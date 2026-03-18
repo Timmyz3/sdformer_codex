@@ -1,32 +1,44 @@
-The repo is the official implementation for the **IJCAI'24 Main Track** paper: [SDformer:Transformer with Spectral Filter and Dynamic Attention for Multivariate Time Series Long-term Forecasting](https://www.ijcai.org/proceedings/2024/629). **This paper was selected as the only long oral presentation of the Time Series Session**.
+# SDformerFlow HW/SW Co-Design
 
-## About Authors
-The student authors of this paper, ranked 1st, 3rd, and 4th, all come from HKUST (Clear Water Bay and Guangzhou campus). They completed their undergraduate studies at the [School of Computer Science](https://cs.bjut.edu.cn/), [Beijing University of Technology](https://www.bjut.edu.cn/). If you are interested in Time Series Analysis and would like further discussion, please feel free to contact [Ziyu Zhou](https://zhouziyu02.github.io/) (MPhil student, [CityMind Lab](https://citymind.top/), HKUSTGZ) at zzhou651@connect.hkust-gz.edu.cn.
+Spiking Transformer optical-flow research stack built around the upstream `SDformerFlow` baseline.
 
-## Usage
-All datasets in this paper come from [Time Series Library](https://github.com/thuml/Time-Series-Library). You can download all datasets from [[Google Drive]](https://drive.google.com/drive/folders/13Cg1KYOlzM5C7K8gK8NfC-F3EYxkM3D2?usp=sharing) or [[Baidu Drive]](https://pan.baidu.com/s/1r3KhGd0Q9PJIUZdfEYoymg?pwd=i9iy), Then place the downloaded data in the folder`./dataset`.
+## Layout
 
-You can reproduce the experiment results as the following examples:
+- `third_party/SDformerFlow/`: locked upstream baseline submodule
+- `configs/`: baseline, variants, and quantization specs
+- `src/`: Python adapters, datasets, trainers, modules, and profilers
+- `scripts/`: setup, data, train, eval, ablation, and profiling entrypoints
+- `hw/`: RTL, testbench, synthesis, and architecture docs
+- `tools/`: Python golden simulator and quant export utilities
 
+## Documentation
+
+- `TECHNICAL_DOCUMENTATION.md`: complete technical write-up of the current implementation
+- `REPORT.md`: stage progress and status tracking
+- `PAPER_CO_DESIGN_PROPOSAL.md`: paper-driven upgrade path for sparse attention, HW/SW co-design, and accelerator architecture
+- `MODULE_ZOO.md`: pluggable module library for small ablations and future HW-aware variants
+- `MODULAR_UPGRADE_TECHNICAL_DOC.md`: detailed technical write-up of the modular sparse plug-ins and their integration points
+- `RUNBOOK_AND_RESEARCH_PLAN_2026.md`: step-by-step execution guide for upstream/local runs plus a conference-oriented research plan
+- `FULL_STACK_TECHNICAL_GUIDE_ZH.md`: Chinese master document covering runtime logic, plug-in schemes, experiment configs, and execution guidance
+- `UPSTREAM_SDFORMERFLOW_RUNBOOK_ZH.md`: Chinese runbook focused only on bringing up the original upstream SDformerFlow baseline
+
+## Quick Start
+
+```bash
+bash scripts/setup_env.sh
+bash scripts/download_data.sh --dataset all
+bash scripts/run_train.sh configs/sdformer_baseline.yaml --output-dir experiments/logs/train
+bash scripts/run_eval.sh configs/sdformer_baseline.yaml --checkpoint experiments/logs/train/sdformer_baseline_best.pth
 ```
-bash ./scripts/Traffic.sh
-```
 
-## Citation
+## Baseline
 
-If you find this repo useful, please cite our paper.
+- Upstream repo: `https://github.com/yitian97/SDformerFlow.git`
+- Submodule path: `third_party/SDformerFlow`
+- Locked commit: `13088516440ab3faba4142c986d162cf5dd7c299`
 
-```
-@inproceedings{ijcai2024p629,
-  title     = {SDformer: Transformer with Spectral Filter and Dynamic Attention for Multivariate Time Series Long-term Forecasting},
-  author    = {Zhou, Ziyu and Lyu, Gengyu and Huang, Yiming and Wang, Zihao and Jia, Ziyu and Yang, Zhen},
-  booktitle = {Proceedings of the Thirty-Third International Joint Conference on
-               Artificial Intelligence, {IJCAI-24}},
-  publisher = {International Joint Conferences on Artificial Intelligence Organization},
-  editor    = {Kate Larson},
-  pages     = {5689--5697},
-  year      = {2024},
-  month     = {8},
-  note      = {Main Track}
-}
-```
+## Status
+
+- Phase 0: repository rebuilt around the optical-flow baseline
+- Phase A: baseline integration scaffolded through adapter scripts
+- Remaining model-variant integration, quantitative validation, and RTL closure continue in this repo
