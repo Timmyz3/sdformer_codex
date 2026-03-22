@@ -21,6 +21,8 @@ Spiking Transformer optical-flow research stack built around the upstream `SDfor
 - `RUNBOOK_AND_RESEARCH_PLAN_2026.md`: step-by-step execution guide for upstream/local runs plus a conference-oriented research plan
 - `FULL_STACK_TECHNICAL_GUIDE_ZH.md`: Chinese master document covering runtime logic, plug-in schemes, experiment configs, and execution guidance
 - `UPSTREAM_SDFORMERFLOW_RUNBOOK_ZH.md`: Chinese runbook focused only on bringing up the original upstream SDformerFlow baseline
+- `COLAB_SINGLE_SEQ_SMOKE_RUNBOOK_ZH.md`: Chinese runbook for migrating the current single-sequence smoke test to Google Colab
+- `SCNET_SINGLE_SEQ_TRAIN_RUNBOOK_ZH.md`: Chinese runbook for running the current single-sequence SDformerFlow smoke training on SCNet
 
 ## Quick Start
 

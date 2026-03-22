@@ -216,10 +216,7 @@ class SDFormerFlowAdapter(nn.Module):
         chunk = self._normalize_nonzero(chunk)
         return {
             "chunk": chunk,
-            "timestep_mask": aux_masks["timestep_mask"],
-            "token_mask": aux_masks["token_mask"],
-            "window_mask": aux_masks["window_mask"],
-            "head_mask": aux_masks["head_mask"],
+            "plugin_masks": aux_masks,
             "plugin_stats": plugin_stats,
         }
 
@@ -235,10 +232,7 @@ class SDFormerFlowAdapter(nn.Module):
             "aux": {
                 "flow_list": flow_list,
                 "attn": output.get("attn"),
-                "token_mask": pre["token_mask"],
-                "timestep_mask": pre["timestep_mask"],
-                "window_mask": pre["window_mask"],
-                "head_mask": pre["head_mask"],
                 "plugin_stats": pre["plugin_stats"],
+                **pre["plugin_masks"],
             },
         }

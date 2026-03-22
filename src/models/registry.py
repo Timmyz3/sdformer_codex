@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict
 MODEL_REGISTRY: Dict[str, Callable[..., Any]] = {}
 MODULE_REGISTRY: Dict[str, Dict[str, Callable[..., Any]]] = {
     "attention": {},
+    "external_inspirations": {},
     "spike_encoding": {},
     "normalization": {},
     "sparse_ops": {},
@@ -55,6 +56,15 @@ from src.models.sdformer.backbone import SDFormerFlowAdapter  # noqa: E402
 from src.models.modules.attention.window_attention import (  # noqa: E402
     BaselineAttentionSpec,
     WindowSpikeAttentionSpec,
+)
+from src.models.modules.external_inspirations import (  # noqa: E402
+    ActivityWindowScheduler,
+    BlockSparseAttentionMasker,
+    GraphImportanceTokenPruner,
+    MotionGuidedTokenSelector,
+    SimilarityTokenMerger,
+    StructuredLatencyPruningController,
+    TemporalAttentionReuse,
 )
 from src.models.modules.normalization.rmsnorm import RMSNorm  # noqa: E402
 from src.models.modules.sparse_ops.head_pruning import HeadGroupPruner  # noqa: E402
