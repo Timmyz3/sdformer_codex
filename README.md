@@ -1,10 +1,10 @@
 # SDformerFlow HW/SW Co-Design
 
-Spiking Transformer optical-flow research stack built around the upstream `SDformerFlow` baseline.
+Spiking Transformer optical-flow research stack built around a vendored `SDformerFlow` baseline snapshot.
 
 ## Layout
 
-- `third_party/SDformerFlow/`: locked upstream baseline submodule
+- `third_party/SDformerFlow/`: vendored upstream baseline code snapshot
 - `configs/`: baseline, variants, and quantization specs
 - `src/`: Python adapters, datasets, trainers, modules, and profilers
 - `scripts/`: setup, data, train, eval, ablation, and profiling entrypoints
@@ -35,9 +35,9 @@ bash scripts/run_eval.sh configs/sdformer_baseline.yaml --checkpoint experiments
 
 ## Baseline
 
-- Upstream repo: `https://github.com/yitian97/SDformerFlow.git`
-- Submodule path: `third_party/SDformerFlow`
-- Locked commit: `13088516440ab3faba4142c986d162cf5dd7c299`
+- Original upstream repo reference: `https://github.com/yitian97/SDformerFlow.git`
+- Vendored path in this repo: `third_party/SDformerFlow`
+- Imported upstream snapshot: `13088516440ab3faba4142c986d162cf5dd7c299`
 
 ## Status
 
