@@ -13,6 +13,7 @@ import math
 from models.STSwinNet_SNN.Spiking_STSwinNet import SpikingformerFlowNet, MS_SpikingformerFlowNet, MS_SpikingformerFlowNet_en4
 from torch.utils.data.dataloader import DataLoader
 from utils.gradients import get_grads
+from utils.runtime_backend import configure_snn_backend
 from utils.utils import load_model, save_csv, save_model, save_state_dict, resume_model, count_parameters,print_parameters
 from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.data_augmentation import downsample_data,Compose,CenterCrop,RandomCrop,RandomRotationFlip,Random_event_drop,Random_horizontal_flip,Random_vertical_flip
@@ -138,22 +139,21 @@ def train(args, config_parser):
     #reset SNN, step model, backend
     functional.reset_net(model)
     functional.set_step_mode(model, config['data']['step_mode'])
-    if device.type != 'cpu':
-        if config["model"]["spiking_neuron"]["neuron_type"] == "if":
-            neurontype = getattr(neuron, "IFNode")
-        elif config["model"]["spiking_neuron"]["neuron_type"] == "lif":
-            neurontype = getattr(neuron, "LIFNode")
-        elif config["model"]["spiking_neuron"]["neuron_type"] == "plif":
-            neurontype = getattr(neuron, "ParametricLIFNode")
-        elif config["model"]["spiking_neuron"]["neuron_type"] == "glif":
-            neurontype = GatedLIFNode
-        elif config["model"]["spiking_neuron"]["neuron_type"] == "psn":
-            neurontype = PSN
-        elif config["model"]["spiking_neuron"]["neuron_type"] == "SLTTlif":
-            neurontype = SLTTLIFNode
-        else:
-            raise "neurontype not implemented!"
-        functional.set_backend(model, "cupy", neurontype)
+    if config["model"]["spiking_neuron"]["neuron_type"] == "if":
+        neurontype = getattr(neuron, "IFNode")
+    elif config["model"]["spiking_neuron"]["neuron_type"] == "lif":
+        neurontype = getattr(neuron, "LIFNode")
+    elif config["model"]["spiking_neuron"]["neuron_type"] == "plif":
+        neurontype = getattr(neuron, "ParametricLIFNode")
+    elif config["model"]["spiking_neuron"]["neuron_type"] == "glif":
+        neurontype = GatedLIFNode
+    elif config["model"]["spiking_neuron"]["neuron_type"] == "psn":
+        neurontype = PSN
+    elif config["model"]["spiking_neuron"]["neuron_type"] == "SLTTlif":
+        neurontype = SLTTLIFNode
+    else:
+        raise "neurontype not implemented!"
+    configure_snn_backend(model, device, config, neurontype)
 
     print(model)
     print_parameters(model)

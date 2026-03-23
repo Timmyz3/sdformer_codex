@@ -38,6 +38,10 @@ bash scripts/run_eval.sh configs/sdformer_baseline.yaml --checkpoint experiments
 - Original upstream repo reference: `https://github.com/yitian97/SDformerFlow.git`
 - Vendored path in this repo: `third_party/SDformerFlow`
 - Imported upstream snapshot: `13088516440ab3faba4142c986d162cf5dd7c299`
+- Optional hetero-runtime path:
+  - `third_party/SDformerFlow/requirements_hetero_no_cupy.txt`
+  - `third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_single_seq_hetero.yml`
+  - `third_party/SDformerFlow/configs/valid_DSEC_supervised_single_seq_hetero.yml`
 
 ## Status
 

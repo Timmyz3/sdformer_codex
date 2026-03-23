@@ -9,6 +9,7 @@ from tqdm import tqdm
 import math
 from models.STSwinNet_SNN.Spiking_STSwinNet import SpikingformerFlowNet, MS_SpikingformerFlowNet, MS_SpikingformerFlowNet_en4
 from utils.gradients import get_grads
+from utils.runtime_backend import configure_snn_backend
 from utils.utils import load_model, save_csv, save_model, save_state_dict, resume_model, count_parameters,print_parameters,save_flops_csv
 from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.DSEC_dataset_lite import DSECDatasetLite
@@ -115,8 +116,7 @@ def train(args, config_parser):
     else:
         raise "neurontype not implemented!"
 
-    if device.type != 'cpu':
-        functional.set_backend(model, "cupy", neurontype)
+    configure_snn_backend(model, device, config, neurontype)
 
     #summary(model)
 

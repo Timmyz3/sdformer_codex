@@ -6,6 +6,7 @@ from loss.flow_supervised import *
 from models.STSwinNet_SNN.Spiking_STSwinNet import SpikingformerFlowNet,MS_SpikingformerFlowNet, MS_SpikingformerFlowNet_en4
 from tqdm import tqdm
 from utils.mlflow import log_config, log_results
+from utils.runtime_backend import configure_snn_backend
 from utils.utils import load_model,  create_model_dir,save_csv, save_model, count_parameters,print_parameters
 from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.DSEC_dataset_lite import DSECDatasetLite
@@ -115,8 +116,7 @@ def valid_test(args, config_parser):
         neurontype = SLTTLIFNode
     else:
         raise "neurontype not implemented!"
-    if device.type != 'cpu':
-        functional.set_backend(model, "cupy", neurontype)
+    configure_snn_backend(model, device, config, neurontype)
     print(model)
     print_parameters(model)
 

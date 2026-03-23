@@ -415,3 +415,13 @@ python eval_DSEC_flow_SNN.py \
 - 训练配置：[train_DSEC_supervised_SDformerFlow_en4_single_seq.yml](/D:/code/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_single_seq.yml)
 - 评估配置：[valid_DSEC_supervised_single_seq.yml](/D:/code/sdformer_codex/SDformer/third_party/SDformerFlow/configs/valid_DSEC_supervised_single_seq.yml)
 - 依赖清单：[requirements_colab_no_torch.txt](/D:/code/sdformer_codex/SDformer/third_party/SDformerFlow/requirements_colab_no_torch.txt)
+
+## 11. 异构卡兼容选择
+
+如果你当前拿到的是 ROCm/HIP 或其他异构卡，而不是标准 CUDA 卡，不要改默认配置，直接使用新增的异构卡分支：
+
+- 异构卡依赖：[requirements_hetero_no_cupy.txt](/D:/code/sdformer_codex/SDformer/third_party/SDformerFlow/requirements_hetero_no_cupy.txt)
+- 异构卡训练配置：[train_DSEC_supervised_SDformerFlow_en4_single_seq_hetero.yml](/D:/code/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_single_seq_hetero.yml)
+- 异构卡评估配置：[valid_DSEC_supervised_single_seq_hetero.yml](/D:/code/sdformer_codex/SDformer/third_party/SDformerFlow/configs/valid_DSEC_supervised_single_seq_hetero.yml)
+
+这套配置只把 `runtime.snn_backend` 切到 `torch`，并移除了 `cupy-cuda12x` 依赖；原来的 CUDA/4090 路线保持不变。
