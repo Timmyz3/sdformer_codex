@@ -46,8 +46,14 @@ def valid_test(args, config_parser):
     # initialize settings
     device = config_parser.device
     loss_function = flow_loss_supervised(config, device)
+    vis_cfg = config["vis"]
+    vis_enabled = vis_cfg.get("enabled", False)
+    vis_store = vis_cfg.get("store", False)
+    vis_store_att = vis_cfg.get("store_att", False)
+    vis_monitor_fr = vis_cfg.get("monitor_fr", False)
+    vis_monitor_v = vis_cfg.get("monitor_v", False)
     # visualization tool
-    if config["vis"]["enabled"] or config["vis"]["store"] or config["vis"]["store_att"]:
+    if vis_enabled or vis_store or vis_store_att:
         vis = Visualization_DSEC(config, eval_id=eval_id, path_results=path_results)
 
 
@@ -137,12 +143,12 @@ def valid_test(args, config_parser):
             val_results[metric]["PE3"] = 0
             val_results[metric]["outliers"] = 0
 
-    if config["vis"]["monitor_fr"]:
+    if vis_monitor_fr:
         # spike_seq_monitor = monitor.OutputMonitor(model, neurontype)
         fr_monitor = monitor.OutputMonitor(model, neurontype, cal_firing_rate)
         fr_monitor.enable()
 
-    if config["vis"]["monitor_v"]:
+    if vis_monitor_v:
         for m in model.modules():
             if isinstance(m, neurontype):
                 m.store_v_seq = True
@@ -166,7 +172,7 @@ def valid_test(args, config_parser):
         with torch.no_grad():
             # forward pass
             if config['model']['encoding'] == 'cnt':
-                if config["vis"]["enabled"] or config['vis']['store_att']:
+                if vis_enabled or vis_store_att:
                     chunk_vis = torch.sum(chunk, dim=1).detach()
                 if config["swin_transformer"]["use_arc"][1] =="PatchEmbed3D":  #B D,P,H,W  -B P D H W
                     chunk = torch.transpose(chunk, 1, 2)
@@ -184,10 +190,10 @@ def valid_test(args, config_parser):
                     # chunk = torch.abs(chunk)
                     chunk = torch.cat((torch.unsqueeze(pos, dim=2), torch.unsqueeze(neg, dim=2)),
                                       dim=2)  # B,C=20,P=2,H,W   B C, P, H, W
-                    if config["vis"]["enabled"]:
+                    if vis_enabled:
                         chunk_vis = torch.stack((torch.sum(pos, dim=1), torch.sum(neg, dim=1)), dim=1)
                 else:
-                    if config["vis"]["enabled"]:
+                    if vis_enabled:
                         chunk_vis = torch.sum(chunk, dim=1).detach()
 
 
@@ -220,12 +226,12 @@ def valid_test(args, config_parser):
             pred = pred_list["flow"][-1]
 
             # print(f'spike_seq_monitor.records=\n{spike_seq_monitor.records}')
-            if config["vis"]["monitor_fr"]:
+            if vis_monitor_fr:
                 fire_rate_mean = [torch.mean(rate) for rate in fr_monitor.records]
                 print(f'firing rate=\n{torch.mean(torch.stack(fire_rate_mean))}')
                 save_csv(fr_monitor.records, "firing_rate.csv")
                 fr_monitor.records =[]
-            if config["vis"]["monitor_v"]:
+            if vis_monitor_v:
                 print(f'v_seq=\n{v_seq_monitor.records}')
                 v_seq_monitor.records =[]
 
@@ -243,7 +249,7 @@ def valid_test(args, config_parser):
 
 
 
-        if config["vis"]["enabled"]  or config["vis"]["store_att"] or config["vis"]["store"] and config["loader"]["batch_size"] == 1:
+        if vis_enabled or vis_store_att or (vis_store and config["loader"]["batch_size"] == 1):
             flow_vis = pred.clone()
             # flow_vis *= mask
 
@@ -273,9 +279,9 @@ def valid_test(args, config_parser):
 
 
         with torch.no_grad():
-            if config["vis"]["enabled"] and config["loader"]["batch_size"] == 1:
+            if vis_enabled and config["loader"]["batch_size"] == 1:
                 vis.update(chunk_vis, label, mask, flow_vis, None)
-            if config["vis"]["store"]:
+            if vis_store:
                 sequence = sequence
                 vis.store(chunk_vis, label, mask, flow_vis, sequence, None)
         sample += 1

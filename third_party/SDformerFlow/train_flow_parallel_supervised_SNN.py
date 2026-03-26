@@ -1,6 +1,7 @@
 import argparse
 import mlflow
 import os
+import time
 import torch
 from torch.optim import *
 from configs.parser import YAMLParser
@@ -15,6 +16,7 @@ from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.DSEC_dataset_lite import DSECDatasetLite
 from DSEC_dataloader.data_augmentation import downsample_data,Compose,CenterCrop,RandomCrop,RandomRotationFlip,Random_event_drop,Random_horizontal_flip,Random_vertical_flip
 from utils.mlflow import log_config, log_results
+from utils.train_stats import compute_throughput_stats
 import torch.nn.functional as F
 import cv2
 import random
@@ -228,6 +230,9 @@ def train(args, config_parser):
 
     for epoch in range(epoch_initial, config["loader"]["n_epochs"]):
         print(f'Epoch {epoch}')
+        epoch_start_time = time.time()
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
         model.train()
         sample = 0
         train_loss = 0.
@@ -276,12 +281,12 @@ def train(args, config_parser):
 
                 # normalize input
                 if config["model"]["norm_input"] == "minmax":
-                    min, max = (
+                    min_val, max_val = (
                         torch.min(chunk[chunk != 0]),
                         torch.max(chunk[chunk != 0]),
                     )
-                    if not min == max:
-                        chunk[chunk != 0] = (chunk[chunk != 0] - min) / (max - min)
+                    if not min_val == max_val:
+                        chunk[chunk != 0] = (chunk[chunk != 0] - min_val) / (max_val - min_val)
                 elif config["model"]["norm_input"] == "std":
                     mean, stddev = (
                         chunk[chunk != 0].mean(),
@@ -361,10 +366,25 @@ def train(args, config_parser):
             grads_w = []
 
         epoch_loss = train_loss / sample
+        epoch_time_sec = time.time() - epoch_start_time
+        train_step_time_sec, train_samples_per_sec = compute_throughput_stats(sample, epoch_time_sec)
+        max_gpu_mem_gib = 0.0
+        if device.type == "cuda":
+            max_gpu_mem_gib = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
         print(f'Epoch loss = {epoch_loss}')
+        print(
+            f"Epoch stats: lr={optimizer.param_groups[0]['lr']:.6g}, "
+            f"epoch_time_sec={epoch_time_sec:.2f}, train_step_time_sec={train_step_time_sec:.4f}, "
+            f"train_samples_per_sec={train_samples_per_sec:.4f}, max_gpu_mem_gib={max_gpu_mem_gib:.3f}"
+        )
 
         if use_ml_flow:
             mlflow.log_metric("train_loss", epoch_loss, step=epoch)
+            mlflow.log_metric("lr", optimizer.param_groups[0]["lr"], step=epoch)
+            mlflow.log_metric("epoch_time_sec", epoch_time_sec, step=epoch)
+            mlflow.log_metric("train_step_time_sec", train_step_time_sec, step=epoch)
+            mlflow.log_metric("train_samples_per_sec", train_samples_per_sec, step=epoch)
+            mlflow.log_metric("max_gpu_mem_gib", max_gpu_mem_gib, step=epoch)
 
         # save model
         with torch.no_grad():
@@ -378,6 +398,7 @@ def train(args, config_parser):
         # Validation Dataset
 
         if epoch % config["test"]["n_valid"] == 0:
+            valid_start_time = time.time()
             sample = 0
             if config["loader"]["batch_size"] > 1:
                 model.eval()
@@ -433,12 +454,12 @@ def train(args, config_parser):
 
                         # normalize input
                         if config["model"]["norm_input"] == "minmax":
-                            min, max = (
+                            min_val, max_val = (
                                 torch.min(chunk[chunk != 0]),
                                 torch.max(chunk[chunk != 0]),
                             )
-                            if not min == max:
-                                chunk[chunk != 0] = (chunk[chunk != 0] - min) / (max - min)
+                            if not min_val == max_val:
+                                chunk[chunk != 0] = (chunk[chunk != 0] - min_val) / (max_val - min_val)
                         elif config["model"]["norm_input"] == "std":
                             mean, stddev = (
                                 chunk[chunk != 0].mean(),
@@ -480,9 +501,17 @@ def train(args, config_parser):
                         break
 
             epoch_loss_valid = epoch_loss_valid/sample
+            valid_time_sec = time.time() - valid_start_time
+            valid_step_time_sec, _ = compute_throughput_stats(sample, valid_time_sec)
             print('Epoch loss (Validation): {} \n'.format(epoch_loss_valid))
+            print(
+                f"Validation stats: valid_time_sec={valid_time_sec:.2f}, "
+                f"valid_step_time_sec={valid_step_time_sec:.4f}"
+            )
             if use_ml_flow:
                 mlflow.log_metric("valid_loss", epoch_loss_valid, step=epoch)
+                mlflow.log_metric("valid_time_sec", valid_time_sec, step=epoch)
+                mlflow.log_metric("valid_step_time_sec", valid_step_time_sec, step=epoch)
 
         # update learning rate
         if scheduler is not None:

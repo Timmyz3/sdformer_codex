@@ -62,12 +62,20 @@ class DSECDatasetLite(Dataset):
             elif (self.input == "cnt"):
                 self.events_path = os.path.join(self.config['data']['path'], 'event_tensors', '{}frames'.format(str(self.num_frames_per_ts).zfill(2)),'left')
 
+        split_overrides = self.config["data"].get("sequence_list_overrides", {})
+        sequence_file = None
+        override_name = split_overrides.get(file_list)
+        if override_name:
+            if os.path.isabs(override_name):
+                sequence_file = override_name
+            else:
+                sequence_file = os.path.join(self.config["data"]["path"], "sequence_lists", override_name)
 
-        if self.num_chunks == 2:
+        if sequence_file is None and self.num_chunks == 2:
             file_list = file_list+"_split_doubleseq.csv"
             sequence_file = os.path.join(self.config['data']['path'], 'sequence_lists', file_list)
 
-        elif self.num_chunks == 1:
+        elif sequence_file is None and self.num_chunks == 1:
             # self.files= []
             # for (dirpath, dirnames, filenames) in walk(self.events_path):
             #     self.files.extend(filenames)

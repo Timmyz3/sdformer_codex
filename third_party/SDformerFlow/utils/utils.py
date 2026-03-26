@@ -1,9 +1,43 @@
 import os
+import glob
 from models.STSwinNet.load_pretrained import remap_pretrained_keys_swin,load_pretrained_interpolate
 import mlflow
 import pandas as pd
 import torch
 from collections.abc import MutableMapping
+
+
+def _extract_model_output_id(run_dir: str) -> str | None:
+    output_meta_paths = glob.glob(os.path.join(run_dir, "outputs", "*", "meta.yaml"))
+    for meta_path in sorted(output_meta_paths):
+        with open(meta_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("destination_id:"):
+                    return line.split(":", 1)[1].strip()
+    return None
+
+
+def _resolve_model_path_from_run(run) -> str | None:
+    artifact_uri = run.info.artifact_uri
+    if artifact_uri[:7] == "file://":
+        artifact_uri = artifact_uri[7:]
+
+    legacy_model_path = os.path.join(artifact_uri, "model", "data", "model.pth")
+    if os.path.isfile(legacy_model_path):
+        return legacy_model_path
+
+    run_dir = os.path.dirname(artifact_uri)
+    experiment_dir = os.path.dirname(run_dir)
+    model_output_id = _extract_model_output_id(run_dir)
+    if model_output_id is None:
+        return None
+
+    mlflow3_model_path = os.path.join(
+        experiment_dir, "models", model_output_id, "artifacts", "data", "model.pth"
+    )
+    if os.path.isfile(mlflow3_model_path):
+        return mlflow3_model_path
+    return None
 
 
 #for test or finetune
@@ -13,11 +47,9 @@ def load_model(prev_runid, model, device, remap = None, test=False):
     except:
         return model
 
-    model_dir = run.info.artifact_uri + "/model/data/model.pth"
-    if model_dir[:7] == "file://":
-        model_dir = model_dir[7:]
+    model_dir = _resolve_model_path_from_run(run)
 
-    if os.path.isfile(model_dir):
+    if model_dir is not None and os.path.isfile(model_dir):
         pretrained_model = torch.load(model_dir, map_location=device)
         #model.load_state_dict(model_loaded.state_dict())
         #for data parallel model
