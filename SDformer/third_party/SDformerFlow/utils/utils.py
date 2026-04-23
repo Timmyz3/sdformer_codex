@@ -9,7 +9,9 @@ from collections.abc import MutableMapping
 
 def _extract_model_output_id(run_dir: str) -> str | None:
     output_meta_paths = glob.glob(os.path.join(run_dir, "outputs", "*", "meta.yaml"))
-    for meta_path in sorted(output_meta_paths):
+    # A resumed run can log multiple model outputs. Use the latest output meta
+    # file so inference restores the final checkpoint instead of an earlier one.
+    for meta_path in sorted(output_meta_paths, key=os.path.getmtime, reverse=True):
         with open(meta_path, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("destination_id:"):
@@ -50,7 +52,10 @@ def load_model(prev_runid, model, device, remap = None, test=False):
     model_dir = _resolve_model_path_from_run(run)
 
     if model_dir is not None and os.path.isfile(model_dir):
-        pretrained_model = torch.load(model_dir, map_location=device)
+        # MLflow stores the whole PyTorch module here, not just a plain state_dict.
+        # PyTorch 2.6+ defaults torch.load(..., weights_only=True), which rejects
+        # trusted project classes unless we explicitly opt into full module loading.
+        pretrained_model = torch.load(model_dir, map_location=device, weights_only=False)
         #model.load_state_dict(model_loaded.state_dict())
         #for data parallel model
         pretrained_dict = pretrained_model.state_dict()
@@ -83,7 +88,7 @@ def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device
 
     if os.path.isfile(state_dir):
 
-        state_dict = torch.load(state_dir, map_location=device)
+        state_dict = torch.load(state_dir, map_location=device, weights_only=False)
         # for item in state_dict["optimizer"]["state"]:
         #     print(state_dict["optimizer"]["state"][item]["exp_avg"].shape)
         if "optimizer" in state_dict.keys():
@@ -190,4 +195,3 @@ def print_parameters(model):
 def flatten_dict(d: MutableMapping, sep: str= '.') -> MutableMapping:
     [flat_dict] = pd.json_normalize(d, sep=sep).to_dict(orient='records')
     return flat_dict
-
