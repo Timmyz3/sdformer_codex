@@ -1,7 +1,11 @@
-"""Autoresearch training entrypoint — extends H1 source-patching with FSN support.
+"""Autoresearch training entrypoint.
 
-Supports: HardSparseGate, HardwareSparseNeuron (GTCN), FusedSparseNeuron (FSN).
+Supports: HardSparseGate (G1), HardwareSparseNeuron (H1/GTCN),
+FusedSparseNeuron (A1/FSN), RefractoryNeuron (A5), dual-sparse loss (A8).
+
+Overlay priority: autoresearch > H1 > baseline.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -12,7 +16,7 @@ import types
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Source-patch anchors and replacements (based on H1 patterns)
+# Source-patch anchors
 # ---------------------------------------------------------------------------
 
 PIN_MEMORY_ANCHOR = """"pin_memory": True,
@@ -30,6 +34,7 @@ LOAD_MODEL_PATCH = """    model = load_model(args.prev_runid, model, device, rem
         install_sparse_gates,
         install_hw_sparse_gates,
         install_fsn_gates,
+        install_refractory_neurons,
         sparse_gate_summary,
     )
     sg_cfg = config_from_dict(config.get("sparse_gate"))
@@ -44,6 +49,11 @@ LOAD_MODEL_PATCH = """    model = load_model(args.prev_runid, model, device, rem
             installed = install_sparse_gates(model, config.get("sparse_gate"))
             print(f"[AR] installed sparse gates: {installed}")
         print(f"[AR] sparse gate summary after install: {sparse_gate_summary(model)}")
+
+    # A5: Refractory-period pruning (independent of gate type)
+    ref_installed = install_refractory_neurons(model, config)
+    if ref_installed:
+        print(f"[AR] installed refractory neurons: {len(ref_installed)} neurons, steps={config.get('refractory', {}).get('refractory_steps', 2)}")
 """
 
 LOSS_ANCHOR = """                # print("loss: ", curr_loss.item())
@@ -55,6 +65,7 @@ LOSS_ANCHOR = """                # print("loss: ", curr_loss.item())
 LOSS_PATCH = """                from models.STSwinNet_SNN.sparse_gate import (
                     sparse_gate_regularization,
                     threshold_regularization_loss,
+                    dual_sparse_regularization,
                 )
                 gate_penalty = sparse_gate_regularization(model, config.get("sparse_gate"))
                 if gate_penalty is not None:
@@ -62,6 +73,10 @@ LOSS_PATCH = """                from models.STSwinNet_SNN.sparse_gate import (
                 threshold_penalty = threshold_regularization_loss(model, config.get("sparse_gate"))
                 if threshold_penalty is not None:
                     curr_loss = curr_loss + threshold_penalty / num_acc_steps
+                # A8: Dual-sparsity penalty (weight + activation)
+                dual_penalty = dual_sparse_regularization(model, config)
+                if dual_penalty is not None:
+                    curr_loss = curr_loss + dual_penalty / num_acc_steps
                 # print("loss: ", curr_loss.item())
 
                 if np.isnan(curr_loss.item()):
@@ -83,6 +98,10 @@ EPOCH_STATS_PATCH = """        print(
         if config.get("sparse_gate", {}).get("enabled", False):
             from models.STSwinNet_SNN.sparse_gate import sparse_gate_summary
             print(f"[AR] sparse gate summary: {sparse_gate_summary(model)}")
+        if config.get("refractory", {}).get("enabled", False):
+            print(f"[AR] refractory active: steps={config['refractory'].get('refractory_steps', 2)}")
+        if config.get("dual_sparse", {}).get("enabled", False):
+            print(f"[AR] dual-sparse active: lambda_f={config['dual_sparse'].get('lambda_firing', 0)}, lambda_w={config['dual_sparse'].get('lambda_weight', 0)}")
 """
 
 MODEL_TRAIN_ANCHOR = """        model.train()
@@ -92,6 +111,10 @@ MODEL_TRAIN_PATCH = """        model.train()
         if config.get("sparse_gate", {}).get("freeze_backbone", False):
             model.eval()
 """
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _repo_root() -> Path:
@@ -149,13 +172,14 @@ def main() -> None:
 
     repo_root = _repo_root()
     baseline_root = repo_root / "third_party" / "SDformerFlow"
-
-    # Use H1 overlay (contains sparse_gate.py with all three install functions)
+    ar_overlay = repo_root / "neuron_autoresearch" / "overlay"
     h1_overlay = repo_root / "neuron_experiments" / "H1_hw_sparse" / "overlay"
     baseline_entry = baseline_root / "train_flow_parallel_supervised_SNN.py"
 
+    # Autoresearch overlay FIRST → overrides H1 sparse_gate with extended version
     sys.path.insert(0, str(repo_root))
     sys.path.insert(0, str(baseline_root))
+    sys.path.insert(0, str(ar_overlay))
     sys.path.insert(0, str(h1_overlay))
 
     sys.argv = [
