@@ -26,7 +26,8 @@ import collections
 from torch.utils.data.distributed import DistributedSampler
 
 
-use_ml_flow = True
+use_ml_flow = os.getenv("SDFORMER_USE_MLFLOW", "1").lower() not in {"0", "false", "no"}
+use_mlflow_model_logging = os.getenv("SDFORMER_MLFLOW_MODEL_LOGGING", "1").lower() not in {"0", "false", "no"}
 
 
 def train(args, config_parser):
@@ -36,16 +37,39 @@ def train(args, config_parser):
     device = config_parser.device
     print('device:', device)
 
+    if args.path_mlflow:
+        mlflow.set_tracking_uri(args.path_mlflow)
+        print("MLflow tracking URI:", args.path_mlflow)
+
     # log config
     if use_ml_flow:
-        mlflow.set_tracking_uri(args.path_mlflow)
         mlflow.set_experiment(config["experiment"])
         mlflow.start_run()
         mlflow.log_params(config)
         mlflow.log_param("prev_runid", args.prev_runid)
+        mlflow.log_param("mlflow_model_logging", use_mlflow_model_logging)
         print("MLflow dir:", mlflow.active_run().info.artifact_uri[:-9])
+    else:
+        print("[runtime] MLflow logging disabled via SDFORMER_USE_MLFLOW")
 
     config = config_parser.combine_entries(config)
+
+    runtime_cfg = config.get("runtime", {})
+    detect_anomaly = bool(runtime_cfg.get("detect_anomaly", False))
+    non_blocking = bool(config["loader"].get("non_blocking", False))
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = bool(runtime_cfg.get("cudnn_benchmark", False))
+        allow_tf32 = bool(runtime_cfg.get("allow_tf32", False))
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
+        if allow_tf32:
+            torch.set_float32_matmul_precision("high")
+    print(
+        f"[runtime] detect_anomaly={detect_anomaly}, "
+        f"cudnn_benchmark={torch.backends.cudnn.benchmark}, "
+        f"allow_tf32={getattr(torch.backends.cuda.matmul, 'allow_tf32', False)}, "
+        f"non_blocking={non_blocking}"
+    )
 
     #use mix-precision training
     if config['optimizer']['use_amp']:
@@ -189,14 +213,20 @@ def train(args, config_parser):
 
     # Define training dataloader
 
-    train_dataloader = torch.utils.data.DataLoader(
-        dataset=train_dataset,
-        batch_size=config["loader"]["batch_size"],
-        shuffle=True,
-        drop_last=True,
-        pin_memory=True,
-        num_workers=config["loader"]["n_workers"]
-    )
+    train_loader_kwargs = {
+        "dataset": train_dataset,
+        "batch_size": config["loader"]["batch_size"],
+        "shuffle": True,
+        "drop_last": True,
+        "pin_memory": True,
+        "num_workers": config["loader"]["n_workers"],
+    }
+    if config["loader"]["n_workers"] > 0:
+        train_loader_kwargs["worker_init_fn"] = config_parser.worker_init_fn
+        train_loader_kwargs["persistent_workers"] = bool(config["loader"].get("persistent_workers", False))
+        if "prefetch_factor" in config["loader"]:
+            train_loader_kwargs["prefetch_factor"] = int(config["loader"]["prefetch_factor"])
+    train_dataloader = torch.utils.data.DataLoader(**train_loader_kwargs)
 
 
     # Create validation dataset centrer crop no scale
@@ -209,14 +239,20 @@ def train(args, config_parser):
 
     # Define validation dataloader
 
-    valid_dataloader = torch.utils.data.DataLoader(
-        dataset=valid_dataset,
-        batch_size=config["loader"]["batch_size"],
-        shuffle=False,
-        drop_last=False,
-        pin_memory=True,
-        num_workers=config["loader"]["n_workers"]
-    )
+    valid_loader_kwargs = {
+        "dataset": valid_dataset,
+        "batch_size": config["loader"]["batch_size"],
+        "shuffle": False,
+        "drop_last": False,
+        "pin_memory": True,
+        "num_workers": config["loader"]["n_workers"],
+    }
+    if config["loader"]["n_workers"] > 0:
+        valid_loader_kwargs["worker_init_fn"] = config_parser.worker_init_fn
+        valid_loader_kwargs["persistent_workers"] = bool(config["loader"].get("persistent_workers", False))
+        if "prefetch_factor" in config["loader"]:
+            valid_loader_kwargs["prefetch_factor"] = int(config["loader"]["prefetch_factor"])
+    valid_dataloader = torch.utils.data.DataLoader(**valid_loader_kwargs)
 
 
 
@@ -237,17 +273,18 @@ def train(args, config_parser):
             torch.cuda.reset_peak_memory_stats(device)
         model.train()
         sample = 0
+        train_sample_count = 0
         train_loss = 0.
         # spiking_rates = collections.defaultdict(list)
         for chunk, mask, label in tqdm(train_dataloader):
-            torch.autograd.set_detect_anomaly(True)
+            torch.autograd.set_detect_anomaly(detect_anomaly)
 
             functional.reset_net(model)
             functional.set_step_mode(model, config['data']['step_mode']) #layer-by-layer
 
-            chunk = chunk.to(device=device, dtype=torch.float32) #[B,20,2,H,W]
-            label = label.to(device=device, dtype=torch.float32)  # [num_batches, 2, H, W]
-            mask = mask.to(device=device)
+            chunk = chunk.to(device=device, dtype=torch.float32, non_blocking=non_blocking) #[B,20,2,H,W]
+            label = label.to(device=device, dtype=torch.float32, non_blocking=non_blocking)  # [num_batches, 2, H, W]
+            mask = mask.to(device=device, non_blocking=non_blocking)
             mask = torch.unsqueeze(mask, dim=1)
             if transform_train is not None:
                 chunk, label, mask = transform_train((chunk, label, mask.float()))
@@ -358,6 +395,7 @@ def train(args, config_parser):
 
             # print training info
             sample += 1
+            train_sample_count += chunk.shape[0]
 
 
 
@@ -369,7 +407,8 @@ def train(args, config_parser):
 
         epoch_loss = train_loss / sample
         epoch_time_sec = time.time() - epoch_start_time
-        train_step_time_sec, train_samples_per_sec = compute_throughput_stats(sample, epoch_time_sec)
+        train_step_time_sec, _ = compute_throughput_stats(sample, epoch_time_sec)
+        train_samples_per_sec = train_sample_count / epoch_time_sec if epoch_time_sec > 0 else 0.0
         max_gpu_mem_gib = 0.0
         if device.type == "cuda":
             max_gpu_mem_gib = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
@@ -390,10 +429,30 @@ def train(args, config_parser):
 
         # save model
         with torch.no_grad():
-            if epoch_loss < best_loss:
-                save_model(model)
-                save_state_dict(optimizer, scheduler, scaler, epoch)
-                best_loss = epoch_loss
+            should_save_model = epoch_loss < best_loss or epoch == config["loader"]["n_epochs"] - 1
+            if should_save_model:
+                if use_ml_flow and use_mlflow_model_logging:
+                    save_model(model)
+                    save_state_dict(optimizer, scheduler, scaler, epoch)
+                else:
+                    checkpoint_path = args.save_path.format(epoch)
+                    checkpoint_dir = os.path.dirname(checkpoint_path)
+                    if checkpoint_dir:
+                        os.makedirs(checkpoint_dir, exist_ok=True)
+                    torch.save(model, checkpoint_path)
+                    state_path = checkpoint_path.replace(".pth", "_state_dict.pth")
+                    torch.save(
+                        {
+                            "optimizer": optimizer.state_dict(),
+                            "scheduler": scheduler.state_dict() if scheduler else None,
+                            "epoch": epoch,
+                            "scaler": scaler.state_dict() if scaler else None,
+                        },
+                        state_path,
+                    )
+                    print(f"Local checkpoint saved to {checkpoint_path}")
+                    print(f"Local training state saved to {state_path}")
+                best_loss = min(best_loss, epoch_loss)
 
 
         #####validate after each 5 epoch############
@@ -402,6 +461,7 @@ def train(args, config_parser):
         if epoch % config["test"]["n_valid"] == 0:
             valid_start_time = time.time()
             sample = 0
+            valid_sample_count = 0
             if config["loader"]["batch_size"] > 1:
                 model.eval()
             else:
@@ -416,9 +476,9 @@ def train(args, config_parser):
                     functional.reset_net(model)
                     functional.set_step_mode(model, config['data']['step_mode'])
 
-                    chunk = chunk.to(device=device, dtype=torch.float32)
-                    label = label.to(device=device, dtype=torch.float32)  # [num_batches, 2, H, W]
-                    mask = mask.bool().to(device=device)
+                    chunk = chunk.to(device=device, dtype=torch.float32, non_blocking=non_blocking)
+                    label = label.to(device=device, dtype=torch.float32, non_blocking=non_blocking)  # [num_batches, 2, H, W]
+                    mask = mask.bool().to(device=device, non_blocking=non_blocking)
                     mask = torch.unsqueeze(mask, dim=1)
 
                     with torch.no_grad():
@@ -499,21 +559,25 @@ def train(args, config_parser):
 
                     epoch_loss_valid += total_loss.item() * config["loader"]["batch_size"]
                     sample += 1
+                    valid_sample_count += chunk.shape[0]
                     if sample > config['test']['sample'] // config["loader"]["batch_size"]:
                         break
 
             epoch_loss_valid = epoch_loss_valid/sample
             valid_time_sec = time.time() - valid_start_time
             valid_step_time_sec, _ = compute_throughput_stats(sample, valid_time_sec)
+            valid_samples_per_sec = valid_sample_count / valid_time_sec if valid_time_sec > 0 else 0.0
             print('Epoch loss (Validation): {} \n'.format(epoch_loss_valid))
             print(
                 f"Validation stats: valid_time_sec={valid_time_sec:.2f}, "
-                f"valid_step_time_sec={valid_step_time_sec:.4f}"
+                f"valid_step_time_sec={valid_step_time_sec:.4f}, "
+                f"valid_samples_per_sec={valid_samples_per_sec:.4f}"
             )
             if use_ml_flow:
                 mlflow.log_metric("valid_loss", epoch_loss_valid, step=epoch)
                 mlflow.log_metric("valid_time_sec", valid_time_sec, step=epoch)
                 mlflow.log_metric("valid_step_time_sec", valid_step_time_sec, step=epoch)
+                mlflow.log_metric("valid_samples_per_sec", valid_samples_per_sec, step=epoch)
 
         # update learning rate
         if scheduler is not None:
@@ -566,6 +630,3 @@ if __name__ == "__main__":
 
     # launch training
     train(args, YAMLParser(args.config))
-
-
-

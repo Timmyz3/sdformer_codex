@@ -42,8 +42,54 @@ def _resolve_model_path_from_run(run) -> str | None:
     return None
 
 
+def _extract_pretrained_state_dict(pretrained_model, test=False):
+    if hasattr(pretrained_model, "state_dict") and not isinstance(pretrained_model, dict):
+        pretrained_dict = pretrained_model.state_dict()
+    elif isinstance(pretrained_model, dict):
+        if "model_state_dict" in pretrained_model:
+            pretrained_dict = pretrained_model["model_state_dict"]
+        elif "state_dict" in pretrained_model:
+            pretrained_dict = pretrained_model["state_dict"]
+        elif "model" in pretrained_model and hasattr(pretrained_model["model"], "state_dict"):
+            pretrained_dict = pretrained_model["model"].state_dict()
+        else:
+            pretrained_dict = pretrained_model
+    else:
+        raise TypeError(f"Unsupported checkpoint type: {type(pretrained_model)}")
+
+    if test:
+        pretrained_dict = {key.replace("module.", ""): value for key, value in pretrained_dict.items()}
+    return pretrained_dict
+
+
+def _local_training_state_path(checkpoint_path: str) -> str:
+    if checkpoint_path.endswith("_state_dict.pth"):
+        return checkpoint_path
+    if checkpoint_path.endswith(".pth"):
+        return checkpoint_path.replace(".pth", "_state_dict.pth")
+    return checkpoint_path + "_state_dict.pth"
+
+
 #for test or finetune
 def load_model(prev_runid, model, device, remap = None, test=False):
+    if prev_runid and os.path.isfile(prev_runid):
+        pretrained_model = torch.load(prev_runid, map_location=device, weights_only=False)
+        pretrained_dict = _extract_pretrained_state_dict(pretrained_model, test=test)
+        if remap == "v2":
+            print(">>>>>>>>>> Remapping pre-trained keys for SWIN ..........")
+            pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
+        elif remap == "v1":
+            load_pretrained_interpolate(model, pretrained_dict)
+            del pretrained_model
+            torch.cuda.empty_cache()
+            print("Model restored from local checkpoint " + prev_runid + "\n")
+            return model
+        model.load_state_dict(pretrained_dict, strict=False)
+        del pretrained_model
+        torch.cuda.empty_cache()
+        print("Model restored from local checkpoint " + prev_runid + "\n")
+        return model
+
     try:
         run = mlflow.get_run(prev_runid)
     except:
@@ -58,9 +104,7 @@ def load_model(prev_runid, model, device, remap = None, test=False):
         pretrained_model = torch.load(model_dir, map_location=device, weights_only=False)
         #model.load_state_dict(model_loaded.state_dict())
         #for data parallel model
-        pretrained_dict = pretrained_model.state_dict()
-        if test:
-            pretrained_dict = {key.replace("module.", ""): value for key, value in pretrained_dict.items()}
+        pretrained_dict = _extract_pretrained_state_dict(pretrained_model, test=test)
         if remap == "v2":
             print(">>>>>>>>>> Remapping pre-trained keys for SWIN ..........")
             pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
@@ -79,8 +123,24 @@ def load_model(prev_runid, model, device, remap = None, test=False):
 
 def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device):
 
-    run = mlflow.get_run(prev_runid)
+    if prev_runid and os.path.isfile(prev_runid):
+        state_dir = _local_training_state_path(prev_runid)
+        if os.path.isfile(state_dir):
+            state_dict = torch.load(state_dir, map_location=device, weights_only=False)
+            if "optimizer" in state_dict.keys():
+                optimizer.load_state_dict(state_dict["optimizer"])
+            if "scheduler" in state_dict.keys() and scheduler is not None:
+                scheduler.load_state_dict(state_dict["scheduler"])
+            if "scaler" in state_dict.keys() and scaler is not None:
+                scaler.load_state_dict(state_dict["scaler"])
+            epoch_initial = state_dict["epoch"] + 1
 
+            print("Training state resumed from local checkpoint " + state_dir + "\n")
+        else:
+            print("No local training state found at " + state_dir + "\n")
+        return optimizer, scheduler, scaler, epoch_initial
+
+    run = mlflow.get_run(prev_runid)
 
     state_dir = run.info.artifact_uri + "/training_state_dict/state_dict.pth"
     if state_dir[:7] == "file://":

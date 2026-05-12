@@ -17,12 +17,13 @@
 
 ## 统一约定
 
-- 项目根目录：[SDformer](/home/zhumd/code/sdformer_codex/SDformer)
-- baseline 根目录：[third_party/SDformerFlow](/home/zhumd/code/sdformer_codex/SDformer/third_party/SDformerFlow)
-- 实验日志目录：[experiments/logs](/home/zhumd/code/sdformer_codex/SDformer/experiments/logs)
-- 实验报告目录：[experiments/reports](/home/zhumd/code/sdformer_codex/SDformer/experiments/reports)
-- MLflow 根目录：[experiments/mlruns](/home/zhumd/code/sdformer_codex/SDformer/experiments/mlruns)
-- 当前阶段训练说明文档：[full_train_dsec_noamp_20260421.md](/home/zhumd/code/sdformer_codex/SDformer/experiments/reports/full_train_dsec_noamp_20260421.md)
+- 当前项目根目录：[SDformer](/root/private_data/work/sdformer_codex/SDformer)
+- 兼容软链接根目录：[SDformer](/root/private_data/work/SDformer)
+- baseline 根目录：[third_party/SDformerFlow](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow)
+- 实验日志目录：[experiments/logs](/root/private_data/work/sdformer_codex/SDformer/experiments/logs)
+- 实验报告目录：[experiments/reports](/root/private_data/work/sdformer_codex/SDformer/experiments/reports)
+- MLflow 根目录：[experiments/mlruns](/root/private_data/work/sdformer_codex/SDformer/experiments/mlruns)
+- 本文件是后续唯一总索引；新实验先追加这里，再写单独 report。
 
 状态说明：
 
@@ -31,6 +32,13 @@
 - `中止`：人为停止，通常是为了切换到更合适的配置
 - `进行中`：实验仍在运行
 - `探测性尝试`：只做链路、路径或环境验证，没有形成完整有效 baseline
+
+## 当前正在运行
+
+- 状态：`无`
+- 最近完成实验：第 18 次，原始全量权重 vs bs4 epoch59 推理对比
+- 最佳当前权重：[checkpoint_epoch59.pth](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_resume_epoch15_to60_20260424_163657/checkpoint_epoch59.pth)
+- 最新对比报告：[infer_compare_original_vs_bs4_epoch59_20260425.md](/root/private_data/work/sdformer_codex/SDformer/experiments/reports/infer_compare_original_vs_bs4_epoch59_20260425.md)
 
 ## 数据集前置状态
 
@@ -54,6 +62,16 @@
 | 6 | 2026-04-21 | 全量训练 | 手动停止，可恢复 | 尽量兼顾稳定性与速度 | 保留 `AMP`，学习率从 `1e-4` 降到 `5e-5` | `DSEC_full_torch_amp_lr5e5` | `9691153d1b6e495da2411029bdf27a11` |
 | 7 | 2026-04-21 | 恢复训练 | 失败，可恢复 | 从第 6 次实验继续训练 | 修复 PyTorch 2.6+ `torch.load` 兼容问题，使用 `--resume True` | `DSEC_full_torch_amp_lr5e5` | `033e8ba0cb71405a8d13a243f837fdb6` |
 | 8 | 2026-04-22 | 恢复训练重试 | 失败，可恢复 | 验证 Epoch 19 NaN 是否复现 | 从第 7 次实验保存点继续，未改训练逻辑 | `DSEC_full_torch_amp_lr5e5` | `2a8daca8481243d585100ca99b18c56e` |
+| 9 | 2026-04-23 | 恢复训练 | 中断，可恢复 | 从 Epoch 45 继续完成 full baseline | 不改训练逻辑，继续 AMP lr5e-5 | `DSEC_full_torch_amp_lr5e5` | `a78bfc1ee0524671961d687cc7b9bc43` |
+| 10 | 2026-04-23 | 恢复训练 | 成功 | 完成第一次全量 baseline | 从 Epoch 54 脱离终端继续训练 | `DSEC_full_torch_amp_lr5e5` | `66d1fc5322004d59a03c8ab132b11830` |
+| 11 | 2026-04-23 | 推理评估 | 成功 | 用第一次全量权重跑 DSEC valid 推理 | `cupy` backend，无可视化配置 | 无新增训练 run | `66d1fc5322004d59a03c8ab132b11830` |
+| 12 | 2026-04-24 | 后端 benchmark | 成功 | 比较 `cupy` 和 `torch` 后端 | 128 train / 8 valid 小切片 | `DSEC_backend_benchmark` | 多个短 run |
+| 13 | 2026-04-24 | 吞吐 benchmark | 成功 | 找 A800 batch/worker 甜点区 | `bs1/4/8/16`，workers=4，TF32 | 多个短 run | 多个短 run |
+| 14 | 2026-04-24 | bs4 从头全量 | 中止 | 尝试 `bs=4` full 从头训练 | `torch + bs4 + workers4` | `DSEC_full_torch_bs4_fast` | `455ad1898a8f47669c3f902c57fda2fe` |
+| 15 | 2026-04-24 | bs4 继续训练 | 失败 | 从第一次全量权重继续训练 | MLflow 关闭但保存仍调用 MLflow，epoch0 后失败 | 无 MLflow run | 无 |
+| 16 | 2026-04-24 | bs4 继续训练 | 成功 | 从第一次全量权重继续优化 | MLflow 记录指标，本地保存 checkpoint | `DSEC_bs4_continue_from_full` | `512913e55f73447db3de2f011af74ec9` |
+| 17 | 2026-04-24 | bs4 断点继续 | 成功 | 从第 16 次 Epoch 15 继续到 Epoch 60 | 新增本地 checkpoint 恢复，恢复 optimizer/scheduler/scaler，最后一轮强制保存 | `DSEC_bs4_resume_epoch15_to60` | `98d161a3f7144441a60fa79083e0fffd` |
+| 18 | 2026-04-25 | 推理对比 | 成功 | 对比原始全量权重和 bs4 epoch59 | 同一 DSEC valid 推理配置，比较 AEE/AAE/PE | 无新增训练 run | `66d1fc...` vs `checkpoint_epoch59.pth` |
 
 ## 详细记录
 
@@ -505,3 +523,228 @@
 - 每次新增配置文件时，在这份台账里明确写出“基于哪个配置改的”
 - 每次新增日志文件时，在这份台账里和 `run id` 双向关联
 - 训练完成后，把最终推理和指标也回填到对应实验条目里
+
+## 2026-04-23/24 新增实验记录
+
+### 11. DSEC valid 推理评估：第一次全量训练权重
+
+- 日期：`2026-04-23`
+- 状态：`成功`
+- 目的：验证第一次全量训练得到的权重在本地 DSEC valid split 上的推理指标
+- 权重来源 run id：`66d1fc5322004d59a03c8ab132b11830`
+- 推理脚本：[eval_DSEC_flow_SNN.py](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/eval_DSEC_flow_SNN.py)
+- 推理配置：[valid_DSEC_supervised_no_vis.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/valid_DSEC_supervised_no_vis.yml)
+- 推理日志：[infer_dsec_cupy_20260423_130347.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/infer_dsec_cupy_20260423_130347.log)
+- 推理报告：[infer_dsec_cupy_20260423_130347.md](/root/private_data/work/sdformer_codex/SDformer/experiments/reports/infer_dsec_cupy_20260423_130347.md)
+
+结果：
+
+- `AEE = 2.3922855504879763`
+- `AAE = 12.012944526824297`
+- `AEE_PE1 = 0.5333474421983256`
+- `AEE_PE2 = 0.24919899437101742`
+- `AEE_PE3 = 0.15811654052745058`
+
+结论：
+
+- 本地 valid split 推理链路跑通
+- 该 AEE 高于论文 benchmark 数值，当前不能直接等价比较，因为评估 split / checkpoint / benchmark 口径不同
+
+### 12. 后端 benchmark：cupy vs torch
+
+- 日期：`2026-04-24`
+- 状态：`成功`
+- 目的：确认当前 A800 上 `cupy` 和 `torch` 哪个 SNN backend 更快
+- 配置：[train_DSEC_supervised_SDformerFlow_en4_backend_benchmark.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_backend_benchmark.yml)
+- 日志：
+  - [backend_benchmark_cupy_20260423_0034.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/backend_benchmark_cupy_20260423_0034.log)
+  - [backend_benchmark_torch_20260423_0034.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/backend_benchmark_torch_20260423_0034.log)
+- 报告：[backend_benchmark_20260423_0034.md](/root/private_data/work/sdformer_codex/SDformer/experiments/reports/backend_benchmark_20260423_0034.md)
+
+结果：
+
+- `cupy`: `train_samples_per_sec = 0.7318`
+- `torch`: `train_samples_per_sec = 0.7486`
+
+结论：
+
+- 在当前服务器和代码路径上，`torch` 略快于 `cupy`
+
+### 13. A800 吞吐调优 benchmark
+
+- 日期：`2026-04-24`
+- 状态：`成功`
+- 目的：寻找 A800 上更合适的 `batch_size` / dataloader worker / runtime 设置
+- 报告：[throughput_tuning_20260424.md](/root/private_data/work/sdformer_codex/SDformer/experiments/reports/throughput_tuning_20260424.md)
+- 相关配置：
+  - [backend_benchmark_bs1w4.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_backend_benchmark_bs1w4.yml)
+  - [backend_benchmark_bs4w4.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_backend_benchmark_bs4w4.yml)
+  - [backend_benchmark_bs8w4.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_backend_benchmark_bs8w4.yml)
+  - [backend_benchmark_bs16w4.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_backend_benchmark_bs16w4.yml)
+
+结果摘要：
+
+- 原始基线：`1.0631 samples/s`
+- `bs1 + workers4 + runtime tuned`: `3.2858 samples/s`
+- `bs4 + workers4 + runtime tuned`: `7.5272 samples/s`
+- `bs8 + workers4 + runtime tuned`: `7.6922 samples/s`
+- `bs16 + workers4 + runtime tuned`: `6.5619 samples/s`
+
+结论：
+
+- `bs4` 和 `bs8` 是当前甜点区
+- `bs4` 速度接近 `bs8`，显存压力更小，后续主线优先用 `bs4`
+
+### 14. bs4 full 从头训练
+
+- 日期：`2026-04-24`
+- 状态：`中止`
+- 目的：用 `bs4` 加速 full training
+- MLflow experiment id：`886437313958210942`
+- run id：`455ad1898a8f47669c3f902c57fda2fe`
+- 配置：[train_DSEC_supervised_SDformerFlow_en4_full_torch_bs4_fast.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_full_torch_bs4_fast.yml)
+- 日志：[train_full_dsec_torch_bs4_20260423_165845.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/train_full_dsec_torch_bs4_20260423_165845.log)
+- 报告：[full_train_dsec_torch_bs4_20260423_165845.md](/root/private_data/work/sdformer_codex/SDformer/experiments/reports/full_train_dsec_torch_bs4_20260423_165845.md)
+
+结果：
+
+- GPU 利用率和吞吐明显提高
+- 但从头跑 `bs4` 的 loss 明显高于已完成的 `bs1` baseline
+- 后续判断：更合适的路线是从 `bs1` 已训好权重继续 `bs4` 微调，而不是从头训练
+
+结论：
+
+- 该 run 不再作为当前主线继续
+
+### 15. bs4 从第一次全量权重继续训练，MLflow 关闭版
+
+- 日期：`2026-04-24`
+- 状态：`失败`
+- 目的：从第一次全量训练权重继续 `bs4` 小学习率优化
+- 续训来源 run id：`66d1fc5322004d59a03c8ab132b11830`
+- 配置：[train_DSEC_supervised_SDformerFlow_en4_bs4_continue_from_full.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_bs4_continue_from_full.yml)
+- 日志：[train_bs4_continue_from_full_20260424_102645.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/train_bs4_continue_from_full_20260424_102645.log)
+- 报告：[train_bs4_continue_from_full_20260424_102645.md](/root/private_data/work/sdformer_codex/SDformer/experiments/reports/train_bs4_continue_from_full_20260424_102645.md)
+
+结果：
+
+- 成功加载旧权重：`Model restored from 66d1fc5322004d59a03c8ab132b11830`
+- `Epoch 0 train_loss = 2.1728915300735063`
+- 吞吐：`train_samples_per_sec = 9.3107`
+- 失败原因：关闭 MLflow 后，保存模型逻辑仍调用 `mlflow.pytorch.log_model`，导致 `Could not find experiment with ID 0`
+
+结论：
+
+- 训练方向正确，loss 比从头 bs4 明显正常
+- 需要保留 MLflow 或改为本地 checkpoint 保存
+- 已修训练脚本，使关闭模型 artifact logging 时可以本地保存 checkpoint
+
+### 16. bs4 从第一次全量权重继续训练，MLflow 指标开启，本地 checkpoint
+
+- 日期：`2026-04-24`
+- 状态：`成功`
+- 目的：加载第一次全量训练完成权重，用 `bs4`、小学习率继续优化
+- 续训来源 run id：`66d1fc5322004d59a03c8ab132b11830`
+- MLflow experiment id：`234701887556936306`
+- run id：`512913e55f73447db3de2f011af74ec9`
+- 配置：[train_DSEC_supervised_SDformerFlow_en4_bs4_continue_from_full.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_bs4_continue_from_full.yml)
+- 脚本：[train_flow_parallel_supervised_SNN.py](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/train_flow_parallel_supervised_SNN.py)
+- 日志：[train_bs4_continue_from_full_mlflow_20260424_025025.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/train_bs4_continue_from_full_mlflow_20260424_025025.log)
+- checkpoint 目录：[bs4_continue_from_full_mlflow_20260424_025025](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_continue_from_full_mlflow_20260424_025025)
+- 最近可用 checkpoint：[checkpoint_epoch15.pth](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_continue_from_full_mlflow_20260424_025025/checkpoint_epoch15.pth)
+- 最近可用 state_dict：[checkpoint_epoch15_state_dict.pth](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_continue_from_full_mlflow_20260424_025025/checkpoint_epoch15_state_dict.pth)
+
+本次改动：
+
+- `batch_size: 4`
+- `lr: 1e-5`
+- `n_epochs: 20`
+- `runtime.snn_backend: torch`
+- `detect_anomaly: False`
+- `cudnn_benchmark: True`
+- `allow_tf32: True`
+- `n_workers: 4`
+- `persistent_workers: True`
+- `prefetch_factor: 4`
+- `non_blocking: True`
+- `SDFORMER_USE_MLFLOW=1`
+- `SDFORMER_MLFLOW_MODEL_LOGGING=0`
+
+结果：
+
+- 日志确认已加载旧权重
+- 完整跑完 `20` 个 epoch：`Epoch 0` 到 `Epoch 19`
+- MLflow run 状态为 `FINISHED`
+- 最终训练 loss：`1.5016479405277572`（Epoch 19）
+- 最终训练吞吐：`9.2827 samples/s`，约 `2.32 it/s`，注意这里 batch size 为 `4`
+- 最后一次验证 loss：`1.9024231867356733`（Epoch 15）
+- 最高显存：约 `18.552 GiB`
+- 大模型 artifact 不写入 MLflow，checkpoint 写到本地目录
+- 本地 checkpoint 保存到 Epoch `0,1,2,3,4,5,6,7,9,10,12,15`；最后一个可用完整模型为 `checkpoint_epoch15.pth`
+
+结论：
+
+- 训练本身正常结束，没有发现 `Traceback`、`Killed` 或 `Exception`
+- 由于保存策略没有在 Epoch 19 自动保存，当前用于推理评估的首选权重是 `checkpoint_epoch15.pth`
+- 下一步应用 `checkpoint_epoch15.pth` 跑 DSEC valid 推理，对比第一次全量 baseline 的 AEE `2.3923`
+
+### 17. bs4 从第 16 次 Epoch 15 本地 checkpoint 断点继续
+
+- 日期：`2026-04-24`
+- 状态：`成功`
+- 目的：第 16 次只配置了 `20` 个 epoch，本次从其最后可用 checkpoint 继续训练到 `Epoch 60`
+- MLflow experiment id：`793360624675302370`
+- run id：`98d161a3f7144441a60fa79083e0fffd`
+- 配置：[train_DSEC_supervised_SDformerFlow_en4_bs4_resume_epoch15_to60.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_bs4_resume_epoch15_to60.yml)
+- 脚本：[train_flow_parallel_supervised_SNN.py](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/train_flow_parallel_supervised_SNN.py)
+- 恢复逻辑：[utils.py](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/utils/utils.py)
+- 日志：[train_bs4_resume_epoch15_to60_20260424_163657.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/train_bs4_resume_epoch15_to60_20260424_163657.log)
+- checkpoint 目录：[bs4_resume_epoch15_to60_20260424_163657](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_resume_epoch15_to60_20260424_163657)
+- 续训来源模型：[checkpoint_epoch15.pth](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_continue_from_full_mlflow_20260424_025025/checkpoint_epoch15.pth)
+- 续训来源训练状态：[checkpoint_epoch15_state_dict.pth](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_continue_from_full_mlflow_20260424_025025/checkpoint_epoch15_state_dict.pth)
+
+本次改动：
+
+- 新增本地 checkpoint 加载支持：`--prev_runid` 可以直接传 `.pth` 文件
+- `--resume True` 时自动读取同名 `_state_dict.pth`
+- 恢复内容包括 optimizer、scheduler、AMP scaler 和 epoch 号
+- `loader.n_epochs` 改为 `60`
+- 保存策略补强：train loss 创新低或到最后一轮都会保存 checkpoint，避免最终 epoch 权重不落盘
+
+启动确认：
+
+- 日志确认：`Model restored from local checkpoint ... checkpoint_epoch15.pth`
+- 日志确认：`Training state resumed from local checkpoint ... checkpoint_epoch15_state_dict.pth`
+- 日志确认从 `Epoch 16` 开始
+- 后台 PID：`150229`
+
+结果：
+
+- 完整跑到 `Epoch 59`
+- 最终训练 loss：`1.436652611142533`
+- 最佳训练 loss：`1.436652611142533`（Epoch 59）
+- 最终 checkpoint：[checkpoint_epoch59.pth](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_resume_epoch15_to60_20260424_163657/checkpoint_epoch59.pth)
+- 最终 state_dict：[checkpoint_epoch59_state_dict.pth](/root/private_data/work/sdformer_codex/SDformer/experiments/checkpoints/bs4_resume_epoch15_to60_20260424_163657/checkpoint_epoch59_state_dict.pth)
+- MLflow 状态为 `FINISHED`
+
+### 18. 原始全量权重 vs bs4 epoch59 推理对比
+
+- 日期：`2026-04-25`
+- 状态：`成功`
+- 目的：用同一套 DSEC valid 推理配置，对比原始 full baseline 与 bs4 续训最终权重
+- 推理配置：[valid_DSEC_supervised_no_vis.yml](/root/private_data/work/sdformer_codex/SDformer/third_party/SDformerFlow/configs/valid_DSEC_supervised_no_vis.yml)
+- 报告：[infer_compare_original_vs_bs4_epoch59_20260425.md](/root/private_data/work/sdformer_codex/SDformer/experiments/reports/infer_compare_original_vs_bs4_epoch59_20260425.md)
+- 原始全量日志：[infer_compare_original_full_20260425.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/infer_compare_original_full_20260425.log)
+- bs4 epoch59 日志：[infer_compare_bs4_epoch59_20260425.log](/root/private_data/work/sdformer_codex/SDformer/experiments/logs/infer_compare_bs4_epoch59_20260425.log)
+
+结果：
+
+- 原始全量：`AEE=2.3922855505`，`AAE=12.0129445268`
+- bs4 epoch59：`AEE=1.3306697985`，`AAE=7.8131987781`
+- AEE 相对降低约 `44.38%`
+- AAE 相对降低约 `34.96%`
+
+结论：
+
+- bs4 续训后的最终权重在同一推理口径下明显优于原始 full baseline
+- 训练 loss/valid loss 不能单独作为当前优化成败判断，应以后续 DSEC valid AEE/AAE 为主

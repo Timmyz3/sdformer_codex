@@ -103,7 +103,8 @@ def valid_test(args, config_parser):
 
     remap = config["loader"]["remap"] if "remap" in config["loader"] else None
 
-    model = load_model(args.runid, model, device, remap = remap, test = True) # delete the relative positioning bias and index
+    model_source = args.checkpoint if args.checkpoint else args.runid
+    model = load_model(model_source, model, device, remap = remap, test = True) # delete the relative positioning bias and index
 
     functional.reset_net(model)
     functional.set_step_mode(model, config['data']['step_mode'])
@@ -334,6 +335,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--runid", default="4b3da75cc15e44da80b84c3fb35ad618", help="mlflow run")
+    parser.add_argument("--checkpoint", default="", help="optional local checkpoint path to evaluate")
     parser.add_argument(
         "--save_path",
         default="results/checkpoint_epoch{}.pth",
@@ -347,5 +349,4 @@ if __name__ == "__main__":
     # launch test
     if args.mode == "valid":
         valid_test(args, YAMLParser(args.config))
-
 

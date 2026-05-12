@@ -42,58 +42,40 @@ if $H1_STILL_RUNNING; then
     exit 0
 fi
 
-# H1 is NOT running
-if [ "$PREV_STATE" = "h1_running" ]; then
-    log "H1 TRAINING COMPLETED! Transitioning to A5..."
-    echo "h1_done" > "$STATE_FILE"
-fi
-
 CURRENT_STATE=$(cat "$STATE_FILE" 2>/dev/null || echo "unknown")
 
+# H1 done tracking (backward compat)
+if [ "$CURRENT_STATE" = "h1_running" ] && ! $H1_STILL_RUNNING; then
+    log "H1 training completed (detected retrospectively)"
+    CURRENT_STATE="h1_done"
+fi
+
 case "$CURRENT_STATE" in
-    h1_done)
-        log "=== Starting A5 smoke test ==="
-        SDFORMER_USE_MLFLOW=0 python SDformer/neuron_autoresearch/entrypoints/train.py \
-            --config "$A5_SMOKE_CONFIG" \
-            --prev_runid "$BASELINE_CKPT" \
-            > "$REPO_ROOT/neuron_autoresearch/experiments/a5_refractory/results/smoke_$(date +%Y%m%d_%H%M%S).log" 2>&1
-        SMOKE_EXIT=$?
-        if [ $SMOKE_EXIT -eq 0 ]; then
-            log "A5 smoke PASSED, launching full training..."
-            echo "a5_smoke_ok" > "$STATE_FILE"
-            # Launch full training in background
-            nohup bash -c "
-                cd /root/private_data/work/SDformer && \
-                SDFORMER_USE_MLFLOW=0 python neuron_autoresearch/entrypoints/train.py \
-                    --config $A5_FULL_CONFIG \
-                    --prev_runid $BASELINE_CKPT \
-                    > neuron_autoresearch/experiments/a5_refractory/results/a5_full_\$(date +%Y%m%d_%H%M%S).log 2>&1
-                echo \"a5_full_done\" > neuron_autoresearch/.monitor_state
-            " &
-            A5_PID=$!
-            log "A5 full training launched (PID=$A5_PID)"
-        else
-            log "A5 smoke FAILED (exit=$SMOKE_EXIT), check logs"
-            echo "a5_smoke_failed" > "$STATE_FILE"
-        fi
-        ;;
-    a5_smoke_ok)
-        A5_PID=$(pgrep -f "a5_refractory" 2>/dev/null | head -1 || true)
-        if [ -n "$A5_PID" ]; then
-            log "A5 full training running (PID=$A5_PID)"
+    a5_running)
+        A5_PID=$(pgrep -f "a5_refractory.*train.py" 2>/dev/null | head -1 || true)
+        if [ -z "$A5_PID" ]; then
+            A5_LOG=$(ls -t "$REPO_ROOT/neuron_autoresearch/experiments/a5_refractory/results/a5_full_"*.log 2>/dev/null | head -1 || true)
+            if [ -f "$A5_LOG" ]; then
+                LATEST=$(grep -oP "Epoch stats.*epoch_time" "$A5_LOG" 2>/dev/null | tail -1 || echo "unknown")
+                if echo "$LATEST" | grep -q "lr=0.000000"; then
+                    log "A5 full training COMPLETED! Latest: $LATEST"
+                    echo "a5_full_done" > "$STATE_FILE"
+                else
+                    log "A5 process not found but may have crashed. Latest: $LATEST"
+                    echo "a5_crashed" > "$STATE_FILE"
+                fi
+            fi
         else
             A5_LOG=$(ls -t "$REPO_ROOT/neuron_autoresearch/experiments/a5_refractory/results/a5_full_"*.log 2>/dev/null | head -1 || true)
             if [ -f "$A5_LOG" ]; then
-                LATEST=$(grep -oP 'Epoch \d+' "$A5_LOG" 2>/dev/null | tail -1 || echo "unknown")
-                log "A5 full possibly done, latest: $LATEST. Check: $A5_LOG"
+                LATEST=$(grep -oP "Epoch \d+" "$A5_LOG" 2>/dev/null | tail -1 || echo "unknown")
+                GATE_INFO=$(grep -oP "\Q[AR]\E.*" "$A5_LOG" 2>/dev/null | tail -1 || echo "")
+                log "A5 running: $LATEST"
             fi
         fi
         ;;
     a5_full_done)
-        log "=== A5 complete! Next: A1 FSN on G1 ==="
-        echo "ready_for_a1" > "$STATE_FILE"
-        ;;
-    *)
-        log "Unknown state: $CURRENT_STATE"
+        log "A5 complete! Time to profile results."
+        # Profile will be done manually for now
         ;;
 esac
