@@ -20,6 +20,10 @@ import torch.nn as nn
 def soc_gate(q_sign: torch.Tensor, k_sign: torch.Tensor, eps: float = 1e-6):
     """Compute token consensus gate from ternary Q/K sign tensors.
 
+    Aligned with design doc T5: denominator excludes silent channels,
+    uses softplus (not clamp), supports negative consensus path.
+    Fallback to uniform gate when all consensus <= 0.
+
     Args:
         q_sign: Q signs, shape [B, heads, n_tokens, head_dim], values in {-1,0,+1}
         k_sign: K signs, same shape and semantics
@@ -28,18 +32,22 @@ def soc_gate(q_sign: torch.Tensor, k_sign: torch.Tensor, eps: float = 1e-6):
     Returns:
         gate: per-token scalar gate, shape [B, heads, n_tokens, 1]
     """
-    q_active = q_sign.ne(0)
-    k_active = k_sign.ne(0)
-    both_active = q_active & k_active
+    both_active = q_sign.ne(0) & k_sign.ne(0)
     agree = (q_sign.eq(k_sign) & both_active).sum(dim=-1, keepdim=True).float()
     disagree = (q_sign.ne(k_sign) & both_active).sum(dim=-1, keepdim=True).float()
-    silent = (~both_active).sum(dim=-1, keepdim=True).float()
 
-    consensus = (agree - disagree) / (agree + disagree + silent + eps)
+    # Aligned with design doc: denominator excludes silent channels
+    consensus = (agree - disagree) / (agree + disagree + eps)
 
-    pos = torch.clamp(consensus, min=0.0)
-    denom = pos.sum(dim=2, keepdim=True) + eps
-    gate = pos / denom
+    # softplus preserves small values smoothly, unlike clamp
+    gate = torch.nn.functional.softplus(consensus)
+
+    # L1 normalize + uniform fallback
+    denom = gate.sum(dim=2, keepdim=True)
+    if (denom < eps).any():
+        gate = torch.where(denom < eps, torch.ones_like(gate), gate)
+        denom = gate.sum(dim=2, keepdim=True)
+    gate = gate / (denom + eps)
 
     n = q_sign.shape[2]
     gate = gate * float(n)
