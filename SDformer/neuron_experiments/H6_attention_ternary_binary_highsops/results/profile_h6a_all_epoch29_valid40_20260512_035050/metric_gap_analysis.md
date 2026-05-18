@@ -23,6 +23,9 @@ For each valid pixel:
 ```text
 pred = network_output * flow_scaling
 cosine = dot(pred, gt) / (|pred| * |gt|)
+
+
+
 AAE_pixel = acos(clamp(cosine)) * 180 / pi
 AAE = mean(AAE_pixel over valid pixels)
 ```

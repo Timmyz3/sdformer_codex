@@ -127,11 +127,31 @@ MLFLOW_MODEL_LOGGING_PATCH = """                if (
 """
 
 STATE_SAVE_ANCHOR = """                    state_path = checkpoint_path.replace(".pth", "_state_dict.pth")
+                    torch.save(
+                        {
+                            "optimizer": optimizer.state_dict(),
+                            "scheduler": scheduler.state_dict() if scheduler else None,
+                            "epoch": epoch,
+                            "scaler": scaler.state_dict() if scaler else None,
+                        },
+                        state_path,
+                    )
+                    print(f"Local checkpoint saved to {checkpoint_path}")
+                    print(f"Local training state saved to {state_path}")
 """
 STATE_SAVE_PATCH = """                    if not bool(config.get("runtime", {}).get("skip_state_save", False)):
                         state_path = checkpoint_path.replace(".pth", "_state_dict.pth")
-                    else:
-                        state_path = None
+                        torch.save(
+                            {
+                                "optimizer": optimizer.state_dict(),
+                                "scheduler": scheduler.state_dict() if scheduler else None,
+                                "epoch": epoch,
+                                "scaler": scaler.state_dict() if scaler else None,
+                            },
+                            state_path,
+                        )
+                        print(f"Local training state saved to {state_path}")
+                    print(f"Local checkpoint saved to {checkpoint_path}")
 """
 
 # --- Angular loss patch (enable the commented-out angular loss in baseline) ---
@@ -197,26 +217,27 @@ def _patch_source(source: str, baseline_entry: Path) -> str:
 
 def _install_angular_loss_hook(repo_root: Path):
     """Import hook: intercept flow_supervised to enable angular loss without modifying files."""
-    import importlib
-    import importlib.util
+    from importlib.abc import MetaPathFinder
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import spec_from_loader
 
     target_file = str(
         repo_root / "third_party" / "SDformerFlow" / "loss" / "flow_supervised.py"
     )
 
-    class AngularLoader(importlib.machinery.SourceFileLoader):
+    class AngularLoader(SourceFileLoader):
         def get_source(self, fullname):
             source = super().get_source(fullname)
             if ANG_LOSS_ANCHOR in source:
                 source = source.replace(ANG_LOSS_ANCHOR, ANG_LOSS_PATCH, 1)
             return source
 
-    class AngularFinder(importlib.abc.MetaPathFinder):
+    class AngularFinder(MetaPathFinder):
         def find_spec(self, fullname, path, target=None):
             if fullname != "loss.flow_supervised":
                 return None
             loader = AngularLoader(fullname, target_file)
-            return importlib.util.spec_from_loader(fullname, loader, origin=target_file)
+            return spec_from_loader(fullname, loader, origin=target_file)
 
     sys.meta_path.insert(0, AngularFinder())
 

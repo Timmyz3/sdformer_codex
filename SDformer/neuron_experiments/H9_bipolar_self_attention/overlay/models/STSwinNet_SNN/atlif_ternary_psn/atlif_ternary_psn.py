@@ -77,6 +77,10 @@ class ATLIFTernaryPSN(nn.Module):
         threshold_lr_scale: float | None = None,
         target_rate: float | None = None,
         target_rate_eta: float = 0.0,
+        negative_target_rate: float | None = None,
+        negative_target_eta: float = 0.0,
+        negative_scale_min: float | None = None,
+        negative_scale_max: float | None = None,
         output_mode: str = "ternary",
     ) -> None:
         super().__init__()
@@ -94,6 +98,10 @@ class ATLIFTernaryPSN(nn.Module):
         self.threshold_lr_scale = None if threshold_lr_scale is None else float(threshold_lr_scale)
         self.target_rate = target_rate
         self.target_rate_eta = float(target_rate_eta)
+        self.negative_target_rate = negative_target_rate
+        self.negative_target_eta = float(negative_target_eta)
+        self.negative_scale_min = negative_scale_min
+        self.negative_scale_max = negative_scale_max
         self.r = 0.0
         self.pos_r = 0.0
         self.neg_r = 0.0

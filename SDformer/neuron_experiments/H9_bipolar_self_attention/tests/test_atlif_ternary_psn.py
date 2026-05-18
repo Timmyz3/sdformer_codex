@@ -187,6 +187,52 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
         self.assertLess(float(node.thresh.detach()), before)
         self.assertLess(float(stats["target_feedback_mean"]), 0.0)
 
+    def test_negative_rate_feedback_can_keep_negative_trigger_active(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=0.0,
+            negative_threshold_scale=8.0,
+            negative_target_rate=0.01,
+            negative_target_eta=10.0,
+            negative_scale_min=2.0,
+            negative_scale_max=12.0,
+        )
+        node.neg_r = 0.0
+        before = float(node.negative_threshold_scale)
+
+        stats = threshold_update(node, lr=1.0, raw_config={"enabled": True})
+
+        self.assertLess(float(node.negative_threshold_scale), before)
+        self.assertGreaterEqual(float(node.negative_threshold_scale), 2.0)
+        self.assertLess(float(stats["negative_scale_feedback_mean"]), 0.0)
+
+    def test_negative_rate_feedback_can_prevent_dense_negative_spikes(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=0.0,
+            negative_threshold_scale=3.0,
+            negative_target_rate=0.01,
+            negative_target_eta=10.0,
+            negative_scale_min=2.0,
+            negative_scale_max=12.0,
+        )
+        node.neg_r = 0.05
+        before = float(node.negative_threshold_scale)
+
+        stats = threshold_update(node, lr=1.0, raw_config={"enabled": True})
+
+        self.assertGreater(float(node.negative_threshold_scale), before)
+        self.assertLessEqual(float(node.negative_threshold_scale), 12.0)
+        self.assertGreater(float(stats["negative_scale_feedback_mean"]), 0.0)
+
     def test_target_groups_apply_path_specific_strength(self):
         from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, install_atlif_ternary_psn
 

@@ -31,25 +31,25 @@ modules, not as an invasive baseline rewrite.
 
 ## Variants
 
-### H9a TMP Only
+### H9a Shiftmax Compatibility
 
-Q/K use PSN+ATLIF ternary output and attention scores use a direct ternary
-matrix product. No Shiftmax is applied. This is a negative-control style
-experiment: if AAE stays bad, it supports the idea that ternary polarity alone is
-insufficient.
+Start from the H8m neuron stack and add a Shiftmax compatibility gate to the
+existing SDFormerFlow QK attention path. This is the first non-redundant H9
+experiment: it directly tests whether the H6/H8 AAE collapse comes from missing
+attention normalization rather than from the PSN+ATLIF ternary neuron itself.
 
-### H9b TMP + Shiftmax
+### H9b Attention Stage/Block Search
 
-Q/K use PSN+ATLIF ternary output and attention scores pass through Shiftmax
-before weighting V. This is the core H9 test. Success means AAE moves back
-toward baseline while SOPs remain below baseline.
+Use the H9a compatibility mechanism on selected attention stages or blocks. This
+search identifies whether early, middle, or late attention blocks tolerate
+ternary+Shiftmax best.
 
 ### H9c BSA + H6 Sparse FFN
 
-Start from H9b and add the H6-style high-SOP sparse modules:
+Start from the best H9b attention subset and search high-SOP sparse modules:
 
-- stage0 FFN binary ATLIF
-- stage0/stage2 downsample binary ATLIF
+- stage/block FFN binary ATLIF
+- downsample binary ATLIF
 
 This tests whether the final sparse story works once attention normalization is
 fixed. Attention keeps ternary PSN+ATLIF, while FFN/downsample use binary
@@ -71,16 +71,16 @@ only for comparison.
 
 - `overlay/models/STSwinNet_SNN/atlif_ternary_psn/`: copy of the H8 PSN+ATLIF
   neuron stack, kept local so H9 is an independent experiment.
-- `overlay/models/STSwinNet_SNN/bsa_attention.py`: TMP attention helpers and
-  Shiftmax implementation.
+- `overlay/models/STSwinNet_SNN/bsa_attention.py`: Shiftmax compatibility gate
+  and later TMP attention helpers.
 - `overlay/models/STSwinNet_SNN/bsa_installer.py`: module installer or forward
   patcher for selected Swin attention blocks.
 - `entrypoints/train.py`: baseline training entrypoint with H9 install hook.
 - `entrypoints/profile_sops.py`: baseline profiling entrypoint with H9 install
   hook and existing SOP metrics.
-- `configs/h9a_tmp_only_*.yml`: short/full configs for H9a.
-- `configs/h9b_shiftmax_*.yml`: short/full configs for H9b.
-- `configs/h9c_shiftmax_h6sparse_*.yml`: short/full configs for H9c.
+- `configs/h9a_shiftmax_compat_*.yml`: short/full configs for H9a.
+- `configs/h9b_*stage*_*.yml`: stage/block search configs for H9b.
+- `configs/h9c_*ffn*_*.yml`: combined attention plus FFN sparse configs.
 
 ## Success Criteria
 

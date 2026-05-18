@@ -1,4 +1,4 @@
-"""Install H8 ATLIF ternary/binary PSN neurons on SDFormerFlow modules."""
+"""Install H9 ATLIF ternary/binary PSN neurons on SDFormerFlow modules."""
 
 from __future__ import annotations
 
@@ -28,10 +28,16 @@ class ATLIFTernaryPSNConfig:
     negative_threshold_scale: float = 5.0
     target_rate: float | None = None
     target_rate_eta: float = 0.0
+    negative_target_rate: float | None = None
+    negative_target_eta: float = 0.0
+    negative_scale_min: float | None = None
+    negative_scale_max: float | None = None
     output_mode: str = "ternary"
+    preserve_loaded_threshold: bool = False
     stage_activity_eta: Any = None
     stage_max_threshold: Any = None
     stage_negative_threshold_scale: Any = None
+    stage_negative_target_rate: Any = None
     stage_target_rate: Any = None
     target_groups: tuple[dict[str, Any], ...] = ()
 
@@ -58,10 +64,18 @@ def config_from_dict(raw: dict | None) -> ATLIFTernaryPSNConfig:
         negative_threshold_scale=float(raw.get("negative_threshold_scale", 5.0)),
         target_rate=None if raw.get("target_rate") is None else float(raw.get("target_rate")),
         target_rate_eta=float(raw.get("target_rate_eta", 0.0)),
+        negative_target_rate=None
+        if raw.get("negative_target_rate") is None
+        else float(raw.get("negative_target_rate")),
+        negative_target_eta=float(raw.get("negative_target_eta", 0.0)),
+        negative_scale_min=None if raw.get("negative_scale_min") is None else float(raw.get("negative_scale_min")),
+        negative_scale_max=None if raw.get("negative_scale_max") is None else float(raw.get("negative_scale_max")),
         output_mode=str(raw.get("output_mode", "ternary")),
+        preserve_loaded_threshold=bool(raw.get("preserve_loaded_threshold", False)),
         stage_activity_eta=raw.get("stage_activity_eta"),
         stage_max_threshold=raw.get("stage_max_threshold"),
         stage_negative_threshold_scale=raw.get("stage_negative_threshold_scale"),
+        stage_negative_target_rate=raw.get("stage_negative_target_rate"),
         stage_target_rate=raw.get("stage_target_rate"),
         target_groups=tuple(dict(group) for group in target_groups),
     )
@@ -138,10 +152,17 @@ def _install_on_wrapper(
     if isinstance(current, ATLIFTernaryPSN):
         return False
     device = _module_device(wrapper)
+    initial_threshold = cfg.threshold_init
+    if cfg.preserve_loaded_threshold and hasattr(current, "thresh"):
+        loaded_threshold = getattr(current, "thresh")
+        if isinstance(loaded_threshold, torch.Tensor):
+            initial_threshold = float(loaded_threshold.detach().float().mean().cpu())
+        elif isinstance(loaded_threshold, Number):
+            initial_threshold = float(loaded_threshold)
     wrapper.spiking_neuron = ATLIFTernaryPSN(
         T=getattr(current, "T", getattr(wrapper, "num_steps", 10)),
         base_psn=current,
-        thresh=cfg.threshold_init,
+        thresh=initial_threshold,
         sparsity_eta=cfg.threshold_eta,
         negative_threshold_scale=float(
             _stage_value(cfg.stage_negative_threshold_scale, stage_idx, cfg.negative_threshold_scale)
@@ -156,6 +177,12 @@ def _install_on_wrapper(
         if _stage_value(cfg.stage_target_rate, stage_idx, cfg.target_rate) is None
         else float(_stage_value(cfg.stage_target_rate, stage_idx, cfg.target_rate)),
         target_rate_eta=cfg.target_rate_eta,
+        negative_target_rate=None
+        if _stage_value(cfg.stage_negative_target_rate, stage_idx, cfg.negative_target_rate) is None
+        else float(_stage_value(cfg.stage_negative_target_rate, stage_idx, cfg.negative_target_rate)),
+        negative_target_eta=cfg.negative_target_eta,
+        negative_scale_min=cfg.negative_scale_min,
+        negative_scale_max=cfg.negative_scale_max,
         output_mode=cfg.output_mode,
     ).to(device)
     return True
@@ -173,13 +200,31 @@ def _config_for_group(base: ATLIFTernaryPSNConfig, group: dict[str, Any]) -> ATL
         "negative_threshold_scale",
         "target_rate",
         "target_rate_eta",
+        "negative_target_rate",
+        "negative_target_eta",
+        "negative_scale_min",
+        "negative_scale_max",
         "output_mode",
     ):
         if key in group:
             value = group[key]
             if value is None:
                 overrides[key] = None
-            elif key in {"threshold_init", "threshold_eta", "threshold_lr_scale", "min_threshold", "max_threshold", "activity_eta", "negative_threshold_scale", "target_rate", "target_rate_eta"}:
+            elif key in {
+                "threshold_init",
+                "threshold_eta",
+                "threshold_lr_scale",
+                "min_threshold",
+                "max_threshold",
+                "activity_eta",
+                "negative_threshold_scale",
+                "target_rate",
+                "target_rate_eta",
+                "negative_target_rate",
+                "negative_target_eta",
+                "negative_scale_min",
+                "negative_scale_max",
+            }:
                 overrides[key] = float(value)
             else:
                 overrides[key] = value
@@ -274,6 +319,7 @@ def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> di
         return {"num_modules": 0}
     updates: list[float] = []
     feedbacks: list[float] = []
+    negative_scale_feedbacks: list[float] = []
     for _, module in iter_atlif_ternary_psn(model):
         update_value = module.update_value
         if isinstance(update_value, Number):
@@ -302,11 +348,31 @@ def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> di
             min_value = -float("inf") if min_threshold is None else float(min_threshold)
             max_value = float("inf") if max_threshold is None else float(max_threshold)
             module.thresh.data.clamp_(min=min_value, max=max_value)
+        negative_target_rate = getattr(module, "negative_target_rate", cfg.negative_target_rate)
+        negative_target_eta = float(getattr(module, "negative_target_eta", cfg.negative_target_eta))
+        if (
+            getattr(module, "output_mode", "ternary") == "ternary"
+            and negative_target_rate is not None
+            and negative_target_eta != 0.0
+        ):
+            negative_scale_feedback = negative_target_eta * (float(module.neg_r) - float(negative_target_rate))
+            new_scale = float(module.negative_threshold_scale) + negative_scale_feedback
+            min_scale = getattr(module, "negative_scale_min", cfg.negative_scale_min)
+            max_scale = getattr(module, "negative_scale_max", cfg.negative_scale_max)
+            if min_scale is not None:
+                new_scale = max(float(min_scale), new_scale)
+            if max_scale is not None:
+                new_scale = min(float(max_scale), new_scale)
+            module.negative_threshold_scale = new_scale
+            negative_scale_feedbacks.append(float(negative_scale_feedback))
         module.update_value = 0.0
     summary = atlif_ternary_summary(model)
     summary["raw_update_mean"] = sum(updates) / len(updates) if updates else 0.0
     summary["effective_update_mean"] = summary["raw_update_mean"] * float(lr) * cfg.threshold_lr_scale
     summary["target_feedback_mean"] = sum(feedbacks) / len(feedbacks) if feedbacks else 0.0
+    summary["negative_scale_feedback_mean"] = (
+        sum(negative_scale_feedbacks) / len(negative_scale_feedbacks) if negative_scale_feedbacks else 0.0
+    )
     return summary
 
 
@@ -320,6 +386,10 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
     neg = [float(module.neg_r) for _, module in modules]
     updates = [float(module.update_value) for _, module in modules]
     target_rates = [module.target_rate for _, module in modules if module.target_rate is not None]
+    negative_scales = [float(module.negative_threshold_scale) for _, module in modules]
+    negative_target_rates = [
+        module.negative_target_rate for _, module in modules if getattr(module, "negative_target_rate", None) is not None
+    ]
     return {
         "num_modules": len(modules),
         "threshold_mean": sum(thresholds) / len(thresholds),
@@ -330,4 +400,10 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
         "neg_mean": sum(neg) / len(neg),
         "update_mean": sum(updates) / len(updates),
         "target_rate_mean": sum(float(value) for value in target_rates) / len(target_rates) if target_rates else 0.0,
+        "negative_scale_mean": sum(negative_scales) / len(negative_scales),
+        "negative_scale_min": min(negative_scales),
+        "negative_scale_max": max(negative_scales),
+        "negative_target_rate_mean": sum(float(value) for value in negative_target_rates) / len(negative_target_rates)
+        if negative_target_rates
+        else 0.0,
     }

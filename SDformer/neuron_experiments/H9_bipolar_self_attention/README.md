@@ -38,14 +38,14 @@ Reference branch:
 
 | Experiment | Attention change | FFN/downsample change | Purpose |
 | --- | --- | --- | --- |
-| H9a | PSN+ATLIF ternary Q/K + TMP only | baseline PSN | isolate polarity without Shiftmax |
-| H9b | PSN+ATLIF ternary Q/K + TMP + Shiftmax | baseline PSN | test whether attention normalization fixes AAE |
-| H9c | H9b attention | H6-style PSN+ATLIF binary FFN/downsample | combine attention fix with high-SOP sparse story |
+| H9a | H8m PSN+ATLIF neurons + Shiftmax compatibility gate on QK attention | H8m FFN/downsample sparse set | test whether attention normalization fixes AAE without changing the skeleton |
+| H9b | H9a mechanism on selected attention stage/block subsets | matched FFN/downsample setting | search where Shiftmax-compatible ternary attention is useful |
+| H9c | best H9b attention subset | searched PSN+ATLIF binary FFN/downsample subsets | combine direction-stable attention with high-SOP sparse layers |
 | H9d optional | A2OS2A-style Q binary, K ReLU, V ternary | baseline PSN | separate reference branch, not the H9 mainline |
 
 The mainline H9a-H9c must keep PSN weights/biases and ATLIF learnable
-thresholds. It should not replace the neuron with a pure TSN unless that branch
-is explicitly labeled as an ablation.
+thresholds. H9a is not a TMP-only repeat of H6/H8; it is the first compatibility
+run that adds Shiftmax-style normalization on top of the H8m neuron stack.
 
 ## Isolation Rules
 

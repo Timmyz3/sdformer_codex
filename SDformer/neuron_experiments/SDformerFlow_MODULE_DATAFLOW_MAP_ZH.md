@@ -208,21 +208,7 @@ encoder stage 配置：
 swin_depths:    [2, 2, 6, 2]
 swin_num_heads: [3, 6, 12, 24]
 base channels:  [96, 192, 384, 768]
-```
-
-stage 流：
-
-```text
-input B,C,T,H,W
-  -> rearrange to B,T,H,W,C
-  -> for each Swin block:
-      -> attention branch
-      -> FFN / MLP branch
-  -> optional patch merging / downsample
-  -> output B,C',T,H',W'
-```
-
-重要命名：
+``` 
 
 ```text
 sttmultires_unet.encoders.swin3d.layers.{stage}.swin_blocks.{block}.attn.*

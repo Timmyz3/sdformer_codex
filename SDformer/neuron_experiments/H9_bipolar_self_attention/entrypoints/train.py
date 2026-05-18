@@ -1,4 +1,4 @@
-"""H8 training entrypoint for staged FFN ATLIF/binary expansion."""
+"""H9 training entrypoint for PSN-ATLIF ternary attention plus Shiftmax."""
 
 from __future__ import annotations
 
@@ -18,14 +18,28 @@ PIN_MEMORY_PATCH = """"pin_memory": bool(config["loader"].get("pin_memory", True
 LOAD_MODEL_ANCHOR = """    model = load_model(args.prev_runid, model, device, remap)
 """
 
-LOAD_MODEL_PATCH = """    model = load_model(args.prev_runid, model, device, remap)
+LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import register_shiftmax_pickle_compat
+    register_shiftmax_pickle_compat()
+    if bool(config.get("runtime", {}).get("load_full_model", False)) and args.prev_runid and os.path.isfile(args.prev_runid):
+        model = torch.load(args.prev_runid, map_location=device, weights_only=False)
+        model.to(device)
+        print("H9 full model restored from local checkpoint " + args.prev_runid + "\\n")
+    else:
+        model = load_model(args.prev_runid, model, device, remap)
     from models.STSwinNet_SNN.atlif_ternary_psn import apply_trainable_mode, atlif_ternary_summary, install_atlif_ternary_psn
-    installed_h8 = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
-    if installed_h8:
-        print(f"[H8] installed ATLIFTernaryPSN: {len(installed_h8)} modules")
-        print(f"[H8] targets: {installed_h8[:8]}{' ...' if len(installed_h8) > 8 else ''}")
-        print(f"[H8] trainable: {apply_trainable_mode(model, config.get('atlif_ternary_psn'))}")
-        print(f"[H8] summary after install: {atlif_ternary_summary(model)}")
+    from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, shiftmax_attention_summary
+    installed_h9 = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
+    if installed_h9:
+        print(f"[H9] installed ATLIFTernaryPSN: {len(installed_h9)} modules")
+        print(f"[H9] neuron targets: {installed_h9[:8]}{' ...' if len(installed_h9) > 8 else ''}")
+    installed_h9_bsa = install_shiftmax_attention(model, config.get("bsa_attention"))
+    if installed_h9_bsa:
+        print(f"[H9] installed Shiftmax attention: {len(installed_h9_bsa)} modules")
+        print(f"[H9] attention targets: {installed_h9_bsa[:8]}{' ...' if len(installed_h9_bsa) > 8 else ''}")
+    if installed_h9 or installed_h9_bsa:
+        print(f"[H9] trainable: {apply_trainable_mode(model, config.get('atlif_ternary_psn'))}")
+        print(f"[H9] neuron summary after install: {atlif_ternary_summary(model)}")
+        print(f"[H9] attention summary after install: {shiftmax_attention_summary(model)}")
 """
 
 LOSS_ANCHOR = """                # print("loss: ", curr_loss.item())
@@ -53,7 +67,7 @@ SCALER_STEP_PATCH = """                    scaler.step(optimizer)
                     h8_update_stats = threshold_update(model, optimizer.param_groups[0]["lr"], config.get("atlif_ternary_psn"))
                     h6_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
-                        print(f"[H8] step {sample + 1} update: {h8_update_stats}")
+                        print(f"[H9] step {sample + 1} update: {h8_update_stats}")
                     scaler.update()
 """
 
@@ -67,7 +81,7 @@ OPTIMIZER_STEP_PATCH = """                    optimizer.step()
                     h8_update_stats = threshold_update(model, optimizer.param_groups[0]["lr"], config.get("atlif_ternary_psn"))
                     h6_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
-                        print(f"[H8] step {sample + 1} update: {h8_update_stats}")
+                        print(f"[H9] step {sample + 1} update: {h8_update_stats}")
 
                 # zero grad
 """
@@ -86,7 +100,9 @@ EPOCH_STATS_PATCH = """        print(
         )
         if config.get("atlif_ternary_psn", {}).get("enabled", False):
             from models.STSwinNet_SNN.atlif_ternary_psn import atlif_ternary_summary
-            print(f"[H8] ATLIFTernaryPSN summary: {atlif_ternary_summary(model)}")
+            from models.STSwinNet_SNN.bsa_attention import shiftmax_attention_summary
+            print(f"[H9] ATLIFTernaryPSN summary: {atlif_ternary_summary(model)}")
+            print(f"[H9] Shiftmax attention summary: {shiftmax_attention_summary(model)}")
 """
 
 TRAIN_STEP_ANCHOR = """            sample += 1
@@ -97,7 +113,7 @@ TRAIN_STEP_PATCH = """            sample += 1
             train_sample_count += chunk.shape[0]
             max_train_steps = int(config.get("runtime", {}).get("max_train_steps", 0) or 0)
             if max_train_steps > 0 and sample >= max_train_steps:
-                print(f"[H8] stopping train epoch early at max_train_steps={max_train_steps}")
+                print(f"[H9] stopping train epoch early at max_train_steps={max_train_steps}")
                 break
 """
 
@@ -107,6 +123,16 @@ SAVE_ANCHOR = """            should_save_model = epoch_loss < best_loss or epoch
 SAVE_PATCH = """            should_save_model = (
                 epoch_loss < best_loss or epoch == config["loader"]["n_epochs"] - 1
             ) and not bool(config.get("runtime", {}).get("skip_save", False))
+"""
+
+MLFLOW_MODEL_LOGGING_ANCHOR = """                if use_ml_flow and use_mlflow_model_logging:
+"""
+
+MLFLOW_MODEL_LOGGING_PATCH = """                if (
+                    use_ml_flow
+                    and use_mlflow_model_logging
+                    and bool(config.get("runtime", {}).get("use_mlflow_model_logging", False))
+                ):
 """
 
 STATE_SAVE_ANCHOR = """                    state_path = checkpoint_path.replace(".pth", "_state_dict.pth")
@@ -136,6 +162,16 @@ STATE_SAVE_PATCH = """                    if not bool(config.get("runtime", {}).
                         )
                         print(f"Local training state saved to {state_path}")
                     print(f"Local checkpoint saved to {checkpoint_path}")
+"""
+
+LOSS_FUNCTION_ANCHOR = """    # Define the loss function
+    loss_function = flow_loss_supervised(config,device)
+"""
+
+LOSS_FUNCTION_PATCH = """    # Define the loss function
+    loss_function = flow_loss_supervised(config,device)
+    from models.STSwinNet_SNN.h9_losses import maybe_replace_flow_loss
+    loss_function = maybe_replace_flow_loss(loss_function, config, device)
 """
 
 
@@ -181,7 +217,9 @@ def _patch_source(source: str, baseline_entry: Path) -> str:
         (EPOCH_STATS_ANCHOR, EPOCH_STATS_PATCH),
         (TRAIN_STEP_ANCHOR, TRAIN_STEP_PATCH),
         (SAVE_ANCHOR, SAVE_PATCH),
+        (MLFLOW_MODEL_LOGGING_ANCHOR, MLFLOW_MODEL_LOGGING_PATCH),
         (STATE_SAVE_ANCHOR, STATE_SAVE_PATCH),
+        (LOSS_FUNCTION_ANCHOR, LOSS_FUNCTION_PATCH),
     ):
         if anchor not in source:
             raise RuntimeError(f"Could not patch {baseline_entry}: missing anchor {anchor[:60]!r}")
