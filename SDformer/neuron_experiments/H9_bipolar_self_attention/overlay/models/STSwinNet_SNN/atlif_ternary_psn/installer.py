@@ -32,7 +32,9 @@ class ATLIFTernaryPSNConfig:
     negative_target_eta: float = 0.0
     negative_scale_min: float | None = None
     negative_scale_max: float | None = None
+    center_mode: str = "zero"
     output_mode: str = "ternary"
+    threshold_mode: str = "asymmetric_scale"
     preserve_loaded_threshold: bool = False
     stage_activity_eta: Any = None
     stage_max_threshold: Any = None
@@ -70,7 +72,9 @@ def config_from_dict(raw: dict | None) -> ATLIFTernaryPSNConfig:
         negative_target_eta=float(raw.get("negative_target_eta", 0.0)),
         negative_scale_min=None if raw.get("negative_scale_min") is None else float(raw.get("negative_scale_min")),
         negative_scale_max=None if raw.get("negative_scale_max") is None else float(raw.get("negative_scale_max")),
+        center_mode=str(raw.get("center_mode", "zero")),
         output_mode=str(raw.get("output_mode", "ternary")),
+        threshold_mode=str(raw.get("threshold_mode", "asymmetric_scale")),
         preserve_loaded_threshold=bool(raw.get("preserve_loaded_threshold", False)),
         stage_activity_eta=raw.get("stage_activity_eta"),
         stage_max_threshold=raw.get("stage_max_threshold"),
@@ -183,7 +187,9 @@ def _install_on_wrapper(
         negative_target_eta=cfg.negative_target_eta,
         negative_scale_min=cfg.negative_scale_min,
         negative_scale_max=cfg.negative_scale_max,
+        center_mode=cfg.center_mode,
         output_mode=cfg.output_mode,
+        threshold_mode=cfg.threshold_mode,
     ).to(device)
     return True
 
@@ -204,7 +210,9 @@ def _config_for_group(base: ATLIFTernaryPSNConfig, group: dict[str, Any]) -> ATL
         "negative_target_eta",
         "negative_scale_min",
         "negative_scale_max",
+        "center_mode",
         "output_mode",
+        "threshold_mode",
     ):
         if key in group:
             value = group[key]
@@ -352,6 +360,7 @@ def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> di
         negative_target_eta = float(getattr(module, "negative_target_eta", cfg.negative_target_eta))
         if (
             getattr(module, "output_mode", "ternary") == "ternary"
+            and getattr(module, "threshold_mode", "asymmetric_scale") == "asymmetric_scale"
             and negative_target_rate is not None
             and negative_target_eta != 0.0
         ):
@@ -384,9 +393,21 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
     rates = [float(module.r) for _, module in modules]
     pos = [float(module.pos_r) for _, module in modules]
     neg = [float(module.neg_r) for _, module in modules]
+    ternary_modules = [(name, module) for name, module in modules if getattr(module, "output_mode", "ternary") == "ternary"]
+    binary_modules = [(name, module) for name, module in modules if getattr(module, "output_mode", "ternary") == "binary"]
+    ternary_rates = [float(module.r) for _, module in ternary_modules]
+    ternary_pos = [float(module.pos_r) for _, module in ternary_modules]
+    ternary_neg = [float(module.neg_r) for _, module in ternary_modules]
+    binary_rates = [float(module.r) for _, module in binary_modules]
     updates = [float(module.update_value) for _, module in modules]
     target_rates = [module.target_rate for _, module in modules if module.target_rate is not None]
     negative_scales = [float(module.negative_threshold_scale) for _, module in modules]
+    threshold_modes = [
+        str(getattr(module, "threshold_mode", "asymmetric_scale"))
+        for _, module in modules
+        if getattr(module, "output_mode", "ternary") == "ternary"
+    ]
+    center_modes = [str(getattr(module, "center_mode", "zero")) for _, module in modules]
     negative_target_rates = [
         module.negative_target_rate for _, module in modules if getattr(module, "negative_target_rate", None) is not None
     ]
@@ -398,11 +419,19 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
         "activity_mean": sum(rates) / len(rates),
         "pos_mean": sum(pos) / len(pos),
         "neg_mean": sum(neg) / len(neg),
+        "ternary_activity_mean": sum(ternary_rates) / len(ternary_rates) if ternary_rates else 0.0,
+        "ternary_pos_mean": sum(ternary_pos) / len(ternary_pos) if ternary_pos else 0.0,
+        "ternary_neg_mean": sum(ternary_neg) / len(ternary_neg) if ternary_neg else 0.0,
+        "binary_activity_mean": sum(binary_rates) / len(binary_rates) if binary_rates else 0.0,
         "update_mean": sum(updates) / len(updates),
         "target_rate_mean": sum(float(value) for value in target_rates) / len(target_rates) if target_rates else 0.0,
         "negative_scale_mean": sum(negative_scales) / len(negative_scales),
         "negative_scale_min": min(negative_scales),
         "negative_scale_max": max(negative_scales),
+        "asymmetric_scale_modules": sum(1 for mode in threshold_modes if mode == "asymmetric_scale"),
+        "symmetric_bsa_tsn_modules": sum(1 for mode in threshold_modes if mode == "symmetric_bsa_tsn"),
+        "symmetric_target_rate_modules": sum(1 for mode in threshold_modes if mode == "symmetric_target_rate"),
+        "center_bias_modules": sum(1 for mode in center_modes if mode == "bias"),
         "negative_target_rate_mean": sum(float(value) for value in negative_target_rates) / len(negative_target_rates)
         if negative_target_rates
         else 0.0,

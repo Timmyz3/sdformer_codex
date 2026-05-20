@@ -81,13 +81,23 @@ class ATLIFTernaryPSN(nn.Module):
         negative_target_eta: float = 0.0,
         negative_scale_min: float | None = None,
         negative_scale_max: float | None = None,
+        center_mode: str = "zero",
         output_mode: str = "ternary",
+        threshold_mode: str = "asymmetric_scale",
     ) -> None:
         super().__init__()
         self.T = int(T)
         if output_mode not in {"ternary", "binary"}:
             raise ValueError("output_mode must be ternary or binary")
+        if center_mode not in {"zero", "bias"}:
+            raise ValueError("center_mode must be zero or bias")
+        if threshold_mode not in {"asymmetric_scale", "symmetric_bsa_tsn", "symmetric_target_rate"}:
+            raise ValueError(
+                "threshold_mode must be asymmetric_scale, symmetric_bsa_tsn, or symmetric_target_rate"
+            )
         self.output_mode = output_mode
+        self.threshold_mode = threshold_mode
+        self.center_mode = center_mode
         self.act = TernarySurrogate.apply if output_mode == "ternary" else BinarySurrogate.apply
         self.thresh = nn.Parameter(torch.tensor(float(thresh)), requires_grad=True)
         self.sp = float(sparsity_eta)
@@ -118,11 +128,16 @@ class ATLIFTernaryPSN(nn.Module):
             nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
             nn.init.constant_(self.bias, -1.0)
             self.surrogate_function = None
+        center = self.bias.detach().clone() if center_mode == "bias" else torch.zeros_like(self.bias.detach())
+        self.register_buffer("center", center)
 
     def forward(self, x_seq: torch.Tensor) -> torch.Tensor:
         h_seq = torch.addmm(self.bias, self.weight, x_seq.flatten(1))
+        if self.center_mode != "zero":
+            h_seq = h_seq - self.center.to(device=h_seq.device, dtype=h_seq.dtype)
         if self.output_mode == "ternary":
-            spike, thre_updates = self.act(h_seq, self.thresh, self.sp, self.negative_threshold_scale)
+            negative_scale = 1.0 if self.threshold_mode in {"symmetric_bsa_tsn", "symmetric_target_rate"} else self.negative_threshold_scale
+            spike, thre_updates = self.act(h_seq, self.thresh, self.sp, negative_scale)
         else:
             spike, thre_updates = self.act(h_seq, self.thresh, self.sp)
         self.update_value += thre_updates
@@ -140,5 +155,6 @@ class ATLIFTernaryPSN(nn.Module):
     def extra_repr(self) -> str:
         return (
             f"T={self.T}, thresh={float(self.thresh.detach().cpu()):.4f}, "
-            f"sp={self.sp}, neg_scale={self.negative_threshold_scale}, mode={self.output_mode}"
+            f"sp={self.sp}, neg_scale={self.negative_threshold_scale}, "
+            f"mode={self.output_mode}, threshold_mode={self.threshold_mode}, center_mode={self.center_mode}"
         )

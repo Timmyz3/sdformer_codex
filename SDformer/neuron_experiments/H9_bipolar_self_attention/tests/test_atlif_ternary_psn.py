@@ -233,6 +233,108 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
         self.assertLessEqual(float(node.negative_threshold_scale), 12.0)
         self.assertGreater(float(stats["negative_scale_feedback_mean"]), 0.0)
 
+    def test_asymmetric_scale_keeps_legacy_negative_threshold(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=0.0,
+            negative_threshold_scale=30.0,
+            threshold_mode="asymmetric_scale",
+        )
+        x = torch.tensor([[0.6, -1.0], [0.0, 0.0], [0.0, 0.0]])
+
+        out = node(x)
+
+        unique = set(torch.unique(out).tolist())
+        self.assertIn(0.5, unique)
+        self.assertNotIn(-0.5, unique)
+        self.assertGreater(node.pos_r, 0.0)
+        self.assertEqual(node.neg_r, 0.0)
+
+    def test_symmetric_bsa_tsn_ignores_negative_scale_for_trigger(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=0.0,
+            negative_threshold_scale=30.0,
+            threshold_mode="symmetric_bsa_tsn",
+        )
+        x = torch.tensor([[0.6, -0.6, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+
+        out = node(x)
+
+        self.assertTrue(set(torch.unique(out).tolist()).issubset({-0.5, 0.0, 0.5}))
+        self.assertGreater(node.pos_r, 0.0)
+        self.assertGreater(node.neg_r, 0.0)
+
+    def test_bias_center_mode_treats_psn_bias_as_silent_center(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+
+        class BiasOnlyPSN(nn.Module):
+            T = 2
+
+            def __init__(self):
+                super().__init__()
+                self.weight = nn.Parameter(torch.zeros(2, 2))
+                self.bias = nn.Parameter(torch.full((2, 1), -1.0))
+
+        x = torch.zeros(2, 1, 1)
+        zero_center = ATLIFTernaryPSN(
+            T=2,
+            base_psn=BiasOnlyPSN(),
+            thresh=0.1,
+            output_mode="ternary",
+            threshold_mode="symmetric_target_rate",
+            center_mode="zero",
+        )
+        bias_center = ATLIFTernaryPSN(
+            T=2,
+            base_psn=BiasOnlyPSN(),
+            thresh=0.1,
+            output_mode="ternary",
+            threshold_mode="symmetric_target_rate",
+            center_mode="bias",
+        )
+
+        self.assertLess(zero_center(x).sum().item(), 0.0)
+        self.assertEqual(bias_center(x).abs().sum().item(), 0.0)
+
+    def test_symmetric_target_rate_uses_total_rate_not_negative_scale_feedback(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=0.0,
+            negative_threshold_scale=30.0,
+            negative_target_rate=0.1,
+            negative_target_eta=10.0,
+            target_rate=0.8,
+            target_rate_eta=1e-3,
+            threshold_mode="symmetric_target_rate",
+        )
+        _ = node(torch.zeros(3, 4))
+        before_scale = float(node.negative_threshold_scale)
+        before_thresh = float(node.thresh.detach())
+
+        stats = threshold_update(
+            node,
+            lr=1.0,
+            raw_config={"enabled": True, "threshold_lr_scale": 100.0, "min_threshold": 0.1},
+        )
+
+        self.assertEqual(float(node.negative_threshold_scale), before_scale)
+        self.assertLess(float(node.thresh.detach()), before_thresh)
+        self.assertLess(float(stats["target_feedback_mean"]), 0.0)
+        self.assertEqual(float(stats["negative_scale_feedback_mean"]), 0.0)
+
     def test_target_groups_apply_path_specific_strength(self):
         from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, install_atlif_ternary_psn
 
@@ -251,6 +353,7 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
                         "activity_eta": 0.1,
                         "max_threshold": 0.11,
                         "negative_threshold_scale": 10.0,
+                        "threshold_mode": "symmetric_bsa_tsn",
                         "output_mode": "binary",
                     }
                 ],
@@ -262,6 +365,7 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
         self.assertEqual(model.custom_high_sops.spiking_neuron.activity_eta, 0.1)
         self.assertEqual(model.custom_high_sops.spiking_neuron.max_threshold, 0.11)
         self.assertEqual(model.custom_high_sops.spiking_neuron.negative_threshold_scale, 10.0)
+        self.assertEqual(model.custom_high_sops.spiking_neuron.threshold_mode, "symmetric_bsa_tsn")
         self.assertEqual(model.custom_high_sops.spiking_neuron.output_mode, "binary")
 
     def test_binary_mode_has_no_negative_spikes(self):

@@ -68,6 +68,21 @@ class ShiftmaxAttentionTest(unittest.TestCase):
         self.assertTrue(torch.all(row_sum <= 1.0 + 1e-6))
         self.assertFalse(torch.isnan(probs).any())
 
+    def test_shiftnorm_row_sum_is_power_two_bounded(self):
+        from models.STSwinNet_SNN.bsa_attention import l1norm, shiftnorm
+
+        scores = torch.randint(0, 9, (4, 3, 17, 1)).float()
+        probs = shiftnorm(scores, dim=2)
+        row_sum = probs.sum(dim=2)
+
+        self.assertTrue(torch.all(row_sum > 0.5 - 1e-6))
+        self.assertTrue(torch.all(row_sum <= 1.0 + 1e-6))
+        self.assertFalse(torch.isnan(probs).any())
+
+        l1_probs = l1norm(scores, dim=2)
+        self.assertTrue(torch.allclose(l1_probs.sum(dim=2), torch.ones_like(row_sum), atol=1e-6))
+        self.assertFalse(torch.isnan(l1_probs).any())
+
     def test_target_block_selection_reports_missing_blocks(self):
         from models.STSwinNet_SNN.bsa_attention import _iter_attention_modules, config_from_dict
 
@@ -119,6 +134,146 @@ class ShiftmaxAttentionTest(unittest.TestCase):
         self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
         self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
         self.assertLessEqual(module.h9_shiftmax_row_sum_mean, 1.0)
+
+    def test_h13_consensus_modes_run_on_tiny_attention(self):
+        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, mode: str):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": mode,
+                        "center_scores": False,
+                        "preserve_mean": False,
+                        "consensus_bias": 1.0,
+                    }
+                )
+
+        for mode in ("signed_consensus_shiftmax", "signed_consensus_shiftnorm", "signed_consensus_popcount_l1"):
+            module = TinyAttention(mode)
+            x = torch.randn(1, 2, 1, 2, 4)
+            out, spikes = _qk_shiftmax_gate_forward(module, x)
+
+            self.assertEqual(tuple(out.shape), (2, 2, 4))
+            self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+            self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
+            self.assertLessEqual(module.h9_shiftmax_row_sum_mean, 1.0 + 1e-6)
+            self.assertFalse(torch.isnan(out).any())
+
+    def test_strict_bsa_matrix_modes_use_bounded_shiftmax(self):
+        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, value_mode: str):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": "strict_bsa_shiftmax",
+                        "center_scores": True,
+                        "preserve_mean": False,
+                        "consensus_score_norm": "head_dim",
+                        "value_mode": value_mode,
+                    }
+                )
+
+        for value_mode in ("sign", "threshold"):
+            module = TinyAttention(value_mode)
+            x = torch.randn(1, 2, 1, 2, 4)
+            out, spikes = _qk_shiftmax_gate_forward(module, x)
+
+            self.assertEqual(tuple(out.shape), (2, 2, 4))
+            self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+            self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.5 - 1e-6)
+            self.assertLessEqual(module.h9_shiftmax_row_sum_mean, 1.0 + 1e-6)
+            self.assertFalse(torch.isnan(out).any())
+
+    def test_h18_paper_backed_modes_run_on_tiny_attention(self):
+        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, mode: str):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": mode,
+                        "center_scores": False,
+                        "preserve_mean": False,
+                        "consensus_bias": 0.02,
+                        "alpha0": 0.02,
+                        "mismatch_penalty": 0.5,
+                    }
+                )
+
+        for mode in (
+            "ternary_alpha_xnor_shiftmax",
+            "ternary_alpha_xnor_l1",
+            "a2os2a_gate",
+            "alpha_xnor_matrix_shiftmax",
+            "alpha_xnor_matrix_l1",
+            "a2os2a_direct",
+            "hamming_binary_direct",
+            "hamming_ternary_active_direct",
+        ):
+            module = TinyAttention(mode)
+            x = torch.randn(1, 2, 1, 2, 4)
+            out, spikes = _qk_shiftmax_gate_forward(module, x)
+
+            self.assertEqual(tuple(out.shape), (2, 2, 4))
+            self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+            self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
+            self.assertFalse(torch.isnan(out).any())
 
 
 if __name__ == "__main__":

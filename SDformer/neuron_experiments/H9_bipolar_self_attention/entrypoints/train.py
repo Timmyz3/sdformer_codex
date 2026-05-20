@@ -120,8 +120,11 @@ TRAIN_STEP_PATCH = """            sample += 1
 SAVE_ANCHOR = """            should_save_model = epoch_loss < best_loss or epoch == config["loader"]["n_epochs"] - 1
 """
 
-SAVE_PATCH = """            should_save_model = (
-                epoch_loss < best_loss or epoch == config["loader"]["n_epochs"] - 1
+SAVE_PATCH = """            force_save_epochs = set(int(item) for item in config.get("runtime", {}).get("force_save_epochs", []) or [])
+            should_save_model = (
+                epoch_loss < best_loss
+                or epoch == config["loader"]["n_epochs"] - 1
+                or epoch in force_save_epochs
             ) and not bool(config.get("runtime", {}).get("skip_save", False))
 """
 
