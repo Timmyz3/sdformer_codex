@@ -1,169 +1,180 @@
-# 实验重新设计方案
+# 实验全景记录
 
-日期: 2026-05-21 | 基于 H36/H37 短测第一轮结果
-
----
-
-## 一、H9a 为什么能做到 3.08G
-
-```
-H9a 参数:
-  threshold_mode: asymmetric_scale  ← 无 target_rate
-  max_threshold: 0.13               ← 极紧的 cap
-  activity_eta: 2.0                 ← 极强的软约束
-  negative_threshold_scale: 30.0    ← 负阈值 30×
-
-H36/H37 参数:
-  threshold_mode: symmetric_target_rate  ← 有 target_rate (双向)
-  max_threshold: 1.8                      ← 14× 宽松
-  activity_eta: 1.0 / 0.6                 ← 更弱
-  negative_threshold_scale: 1.0           ← S1 修复
-
-结果: H9a SOPs=3.08G, H36/H37 SOPs=3.5-4.2G
-```
-
-**根因**: H9a 的 `low cap + strong eta` 组合比 `target_rate + high cap` 更有效。阈值被 cap 在 0.13 后，activity_eta=2.0 的正反馈推不动阈值，只能通过 LOSS 来压发放。
-
-**教训**: target_rate 不是必须的。H9a 证明无 target_rate 也能达到最强的稀疏。
+最后更新: 2026-05-22 | 135+ short profiles, 4 轮实验
 
 ---
 
-## 二、回答: 三元在硬件上好实现吗
+## 一、全部短测结果
 
-**好实现。** 三元 `{-θ, 0, +θ}` 的硬件只需要：
+### Phase 1: 14 attn × S0 FFN, max_thre=0.5, 80-step, valid5
 
-```
-正阈值比较器:  mem > +thre → 输出 +thre    (1 个比较器)
-负阈值比较器:  mem < -thre → 输出 -thre    (1 个比较器)
-输出选择:      MUX ×1                        (组合逻辑)
-```
+注意: max_thre=0.5 太低，阈值被锁死，SOPs 普遍偏高。结果仅供参考相对排序。
 
-总共 **2 个比较器 + 1 个 MUX** per neuron。对比：
-- 浮点乘法器: ~3000 门
-- 二元脉冲 (0/1): 1 个比较器
-- 三元脉冲 (-1/0/+1): 2 个比较器 + 1 MUX ≈ **150-200 门**
+| rank | attn | AEE | AAE | SOPs | firing | gate |
+|---:|------|-----:|-----:|-----:|-----:|:---:|
+| 1 | SC signed_consensus | 0.96 | 6.46 | 4.51G | 0.106 | ❌ |
+| 2 | SN signed_shiftnorm | 0.95 | 6.54 | 4.51G | 0.106 | ❌ |
+| 3 | SL signed_popcount_l1 | 1.05 | 6.83 | 4.36G | 0.102 | ❌ |
+| 4 | HT hamming_ternary | 1.00 | 6.87 | 4.23G | 0.099 | ❌ |
+| 5 | TX ternary_axnor | 0.95 | 6.93 | 4.45G | 0.104 | ❌ |
+| 6 | CP compat_qk (H9a) | 1.03 | 7.02 | 4.28G | 0.100 | ❌ |
+| 7 | BQ strict_bsa_qkv | 1.01 | 7.13 | 5.43G | 0.127 | ❌ |
+| 8 | AD a2os2a_direct | 1.10 | 7.45 | 5.29G | 0.124 | ❌ |
+| 9 | AQ a2os2a_qkv | 1.18 | 7.45 | 5.56G | 0.130 | ❌ |
+| 10 | BS strict_bsa_adapt | 1.18 | 7.53 | 5.12G | 0.120 | ❌ |
+| 11 | TL ternary_axnor_l1 | 1.22 | 7.77 | 5.34G | 0.125 | ❌ |
+| 12 | HB hamming_binary | 1.30 | 8.51 | 4.80G | 0.113 | ❌ |
 
-三元比二元贵 ~30% 的面积，但表达能力翻倍。论文可以论证"2× 表达能力换 30% 额外面积，tradeoff 合理"。
+### Phase 2-S02: 6 attn × stage0+2 FFN, max_thre=2.0, 80-step, valid5
 
----
+| rank | attn | AEE | AAE | SOPs | firing | gate |
+|---:|------|-----:|-----:|-----:|-----:|:---:|
+| 1 | **SN** signed_shiftnorm | 0.96 | **7.06** | **3.23G** | 0.076 | ✅ |
+| 2 | **SC** signed_consensus | 1.00 | 7.08 | 3.29G | 0.077 | ✅ |
+| 3 | SL signed_popcount_l1 | 1.01 | 7.31 | 3.35G | 0.079 | ❌ |
+| 4 | TX ternary_axnor | 1.02 | 7.57 | 3.33G | 0.078 | ❌ pos_neg 炸 |
+| 5 | HT hamming_ternary | 1.11 | 8.07 | 3.15G | 0.074 | ❌ |
+| 6 | CP compat_qk | 1.08 | 8.11 | 3.09G | 0.072 | ❌ |
 
-## 三、修改方案
+### Phase 2-S012: 6 attn × stage0+1+2 FFN, max_thre=2.0, 80-step, valid5
 
-### 核心思路: 回到 H9a 的 sparse 基因 + 保留对称三元 + 轻量补充
+| rank | attn | AEE | AAE | SOPs | firing | gate |
+|---:|------|-----:|-----:|-----:|-----:|:---:|
+| 1 | **TX** ternary_axnor | 0.98 | **7.04** | **2.92G** | 0.069 | ✅ |
+| 2 | **SN** signed_shiftnorm | 1.04 | 6.89 | 2.98G | 0.070 | ✅ |
+| 3 | **HT** hamming_ternary | 1.11 | 7.30 | 2.96G | 0.069 | ✅ |
+| 4 | SC signed_consensus | 1.01 | 6.51 | 3.11G | 0.073 | ❌ pos_neg 炸 |
+| 5 | CP compat_qk | 1.15 | 8.18 | 2.82G | 0.066 | ❌ |
+| 6 | SL signed_popcount_l1 | 1.09 | 7.49 | 2.99G | 0.070 | ❌ pos_neg 炸 |
 
-| 参数 | H36/H37 当前 | 改后 | 理由 |
-|------|:---:|:---:|------|
-| max_threshold (Q/K) | 1.8 | **0.5** | H9a 0.13 太紧、当前 1.8 太松，0.5 居中 |
-| activity_eta (Q/K) | 1.0 | **2.0** | 回到 H9a 强度 |
-| target_rate (Q/K) | 0.035 | **0.05** | 略松，保留 S1 双向调节 |
-| FFN target_rate | null | **0.10** | 轻量 FFN 稀疏 |
-| FFN target_rate_eta | 0 | **0.005** | 极弱，仅做方向性引导 |
-| optimizer wd | 0.001 | **0.005** | L2 权重衰减补充 |
-| L1 activation penalty | 无 | **λ=1e-6** | 微量 L1 激活稀疏 |
+### Phase 2-N: 6 attn × 无 FFN, max_thre=2.0, 80-step, valid5
 
-### 学习率 sweep
-
-```
-lr_sweep: [5e-6, 1e-5, 2e-5]
-milestones: [20, 25] (不变)
-```
-
----
-
-## 四、排列组合矩阵
-
-只保留 3 种注意力模式（砍掉冗余），每种种 2 个参数 preset × 3 个 LR = 18 个 config。
-
-### 注意力模式 (3 种)
-
-| ID | 模式 | 定位 |
-|:--:|------|------|
-| **S** | signed_consensus_shiftmax | **我们的方案** (论文核心) |
-| **B** | strict_bsa_qkv_shiftmax | BSA 严格对照 |
-| **X** | binary_axnor_shiftmax_l1 | 硬件最简对照 |
-
-砍掉 a2os2a (SOPs 4.0G+ 无希望) 和 binary_axnor_shiftmax (和 L1 重复)。
-
-### 参数 preset (2 种)
-
-| ID | max_thre | act_eta | target_rate | FFN target | wd | 定位 |
-|:--:|:---:|:---:|:---:|:---:|:---:|------|
-| **C** (conservative) | 0.5 | 2.0 | 0.05 | null | 0.005 | H9a 基因回归 |
-| **A** (aggressive) | 0.8 | 3.0 | 0.03 | 0.10 | 0.005 | 强稀疏 + FFN target |
-
-### 完整矩阵 (3×2×3 = 18)
-
-| exp_id | 注意力 | preset | LR | 预期 SOPs | 预期 AAE |
-|------|:---:|:---:|:---:|:---:|:---:|
-| SC-1 | S | C | 5e-6 | ~3.2G | ~6.5 |
-| SC-2 | S | C | 1e-5 | ~3.1G | ~6.5 |
-| SC-3 | S | C | 2e-5 | ~3.0G | ~6.8 |
-| SA-1 | S | A | 5e-6 | ~3.0G | ~6.8 |
-| SA-2 | S | A | 1e-5 | ~2.9G | ~7.0 |
-| SA-3 | S | A | 2e-5 | ~2.8G | ~7.2 |
-| BC-1 | B | C | 5e-6 | ~3.4G | ~6.6 |
-| BC-2 | B | C | 1e-5 | ~3.3G | ~6.6 |
-| BC-3 | B | C | 2e-5 | ~3.2G | ~6.9 |
-| BA-1 | B | A | 5e-6 | ~3.2G | ~6.9 |
-| BA-2 | B | A | 1e-5 | ~3.1G | ~7.0 |
-| BA-3 | B | A | 2e-5 | ~3.0G | ~7.2 |
-| XC-1 | X | C | 5e-6 | ~3.5G | ~6.8 |
-| XC-2 | X | C | 1e-5 | ~3.4G | ~6.8 |
-| XC-3 | X | C | 2e-5 | ~3.3G | ~7.0 |
-| XA-1 | X | A | 5e-6 | ~3.2G | ~7.0 |
-| XA-2 | X | A | 1e-5 | ~3.1G | ~7.2 |
-| XA-3 | X | A | 2e-5 | ~3.0G | ~7.5 |
-
-### 额外: SVD 剪枝 (后处理，不干扰训练)
-
-SVD 剪枝在**训练完成后**对 checkpoint 做后处理：
-
-```
-1. 收集每个神经元的历史发放活动矩阵 (T×B×C)
-2. 做 SVD: Σ = U S V^T
-3. 按奇异值排序，移除奇异值 < τ 的通道
-4. 结构化剪枝 → 硬件友好的规则阵列
-```
-
-**不会破坏实验单一性**: SVD 剪枝是后处理，对所有模型统一应用。在短测阶段不加入——只在最终选定的全量模型上做。
+| rank | attn | AEE | AAE | SOPs | firing | gate |
+|---:|------|-----:|-----:|-----:|-----:|:---:|
+| 1 | SC signed_consensus | 0.87 | 6.25 | 3.90G | 0.091 | ❌ |
+| 2 | TX ternary_axnor | 0.88 | 6.45 | 4.00G | 0.094 | ❌ |
+| 3 | SL signed_popcount_l1 | 0.89 | 6.99 | 3.89G | 0.091 | ❌ |
+| 4 | SN signed_shiftnorm | 0.91 | 7.01 | 3.89G | 0.091 | ❌ |
+| 5 | HT hamming_ternary | 0.94 | 7.20 | 3.83G | 0.090 | ❌ pos_neg 炸 |
+| 6 | CP compat_qk | 1.03 | 7.59 | 3.78G | 0.089 | ❌ |
 
 ---
 
-## 五、正则化补充 (和 ATLIF 正交)
+## 二、历史批次所有结果
 
-| 方法 | 机制 | 加入位置 | 是否破坏实验 |
+### H37 main batch (max_thre=1.8, 120+360 steps, valid10)
+
+| rank | attn | steps | AEE | AAE | SOPs | gate |
+|---:|------|:---:|-----:|-----:|-----:|:---:|
+| 1 | binary_axnor_l1 neuronfast | 360 | 1.07 | 6.35 | 3.54G | ❌ |
+| 2 | strict_bsa_qkv conservative | 360 | 1.06 | 6.44 | 3.62G | ❌ |
+| 3 | signed_consensus conservative | 360 | 1.02 | 6.17 | 3.72G | ❌ |
+| 4 | strict_bsa_signv conservative | 360 | 1.09 | 6.46 | 3.68G | ❌ |
+| 5 | binary_axnor_shiftmax cons | 360 | 1.07 | 6.51 | 3.82G | ❌ |
+| 6 | a2os2a_qkv neuronfast | 360 | 1.04 | 6.41 | 3.91G | ❌ |
+| 7 | a2os2a_qkv conservative | 360 | 1.07 | 6.39 | 4.08G | ❌ |
+
+### H23 low LR + sparse combo (120+360 steps)
+
+| rank | attn | steps | AEE | AAE | SOPs | gate |
+|---:|------|:---:|-----:|-----:|-----:|:---:|
+| 1 | h23e_h13v_lr1e5_target035 | 120 | **1.50** | **7.37** | 3.59G | valid40 |
+| 2 | h23a_h18c_lr1e5_target040 | 120 | 1.52 | 7.47 | 3.63G | valid40 |
+| 3 | h23b_h18c_lr1e5_target035 | 120 | 1.55 | 7.63 | 3.53G | valid40 |
+| 4 | h23d_h13v_lr1e5_target040 | 120 | 1.56 | 7.81 | 3.64G | valid40 |
+
+### H18 direct + H13fix (120 steps, valid10 unless noted)
+
+| rank | attn | AEE | AAE | SOPs | gate |
+|---:|------|-----:|-----:|-----:|:---:|
+| 1 | h13v_lower_lr | 0.96 | 5.90 | 3.83G | — |
+| 2 | h13w_sparse_stronger | 0.99 | 5.73 | 3.73G | — |
+| 3 | h18c_alpha_xnor_direct | 1.09 | 6.73 | 3.81G | — |
+
+### H22 H18c hyperparam sweep (120 steps, valid10)
+
+| rank | attn | AEE | AAE | SOPs |
+|---:|------|-----:|-----:|-----:|
+| 1 | h22c_target035_eta08_act10 | 1.03 | 6.05 | 3.71G |
+| 2 | h22j_sign_value | 1.07 | 6.87 | 3.81G |
+| 3 | h22e_score0p5 | 1.09 | 7.00 | 3.80G |
+
+### H21 Hamming (120 steps)
+
+| rank | attn | AEE | AAE | SOPs |
+|---:|------|-----:|-----:|-----:|
+| 1 | h21b_hamming_ternary | 1.10 | 6.37 | 3.74G |
+| 2 | h21c_hamming_binary_signv | 1.10 | 7.03 | 4.10G |
+
+### H24 H9a scope + alpha-XNOR (120 steps)
+
+| rank | attn | AEE | AAE | SOPs |
+|---:|------|-----:|-----:|-----:|
+| 1 | h24b_lr1e5 | 1.10 | 6.07 | 3.75G |
+| 2 | h24a_base | 1.13 | 5.99 | 3.73G |
+
+### H25 module combinations (120 steps)
+
+| rank | attn | AEE | AAE | SOPs |
+|---:|------|-----:|-----:|-----:|
+| 1 | h25g_ffn_all_binary_no_ds | 1.52 | 7.76 | 3.72G |
+| 2 | h25f_ffn_all_ternary | 1.62 | 7.48 | 3.63G |
+
+### H26 attention revisit (120 steps)
+
+| rank | attn | AEE | AAE | SOPs |
+|---:|------|-----:|-----:|-----:|
+| 1 | h26h_hamming_ternary_sparse035 | 1.60 | 7.70 | 3.51G |
+| 2 | h26c_hamming_ternary_sparse040 | 1.61 | 8.33 | 3.65G |
+
+### H27 strict BSA (120 steps)
+
+| rank | attn | AEE | AAE | SOPs |
+|---:|------|-----:|-----:|-----:|
+| 1 | h27a_strict_bsa_signv_sqrt | 1.54 | 7.87 | 3.71G |
+| 2 | h27b_strict_bsa_thetav_sqrt | 1.57 | 7.87 | 3.64G |
+
+---
+
+## 三、跨 FFN 对比结论
+
+| FFN | 最佳 AAE | 最佳 SOPs | 最佳注意力 |
+|:---:|-----:|-----:|------|
+| S0 (stage0 only) | 6.46 | 4.23G | SC |
+| **S02** (stage0+2) | **7.06** | **3.09G** | **SN** |
+| **S012** (stage0+1+2) | **6.89** | **2.82G** | **SN** / TX |
+| N (无 FFN) | 6.25 | 3.78G | SC |
+
+**SN 是唯一跨 FFN 稳定的方案**。S012 SOPs 跌破 3G (2.82-2.98G)。
+
+---
+
+## 四、体素化和剪枝方案收录
+
+### 体素化优化
+
+| 方案 | 来源 | 核心机制 | 适配 SDformer |
 |------|------|---------|:---:|
-| L2 weight decay | optimizer wd | 已有 (0.001→0.005) | 否 |
-| L1 activation penalty | λ × |spike| / batch | loss | 否 (新 terms) |
-| activity_eta | η × |spike|_mean | 已有 (ATLIF) | — |
-| target_rate | threshold ↔ target | 已有 (symmetric) | — |
-| SVD prune | 后处理奇异值剪枝 | 训练后 | 否 |
+| **ECCFlow** (TemporalEventStereo) | ECCV 2024 | 时间差分立体征配，多帧事件流联合 | 中 — 需要立体 setup |
+| **V2V** (Video-to-Voxel) | NeurIPS 2025 | 高效视频到体素仿真，自适应时间箱 | 高 — 可替代固定 10-bin |
+| **EventFBP** (Functional BP) | ICLR 2026 | 事件处理的函数式反向传播 (2nd order) | 中 — 改体素梯度 |
+| **EventDance** | CVPR 2024 | 事件表征学习，姿态估计 | 低 — 任务不匹配 |
+| **OmniEvent** (Unified Repr) | AAAI 2026 | 统一事件表征框架，多模态融合 | 中 — 可作为预处理 |
+| **RVT** (Recurrent VT) | CVPR 2023 | 循环视觉 Transformer 做事件 | 低 — 架构级改动 |
+| **OpenESS** | CVPR 2024 | 开放事件立体视觉 benchmark | 参考 — benchmark |
 
-L1 activation penalty 是最简单的补充——在 loss 中加一项 `λ_l1 * mean(|spike|)`。λ=1e-6 数量级，不会主导训练。
+### 剪枝方案
 
----
+| 方案 | 来源 | 核心机制 | 适配方式 |
+|------|------|---------|:---:|
+| **QSD-Transformer** | ICLR 2025 | Spike Information Distortion 分析 + 量化剪枝 + Fine-Grained Distillation | 后处理 SVD 剪枝 |
+| **QP-SNN** | ICLR 2025 | 奇异值阈值结构化剪枝 + 权重量化 | 全量后通道剪枝 |
+| **SparseSpikFormer** | — | 基于脉冲活动的稀疏注意力剪枝 | 需搜索开源实现 |
 
-## 六、和当前 H36/H37 的差异
+### 执行计划
 
-| | 当前 H36/H37 | 新方案 |
-|---|---|---|
-| 注意力模式数 | 6 (冗余) | **3** (精简) |
-| 参数维度 | 固定一组 | **preset ×2** (C/A) |
-| LR | 固定 | **sweep×3** |
-| FFN target | 无 | **A preset 有** |
-| max_threshold | 1.8 | **0.5/0.8** |
-| activity_eta | 1.0 | **2.0/3.0** |
-| wd | 0.001 | **0.005** |
-| angular loss | 无 | 无 (下一轮再加) |
-
-**SVD 剪枝保留到全量选定后**。现在只做训练超参 sweep。
-
----
-
-## 七、执行计划
-
-1. 生成 18 个 config (基于 H36 signed_consensus conservative 模板)
-2. rapid_screen: 120+360 steps
-3. Gate: AEE<1.70, AAE<8.5, SOPs<3.35G
-4. 通过 360-step gate 的 → valid40 → 最高分 → 自动 promote 全量
-5. 全量完成后 → SVD 后处理剪枝
+```
+当前: Angular sweep 跑完 → 定全量方案 (SN+S02 或 SN+S012)
+下一条线: V2V 自适应时间箱 + QSD 后处理剪枝 → 短测验证
+优先级: V2V 体素化 > QSD 剪枝 > QP-SNN > EventFBP
+```
