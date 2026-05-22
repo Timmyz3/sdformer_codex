@@ -179,7 +179,11 @@ class ShiftmaxAttentionTest(unittest.TestCase):
             self.assertFalse(torch.isnan(out).any())
 
     def test_strict_bsa_matrix_modes_use_bounded_shiftmax(self):
-        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+        from models.STSwinNet_SNN.bsa_attention import (
+            _ensure_independent_value_branch,
+            _qk_shiftmax_gate_forward,
+            config_from_dict,
+        )
 
         class IdentitySN(nn.Module):
             def forward(self, x):
@@ -222,6 +226,28 @@ class ShiftmaxAttentionTest(unittest.TestCase):
             self.assertLessEqual(module.h9_shiftmax_row_sum_mean, 1.0 + 1e-6)
             self.assertFalse(torch.isnan(out).any())
 
+        module = TinyAttention("sign")
+        cfg = config_from_dict(
+            {
+                "enabled": True,
+                "mode": "strict_bsa_qkv_shiftmax",
+                "center_scores": True,
+                "preserve_mean": False,
+                "consensus_score_norm": "sqrt_head_dim",
+                "value_mode": "sign",
+            }
+        )
+        module._h9_shiftmax_cfg = cfg
+        _ensure_independent_value_branch(module, cfg)
+        self.assertTrue(hasattr(module, "linear_v"))
+        self.assertTrue(hasattr(module, "sn_v"))
+        self.assertIsNot(module.linear_v, module.linear_k)
+        x = torch.randn(1, 2, 1, 2, 4)
+        out, spikes = _qk_shiftmax_gate_forward(module, x)
+        self.assertEqual(tuple(out.shape), (2, 2, 4))
+        self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+        self.assertFalse(torch.isnan(out).any())
+
     def test_h18_paper_backed_modes_run_on_tiny_attention(self):
         from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
 
@@ -262,7 +288,10 @@ class ShiftmaxAttentionTest(unittest.TestCase):
             "a2os2a_gate",
             "alpha_xnor_matrix_shiftmax",
             "alpha_xnor_matrix_l1",
+            "binary_alpha_xnor_matrix_shiftmax",
+            "binary_alpha_xnor_matrix_l1",
             "a2os2a_direct",
+            "a2os2a_qkv_l1",
             "hamming_binary_direct",
             "hamming_ternary_active_direct",
         ):

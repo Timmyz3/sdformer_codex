@@ -20,14 +20,72 @@ LOAD_MODEL_ANCHOR = """    model = load_model(args.prev_runid, model, device, re
 
 LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import register_shiftmax_pickle_compat
     register_shiftmax_pickle_compat()
+    from models.STSwinNet_SNN.atlif_ternary_psn import apply_trainable_mode, atlif_ternary_summary, install_atlif_ternary_psn
+    from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, shiftmax_attention_summary
+
+    def _h9_is_overlay_key(key):
+        markers = (".linear_v.", ".bn_v.", ".sn_v.", ".spiking_neuron.thresh", ".spiking_neuron.center")
+        return any(marker in key for marker in markers)
+
+    def _h9_load_model_with_audit(prev_runid, model, device, remap=None):
+        if prev_runid and os.path.isfile(prev_runid):
+            from utils.utils import _extract_pretrained_state_dict, load_pretrained_interpolate, load_model as _baseline_load_model, remap_pretrained_keys_swin
+            pretrained_model = torch.load(prev_runid, map_location=device, weights_only=False)
+            pretrained_dict = _extract_pretrained_state_dict(pretrained_model, test=False)
+            if remap == "v2":
+                print(">>>>>>>>>> Remapping pre-trained keys for SWIN ..........")
+                pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
+            elif remap == "v1":
+                load_pretrained_interpolate(model, pretrained_dict)
+                del pretrained_model
+                torch.cuda.empty_cache()
+                print("Model restored from local checkpoint " + prev_runid + "\\n")
+                return model
+            overlay_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_overlay_key(key)]
+            incompatible = model.load_state_dict(pretrained_dict, strict=False)
+            missing = list(getattr(incompatible, "missing_keys", []))
+            unexpected = list(getattr(incompatible, "unexpected_keys", []))
+            overlay_missing = [key for key in missing if _h9_is_overlay_key(key)]
+            overlay_unexpected = [key for key in unexpected if _h9_is_overlay_key(key)]
+            print(
+                f"[H9] load audit: checkpoint_overlay_keys={len(overlay_checkpoint_keys)}, "
+                f"missing={len(missing)}, unexpected={len(unexpected)}"
+            )
+            if missing:
+                print(f"[H9] missing keys sample: {missing[:12]}")
+            if unexpected:
+                print(f"[H9] unexpected keys sample: {unexpected[:12]}")
+            if overlay_unexpected:
+                raise RuntimeError(
+                    "[H9] overlay checkpoint keys were not registered before load: "
+                    + str(overlay_unexpected[:20])
+                )
+            if overlay_checkpoint_keys and overlay_missing:
+                raise RuntimeError(
+                    "[H9] checkpoint contains overlay parameters but matching model keys are missing: "
+                    + str(overlay_missing[:20])
+                )
+            del pretrained_model
+            torch.cuda.empty_cache()
+            print("Model restored from local checkpoint " + prev_runid + "\\n")
+            return model
+        from utils.utils import load_model as _baseline_load_model
+        return _baseline_load_model(prev_runid, model, device, remap)
+
     if bool(config.get("runtime", {}).get("load_full_model", False)) and args.prev_runid and os.path.isfile(args.prev_runid):
         model = torch.load(args.prev_runid, map_location=device, weights_only=False)
         model.to(device)
         print("H9 full model restored from local checkpoint " + args.prev_runid + "\\n")
     else:
-        model = load_model(args.prev_runid, model, device, remap)
-    from models.STSwinNet_SNN.atlif_ternary_psn import apply_trainable_mode, atlif_ternary_summary, install_atlif_ternary_psn
-    from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, shiftmax_attention_summary
+        installed_h9_preload = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
+        installed_h9_bsa_preload = install_shiftmax_attention(model, config.get("bsa_attention"))
+        if installed_h9_preload:
+            print(f"[H9] installed ATLIFTernaryPSN before load: {len(installed_h9_preload)} modules")
+            print(f"[H9] preload neuron targets: {installed_h9_preload[:8]}{' ...' if len(installed_h9_preload) > 8 else ''}")
+        if installed_h9_bsa_preload:
+            print(f"[H9] installed attention before load: {len(installed_h9_bsa_preload)} modules")
+            print(f"[H9] preload attention targets: {installed_h9_bsa_preload[:8]}{' ...' if len(installed_h9_bsa_preload) > 8 else ''}")
+        model = _h9_load_model_with_audit(args.prev_runid, model, device, remap)
     installed_h9 = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
     if installed_h9:
         print(f"[H9] installed ATLIFTernaryPSN: {len(installed_h9)} modules")
@@ -62,11 +120,20 @@ SCALER_STEP_ANCHOR = """                    scaler.step(optimizer)
                     scaler.update()
 """
 
-SCALER_STEP_PATCH = """                    scaler.step(optimizer)
+SCALER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimizer import apply_lr_warmup, lr_warmup_factor
+                    h40_global_step = epoch * len(train_dataloader) + sample + 1
+                    h40_lrs = apply_lr_warmup(optimizer, h40_global_step, config)
+                    scaler.step(optimizer)
                     from models.STSwinNet_SNN.atlif_ternary_psn import threshold_update
-                    h8_update_stats = threshold_update(model, optimizer.param_groups[0]["lr"], config.get("atlif_ternary_psn"))
+                    h40_warmup_factor = lr_warmup_factor(h40_global_step, config)
+                    h8_threshold_lr = float(config.get("atlif_ternary_psn", {}).get("threshold_base_lr", optimizer.param_groups[0]["lr"]))
+                    if h40_warmup_factor is not None:
+                        h8_threshold_lr *= h40_warmup_factor
+                    h8_update_stats = threshold_update(model, h8_threshold_lr, config.get("atlif_ternary_psn"))
                     h6_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
+                        if h40_lrs is not None:
+                            print(f"[H40] step {sample + 1} lr_warmup: {h40_lrs}")
                         print(f"[H9] step {sample + 1} update: {h8_update_stats}")
                     scaler.update()
 """
@@ -76,11 +143,20 @@ OPTIMIZER_STEP_ANCHOR = """                    optimizer.step()
                 # zero grad
 """
 
-OPTIMIZER_STEP_PATCH = """                    optimizer.step()
+OPTIMIZER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimizer import apply_lr_warmup, lr_warmup_factor
+                    h40_global_step = epoch * len(train_dataloader) + sample + 1
+                    h40_lrs = apply_lr_warmup(optimizer, h40_global_step, config)
+                    optimizer.step()
                     from models.STSwinNet_SNN.atlif_ternary_psn import threshold_update
-                    h8_update_stats = threshold_update(model, optimizer.param_groups[0]["lr"], config.get("atlif_ternary_psn"))
+                    h40_warmup_factor = lr_warmup_factor(h40_global_step, config)
+                    h8_threshold_lr = float(config.get("atlif_ternary_psn", {}).get("threshold_base_lr", optimizer.param_groups[0]["lr"]))
+                    if h40_warmup_factor is not None:
+                        h8_threshold_lr *= h40_warmup_factor
+                    h8_update_stats = threshold_update(model, h8_threshold_lr, config.get("atlif_ternary_psn"))
                     h6_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
+                        if h40_lrs is not None:
+                            print(f"[H40] step {sample + 1} lr_warmup: {h40_lrs}")
                         print(f"[H9] step {sample + 1} update: {h8_update_stats}")
 
                 # zero grad
@@ -177,6 +253,20 @@ LOSS_FUNCTION_PATCH = """    # Define the loss function
     loss_function = maybe_replace_flow_loss(loss_function, config, device)
 """
 
+OPTIMIZER_ANCHOR = """    # optimizers
+    if config["optimizer"]["name"] == 'AdamW':
+        optimizer = eval(config["optimizer"]["name"])(model.parameters(), lr=config["optimizer"]["lr"],weight_decay=config["optimizer"]["wd"])
+
+    else:
+        optimizer = eval(config["optimizer"]["name"])(model.parameters(), lr=config["optimizer"]["lr"])
+"""
+
+OPTIMIZER_PATCH = """    # optimizers
+    from models.STSwinNet_SNN.h28_optimizer import build_optimizer, describe_optimizer_groups
+    optimizer = build_optimizer(model, config)
+    print(f"[H28] optimizer groups: {describe_optimizer_groups(optimizer)}")
+"""
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -223,6 +313,7 @@ def _patch_source(source: str, baseline_entry: Path) -> str:
         (MLFLOW_MODEL_LOGGING_ANCHOR, MLFLOW_MODEL_LOGGING_PATCH),
         (STATE_SAVE_ANCHOR, STATE_SAVE_PATCH),
         (LOSS_FUNCTION_ANCHOR, LOSS_FUNCTION_PATCH),
+        (OPTIMIZER_ANCHOR, OPTIMIZER_PATCH),
     ):
         if anchor not in source:
             raise RuntimeError(f"Could not patch {baseline_entry}: missing anchor {anchor[:60]!r}")

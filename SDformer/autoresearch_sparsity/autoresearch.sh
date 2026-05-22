@@ -30,7 +30,7 @@ fi
 # ── Eval mode: profile existing checkpoint ─────────────────────────────
 if [ "$MODE" = "eval" ]; then
     OUTPUT_DIR="autoresearch_sparsity/results/profile_${STAMP}"
-    python tools/profile_sops.py \
+    python -m autoresearch_sparsity.entrypoints.profile_upstream_sparse \
         --config "$CONFIG" \
         --checkpoint "$CHECKPOINT" \
         --num-samples "$NUM_SAMPLES" \
@@ -90,7 +90,7 @@ elif [ "$MODE" = "train" ]; then
     fi
 
     echo "=== Profiling trained model: $LATEST_CKPT ==="
-    python tools/profile_sops.py \
+    python -m autoresearch_sparsity.entrypoints.profile_upstream_sparse \
         --config "$CONFIG" \
         --checkpoint "$LATEST_CKPT" \
         --num-samples "$NUM_SAMPLES" \

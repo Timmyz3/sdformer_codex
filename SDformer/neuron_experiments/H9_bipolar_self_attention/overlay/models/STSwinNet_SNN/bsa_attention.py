@@ -8,6 +8,7 @@ baseline attention block has no separate V projection.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from types import MethodType
 from typing import Any, Iterable
@@ -29,6 +30,8 @@ class ShiftmaxAttentionConfig:
     consensus_score_norm: str = "head_dim"
     consensus_bias: float = 0.0
     value_mode: str = "threshold"
+    value_branch: str = "reuse_k"
+    value_init: str = "copy_k"
     alpha0: float = 0.05
     mismatch_penalty: float = 0.5
     relu_k_floor: float = 0.0
@@ -51,6 +54,8 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         consensus_score_norm=str(raw.get("consensus_score_norm", "head_dim")),
         consensus_bias=float(raw.get("consensus_bias", 0.0)),
         value_mode=str(raw.get("value_mode", "threshold")),
+        value_branch=str(raw.get("value_branch", "reuse_k")),
+        value_init=str(raw.get("value_init", "copy_k")),
         alpha0=float(raw.get("alpha0", 0.05)),
         mismatch_penalty=float(raw.get("mismatch_penalty", 0.5)),
         relu_k_floor=float(raw.get("relu_k_floor", 0.0)),
@@ -117,6 +122,47 @@ def _qkformer_token_q(q_orig: torch.Tensor) -> torch.Tensor:
     )
 
 
+def _ensure_independent_value_branch(attn: nn.Module, cfg: ShiftmaxAttentionConfig) -> None:
+    """Add a trainable V branch to SDFormerFlow's QK-only block when requested.
+
+    The baseline class has commented-out V code but no live `linear_v/sn_v`
+    modules. For strict QKV ablations we attach separate modules in the overlay
+    after checkpoint load and before optimizer construction. `copy_k` gives a
+    stable continuation point while still creating independent trainable V
+    parameters.
+    """
+
+    if hasattr(attn, "linear_v") and hasattr(attn, "sn_v"):
+        return
+    if not hasattr(attn, "linear_k") or not hasattr(attn, "sn_k"):
+        raise AttributeError("independent V branch requires linear_k and sn_k on the attention module")
+    if cfg.value_init not in {"copy_k"}:
+        raise ValueError("bsa_attention.value_init currently supports only copy_k")
+    attn.linear_v = copy.deepcopy(attn.linear_k)
+    if getattr(attn, "norm_layer", None) in {"BN", "BNTT", "tdBN", "IN"} and hasattr(attn, "bn_k"):
+        attn.bn_v = copy.deepcopy(attn.bn_k)
+    attn.sn_v = copy.deepcopy(attn.sn_k)
+
+
+def _independent_value_tokens(
+    attn: nn.Module,
+    x: torch.Tensor,
+    T: int,
+    B_: int,
+    H: int,
+    W: int,
+    C: int,
+    head_dim: int,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    _ensure_independent_value_branch(attn, cfg)
+    v = attn.linear_v(x).float()
+    if getattr(attn, "norm_layer", None) in ["BN", "BNTT", "tdBN", "IN"]:
+        v = attn.bn_v(v.permute(0, 1, 4, 2, 3)).permute(0, 1, 3, 4, 2)
+    v = attn.sn_v(v)
+    return v.reshape(B_, attn.num_heads, T * H * W, head_dim)
+
+
 def _signed_consensus_token_scores(
     q_orig: torch.Tensor,
     k_orig: torch.Tensor,
@@ -176,14 +222,15 @@ def _strict_bsa_matrix_attention(
     q_orig: torch.Tensor,
     k_orig: torch.Tensor,
     cfg: ShiftmaxAttentionConfig,
+    value_orig: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """BSA-style ternary QK^T attention for SDFormerFlow's no-V attention block.
+    """BSA-style ternary QK^T attention.
 
     Q and K are converted to {-1, 0, +1} events before the score matrix, matching
-    the BSA ternary matrix product. This module has no independent V projection,
-    so K is reused as the value carrier. `value_mode=sign` keeps the full path
-    event/add/shift friendly; `value_mode=threshold` preserves the ATLIF scalar
-    firing amplitude while keeping the normalized score matrix ternary-native.
+    the BSA ternary matrix product. If `value_orig` is provided, it is a separate
+    trainable V stream; otherwise K is reused as V for legacy no-V ablations.
+    `value_mode=sign` keeps the value path event/add/shift friendly, while
+    `value_mode=threshold` preserves the ATLIF scalar firing amplitude.
     """
 
     q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
@@ -204,10 +251,11 @@ def _strict_bsa_matrix_attention(
     if cfg.preserve_mean:
         gate = gate * float(k_event.shape[-2])
 
+    value_source = k_orig if value_orig is None else value_orig
     if cfg.value_mode in {"sign", "event", "ternary"}:
-        value = k_event
+        value = _ternary_sign_ste(value_source)
     elif cfg.value_mode in {"threshold", "theta", "atlif"}:
-        value = k_orig
+        value = value_source
     else:
         raise ValueError("bsa_attention.value_mode must be threshold/theta/atlif or sign/event/ternary")
     return torch.matmul(gate, value), row_sum, gate
@@ -289,6 +337,36 @@ def _ternary_alpha_xnor_matrix_scores(
         q_active = q_event.ne(0).to(dtype=q_orig.dtype)
         k_active = k_event.ne(0).to(dtype=q_orig.dtype)
         active = torch.matmul(q_active, k_active.transpose(-2, -1))
+    return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
+
+
+def _binary_alpha_xnor_matrix_scores(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Binary alpha-XNOR token-token score without ternary polarity semantics.
+
+    This is the conservative paper-facing variant: positive events are 1,
+    everything else is 0. Silent/silent matches receive alpha weight; mismatch
+    penalty is configurable but set to 0 in strict binary configs.
+    """
+
+    q_event = (_qkformer_token_q(q_orig) > 0).to(dtype=q_orig.dtype)
+    k_event = (k_orig > 0).to(dtype=q_orig.dtype)
+    q_silent = 1.0 - q_event
+    k_silent = 1.0 - k_event
+    same_spike = torch.matmul(q_event, k_event.transpose(-2, -1))
+    same_silent = torch.matmul(q_silent, k_silent.transpose(-2, -1))
+    score = same_spike + float(cfg.alpha0) * same_silent
+    if cfg.mismatch_penalty:
+        mismatch = torch.matmul(q_event, k_silent.transpose(-2, -1)) + torch.matmul(
+            q_silent, k_event.transpose(-2, -1)
+        )
+        score = score - float(cfg.mismatch_penalty) * mismatch
+    active = None
+    if cfg.consensus_score_norm == "active":
+        active = torch.matmul(q_event, k_event.transpose(-2, -1))
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
 
 
@@ -398,14 +476,43 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
     k_orig = k.reshape(B_, self.num_heads, -1, head_dim)
     n_tokens = k_orig.shape[2]
 
-    if cfg.mode in {"strict_bsa_shiftmax", "bsa_matrix_shiftmax", "bsa_qkt_shiftmax"}:
-        # Strict H14 candidate: BSA-style ternary matrix product over QK^T.
+    if cfg.mode in {"strict_bsa_qkv_shiftmax", "bsa_qkv_shiftmax", "bsa_true_qkv_shiftmax"}:
+        # Reviewed strict-BSA candidate: BSA-style ternary matrix product over
+        # QK^T with a separate trainable V branch. SDFormerFlow ships this
+        # branch commented out, so the overlay attaches it after checkpoint load
+        # and initializes from K for a stable fine-tuning start.
+        value_orig = _independent_value_tokens(self, x, T, B_, H, W, C, head_dim, cfg)
+        attn, row_sum, gate = _strict_bsa_matrix_attention(q_orig, k_orig, cfg, value_orig=value_orig)
+    elif cfg.mode in {"strict_bsa_shiftmax", "bsa_matrix_shiftmax", "bsa_qkt_shiftmax"}:
+        # BSA-style adapted candidate: ternary QK^T with K reused as V because
+        # the original SDFormerFlow attention block has no live V projection.
         #
         # Unlike H13's token-wise consensus gate, the normalized object here is
         # a real token-token attention matrix whose entries come from sign-only
         # ternary events. Because SDFormerFlow's block has no separate V branch,
         # K is reused as V; cfg.value_mode chooses sign-only K or thresholded K.
         attn, row_sum, gate = _strict_bsa_matrix_attention(q_orig, k_orig, cfg)
+    elif cfg.mode in {"binary_alpha_xnor_matrix_shiftmax", "strict_binary_alpha_xnor_shiftmax"}:
+        # Conservative alpha-XNOR reproduction: binary positive spike events
+        # only, no ternary negative polarity semantics. This is separate from
+        # the more aggressive ternary alpha-XNOR adaptation used by H18/H34.
+        scores = _binary_alpha_xnor_matrix_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=-1, keepdim=True)
+        gate = shiftmax(scores, dim=-1, eps=cfg.eps)
+        row_sum = gate.sum(dim=-1)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
+        attn = torch.matmul(gate, value)
+    elif cfg.mode in {"binary_alpha_xnor_matrix_l1", "strict_binary_alpha_xnor_l1"}:
+        scores = _binary_alpha_xnor_matrix_scores(q_orig, k_orig, cfg)
+        gate = l1norm(torch.relu(scores + cfg.consensus_bias), dim=-1, eps=cfg.eps)
+        row_sum = gate.sum(dim=-1)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
+        attn = torch.matmul(gate, value)
     elif cfg.mode in {"alpha_xnor_matrix_shiftmax", "ternary_alpha_xnor_matrix_shiftmax", "h18c"}:
         # Direct H18c: replace QKFormer's token carrier with a true
         # token-token alpha-XNOR attention matrix. This is intentionally bold:
@@ -442,6 +549,18 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
         value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
+        attn = torch.matmul(gate, value)
+    elif cfg.mode in {"a2os2a_qkv_l1", "a2os2a_true_qkv_l1"}:
+        # Reviewed A2OS2A-style QKV candidate: binary Q, nonnegative K, and an
+        # independent ternary/threshold V stream. It is still an SDFormerFlow
+        # adaptation, but unlike H18e it exercises all three Q/K/V paths.
+        scores = _a2os2a_matrix_scores(q_orig, k_orig, cfg)
+        gate = l1norm(torch.relu(scores + cfg.consensus_bias), dim=-1, eps=cfg.eps)
+        row_sum = gate.sum(dim=-1)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        value_orig = _independent_value_tokens(self, x, T, B_, H, W, C, head_dim, cfg)
+        value = _ternary_sign_ste(value_orig) if cfg.value_mode in {"sign", "event", "ternary"} else value_orig
         attn = torch.matmul(gate, value)
     elif cfg.mode in {"hamming_binary_direct", "spikevideoformer_hamming", "h21a"}:
         # H21a: direct SpikeVideoFormer Hamming attention.
@@ -632,8 +751,9 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "signed_consensus_shiftmax/h13b, signed_consensus_shiftnorm/h13c, "
             "signed_consensus_popcount_l1/h13t, "
             "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_l1/h18a_l1, "
+            "binary_alpha_xnor_matrix_shiftmax/l1, "
             "a2os2a_gate/h18b, alpha_xnor_matrix_shiftmax/h18c, "
-            "alpha_xnor_matrix_l1/h18d, a2os2a_direct/h18e, "
+            "alpha_xnor_matrix_l1/h18d, a2os2a_direct/h18e, a2os2a_qkv_l1, "
             "hamming_binary_direct/h21a, hamming_ternary_active_direct/h21b, "
             "or compat_qk_product/legacy"
         )
@@ -666,6 +786,8 @@ def install_shiftmax_attention(model: nn.Module, raw_config: dict | None) -> lis
     for name, module in _iter_attention_modules(model, cfg):
         if module.__class__.__name__ != "Spiking_QK_WindowAttention3D":
             continue
+        if cfg.mode in {"strict_bsa_qkv_shiftmax", "bsa_qkv_shiftmax", "bsa_true_qkv_shiftmax", "a2os2a_qkv_l1", "a2os2a_true_qkv_l1"}:
+            _ensure_independent_value_branch(module, cfg)
         if not hasattr(module, "_h9_original_forward"):
             module._h9_original_forward = module.forward
         module._h9_shiftmax_cfg = cfg

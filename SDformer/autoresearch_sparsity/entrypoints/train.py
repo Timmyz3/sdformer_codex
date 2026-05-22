@@ -27,11 +27,45 @@ MODEL_FORWARD_ANCHOR = """                pred_list = model(chunk.to(device))
 MODEL_FORWARD_PATCH = """                # ── sparsity preprocessing (autoresearch_sparsity) ──
                 if config.get("sparsity", {}).get("enabled", False):
                     from sparse_preprocess import build_sparsity_pipeline
-                    _sp_pipe = build_sparsity_pipeline(config)
+                    _sp_pipe = globals().get("_ar_sparse_pipeline")
+                    if _sp_pipe is None:
+                        _sp_pipe = build_sparsity_pipeline(config)
+                        globals()["_ar_sparse_pipeline"] = _sp_pipe
                     if _sp_pipe is not None:
+                        _sp_pipe.train(True)
                         chunk, _sp_stats = _sp_pipe(chunk)
                 pred_list = model(chunk.to(device))
                 pred = pred_list["flow"]"""
+
+VALID_FORWARD_ANCHOR = """                        pred_list = model(chunk.to(device))
+                        pred = pred_list["flow"][-1]"""
+
+VALID_FORWARD_PATCH = """                        # ── sparsity preprocessing (autoresearch_sparsity, validation) ──
+                        if config.get("sparsity", {}).get("enabled", False):
+                            from sparse_preprocess import build_sparsity_pipeline
+                            _sp_pipe = globals().get("_ar_sparse_pipeline")
+                            if _sp_pipe is None:
+                                _sp_pipe = build_sparsity_pipeline(config)
+                                globals()["_ar_sparse_pipeline"] = _sp_pipe
+                            if _sp_pipe is not None:
+                                _sp_pipe.train(False)
+                                chunk, _sp_stats = _sp_pipe(chunk)
+                        pred_list = model(chunk.to(device))
+                        pred = pred_list["flow"][-1]"""
+
+VALIDATION_GATE_ANCHOR = """        if epoch % config["test"]["n_valid"] == 0:"""
+
+VALIDATION_GATE_PATCH = """        if (not config.get("runtime", {}).get("skip_train_validation", False)) and epoch % config["test"]["n_valid"] == 0:"""
+
+TRAIN_STEP_ANCHOR = """            sample += 1
+            train_sample_count += chunk.shape[0]"""
+
+TRAIN_STEP_PATCH = """            sample += 1
+            train_sample_count += chunk.shape[0]
+            _max_train_steps = config.get("runtime", {}).get("max_train_steps", None)
+            if _max_train_steps is not None and sample >= int(_max_train_steps):
+                print(f"[SPARSE] stopping train epoch early at max_train_steps={_max_train_steps}")
+                break"""
 
 EPOCH_STATS_ANCHOR = """        print(
             f"Epoch stats: lr={optimizer.param_groups[0]['lr']:.6g}, "
@@ -75,6 +109,9 @@ def _absolutize_path_args(extra_args: list[str]) -> list[str]:
 def _patch_source(source: str, baseline_entry: Path) -> str:
     for anchor, replacement in (
         (MODEL_FORWARD_ANCHOR, MODEL_FORWARD_PATCH),
+        (VALID_FORWARD_ANCHOR, VALID_FORWARD_PATCH),
+        (VALIDATION_GATE_ANCHOR, VALIDATION_GATE_PATCH),
+        (TRAIN_STEP_ANCHOR, TRAIN_STEP_PATCH),
         (EPOCH_STATS_ANCHOR, EPOCH_STATS_PATCH),
     ):
         if anchor not in source:
@@ -108,7 +145,13 @@ def main() -> None:
         *_absolutize_path_args(extra_args),
     ]
 
-    # Disable MLflow if requested
+    # Local experiment folders need deterministic checkpoint files; MLflow model
+    # logging diverts saves into mlruns and makes rapid screening unable to
+    # profile the just-trained checkpoint.
+    force_local_save = os.getenv("SPARSE_FORCE_LOCAL_SAVE", "1").lower() not in {"0", "false", "no"}
+    if force_local_save:
+        os.environ.setdefault("SDFORMER_USE_MLFLOW", "0")
+        os.environ.setdefault("SDFORMER_MLFLOW_MODEL_LOGGING", "0")
     disabled = os.getenv("SDFORMER_USE_MLFLOW", "1").lower() in {"0", "false", "no"}
     if disabled:
         import types

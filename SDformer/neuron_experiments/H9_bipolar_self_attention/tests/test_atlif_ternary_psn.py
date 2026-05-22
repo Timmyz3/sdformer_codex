@@ -164,7 +164,7 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
         self.assertEqual(stage0.target_rate, 0.04)
         self.assertEqual(stage1.target_rate, 0.02)
 
-    def test_target_rate_feedback_can_lower_threshold(self):
+    def test_target_rate_upper_bound_does_not_lower_threshold_by_default(self):
         from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
 
         node = ATLIFTernaryPSN(
@@ -184,8 +184,63 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
             raw_config={"enabled": True, "threshold_lr_scale": 100.0, "min_threshold": 0.1},
         )
 
+        self.assertEqual(float(node.thresh.detach()), before)
+        self.assertEqual(float(stats["target_feedback_mean"]), 0.0)
+
+    def test_target_rate_bidirectional_feedback_can_lower_threshold(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=0.0,
+            target_rate=0.5,
+            target_rate_eta=1e-3,
+            target_rate_mode="bidirectional",
+        )
+        _ = node(torch.zeros(3, 4))
+        before = float(node.thresh.detach())
+
+        stats = threshold_update(
+            node,
+            lr=1.0,
+            raw_config={"enabled": True, "threshold_lr_scale": 100.0, "min_threshold": 0.1},
+        )
+
         self.assertLess(float(node.thresh.detach()), before)
         self.assertLess(float(stats["target_feedback_mean"]), 0.0)
+
+    def test_summary_counts_only_active_target_rate_control(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, atlif_ternary_summary
+
+        active = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            target_rate=0.5,
+            target_rate_eta=1e-3,
+        )
+        eta_zero = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            target_rate=0.5,
+            target_rate_eta=0.0,
+        )
+        official = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            target_rate=0.5,
+            target_rate_eta=1e-3,
+            output_mode="binary",
+            threshold_mode="official_atlif",
+        )
+        model = nn.ModuleList([active, eta_zero, official])
+
+        stats = atlif_ternary_summary(model)
+
+        self.assertEqual(stats["target_rate_control_modules"], 1)
+        self.assertEqual(stats["target_rate_upper_bound_modules"], 1)
+        self.assertEqual(stats["target_rate_bidirectional_modules"], 0)
 
     def test_negative_rate_feedback_can_keep_negative_trigger_active(self):
         from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
@@ -318,6 +373,7 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
             negative_target_eta=10.0,
             target_rate=0.8,
             target_rate_eta=1e-3,
+            target_rate_mode="bidirectional",
             threshold_mode="symmetric_target_rate",
         )
         _ = node(torch.zeros(3, 4))
@@ -386,6 +442,42 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
         self.assertTrue(set(torch.unique(out).tolist()).issubset({0.0, 0.5}))
         self.assertGreater(float(node.pos_r), 0.0)
         self.assertEqual(float(node.neg_r), 0.0)
+
+    def test_official_atlif_binary_matches_source_update_scale(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=1e-3,
+            output_mode="binary",
+            threshold_mode="official_atlif",
+        )
+        _ = node(torch.full((3, 4), 0.5))
+
+        self.assertAlmostEqual(float(node.update_value), 1e-3, places=7)
+        before = float(node.thresh.detach())
+        stats = threshold_update(
+            node,
+            lr=10.0,
+            raw_config={"enabled": True, "threshold_lr_scale": 1.0, "min_threshold": None, "max_threshold": None},
+        )
+
+        self.assertAlmostEqual(float(node.thresh.detach()), before + 1e-2, places=6)
+        self.assertEqual(float(node.update_value), 0.0)
+        self.assertEqual(stats["official_atlif_modules"], 1)
+
+    def test_official_atlif_rejects_ternary_output(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+
+        with self.assertRaises(ValueError):
+            ATLIFTernaryPSN(
+                T=3,
+                base_psn=DummyPSN(T=3),
+                output_mode="ternary",
+                threshold_mode="official_atlif",
+            )
 
 
 if __name__ == "__main__":

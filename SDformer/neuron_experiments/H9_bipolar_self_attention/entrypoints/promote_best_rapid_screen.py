@@ -64,7 +64,7 @@ def run_command(command: list[str], log_path: Path) -> int:
 
 
 def latest_dirs_for_tag(tag: str) -> list[Path]:
-    return sorted(RESULTS_DIR.glob(f"{tag}_20*"), key=lambda path: path.stat().st_mtime)
+    return sorted((path for path in RESULTS_DIR.glob(f"{tag}_20*") if path.is_dir()), key=lambda path: path.stat().st_mtime)
 
 
 def read_rows(root: Path) -> list[dict[str, Any]]:
@@ -83,6 +83,8 @@ def read_rows(root: Path) -> list[dict[str, Any]]:
             except ValueError:
                 continue
             if samples < 40 or not all(math.isfinite(x) for x in (aee, aae, sops_g, firing)):
+                continue
+            if row.get("stage", "") != "confirm" or row.get("gate", "") != "pass":
                 continue
             item = dict(row)
             item.update({"root": str(root), "samples": samples, "AEE": aee, "AAE": aae, "SOPs_G": sops_g, "firing": firing})
@@ -264,7 +266,13 @@ def main() -> int:
             record(f"候选配置不存在: {short_config}")
             return 1
 
-        full_stem = str(best["name"]).replace("_valid40", "").replace("_guard120_steps120", "_auto_full")
+        full_stem = (
+            str(best["name"])
+            .replace("_valid40", "")
+            .replace("_guard120_steps120", "_auto_full")
+            .replace("_steps360", "_auto_full")
+            .replace("_steps120", "_auto_full")
+        )
         if not full_stem.endswith("_auto_full"):
             full_stem += "_auto_full"
         stamp = now_stamp()

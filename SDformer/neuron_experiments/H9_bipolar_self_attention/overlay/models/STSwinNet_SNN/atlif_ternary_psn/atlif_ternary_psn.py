@@ -58,6 +58,35 @@ class BinarySurrogate(torch.autograd.Function):
         return grad_input, grad_thre, None
 
 
+class OfficialATLIFSurrogate(torch.autograd.Function):
+    """Official Activity-Pruning-SNN binary ATLIF surrogate.
+
+    Ported from:
+    optimization_sources/neuron_optimization/ATLIF_Activity-Pruning-SNN/
+    models/submodules/layers.py
+
+    The official update is binary-only: output is {0, thresh}. The manual
+    threshold increment is accumulated separately in ``update_value`` and is
+    applied after optimizer.step().
+    """
+
+    @staticmethod
+    def forward(ctx, input: torch.Tensor, thre: torch.Tensor, sp: float):
+        out = (input >= thre).float()
+        thre_updates = (sp * zif_backward(input - thre, thre) * out).sum(0).mean().item()
+        ctx.save_for_backward(input, thre)
+        return out * thre, thre_updates
+
+    @staticmethod
+    def backward(ctx, grad_input: torch.Tensor, _dummy):
+        input, thre = ctx.saved_tensors
+        normalized = (input - thre) / thre
+        tmp = (1.0 - normalized.abs()).clamp(min=0)
+        grad_input = grad_input * tmp
+        grad_thre = -(grad_input * tmp).mean()
+        return grad_input, grad_thre, None
+
+
 class ATLIFTernaryPSN(nn.Module):
     """PSN-compatible neuron combining PSN, ATLIF threshold growth, and sparse output."""
 
@@ -77,6 +106,7 @@ class ATLIFTernaryPSN(nn.Module):
         threshold_lr_scale: float | None = None,
         target_rate: float | None = None,
         target_rate_eta: float = 0.0,
+        target_rate_mode: str = "upper_bound",
         negative_target_rate: float | None = None,
         negative_target_eta: float = 0.0,
         negative_scale_min: float | None = None,
@@ -91,14 +121,19 @@ class ATLIFTernaryPSN(nn.Module):
             raise ValueError("output_mode must be ternary or binary")
         if center_mode not in {"zero", "bias"}:
             raise ValueError("center_mode must be zero or bias")
-        if threshold_mode not in {"asymmetric_scale", "symmetric_bsa_tsn", "symmetric_target_rate"}:
+        if threshold_mode not in {"asymmetric_scale", "symmetric_bsa_tsn", "symmetric_target_rate", "official_atlif"}:
             raise ValueError(
-                "threshold_mode must be asymmetric_scale, symmetric_bsa_tsn, or symmetric_target_rate"
+                "threshold_mode must be asymmetric_scale, symmetric_bsa_tsn, symmetric_target_rate, or official_atlif"
             )
+        if threshold_mode == "official_atlif" and output_mode != "binary":
+            raise ValueError("official_atlif follows the official binary ATLIF output {0, thresh}")
         self.output_mode = output_mode
         self.threshold_mode = threshold_mode
         self.center_mode = center_mode
-        self.act = TernarySurrogate.apply if output_mode == "ternary" else BinarySurrogate.apply
+        if threshold_mode == "official_atlif":
+            self.act = OfficialATLIFSurrogate.apply
+        else:
+            self.act = TernarySurrogate.apply if output_mode == "ternary" else BinarySurrogate.apply
         self.thresh = nn.Parameter(torch.tensor(float(thresh)), requires_grad=True)
         self.sp = float(sparsity_eta)
         self.negative_threshold_scale = float(negative_threshold_scale)
@@ -108,6 +143,7 @@ class ATLIFTernaryPSN(nn.Module):
         self.threshold_lr_scale = None if threshold_lr_scale is None else float(threshold_lr_scale)
         self.target_rate = target_rate
         self.target_rate_eta = float(target_rate_eta)
+        self.target_rate_mode = str(target_rate_mode)
         self.negative_target_rate = negative_target_rate
         self.negative_target_eta = float(negative_target_eta)
         self.negative_scale_min = negative_scale_min
@@ -140,6 +176,8 @@ class ATLIFTernaryPSN(nn.Module):
             spike, thre_updates = self.act(h_seq, self.thresh, self.sp, negative_scale)
         else:
             spike, thre_updates = self.act(h_seq, self.thresh, self.sp)
+            if self.threshold_mode == "official_atlif":
+                thre_updates = thre_updates / max(1, self.T)
         self.update_value += thre_updates
         out = spike.view(x_seq.shape)
         with torch.no_grad():
