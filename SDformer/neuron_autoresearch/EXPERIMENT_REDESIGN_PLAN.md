@@ -264,7 +264,82 @@
 | LR strategies (W/L) | ❌ 留全量 |
 | Regularization sweep | ❌ 留全量 |
 
-## 十、最终排名
+## 十、全量候选四实验详细方案
+
+### 注意力机制
+
+| | SN | TX | SC | BQ |
+|---|---|---|---|---|
+| 全称 | signed_consensus_shiftnorm | ternary_alpha_xnor_shiftmax | signed_consensus_shiftmax | strict_bsa_qkv_shiftmax |
+| 核心操作 | Q/K 符号 popcount + ShiftNorm | 三值 α-XNOR (+1/+α/-β) + Shiftmax | Q/K 符号 popcount + Shiftmax | Q@K^T/√d + Shiftmax + 独立V |
+| 归一化 | x / 2^ceil(log2(Σ)) (纯shift) | 2^x / 2^ceil(log2(Σ)) (LUT) | 2^x / 2^ceil(log2(Σ)) (LUT) | 2^x / 2^ceil(log2(Σ)) (LUT) |
+| 硬件 | 零 LUT，最优 | LUT×1 | LUT×1 | LUT×1 + 矩阵乘 |
+| 范式来源 | 自研 | CVPR 2025 α-XNOR 三元扩展 | 自研 | BSA NeurIPS 2025 严格复现 |
+| 论文角色 | 自研硬件最简 | 自研三元拓展 | 自研对照 | 正统 BSA 基线 |
+
+### 参数配置
+
+| | SN S02 C | TX S02 A | SC S012 C | BQ S02 |
+|---|---|---|---|---|---|
+| Q/K max_threshold | 2.0 | 2.5 | 2.0 | 1.8 |
+| Q/K target_rate | 0.05 | 0.03 | 0.05 | 0.05 |
+| Q/K activity_eta | 2.0 | 3.0 | 2.0 | 1.0 |
+| Q/K threshold_mode | symmetric_target_rate | symmetric_target_rate | symmetric_target_rate | symmetric_target_rate |
+| FFN 范围 | stage0+2 | stage0+2 | stage0+1+2 | stage0+2 |
+| FFN threshold_mode | official_atlif | official_atlif | official_atlif | official_atlif |
+| FFN target_rate | 无 | **0.10** | 无 | 无 |
+| FFN activity_eta | 2.0 | 2.0 | 2.0 | 2.0 |
+| LR 策略 | differential | flat 1e-5 | flat 1e-5 | flat 1e-5 |
+| Angular loss | 0 | 0 | 0 | 0 |
+| 三元负阈值 | neg=thre (S1) | neg=thre (S1) | neg=thre (S1) | neg=thre (S1) |
+
+### 短测指标
+
+| | 80-step valid5 | | | 360-step valid10 | | | 80-step valid40 | | | |
+|---|---|---|---|---|---|---|---|---|---|---|
+| | AEE | AAE | SOPs | AEE | AAE | SOPs | AEE | AAE | SOPs |
+| SN S02 C | 0.96 | 7.06 | 3.23G | 1.10 | 6.26 | 3.26G | 1.82 | 9.06 | 3.18G |
+| TX S02 A | 0.95 | 7.18 | 3.24G | — | — | — | **1.78** | **8.65** | 3.18G |
+| SC S012 C | 1.00 | 7.02 | 3.01G | 1.19 | 6.84 | 3.02G | 1.82 | 8.75 | **2.90G** |
+| BQ S02 | — | — | — | 1.06 | 6.44 | 3.62G | 1.54 | 7.58 | 3.50G |
+
+### 状态
+
+| 实验 | 状态 | 结果 |
+|------|:---:|------|
+| SN S02 C dlr (H41) | 🔄 epoch 20/30 | ep9: AEE=1.95, SOPs=2.88G |
+| SN S02 C cont (H41) | ✅ 完成 9ep | ep6: AEE=1.74, AAE=8.38, SOPs=2.70G |
+| **TX S02 C slowbb** (H41) | ✅ **完成 30ep** | **ep27: AEE=1.73, AAE=8.40, SOPs=2.62G** |
+| TX S02 A | ⏳ 待启动 | — |
+| SC S012 C | ⏳ 待启动 | — |
+| BQ S02 | ⏳ 待启动 | — |
+
+## 十一、H41 TX S02 C slowbb 全量 30 epoch 完整轨迹
+
+| epoch | AEE | AAE | SOPs | firing |
+|:---:|-----:|-----:|-----:|-----:|
+| 0 | 1.758 | 8.454 | 2.945G | 0.069 |
+| 6 | 1.945 | 9.557 | 2.708G | 0.064 |
+| 12 | 1.873 | 9.377 | 2.706G | 0.063 |
+| 18 | 1.748 | 8.492 | 2.676G | 0.063 |
+| 24 | 1.754 | 8.545 | **2.590G** | 0.061 |
+| **27** | **1.732** | **8.404** | 2.615G | 0.061 |
+| 29 | 1.741 | 8.828 | 2.643G | 0.062 |
+
+### vs 基线
+
+| | AEE | AAE | SOPs | 说明 |
+|---|-----:|-----:|-----:|------|
+| PSN baseline | 1.585 | 7.501 | 3.622G | 原始基线 |
+| H9a (历史最优) | 1.504 | 7.637 | 3.085G | 双轨制稀疏 |
+| **TX S02 C ep27** | **1.732** | **8.404** | **2.615G** | **本次最优** |
+| **TX S02 C ep24** | 1.754 | 8.545 | **2.590G** | **SOPs 历史最低** |
+
+### 核心结论
+
+✅ **SOPs 从 3.62G 降到 2.59-2.62G（-28%），首次稳定突破 3G 并保持到 30 epoch**
+⚠️ AEE 1.73 vs 基线 1.58（+9.5%），AAE 8.40 vs 基线 7.50（+12%）
+📄 论文故事：用 15% 精度代价换 28% 能耗降低
 
 ### 第一档：精度保底 (AEE < 1.56, AAE < 7.70)
 
