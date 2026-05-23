@@ -611,6 +611,26 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         value_orig = _independent_value_tokens(self, x, T, B_, H, W, C, head_dim, cfg)
         value = _ternary_sign_ste(value_orig) if cfg.value_mode in {"sign", "event", "ternary"} else value_orig
         attn = torch.matmul(gate, value)
+    elif cfg.mode in {
+        "ternary_alpha_xnor_ssa_qkv_shiftmax",
+        "alpha_xnor_ssa_qkv_shiftmax",
+        "h42d",
+    }:
+        # Standard Shiftmax QKV version of ternary alpha-XNOR SSA.
+        #
+        # This keeps the paper-facing Q/K/V attention structure while using the
+        # stable BSA-style Shiftmax normalization already used by existing H
+        # experiments. V is an independent overlay branch initialized from K.
+        scores = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=-1, keepdim=True)
+        gate = shiftmax(scores, dim=-1, eps=cfg.eps)
+        row_sum = gate.sum(dim=-1)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        value_orig = _independent_value_tokens(self, x, T, B_, H, W, C, head_dim, cfg)
+        value = _ternary_sign_ste(value_orig) if cfg.value_mode in {"sign", "event", "ternary"} else value_orig
+        attn = torch.matmul(gate, value)
     elif cfg.mode in {"alpha_xnor_matrix_l1", "ternary_alpha_xnor_matrix_l1", "h18d"}:
         # Direct H18d: same alpha-XNOR matrix, but with add/L1 normalization
         # instead of Shiftmax. This is the hardware-cleanest alpha-XNOR test.
@@ -848,6 +868,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "signed_consensus_popcount_l1/h13t, "
             "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_l1/h18a_l1, "
             "ternary_alpha_xnor_ssa_linear/h42b, ternary_alpha_xnor_ssa_qkv_linear/h42c, "
+            "ternary_alpha_xnor_ssa_qkv_shiftmax/h42d, "
             "binary_alpha_xnor_matrix_shiftmax/l1, "
             "a2os2a_gate/h18b, alpha_xnor_matrix_shiftmax/h18c, "
             "alpha_xnor_matrix_l1/h18d, a2os2a_direct/h18e, a2os2a_qkv_l1, "
@@ -893,6 +914,9 @@ def install_shiftmax_attention(model: nn.Module, raw_config: dict | None) -> lis
             "alpha_xnor_ssa_qkv_linear",
             "ternary_alpha_xnor_qkv",
             "h42c",
+            "ternary_alpha_xnor_ssa_qkv_shiftmax",
+            "alpha_xnor_ssa_qkv_shiftmax",
+            "h42d",
         }:
             _ensure_independent_value_branch(module, cfg)
         if not hasattr(module, "_h9_original_forward"):
