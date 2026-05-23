@@ -303,16 +303,51 @@
 | SC S012 C | 1.00 | 7.02 | 3.01G | 1.19 | 6.84 | 3.02G | 1.82 | 8.75 | **2.90G** |
 | BQ S02 | — | — | — | 1.06 | 6.44 | 3.62G | 1.54 | 7.58 | 3.50G |
 
+## 十二、H42 系列注意力公式详解
+
+所有 H42 系列的共同基础：TX 三元 α-XNOR 评分矩阵
+
+```
+Q_event = STE_sign(Q)  ∈ {-1, 0, +1}^(B×H×N×d)
+K_event = STE_sign(K)  ∈ {-1, 0, +1}^(B×H×N×d)
+
+S_ij = Σ_d [ Q⁺ᵢK⁺ⱼ + Q⁻ᵢK⁻ⱼ           ← same non-zero (+1)
+            + α₀ × Q⁰ᵢK⁰ⱼ                 ← same zero (+0.02)
+            - β × (Q⁺ᵢK⁻ⱼ + Q⁻ᵢK⁺ⱼ) ]    ← opposite (-0.25)
+
+S = S / head_dim × score_scale            ← 归一化
+```
+
+### 五种模式对比
+
+| 模式 | V 分支 | 归一化 | 公式 |
+|------|:---:|:---:|------|
+| **H42b** (ssa_linear) | ❌ K 复用 | 无 (raw+bias) | `attn = (S + bias) @ sign(K)` |
+| **H42b_qkv** (matrix_shiftmax) | ❌ K 复用 | Shiftmax | `attn = shiftmax(S) @ sign(K)` |
+| **H42c** (ssa_qkv_linear) | ✅ 独立 V | 无 (raw+bias) | `attn = (S + bias) @ sign(V)` |
+| **H42d** (ssa_qkv_shiftmax) | ✅ 独立 V | Shiftmax | `attn = shiftmax(S) @ sign(V)` |
+| TX S02 C (H18c baseline) | ❌ K 复用 | Shiftmax | 同上，但用非 STE 评分 |
+
+### 关键差异
+
+**Linear (H42b/c)**: `gate = S + bias` — 分数可能无界，依赖 bias 和 score_scale 调参稳定。硬件最简（纯加法+矩阵乘）。
+
+**Shiftmax (H42d/H42b_qkv)**: `gate = shiftmax(S) = 2^S / 2^ceil(log2(Σ2^S))` — BSA 标准归一化。行和 ∈ (0.5, 1]。硬件需 2^x LUT。
+
+**K 复用 vs 独立 V**: K 复用 (`sign(K)`) 保留三元极性作为 V。独立 V (`_independent_value_tokens`) 是可训练的线性层，从 K 初始化后独立学习。
+
+**STE vs 非 STE**: H42 用 STE 版评分 (`_ternary_alpha_xnor_matrix_scores_ste`) 保留 Q/K 梯度。H18c 用非 STE 版 (`_ternary_alpha_xnor_matrix_scores`)，布尔运算阻断梯度。
+
 ### 状态
 
-| 实验 | 状态 | 结果 |
-|------|:---:|------|
-| SN S02 C dlr (H41) | 🔄 epoch 20/30 | ep9: AEE=1.95, SOPs=2.88G |
-| SN S02 C cont (H41) | ✅ 完成 9ep | ep6: AEE=1.74, AAE=8.38, SOPs=2.70G |
-| **TX S02 C slowbb** (H41) | ✅ **完成 30ep** | **ep27: AEE=1.73, AAE=8.40, SOPs=2.62G** |
-| TX S02 A | ⏳ 待启动 | — |
-| SC S012 C | ⏳ 待启动 | — |
-| BQ S02 | ⏳ 待启动 | — |
+| 编号 | 模式 | V | 归一化 | 状态 |
+|:---:|------|:---:|:---:|:---:|
+| H42a | SN mild theta | — | — | ⏳ 没跑 |
+| H42b | ssa_linear | ❌ | raw+bias | ⏳ 没跑 |
+| H42b_qkv | matrix_shiftmax | ❌ | Shiftmax | ⏳ 没跑 |
+| H42c | ssa_qkv_linear | ✅ | raw+bias | ⏳ 没跑 |
+| H42d | ssa_qkv_shiftmax | ✅ | Shiftmax | ⏳ 没跑 |
+| **H44** | ssa_qkv_shiftmax | ✅ | Shiftmax | ⏳ **排队(放松参数)** |
 
 ## 十一、全量训练完整结果
 
