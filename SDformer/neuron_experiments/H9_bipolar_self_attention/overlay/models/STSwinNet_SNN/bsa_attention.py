@@ -75,6 +75,15 @@ def shiftmax(scores: torch.Tensor, dim: int = -1, eps: float = 1.0e-6) -> torch.
     return numerator / denominator
 
 
+def shiftmax_raw(scores: torch.Tensor, dim: int = -1, eps: float = 1.0e-6) -> torch.Tensor:
+    """Shiftmax ablation without subtracting the row maximum."""
+
+    numerator = torch.pow(2.0, scores)
+    denom_power = torch.ceil(torch.log2(numerator.sum(dim=dim, keepdim=True).clamp_min(eps)))
+    denominator = torch.pow(2.0, denom_power)
+    return numerator / denominator
+
+
 def shiftnorm(nonnegative_scores: torch.Tensor, dim: int = -1, eps: float = 1.0e-6) -> torch.Tensor:
     """Power-of-two normalization for nonnegative integer-like scores.
 
@@ -340,6 +349,41 @@ def _ternary_alpha_xnor_matrix_scores(
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
 
 
+def _ternary_alpha_xnor_matrix_scores_ste(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Differentiable ternary alpha-XNOR matrix for direct SSA branches.
+
+    Boolean comparisons make the alpha-XNOR score non-differentiable with
+    respect to Q/K. For H42 direct-attention modes the score is the main
+    attention object, so keep the same forward values using ReLU arithmetic on
+    STE ternary events while preserving surrogate gradients.
+    """
+
+    q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+    k_event = _ternary_sign_ste(k_orig)
+    q_pos = torch.relu(q_event)
+    q_neg = torch.relu(-q_event)
+    k_pos = torch.relu(k_event)
+    k_neg = torch.relu(-k_event)
+    q_zero = torch.clamp(1.0 - q_event.abs(), min=0.0, max=1.0)
+    k_zero = torch.clamp(1.0 - k_event.abs(), min=0.0, max=1.0)
+    same_nonzero = torch.matmul(q_pos, k_pos.transpose(-2, -1)) + torch.matmul(
+        q_neg, k_neg.transpose(-2, -1)
+    )
+    same_zero = torch.matmul(q_zero, k_zero.transpose(-2, -1))
+    opposite = torch.matmul(q_pos, k_neg.transpose(-2, -1)) + torch.matmul(q_neg, k_pos.transpose(-2, -1))
+    score = same_nonzero + float(cfg.alpha0) * same_zero - float(cfg.mismatch_penalty) * opposite
+    active = None
+    if cfg.consensus_score_norm == "active":
+        q_active = q_pos + q_neg
+        k_active = k_pos + k_neg
+        active = torch.matmul(q_active, k_active.transpose(-2, -1))
+    return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
+
+
 def _binary_alpha_xnor_matrix_scores(
     q_orig: torch.Tensor,
     k_orig: torch.Tensor,
@@ -527,6 +571,46 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             gate = gate * float(n_tokens)
         value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
         attn = torch.matmul(gate, value)
+    elif cfg.mode in {
+        "ternary_alpha_xnor_ssa_linear",
+        "alpha_xnor_ssa_linear",
+        "ternary_alpha_xnor_ssa",
+        "h42b",
+    }:
+        # Paper-facing ternary alpha-XNOR SSA adaptation.
+        #
+        # TX/H18a keeps SDFormerFlow's original QKFormer token carrier and uses
+        # alpha-XNOR as an auxiliary gate. This branch is cleaner: alpha-XNOR
+        # similarity is the attention object itself, followed by a linear
+        # score transform and a value matmul. The baseline block has no live V
+        # branch, so K is intentionally reused as V.
+        scores = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=-1, keepdim=True)
+        gate = scores + float(cfg.consensus_bias)
+        row_sum = gate.sum(dim=-1)
+        value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
+        attn = torch.matmul(gate, value)
+    elif cfg.mode in {
+        "ternary_alpha_xnor_ssa_qkv_linear",
+        "alpha_xnor_ssa_qkv_linear",
+        "ternary_alpha_xnor_qkv",
+        "h42c",
+    }:
+        # QKV version of the paper-facing ternary alpha-XNOR SSA adaptation.
+        #
+        # Q/K build the ternary alpha-XNOR similarity matrix, while V is a
+        # separate trainable branch attached by the overlay. The branch is
+        # initialized from K when installed, giving stable baseline continuation
+        # while allowing V to specialize during fine-tuning.
+        scores = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=-1, keepdim=True)
+        gate = scores + float(cfg.consensus_bias)
+        row_sum = gate.sum(dim=-1)
+        value_orig = _independent_value_tokens(self, x, T, B_, H, W, C, head_dim, cfg)
+        value = _ternary_sign_ste(value_orig) if cfg.value_mode in {"sign", "event", "ternary"} else value_orig
+        attn = torch.matmul(gate, value)
     elif cfg.mode in {"alpha_xnor_matrix_l1", "ternary_alpha_xnor_matrix_l1", "h18d"}:
         # Direct H18d: same alpha-XNOR matrix, but with add/L1 normalization
         # instead of Shiftmax. This is the hardware-cleanest alpha-XNOR test.
@@ -649,6 +733,17 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
         attn = k_orig.mul(gate)
+    elif cfg.mode in {"signed_consensus_shiftmax_raw", "consensus_shiftmax_raw", "h13b_raw"}:
+        # SC raw-Shiftmax ablation: keep signed-consensus scores, but remove
+        # the max-subtraction used by numerically stable Shiftmax.
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax_raw(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        attn = k_orig.mul(gate)
     elif cfg.mode in {"signed_consensus_shiftnorm", "consensus_shiftnorm", "h13c"}:
         # H13c: fully shift-normalized variant.
         #
@@ -748,9 +843,11 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "bsa_attention.mode must be strict_bsa_shiftmax/bsa_matrix_shiftmax, "
             "qk_bsa/bsa_qk/ternary_matrix, "
             "qkformer_spike_shift/spike_shift, qkformer_token/token, "
-            "signed_consensus_shiftmax/h13b, signed_consensus_shiftnorm/h13c, "
+            "signed_consensus_shiftmax/h13b, signed_consensus_shiftmax_raw/h13b_raw, "
+            "signed_consensus_shiftnorm/h13c, "
             "signed_consensus_popcount_l1/h13t, "
             "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_l1/h18a_l1, "
+            "ternary_alpha_xnor_ssa_linear/h42b, ternary_alpha_xnor_ssa_qkv_linear/h42c, "
             "binary_alpha_xnor_matrix_shiftmax/l1, "
             "a2os2a_gate/h18b, alpha_xnor_matrix_shiftmax/h18c, "
             "alpha_xnor_matrix_l1/h18d, a2os2a_direct/h18e, a2os2a_qkv_l1, "
@@ -786,7 +883,17 @@ def install_shiftmax_attention(model: nn.Module, raw_config: dict | None) -> lis
     for name, module in _iter_attention_modules(model, cfg):
         if module.__class__.__name__ != "Spiking_QK_WindowAttention3D":
             continue
-        if cfg.mode in {"strict_bsa_qkv_shiftmax", "bsa_qkv_shiftmax", "bsa_true_qkv_shiftmax", "a2os2a_qkv_l1", "a2os2a_true_qkv_l1"}:
+        if cfg.mode in {
+            "strict_bsa_qkv_shiftmax",
+            "bsa_qkv_shiftmax",
+            "bsa_true_qkv_shiftmax",
+            "a2os2a_qkv_l1",
+            "a2os2a_true_qkv_l1",
+            "ternary_alpha_xnor_ssa_qkv_linear",
+            "alpha_xnor_ssa_qkv_linear",
+            "ternary_alpha_xnor_qkv",
+            "h42c",
+        }:
             _ensure_independent_value_branch(module, cfg)
         if not hasattr(module, "_h9_original_forward"):
             module._h9_original_forward = module.forward
