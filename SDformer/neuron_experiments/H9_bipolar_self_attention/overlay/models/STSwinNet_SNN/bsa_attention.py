@@ -34,6 +34,7 @@ class ShiftmaxAttentionConfig:
     value_init: str = "copy_k"
     alpha0: float = 0.05
     mismatch_penalty: float = 0.5
+    single_active_penalty: float = 0.0
     relu_k_floor: float = 0.0
 
 
@@ -58,6 +59,7 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         value_init=str(raw.get("value_init", "copy_k")),
         alpha0=float(raw.get("alpha0", 0.05)),
         mismatch_penalty=float(raw.get("mismatch_penalty", 0.5)),
+        single_active_penalty=float(raw.get("single_active_penalty", 0.0)),
         relu_k_floor=float(raw.get("relu_k_floor", 0.0)),
     )
 
@@ -187,14 +189,22 @@ def _signed_consensus_token_scores(
 
     q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
     k_event = _ternary_sign_ste(k_orig)
+    q_active = q_event.ne(0)
+    k_active = k_event.ne(0)
     score = (q_event * k_event).sum(dim=-1, keepdim=True)
+    if cfg.single_active_penalty:
+        single_active = (q_active ^ k_active).sum(dim=-1, keepdim=True).to(dtype=score.dtype)
+        score = score - float(cfg.single_active_penalty) * single_active
     norm = cfg.consensus_score_norm
     if norm in {"head_dim", "dim"}:
         score = score / float(max(1, q_event.shape[-1]))
     elif norm in {"sqrt_head_dim", "sqrt_dim"}:
         score = score / float(max(1, q_event.shape[-1]) ** 0.5)
     elif norm == "active":
-        active = (q_event.detach().ne(0) & k_event.detach().ne(0)).sum(dim=-1, keepdim=True).clamp_min(1)
+        if cfg.single_active_penalty:
+            active = (q_active | k_active).sum(dim=-1, keepdim=True).clamp_min(1)
+        else:
+            active = (q_active & k_active).sum(dim=-1, keepdim=True).clamp_min(1)
         score = score / active.to(dtype=score.dtype)
     elif norm in {"none", "raw"}:
         pass
@@ -291,10 +301,12 @@ def _ternary_alpha_xnor_token_scores(
     same_nonzero = (q_event == k_event) & q_active & k_active
     same_zero = (~q_active) & (~k_active)
     opposite = (q_event == -k_event) & q_active & k_active
+    single_active = q_active ^ k_active
     score = (
         same_nonzero.to(dtype=q_orig.dtype)
         + float(cfg.alpha0) * same_zero.to(dtype=q_orig.dtype)
         - float(cfg.mismatch_penalty) * opposite.to(dtype=q_orig.dtype)
+        - float(cfg.single_active_penalty) * single_active.to(dtype=q_orig.dtype)
     ).sum(dim=-1, keepdim=True)
     active = None
     if cfg.consensus_score_norm == "active":
@@ -341,11 +353,22 @@ def _ternary_alpha_xnor_matrix_scores(
     same_zero = torch.matmul(q_zero, k_zero.transpose(-2, -1))
     opposite = torch.matmul(q_pos, k_neg.transpose(-2, -1)) + torch.matmul(q_neg, k_pos.transpose(-2, -1))
     score = same_nonzero + float(cfg.alpha0) * same_zero - float(cfg.mismatch_penalty) * opposite
+    q_active = q_event.ne(0).to(dtype=q_orig.dtype)
+    k_active = k_event.ne(0).to(dtype=q_orig.dtype)
+    if cfg.single_active_penalty:
+        single_active = torch.matmul(q_active, k_zero.transpose(-2, -1)) + torch.matmul(
+            q_zero, k_active.transpose(-2, -1)
+        )
+        score = score - float(cfg.single_active_penalty) * single_active
     active = None
     if cfg.consensus_score_norm == "active":
-        q_active = q_event.ne(0).to(dtype=q_orig.dtype)
-        k_active = k_event.ne(0).to(dtype=q_orig.dtype)
-        active = torch.matmul(q_active, k_active.transpose(-2, -1))
+        both_active = torch.matmul(q_active, k_active.transpose(-2, -1))
+        if cfg.single_active_penalty:
+            q_active_count = q_active.sum(dim=-1, keepdim=True)
+            k_active_count = k_active.sum(dim=-1, keepdim=True).transpose(-2, -1)
+            active = q_active_count + k_active_count - both_active
+        else:
+            active = both_active
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
 
 
@@ -376,11 +399,22 @@ def _ternary_alpha_xnor_matrix_scores_ste(
     same_zero = torch.matmul(q_zero, k_zero.transpose(-2, -1))
     opposite = torch.matmul(q_pos, k_neg.transpose(-2, -1)) + torch.matmul(q_neg, k_pos.transpose(-2, -1))
     score = same_nonzero + float(cfg.alpha0) * same_zero - float(cfg.mismatch_penalty) * opposite
+    q_active = q_pos + q_neg
+    k_active = k_pos + k_neg
+    if cfg.single_active_penalty:
+        single_active = torch.matmul(q_active, k_zero.transpose(-2, -1)) + torch.matmul(
+            q_zero, k_active.transpose(-2, -1)
+        )
+        score = score - float(cfg.single_active_penalty) * single_active
     active = None
     if cfg.consensus_score_norm == "active":
-        q_active = q_pos + q_neg
-        k_active = k_pos + k_neg
-        active = torch.matmul(q_active, k_active.transpose(-2, -1))
+        both_active = torch.matmul(q_active, k_active.transpose(-2, -1))
+        if cfg.single_active_penalty:
+            q_active_count = q_active.sum(dim=-1, keepdim=True)
+            k_active_count = k_active.sum(dim=-1, keepdim=True).transpose(-2, -1)
+            active = q_active_count + k_active_count - both_active
+        else:
+            active = both_active
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
 
 
@@ -631,6 +665,23 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         value_orig = _independent_value_tokens(self, x, T, B_, H, W, C, head_dim, cfg)
         value = _ternary_sign_ste(value_orig) if cfg.value_mode in {"sign", "event", "ternary"} else value_orig
         attn = torch.matmul(gate, value)
+    elif cfg.mode in {
+        "ternary_alpha_xnor_ssa_kreuse_shiftmax",
+        "alpha_xnor_ssa_kreuse_shiftmax",
+        "h45",
+    }:
+        # H45: same ternary alpha-XNOR + Shiftmax attention as H44, but reuse K
+        # as the value stream. This removes the independent V branch while
+        # preserving the relaxed ATLIF/training setup for a controlled ablation.
+        scores = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=-1, keepdim=True)
+        gate = shiftmax(scores, dim=-1, eps=cfg.eps)
+        row_sum = gate.sum(dim=-1)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
+        attn = torch.matmul(gate, value)
     elif cfg.mode in {"alpha_xnor_matrix_l1", "ternary_alpha_xnor_matrix_l1", "h18d"}:
         # Direct H18d: same alpha-XNOR matrix, but with add/L1 normalization
         # instead of Shiftmax. This is the hardware-cleanest alpha-XNOR test.
@@ -868,7 +919,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "signed_consensus_popcount_l1/h13t, "
             "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_l1/h18a_l1, "
             "ternary_alpha_xnor_ssa_linear/h42b, ternary_alpha_xnor_ssa_qkv_linear/h42c, "
-            "ternary_alpha_xnor_ssa_qkv_shiftmax/h42d, "
+            "ternary_alpha_xnor_ssa_qkv_shiftmax/h42d, ternary_alpha_xnor_ssa_kreuse_shiftmax/h45, "
             "binary_alpha_xnor_matrix_shiftmax/l1, "
             "a2os2a_gate/h18b, alpha_xnor_matrix_shiftmax/h18c, "
             "alpha_xnor_matrix_l1/h18d, a2os2a_direct/h18e, a2os2a_qkv_l1, "

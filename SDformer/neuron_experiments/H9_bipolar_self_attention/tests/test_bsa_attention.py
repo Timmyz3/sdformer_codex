@@ -164,6 +164,7 @@ class ShiftmaxAttentionTest(unittest.TestCase):
                         "center_scores": False,
                         "preserve_mean": False,
                         "consensus_bias": 1.0,
+                        "single_active_penalty": 0.2,
                     }
                 )
 
@@ -177,6 +178,71 @@ class ShiftmaxAttentionTest(unittest.TestCase):
             self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
             self.assertLessEqual(module.h9_shiftmax_row_sum_mean, 1.0 + 1e-6)
             self.assertFalse(torch.isnan(out).any())
+
+    def test_single_active_penalty_covers_zero_nonzero_mismatch(self):
+        from models.STSwinNet_SNN.bsa_attention import (
+            _signed_consensus_token_scores,
+            _ternary_alpha_xnor_matrix_scores,
+            _ternary_alpha_xnor_matrix_scores_ste,
+            _ternary_alpha_xnor_token_scores,
+            config_from_dict,
+        )
+
+        base_cfg = config_from_dict(
+            {
+                "enabled": True,
+                "consensus_score_norm": "none",
+                "alpha0": 0.2,
+                "mismatch_penalty": 0.5,
+            }
+        )
+        cfg = config_from_dict(
+            {
+                "enabled": True,
+                "consensus_score_norm": "none",
+                "alpha0": 0.2,
+                "mismatch_penalty": 0.5,
+                "single_active_penalty": 0.3,
+            }
+        )
+        q_orig = torch.tensor([[[[[1.0], [0.0], [1.0], [0.0]]]]])
+        k_orig = torch.tensor([[[[0.0], [1.0], [-1.0], [0.0]]]])
+
+        base_alpha_token = _ternary_alpha_xnor_token_scores(q_orig, k_orig, base_cfg)
+        self.assertTrue(
+            torch.allclose(
+                base_alpha_token.reshape(-1),
+                torch.tensor([0.0, 0.0, -0.5, 0.2]),
+                atol=1e-6,
+            )
+        )
+
+        alpha_token = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
+        self.assertTrue(
+            torch.allclose(
+                alpha_token.reshape(-1),
+                torch.tensor([-0.3, -0.3, -0.5, 0.2]),
+                atol=1e-6,
+            )
+        )
+
+        consensus_token = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        self.assertTrue(
+            torch.allclose(
+                consensus_token.reshape(-1),
+                torch.tensor([-0.3, -0.3, -1.0, 0.0]),
+                atol=1e-6,
+            )
+        )
+
+        alpha_matrix = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        self.assertAlmostEqual(float(alpha_matrix[0, 0, 0, 0]), -0.3, places=6)
+        self.assertAlmostEqual(float(alpha_matrix[0, 0, 1, 1]), -0.3, places=6)
+        self.assertAlmostEqual(float(alpha_matrix[0, 0, 2, 2]), -0.5, places=6)
+        self.assertAlmostEqual(float(alpha_matrix[0, 0, 3, 3]), 0.2, places=6)
+
+        alpha_matrix_hard = _ternary_alpha_xnor_matrix_scores(q_orig, k_orig, cfg)
+        self.assertTrue(torch.allclose(alpha_matrix_hard, alpha_matrix, atol=1e-6))
 
     def test_strict_bsa_matrix_modes_use_bounded_shiftmax(self):
         from models.STSwinNet_SNN.bsa_attention import (

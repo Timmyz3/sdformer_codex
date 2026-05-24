@@ -303,7 +303,100 @@
 | SC S012 C | 1.00 | 7.02 | 3.01G | 1.19 | 6.84 | 3.02G | 1.82 | 8.75 | **2.90G** |
 | BQ S02 | — | — | — | 1.06 | 6.44 | 3.62G | 1.54 | 7.58 | 3.50G |
 
-## 十二、H42 系列注意力公式详解
+## 十二、三大注意力范式公式
+
+### 共同前向
+
+```
+Q = SN_Q(Linear_Q(x))      ∈ {-θ_Q, 0, +θ_Q}^(T×B×H×N×d)     三元脉冲发放
+K = SN_K(Linear_K(x) + PE) ∈ {-θ_K, 0, +θ_K}^(B×H×N×d)       带位置编码
+T: 时间步=10, B: batch, H: 头数=3~24, N: token数, d: 头维度=32
+
+Q 折叠 T→N: Q = reshape(Q, [B, H, T×N, d])
+```
+
+### SC (signed_consensus_shiftmax) — 符号共识 + Shiftmax
+
+```
+Q_sign = sign(Q)  ∈ {-1, 0, +1}
+K_sign = sign(K)  ∈ {-1, 0, +1}
+
+# 符号共识分数 (token 级 popcount)
+S_token[j] = Σ_d (Q_sign[i,d] × K_sign[j,d])      ← 同号=+1, 异号=-1, 沉默/单边发放=0
+S_token = S_token / head_dim × score_scale          ← 归一化到 [-1, +1]
+
+# 中心化 + Shiftmax
+S̃ = S - mean(S, dim=token)                         ← 去均值
+gate = 2^S̃ / 2^ceil(log2(Σ 2^S̃))                     ← Shiftmax, 行和 ∈ (0.5, 1]
+gate = gate × N                                      ← 保均值
+
+# 输出 (K 复用为 V, 逐元素门控)
+output = K × gate                     ← shape [B, H, N, d], token-wise mul
+```
+
+### SN (signed_consensus_shiftnorm) — 符号共识 + ShiftNorm
+
+```
+# 前三步同 SC
+S_token[j] = Σ_d (Q_sign[i,d] × K_sign[j,d]) / head_dim
+
+# 关键区别: ShiftNorm 替代 Shiftmax
+S̃ = S - mean(S, dim=token)
+gate = clamp(S̃ + bias, 0)                           ← ReLU 截断负值
+gate = gate / 2^ceil(log2(Σ gate))                   ← 分母 2^n 可移位近似
+gate = gate × N
+output = K × gate
+```
+
+### TX (ternary_alpha_xnor_shiftmax) — 三元 α-XNOR 矩阵 + Shiftmax
+
+```
+Q_sign = sign(Q)  ∈ {-1, 0, +1}
+K_sign = sign(K)  ∈ {-1, 0, +1}
+
+# Token-token 三元 α-XNOR 矩阵 (区别于 SC 的 token 级)
+S[i,j] = Σ_d [
+    Q_sign⁺[i]·K_sign⁺[j] + Q_sign⁻[i]·K_sign⁻[j]    ← 同号激活: +1
+  + α₀ × Q_sign⁰[i]·K_sign⁰[j]                        ← 同时沉默: +0.02
+  - β  × (Q_sign⁺[i]·K_sign⁻[j] + Q_sign⁻[i]·K_sign⁺[j])   ← 异号: -0.25
+  # 旧 TX/H45 未惩罚 0/非0，H46 会额外加 -γ × 单边发放
+]
+S = S / head_dim × score_scale                         ← 归一化
+
+# 中心化 + Shiftmax
+S̃ = S - mean(S, dim=-1)
+gate = shiftmax(S̃)                                     ← 2^x / 2^ceil(log2(Σ2^x))
+gate = gate × N                                        ← 保均值
+
+# 输出 (K 复用为 V, 矩阵乘法)
+output = gate @ K_threshold              ← shape [B, H, N, d], 矩阵乘
+```
+
+### TX SSA QKV (H42d/H44) — TX + 独立 V
+
+```
+# 前三步同 TX, 得 gate = shiftmax(S̃) × N
+
+# 关键区别: 独立可训练 V 分支
+V = Independent_Linear(x)               ← 独立的线性层, 从 K 权重初始化
+V_threshold = ATLIF(V)
+
+output = gate @ V_threshold             ← 矩阵乘, V 替代 K
+```
+
+### 三种范式对比
+
+| | SC | SN | TX | TX SSA QKV |
+|---|---|---|---|---|
+| 评分对象 | token popcount | token popcount | **token-token 矩阵** | token-token 矩阵 |
+| 核心操作 | Q_sign × K_sign | Q_sign × K_sign | Q_sign ⊗ K_sign (XNOR) | Q_sign ⊗ K_sign |
+| 评分粒度 | O(Nd) | O(Nd) | O(N²d) | O(N²d) |
+| α₀/β 加权 | ❌ | ❌ | ✅ (+0.02/-0.25) | ✅ |
+| 归一化 | Shiftmax | **ShiftNorm** | Shiftmax | Shiftmax |
+| 硬件 | LUT | **纯 shift** | LUT | LUT |
+| V 分支 | K 复用 | K 复用 | K 复用 | **独立可训练 V** |
+
+## 十三、H42 系列注意力公式详解
 
 所有 H42 系列的共同基础：TX 三元 α-XNOR 评分矩阵
 
@@ -322,21 +415,38 @@ S = S / head_dim × score_scale            ← 归一化
 
 | 模式 | V 分支 | 归一化 | 公式 |
 |------|:---:|:---:|------|
-| **H42b** (ssa_linear) | ❌ K 复用 | 无 (raw+bias) | `attn = (S + bias) @ sign(K)` |
-| **H42b_qkv** (matrix_shiftmax) | ❌ K 复用 | Shiftmax | `attn = shiftmax(S) @ sign(K)` |
-| **H42c** (ssa_qkv_linear) | ✅ 独立 V | 无 (raw+bias) | `attn = (S + bias) @ sign(V)` |
-| **H42d** (ssa_qkv_shiftmax) | ✅ 独立 V | Shiftmax | `attn = shiftmax(S) @ sign(V)` |
+| **H42b** (ssa_linear) | ❌ K 复用 | 无 (raw+bias) | `attn = (S + bias) @ K_threshold` |
+| **H45** (ssa_kreuse_shiftmax) | ❌ K 复用 | Shiftmax | `attn = shiftmax(S) @ K_threshold` |
+| **H42c** (ssa_qkv_linear) | ✅ 独立 V | 无 (raw+bias) | `attn = (S + bias) @ V_threshold` |
+| **H42d** (ssa_qkv_shiftmax) | ✅ 独立 V | Shiftmax | `attn = shiftmax(S) @ V_threshold` |
 | TX S02 C (H18c baseline) | ❌ K 复用 | Shiftmax | 同上，但用非 STE 评分 |
 
 ### 关键差异
 
 **Linear (H42b/c)**: `gate = S + bias` — 分数可能无界，依赖 bias 和 score_scale 调参稳定。硬件最简（纯加法+矩阵乘）。
 
-**Shiftmax (H42d/H42b_qkv)**: `gate = shiftmax(S) = 2^S / 2^ceil(log2(Σ2^S))` — BSA 标准归一化。行和 ∈ (0.5, 1]。硬件需 2^x LUT。
+**Shiftmax (H42d/H45)**: `gate = shiftmax(S) = 2^S / 2^ceil(log2(Σ2^S))` — BSA 标准归一化。行和 ∈ (0.5, 1]。硬件需 2^x LUT。
 
-**K 复用 vs 独立 V**: K 复用 (`sign(K)`) 保留三元极性作为 V。独立 V (`_independent_value_tokens`) 是可训练的线性层，从 K 初始化后独立学习。
+**K 复用 vs 独立 V**: K 复用默认使用 `value_mode: threshold`，即保留 ATLIF 阈值幅度的 K，不新增 V 参数；独立 V (`_independent_value_tokens`) 是可训练的线性层，从 K 初始化后独立学习，H42d/H44 使用 `value_mode: threshold`。如果显式切到 `value_mode: sign`，公式才是 `@ sign(K/V)`。
 
 **STE vs 非 STE**: H42 用 STE 版评分 (`_ternary_alpha_xnor_matrix_scores_ste`) 保留 Q/K 梯度。H18c 用非 STE 版 (`_ternary_alpha_xnor_matrix_scores`)，布尔运算阻断梯度。
+
+### H46 单边发放惩罚
+
+H46 修正一个三值相似度细节：旧 TX/SC/SN 都没有惩罚 `0/+1`、`0/-1`、`+1/0`、`-1/0`。这会让“一边沉默、一边发放”的 Q/K 通道贡献为 0，区分度偏弱。H46 增加：
+
+```
+single_active = (Q_active XOR K_active)
+S = S - γ × single_active
+```
+
+当前备选统一设 `γ=0.15`，小于异号惩罚 `β=0.25`，表示单边发放比正负极性冲突轻一些，但不再完全无代价。默认 `single_active_penalty=0`，因此旧 H41/H42/H45 配置仍可复现。
+
+| H46 配置 | 对应原方案 | 只新增的变化 | 配置文件 |
+|---|---|---|---|
+| H46-TX-g015 | H45 TX K-reuse relaxed | `single_active_penalty=0.15`，三值 alpha-XNOR 矩阵分数惩罚 0/非0 | `configs/generated/h46_tx_kreuse_singlepenalty_g015_full20.yml` |
+| H46-SC-g015 | H41 SC S012 C ang02 | `single_active_penalty=0.15`，signed consensus + Shiftmax 惩罚 0/非0 | `configs/generated/h46_sc_s012c_singlepenalty_g015_full30.yml` |
+| H46-SN-g015 | H41 SN S02 C continue | `single_active_penalty=0.15`，signed consensus + ShiftNorm 惩罚 0/非0 | `configs/generated/h46_sn_s02c_singlepenalty_g015_continue10.yml` |
 
 ### 状态
 
@@ -344,10 +454,13 @@ S = S / head_dim × score_scale            ← 归一化
 |:---:|------|:---:|:---:|:---:|
 | H42a | SN mild theta | — | — | ⏳ 没跑 |
 | H42b | ssa_linear | ❌ | raw+bias | ⏳ 没跑 |
-| H42b_qkv | matrix_shiftmax | ❌ | Shiftmax | ⏳ 没跑 |
 | H42c | ssa_qkv_linear | ✅ | raw+bias | ⏳ 没跑 |
-| H42d | ssa_qkv_shiftmax | ✅ | Shiftmax | ⏳ 没跑 |
-| **H44** | ssa_qkv_shiftmax | ✅ | Shiftmax | ⏳ **排队(放松参数)** |
+| H42d | ssa_qkv_shiftmax | ✅ | Shiftmax | ✅ 配置已修复为 full30，尚未单独跑 |
+| H44 | ssa_qkv_shiftmax | ✅ | Shiftmax | ⏹ 已按要求停止（独立 V 版本，不继续跑） |
+| **H45** | ssa_kreuse_shiftmax | ❌ | Shiftmax | ▶️ **正在跑**（H44 relaxed 参数不变，V 改为 K 复用） |
+| H46-TX-g015 | ssa_kreuse_shiftmax + single active penalty | ❌ | Shiftmax | ✅ 配置已写；对应 H45，γ=0.15 |
+| H46-SC-g015 | signed_consensus_shiftmax + single active penalty | ❌ | Shiftmax | ✅ 配置已写；对应 H41 SC S012 C ang02，γ=0.15 |
+| H46-SN-g015 | signed_consensus_shiftnorm + single active penalty | ❌ | ShiftNorm | ✅ 配置已写；对应 H41 SN S02 C continue，γ=0.15 |
 
 ## 十一、全量训练完整结果
 
@@ -363,7 +476,7 @@ S = S / head_dim × score_scale            ← 归一化
 | **27** | **1.732** | **8.404** | 2.615G | 0.061 |
 | 29 | 1.741 | 8.828 | 2.643G | 0.062 |
 
-### SC S012 C slowbb ang02 (signed consensus + stage0+1+2 + angular 0.2)
+### SC S012 C slowbb ang02 (signed consensus + stage0+1+2 + angular 0.02)
 
 | epoch | AEE | AAE | SOPs | firing |
 |:---:|-----:|-----:|-----:|-----:|
@@ -378,6 +491,22 @@ S = S / head_dim × score_scale            ← 归一化
 | 24 | 1.918 | 8.694 | 2.760G | 0.065 |
 | 27 | **1.844** | 8.553 | 2.749G | 0.064 |
 | 29 | 1.945 | 8.945 | 2.780G | 0.065 |
+
+### SC raw S012 C slowbb ang02 (不减 max 的 Shiftmax raw + stage0+1+2 + angular 0.02)
+
+| epoch | AEE | AAE | SOPs | firing |
+|:---:|-----:|-----:|-----:|-----:|
+| **0** | **1.805** | 8.453 | 2.875G | 0.067 |
+| 3 | 1.899 | 8.962 | 2.820G | 0.066 |
+| 6 | 1.899 | 8.598 | 2.746G | 0.064 |
+| 9 | 1.927 | 8.484 | 2.912G | 0.068 |
+| 12 | 1.850 | **8.433** | 2.827G | 0.066 |
+| 15 | 1.983 | 8.980 | 2.934G | 0.069 |
+| 18 | 1.944 | 8.684 | 2.804G | 0.066 |
+| 21 | 1.868 | 8.510 | 2.857G | 0.067 |
+| 24 | 1.960 | 8.941 | **2.737G** | 0.064 |
+| 27 | 1.888 | 8.824 | 2.826G | 0.066 |
+| 29 | 1.921 | 8.718 | 2.806G | 0.066 |
 
 ### SN S02 C dlr / continue (signed shiftnorm + stage0+2 + 差分LR)
 
@@ -398,6 +527,7 @@ S = S / head_dim × score_scale            ← 归一化
 | 🥈 | TX S02 C slowbb | 24 | 1.754 | 8.545 | **2.590G** | 0.061 |
 | 🥉 | SN S02 C continue | 6 | 1.743 | 8.379 | 2.702G | 0.063 |
 | 4 | SC S012 C ang02 | 27 | 1.844 | 8.553 | 2.749G | 0.064 |
+| 5 | SC raw S012 C ang02 | 0 | 1.805 | 8.453 | 2.875G | 0.067 |
 | — | PSN baseline | — | 1.585 | 7.501 | 3.622G | 0.085 |
 | — | H9a (历史最优) | — | 1.504 | 7.637 | 3.085G | 0.072 |
 
@@ -405,6 +535,7 @@ S = S / head_dim × score_scale            ← 归一化
 
 ✅ **TX S02 C 全量 SOPs 2.59-2.62G（-28% vs baseline），首次稳定破 3G**
 ⚠️ SC S012 C ang02 的 angular loss 未修复精度 (ep12 AAE=8.39 最优但仍差), SOPs 2.7-2.9G
+⚠️ SC raw 不减 max 的 Shiftmax 没有改善 normal SC，AEE/AAE/SOPs 都未占优
 ❌ SN S02 C dlr 退化严重, continue 版本稍好但只到 ep9
 📄 **论文主图: TX S02 C slowbb epoch27** — 唯一同时满足 SOPs<3G + AEE<1.75 的方案
 
