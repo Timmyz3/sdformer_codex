@@ -244,6 +244,44 @@ class ShiftmaxAttentionTest(unittest.TestCase):
         alpha_matrix_hard = _ternary_alpha_xnor_matrix_scores(q_orig, k_orig, cfg)
         self.assertTrue(torch.allclose(alpha_matrix_hard, alpha_matrix, atol=1e-6))
 
+    def test_signed_consensus_ste_single_active_keeps_forward_and_adds_gradient(self):
+        from models.STSwinNet_SNN.bsa_attention import _signed_consensus_token_scores, config_from_dict
+
+        hard_cfg = config_from_dict(
+            {
+                "enabled": True,
+                "consensus_score_norm": "none",
+                "single_active_penalty": 0.3,
+                "single_active_penalty_grad": "hard",
+            }
+        )
+        ste_cfg = config_from_dict(
+            {
+                "enabled": True,
+                "consensus_score_norm": "none",
+                "single_active_penalty": 0.3,
+                "single_active_penalty_grad": "ste",
+                "single_active_ste_slope": 4.0,
+                "single_active_ste_margin": 0.25,
+            }
+        )
+        q_hard = torch.tensor([[[[[1.0, 0.0]]]]], requires_grad=True)
+        k_hard = torch.tensor([[[[0.0, 1.0]]]], requires_grad=True)
+        q_ste = q_hard.detach().clone().requires_grad_(True)
+        k_ste = k_hard.detach().clone().requires_grad_(True)
+
+        hard_score = _signed_consensus_token_scores(q_hard, k_hard, hard_cfg)
+        ste_score = _signed_consensus_token_scores(q_ste, k_ste, ste_cfg)
+        self.assertTrue(torch.allclose(hard_score, ste_score, atol=1e-6))
+        self.assertAlmostEqual(float(ste_score.reshape(-1)[0]), -0.6, places=6)
+
+        hard_score.sum().backward()
+        ste_score.sum().backward()
+        self.assertAlmostEqual(float(q_hard.grad.reshape(-1)[0]), 0.0, places=6)
+        self.assertGreater(abs(float(q_ste.grad.reshape(-1)[0])), 0.0)
+        self.assertAlmostEqual(float(k_hard.grad.reshape(-1)[1]), 0.0, places=6)
+        self.assertGreater(abs(float(k_ste.grad.reshape(-1)[1])), 0.0)
+
     def test_strict_bsa_matrix_modes_use_bounded_shiftmax(self):
         from models.STSwinNet_SNN.bsa_attention import (
             _ensure_independent_value_branch,
@@ -313,6 +351,56 @@ class ShiftmaxAttentionTest(unittest.TestCase):
         self.assertEqual(tuple(out.shape), (2, 2, 4))
         self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
         self.assertFalse(torch.isnan(out).any())
+
+    def test_independent_value_branch_can_sync_from_loaded_k(self):
+        from models.STSwinNet_SNN.bsa_attention import (
+            _ensure_independent_value_branch,
+            config_from_dict,
+            sync_independent_value_branch_from_k,
+        )
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class Spiking_QK_WindowAttention3D(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_k = IdentitySN()
+
+        model = DummyModel()
+        attn = Spiking_QK_WindowAttention3D()
+        model.sttmultires_unet.encoders.swin3d.layers[0].swin_blocks[0].attn = attn
+        cfg = config_from_dict(
+            {
+                "enabled": True,
+                "mode": "ternary_alpha_xnor_ssa_qkv_shiftmax",
+                "target_blocks": ["0:0"],
+                "value_init": "copy_k",
+            }
+        )
+        with torch.no_grad():
+            attn.linear_k.weight.fill_(0.25)
+        _ensure_independent_value_branch(attn, cfg)
+        with torch.no_grad():
+            attn.linear_k.weight.fill_(2.0)
+
+        synced = sync_independent_value_branch_from_k(
+            model,
+            {
+                "enabled": True,
+                "mode": "ternary_alpha_xnor_ssa_qkv_shiftmax",
+                "target_blocks": ["0:0"],
+                "value_init": "copy_k",
+            },
+        )
+
+        self.assertEqual(synced, 1)
+        self.assertTrue(torch.allclose(attn.linear_v.weight, attn.linear_k.weight))
+        self.assertTrue(getattr(attn, "_h9_v_initialized_from_loaded_k"))
 
     def test_h18_paper_backed_modes_run_on_tiny_attention(self):
         from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict

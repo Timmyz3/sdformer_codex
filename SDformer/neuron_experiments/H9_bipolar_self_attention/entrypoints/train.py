@@ -21,7 +21,7 @@ LOAD_MODEL_ANCHOR = """    model = load_model(args.prev_runid, model, device, re
 LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import register_shiftmax_pickle_compat
     register_shiftmax_pickle_compat()
     from models.STSwinNet_SNN.atlif_ternary_psn import apply_trainable_mode, atlif_ternary_summary, install_atlif_ternary_psn
-    from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, shiftmax_attention_summary
+    from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, shiftmax_attention_summary, sync_independent_value_branch_from_k
 
     def _h9_is_overlay_key(key):
         markers = (".linear_v.", ".bn_v.", ".sn_v.", ".spiking_neuron.thresh", ".spiking_neuron.center")
@@ -42,6 +42,10 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
                 print("Model restored from local checkpoint " + prev_runid + "\\n")
                 return model
             overlay_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_overlay_key(key)]
+            overlay_v_checkpoint_keys = [
+                key for key in pretrained_dict.keys()
+                if any(marker in key for marker in (".linear_v.", ".bn_v.", ".sn_v."))
+            ]
             incompatible = model.load_state_dict(pretrained_dict, strict=False)
             missing = list(getattr(incompatible, "missing_keys", []))
             unexpected = list(getattr(incompatible, "unexpected_keys", []))
@@ -65,6 +69,10 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
                     "[H9] checkpoint contains overlay parameters but matching model keys are missing: "
                     + str(overlay_missing[:20])
                 )
+            if not overlay_v_checkpoint_keys:
+                synced_v = sync_independent_value_branch_from_k(model, config.get("bsa_attention"))
+                if synced_v:
+                    print(f"[H9] initialized independent V from loaded K branches: {synced_v} modules")
             del pretrained_model
             torch.cuda.empty_cache()
             print("Model restored from local checkpoint " + prev_runid + "\\n")

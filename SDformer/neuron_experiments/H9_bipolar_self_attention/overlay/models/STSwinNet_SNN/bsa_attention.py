@@ -35,6 +35,9 @@ class ShiftmaxAttentionConfig:
     alpha0: float = 0.05
     mismatch_penalty: float = 0.5
     single_active_penalty: float = 0.0
+    single_active_penalty_grad: str = "hard"
+    single_active_ste_slope: float = 4.0
+    single_active_ste_margin: float = 0.25
     relu_k_floor: float = 0.0
 
 
@@ -60,6 +63,9 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         alpha0=float(raw.get("alpha0", 0.05)),
         mismatch_penalty=float(raw.get("mismatch_penalty", 0.5)),
         single_active_penalty=float(raw.get("single_active_penalty", 0.0)),
+        single_active_penalty_grad=str(raw.get("single_active_penalty_grad", "hard")),
+        single_active_ste_slope=float(raw.get("single_active_ste_slope", 4.0)),
+        single_active_ste_margin=float(raw.get("single_active_ste_margin", 0.25)),
         relu_k_floor=float(raw.get("relu_k_floor", 0.0)),
     )
 
@@ -124,6 +130,19 @@ def _ternary_sign_ste(x: torch.Tensor) -> torch.Tensor:
     return (hard - x).detach() + x
 
 
+def _single_active_proxy(event: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    """Hard active mask in forward with optional soft proxy gradient."""
+
+    mode = cfg.single_active_penalty_grad
+    if mode in {"hard", "none"}:
+        return event.ne(0).to(dtype=event.dtype)
+    if mode not in {"ste", "proxy", "soft"}:
+        raise ValueError("bsa_attention.single_active_penalty_grad must be hard or ste")
+    hard_active = event.ne(0).to(dtype=event.dtype)
+    soft_active = torch.sigmoid(float(cfg.single_active_ste_slope) * (event.abs() - float(cfg.single_active_ste_margin)))
+    return (hard_active - soft_active).detach() + soft_active
+
+
 def _qkformer_token_q(q_orig: torch.Tensor) -> torch.Tensor:
     return q_orig.permute(1, 2, 0, 3, 4).reshape(
         q_orig.shape[1],
@@ -155,6 +174,55 @@ def _ensure_independent_value_branch(attn: nn.Module, cfg: ShiftmaxAttentionConf
     attn.sn_v = copy.deepcopy(attn.sn_k)
 
 
+def _uses_independent_value_branch(cfg: ShiftmaxAttentionConfig) -> bool:
+    return cfg.mode in {
+        "strict_bsa_qkv_shiftmax",
+        "bsa_qkv_shiftmax",
+        "bsa_true_qkv_shiftmax",
+        "a2os2a_qkv_l1",
+        "a2os2a_true_qkv_l1",
+        "ternary_alpha_xnor_ssa_qkv_linear",
+        "alpha_xnor_ssa_qkv_linear",
+        "ternary_alpha_xnor_qkv",
+        "h42c",
+        "ternary_alpha_xnor_ssa_qkv_shiftmax",
+        "alpha_xnor_ssa_qkv_shiftmax",
+        "h42d",
+    }
+
+
+def sync_independent_value_branch_from_k(model: nn.Module, raw_config: dict | None) -> int:
+    """Initialize overlay V branches from the currently loaded K branches.
+
+    QKV ablations are usually resumed from a baseline QK checkpoint. The V
+    modules must exist before `load_state_dict` so overlay checkpoints can load,
+    but a baseline checkpoint has no V keys. In that case this function copies
+    the already-loaded K branch into V after checkpoint load, preserving the
+    intended `copy_k` continuation point without overwriting trained V when a
+    later overlay checkpoint provides V parameters.
+    """
+
+    cfg = config_from_dict(raw_config)
+    if not cfg.enabled or not _uses_independent_value_branch(cfg):
+        return 0
+    synced = 0
+    for _, module in _iter_attention_modules(model, cfg):
+        if module.__class__.__name__ != "Spiking_QK_WindowAttention3D":
+            continue
+        _ensure_independent_value_branch(module, cfg)
+        module.linear_v.load_state_dict(module.linear_k.state_dict())
+        if (
+            getattr(module, "norm_layer", None) in {"BN", "BNTT", "tdBN", "IN"}
+            and hasattr(module, "bn_k")
+            and hasattr(module, "bn_v")
+        ):
+            module.bn_v.load_state_dict(module.bn_k.state_dict())
+        module.sn_v.load_state_dict(module.sn_k.state_dict())
+        module._h9_v_initialized_from_loaded_k = True
+        synced += 1
+    return synced
+
+
 def _independent_value_tokens(
     attn: nn.Module,
     x: torch.Tensor,
@@ -183,8 +251,10 @@ def _signed_consensus_token_scores(
 
     Forward values are integer-like agreement-minus-conflict popcounts:
     same-positive and same-negative channels add +1, opposite polarity channels
-    add -1, silent channels add 0. Optional normalization keeps Shiftmax from
-    becoming too sharp while remaining power-of-two friendly for head_dim values.
+    add -1, and silent/silent channels add 0. When enabled, single-active
+    channels (one side silent, the other side nonzero) are penalized separately.
+    Optional normalization keeps Shiftmax from becoming too sharp while
+    remaining power-of-two friendly for head_dim values.
     """
 
     q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
@@ -193,7 +263,14 @@ def _signed_consensus_token_scores(
     k_active = k_event.ne(0)
     score = (q_event * k_event).sum(dim=-1, keepdim=True)
     if cfg.single_active_penalty:
-        single_active = (q_active ^ k_active).sum(dim=-1, keepdim=True).to(dtype=score.dtype)
+        if cfg.single_active_penalty_grad in {"ste", "proxy", "soft"}:
+            q_active_proxy = _single_active_proxy(q_event, cfg)
+            k_active_proxy = _single_active_proxy(k_event, cfg)
+            single_active = (
+                q_active_proxy * (1.0 - k_active_proxy) + (1.0 - q_active_proxy) * k_active_proxy
+            ).sum(dim=-1, keepdim=True)
+        else:
+            single_active = (q_active ^ k_active).sum(dim=-1, keepdim=True).to(dtype=score.dtype)
         score = score - float(cfg.single_active_penalty) * single_active
     norm = cfg.consensus_score_norm
     if norm in {"head_dim", "dim"}:
@@ -202,7 +279,14 @@ def _signed_consensus_token_scores(
         score = score / float(max(1, q_event.shape[-1]) ** 0.5)
     elif norm == "active":
         if cfg.single_active_penalty:
-            active = (q_active | k_active).sum(dim=-1, keepdim=True).clamp_min(1)
+            if cfg.single_active_penalty_grad in {"ste", "proxy", "soft"}:
+                q_active_proxy = _single_active_proxy(q_event, cfg)
+                k_active_proxy = _single_active_proxy(k_event, cfg)
+                active = (q_active_proxy + k_active_proxy - q_active_proxy * k_active_proxy).sum(
+                    dim=-1, keepdim=True
+                ).clamp_min(1)
+            else:
+                active = (q_active | k_active).sum(dim=-1, keepdim=True).clamp_min(1)
         else:
             active = (q_active & k_active).sum(dim=-1, keepdim=True).clamp_min(1)
         score = score / active.to(dtype=score.dtype)
@@ -793,8 +877,9 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         # H13b: ternary-native token gating.
         #
         # The score is a hardware-friendly signed popcount over Q/K events:
-        # same polarity contributes +1, opposite polarity -1, silence 0. Shiftmax
-        # is retained as the BSA-style normalization, but its input is now a
+        # same polarity contributes +1, opposite polarity -1, silence/silence 0,
+        # and optional single-active mismatches get their own penalty. Shiftmax is
+        # retained as the BSA-style normalization, but its input is now a
         # sign-consensus score instead of a theta-weighted real-valued product.
         scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
         if cfg.center_scores:

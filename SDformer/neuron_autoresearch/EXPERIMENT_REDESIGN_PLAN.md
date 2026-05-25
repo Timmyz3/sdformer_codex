@@ -442,11 +442,18 @@ S = S - γ × single_active
 
 当前备选统一设 `γ=0.15`，小于异号惩罚 `β=0.25`，表示单边发放比正负极性冲突轻一些，但不再完全无代价。默认 `single_active_penalty=0`，因此旧 H41/H42/H45 配置仍可复现。
 
+`single_active_penalty_grad` 用来区分 hard 和 STE 两类实现：
+
+- `hard`：前向分数使用严格布尔 XOR，实验最干净，但单边惩罚项本身不直接给 Q/K 梯度。
+- `ste`：前向仍保持同样的 hard XOR 值，反向用 sigmoid active proxy 给正在孤立发放的一侧提供 surrogate 梯度；适合 SC/SN 后续认真调参。
+
 | H46 配置 | 对应原方案 | 只新增的变化 | 配置文件 |
 |---|---|---|---|
 | H46-TX-g015 | H45 TX K-reuse relaxed | `single_active_penalty=0.15`，三值 alpha-XNOR 矩阵分数惩罚 0/非0 | `configs/generated/h46_tx_kreuse_singlepenalty_g015_full20.yml` |
+| H47-TX-QKV-g015 | H44 TX QKV relaxed | `single_active_penalty=0.15`，独立 V + Shiftmax，检验 QKV 是否能弥补 K-reuse 表达力不足 | `configs/generated/h47_tx_qkv_singlepenalty_g015_shiftmax_full20.yml` |
 | H46-SC-g015 | H41 SC S012 C ang02 | `single_active_penalty=0.15`，signed consensus + Shiftmax 惩罚 0/非0 | `configs/generated/h46_sc_s012c_singlepenalty_g015_full30.yml` |
 | H46-SN-g015 | H41 SN S02 C continue | `single_active_penalty=0.15`，signed consensus + ShiftNorm 惩罚 0/非0 | `configs/generated/h46_sn_s02c_singlepenalty_g015_continue10.yml` |
+| H47-SC/SN-ste | H46-SC/SN 的可导变体 | 额外设置 `single_active_penalty_grad: ste`，前向不变但惩罚项有 surrogate 梯度 | 待生成 |
 
 ### 状态
 
@@ -457,10 +464,77 @@ S = S - γ × single_active
 | H42c | ssa_qkv_linear | ✅ | raw+bias | ⏳ 没跑 |
 | H42d | ssa_qkv_shiftmax | ✅ | Shiftmax | ✅ 配置已修复为 full30，尚未单独跑 |
 | H44 | ssa_qkv_shiftmax | ✅ | Shiftmax | ⏹ 已按要求停止（独立 V 版本，不继续跑） |
-| **H45** | ssa_kreuse_shiftmax | ❌ | Shiftmax | ▶️ **正在跑**（H44 relaxed 参数不变，V 改为 K 复用） |
-| H46-TX-g015 | ssa_kreuse_shiftmax + single active penalty | ❌ | Shiftmax | ✅ 配置已写；对应 H45，γ=0.15 |
+| **H45** | ssa_kreuse_shiftmax | ❌ | Shiftmax | ✅ 已跑完并 profile；best valid40 为 epoch12：AEE 1.7150 / AAE 8.8009 / SOPs 3.1295G |
+| H46-TX-g015 | ssa_kreuse_shiftmax + single active penalty | ❌ | Shiftmax | ▶️ 正在全量跑；截至 2026-05-25 00:59（约 UTC+8）已进入 epoch9，已保存 epoch0-8 checkpoints |
+| H47-TX-QKV-g015 | ssa_qkv_shiftmax + single active penalty | ✅ | Shiftmax | ✅ 配置已写；尚未启动，目标是测试“独立 V + 单边惩罚”是否优于 H45/H46 |
 | H46-SC-g015 | signed_consensus_shiftmax + single active penalty | ❌ | Shiftmax | ✅ 配置已写；对应 H41 SC S012 C ang02，γ=0.15 |
 | H46-SN-g015 | signed_consensus_shiftnorm + single active penalty | ❌ | ShiftNorm | ✅ 配置已写；对应 H41 SN S02 C continue，γ=0.15 |
+
+#### H47 启动前修复记录
+
+独立 V 分支需要特别小心：H47 从 baseline checkpoint 续训，而 baseline 没有 `linear_v/bn_v/sn_v` 参数。如果在 checkpoint load 前直接 `copy.deepcopy(linear_k)`，V 会复制随机初始化的 K，而不是复制加载后的 baseline K。已修复：
+
+- `bsa_attention.py` 增加 `sync_independent_value_branch_from_k()`。
+- `entrypoints/train.py` 在 `load_state_dict()` 后检测 checkpoint 是否含 V 参数；如果不含 V，则把已经加载好的 K 同步到 V。
+- 如果后续从 H47/overlay checkpoint 恢复，checkpoint 内含 V 参数，则不会再同步覆盖已训练的 V。
+- H47 `launch.sh` 增加 `flock`，避免多个 watcher 同时触发重复启动。
+- H47 watcher 等待 H46 `status.log` 出现 `profile_done` 后才启动，避免 H46 异常退出时误启动。
+
+验证命令：
+
+```
+python -m py_compile bsa_attention.py entrypoints/train.py
+python -m unittest neuron_experiments.H9_bipolar_self_attention.tests.test_bsa_attention
+patched train source compile
+```
+
+验证结果：`test_bsa_attention` 共 10 个测试通过，其中包含“先创建 V、再加载 K 后同步 V”的回归测试。
+
+#### H45 已完成结果记录
+
+H45 是 `TX + K-reuse + Shiftmax` 的全量 20 epoch 对照，不含单边发放惩罚；训练从 baseline `checkpoint_epoch59.pth` 续训，配置为 `configs/generated/h45_tx_kreuse_relaxed_full20.yml`。该实验已完成训练与 valid40 profile，结果目录：
+
+`neuron_experiments/H9_bipolar_self_attention/results/h45_tx_kreuse_relaxed_full20_20260524_130941`
+
+valid40 checkpoint 排名如下：
+
+| rank | checkpoint | AEE | AAE | SOPs(G) | firing | score |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | `checkpoint_epoch12.pth` | **1.7150** | 8.8009 | 3.1295 | 0.07341 | **1.9507** |
+| 2 | `checkpoint_epoch0.pth` | 1.7473 | 8.8525 | 3.1185 | 0.07315 | 1.9804 |
+| 3 | `checkpoint_epoch9.pth` | 1.7728 | 9.0944 | 3.1698 | 0.07436 | 2.0300 |
+| 4 | `checkpoint_epoch15.pth` | 1.8140 | 8.8244 | 3.1258 | 0.07332 | 2.0490 |
+| 5 | `checkpoint_epoch6.pth` | 1.8275 | 9.4792 | 3.0306 | 0.07109 | 2.0645 |
+| 6 | `checkpoint_epoch3.pth` | 1.8748 | 9.4866 | **2.9214** | **0.06853** | 2.1119 |
+| 7 | `checkpoint_epoch19.pth` | 1.8656 | 9.2826 | 3.1294 | 0.07341 | 2.1133 |
+| 8 | `checkpoint_epoch18.pth` | 1.9010 | 9.8748 | 3.0117 | 0.07065 | 2.1479 |
+
+当前判断：H45 的最佳 AEE 在 epoch12，但 AAE 明显弱于 H9a/PSN baseline；SOPs 最低的 epoch3 精度又偏差。因此 H45 更适合作为“去掉独立 V 后表达力不足”的负对照，而不是主推方案。H46 正在验证同样 K-reuse 结构加入 `single_active_penalty=0.15` 是否改善单边发放匹配；H47 将在 H46 profile 完成后自动验证独立 QKV 版本。
+
+#### 从 TX / SC / SN 三条路线后的实验演化路径
+
+这一段只记录 Phase 3 之后的主线变化，目的是把“为什么从 TX/SC/SN 走到 H41/H42/H45/H46/H47”串起来。
+
+| 阶段 | 实验/方案 | 改动逻辑 | 训练状态 | 最好/关键指标 | 结论 |
+|---|---|---|---|---|---|
+| 选择起点 | TX / SC / SN 三路线短测 | 从 `ternary_alpha_xnor_shiftmax`、`signed_consensus_shiftmax`、`signed_consensus_shiftnorm` 三个注意力里筛选；FFN 主要在 S02/S012 间搜索 | 已完成 80-step valid40 和 360-step confirm | 80-step valid40：TX S02 A 1.78/8.65/3.18G；SC S012 C 1.82/8.75/2.90G；SN S02 C 1.82/9.06/3.18G | 三条都能做稀疏，但短测只能排序，不能直接代表全量收敛 |
+| H41-TX | TX S02 C slowbb full30 | TX 三元 alpha-XNOR + stage0/2 FFN 稀疏，保守慢阈值，追求 SOPs 破 3G 且精度不崩 | 已完成 full30 + valid40 profile | epoch27：AEE 1.732 / AAE 8.404 / SOPs 2.615G / firing 0.061；epoch24 SOPs 2.590G | 当前最适合讲“明显稀疏、精度可接受”的主线结果 |
+| H41-SC | SC S012 C slowbb ang02 full30 | signed-consensus + Shiftmax，stage0/1/2 FFN 稀疏，加轻量 angular | 已完成 full30 + valid40 profile | epoch27：AEE 1.844 / AAE 8.553 / SOPs 2.749G；epoch12 AAE 8.385 | SOPs 好，但 AEE/AAE 不如 TX 主线；angular 没明显救回来 |
+| H42-SC-raw | SC raw S012 C ang02 full30 | 去掉 Shiftmax 的减最大值版本，测试 raw Shiftmax 是否更适合三值 | 已完成 full30 + valid40 profile | epoch0：AEE 1.805 / AAE 8.453 / SOPs 2.875G；epoch12 AAE 8.433 | raw 版没有稳定优于 normal SC，暂不主推 |
+| H41/H42-SN | SN S02 C dlr / continue | signed shiftnorm，stage0/2 FFN 稀疏；后续从中间 checkpoint 继续 | 部分 full/continue 已完成到短中程 profile | continue epoch6：AEE 1.743 / AAE 8.379 / SOPs 2.702G | 有单点不错，但训练稳定性和全量完整性弱于 TX；作为对照保留 |
+| H45 | TX K-reuse Shiftmax full20 | 把 TX 做成真正 token-token attention：`shiftmax(S) @ K_threshold`，不再挂原 QKFormer carrier，不引入独立 V | 已完成 full20 + valid40 profile | epoch12：AEE 1.715 / AAE 8.801 / SOPs 3.129G；epoch3 SOPs 2.921G 但 AEE/AAE 1.875/9.487 | K-reuse 表达力不足，AAE 明显差；更像负对照 |
+| H46-TX | H45 + single-active penalty | 修正 TX 评分里 `0/+1`、`0/-1` 单边发放不扣分的问题，设 `γ=0.15` | 本机正在全量跑；截至 2026-05-25 00:59（约 UTC+8）已到 epoch9，已保存 epoch0-8，未 profile | 暂无最终 AEE/AAE/SOPs；训练 loss 从 109.60 降到约 101.45；epoch8 发放统计约 ternary activity 0.041、pos/neg ratio 1.65 | 等 full/profile 判断；若不优于 H45，K-reuse TX 基本放弃 |
+| H47-TX-QKV | H44/H42d 思路 + single-active penalty | 独立 V 分支：`shiftmax(S) @ V_threshold`，且修复了 V 从 loaded K 初始化的问题 | 本机已排队；等待 H46 `profile_done` 后自动启动 | 暂无 | 关键验证：如果 H47 明显优于 H45/H46，说明独立 V 是 TX direct attention 的必要条件 |
+| 外部 H42B | H42B QKV P3 precision-first（外部服务器汇报） | `ternary_alpha_xnor_matrix_shiftmax`，Q/K/V 方向 TX 三值 alpha-XNOR matrix shiftmax + S02 FFN，`target_rate=0.08`，慢阈值增长，约 3G SOPs 保精度 | 外部服务器已完成 valid825 profile | epoch29：AEE 3.1461 / AAE 17.9545 / SOPs 3.2637G / firing 0.07656；epoch20：AEE 3.3607 / AAE 19.7203 / SOPs 3.2564G / firing 0.07639 | 精度崩，虽然 SOPs 接近目标但不值得继续押；应作为失败案例记录 |
+| 外部 H46SC | H46-SC 从 epoch6 恢复 | H46 的 SC 分支：signed-consensus + single-active penalty；从 `checkpoint_epoch6.pth` 恢复跑剩余 23 epoch | 外部服务器运行中，PID 236458，保存格式 `resume_from_epoch6_local_epoch{}.pth` | 暂无最终 profile | 等恢复训练完成后看能否比 H41-SC/H42-SC-raw 更稳；若 AAE 仍 >8.4，则 SC 不作为主线 |
+
+阶段性判断：
+
+- **主线仍是 H41-TX S02 C**：它是目前唯一稳定做到 SOPs 2.6G 左右且 AEE < 1.75 的完整全量结果。
+- **H45 暂时不主推**：K-reuse direct attention 的 AAE 太差，H46 只是验证单边惩罚能否修复它。
+- **H47 是关键分叉点**：如果独立 V 能把 AAE 拉回 8.0 左右，同时 SOPs 不超过 3.2G，TX-QKV 才值得继续；否则回到 H41-TX 的 carrier/FFN 路线做精修。
+- **H42B 外服结果已经判负**：精度崩到 AEE 3+ / AAE 18 左右，后续不再投入同类 P3 precision-first 配置。
+- **SC/SN 更适合作对照或补充**：SC/SN 单点有不错指标，但全量稳定性和论文主线清晰度暂时弱于 TX。
 
 ## 十一、全量训练完整结果
 
