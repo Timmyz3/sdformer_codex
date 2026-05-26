@@ -282,6 +282,116 @@ class ShiftmaxAttentionTest(unittest.TestCase):
         self.assertAlmostEqual(float(k_hard.grad.reshape(-1)[1]), 0.0, places=6)
         self.assertGreater(abs(float(k_ste.grad.reshape(-1)[1])), 0.0)
 
+    def test_h49_token_single_active_ste_keeps_forward_and_adds_gradient(self):
+        from models.STSwinNet_SNN.bsa_attention import _ternary_alpha_xnor_token_scores, config_from_dict
+
+        hard_cfg = config_from_dict(
+            {
+                "enabled": True,
+                "consensus_score_norm": "none",
+                "alpha0": 0.2,
+                "mismatch_penalty": 0.5,
+                "single_active_penalty": 0.3,
+                "single_active_penalty_grad": "hard",
+            }
+        )
+        ste_cfg = config_from_dict(
+            {
+                "enabled": True,
+                "consensus_score_norm": "none",
+                "alpha0": 0.2,
+                "mismatch_penalty": 0.5,
+                "single_active_penalty": 0.3,
+                "single_active_penalty_grad": "ste",
+                "single_active_ste_slope": 4.0,
+                "single_active_ste_margin": 0.25,
+            }
+        )
+        q_hard = torch.tensor([[[[[1.0, 0.0]]]]], requires_grad=True)
+        k_hard = torch.tensor([[[[0.0, 1.0]]]], requires_grad=True)
+        q_ste = q_hard.detach().clone().requires_grad_(True)
+        k_ste = k_hard.detach().clone().requires_grad_(True)
+
+        hard_score = _ternary_alpha_xnor_token_scores(q_hard, k_hard, hard_cfg)
+        ste_score = _ternary_alpha_xnor_token_scores(q_ste, k_ste, ste_cfg)
+        self.assertTrue(torch.allclose(hard_score, ste_score, atol=1e-6))
+        self.assertAlmostEqual(float(ste_score.reshape(-1)[0]), -0.6, places=6)
+        self.assertFalse(hard_score.requires_grad)
+        self.assertTrue(ste_score.requires_grad)
+
+        ste_score.sum().backward()
+        self.assertIsNone(q_hard.grad)
+        self.assertGreater(abs(float(q_ste.grad.reshape(-1)[0])), 0.0)
+        self.assertIsNone(k_hard.grad)
+        self.assertGreater(abs(float(k_ste.grad.reshape(-1)[1])), 0.0)
+
+    def test_h54_bipolar_score_components_split_tx_evidence(self):
+        from models.STSwinNet_SNN.bsa_attention import _bipolar_token_score_components, config_from_dict
+
+        cfg = config_from_dict(
+            {
+                "enabled": True,
+                "consensus_score_norm": "none",
+                "alpha0": 0.2,
+                "mismatch_penalty": 0.5,
+                "single_active_penalty": 0.3,
+            }
+        )
+        q_orig = torch.tensor([[[[[1.0, 1.0, 0.0, -1.0]]]]])
+        k_orig = torch.tensor([[[[1.0, -1.0, 0.0, -1.0]]]])
+
+        tx_score, same_score, opp_score = _bipolar_token_score_components(q_orig, k_orig, cfg)
+        self.assertAlmostEqual(float(same_score.reshape(-1)[0]), 2.2, places=6)
+        self.assertAlmostEqual(float(opp_score.reshape(-1)[0]), 1.0, places=6)
+        self.assertAlmostEqual(float(tx_score.reshape(-1)[0]), 1.7, places=6)
+
+    def test_h54_bipolar_modes_run_on_tiny_attention_and_can_make_signed_gate(self):
+        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, mode: str):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": mode,
+                        "center_scores": False,
+                        "preserve_mean": False,
+                        "consensus_score_norm": "none",
+                        "alpha0": 0.02,
+                        "mismatch_penalty": 0.25,
+                        "single_active_penalty": 0.2,
+                        "bipolar_mu": 0.5,
+                        "bipolar_lambda": 1.0,
+                    }
+                )
+
+        for mode in ("bipolar_qkselector_shiftmax", "tx_bipolar_qkselector_shiftmax"):
+            module = TinyAttention(mode)
+            x = torch.randn(1, 2, 1, 2, 4)
+            out, spikes = _qk_shiftmax_gate_forward(module, x)
+
+            self.assertEqual(tuple(out.shape), (2, 2, 4))
+            self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+            self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
+            self.assertFalse(torch.isnan(out).any())
+
     def test_strict_bsa_matrix_modes_use_bounded_shiftmax(self):
         from models.STSwinNet_SNN.bsa_attention import (
             _ensure_independent_value_branch,

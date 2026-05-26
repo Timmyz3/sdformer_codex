@@ -39,6 +39,11 @@ class ShiftmaxAttentionConfig:
     single_active_ste_slope: float = 4.0
     single_active_ste_margin: float = 0.25
     relu_k_floor: float = 0.0
+    residual_alpha: float = 0.3
+    bipolar_mu: float = 0.5
+    bipolar_lambda: float = 0.8
+    bipolar_gate_min: float | None = None
+    bipolar_gate_max: float | None = None
 
 
 def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
@@ -67,6 +72,11 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         single_active_ste_slope=float(raw.get("single_active_ste_slope", 4.0)),
         single_active_ste_margin=float(raw.get("single_active_ste_margin", 0.25)),
         relu_k_floor=float(raw.get("relu_k_floor", 0.0)),
+        residual_alpha=float(raw.get("residual_alpha", 0.3)),
+        bipolar_mu=float(raw.get("bipolar_mu", raw.get("residual_alpha", 0.5))),
+        bipolar_lambda=float(raw.get("bipolar_lambda", 0.8)),
+        bipolar_gate_min=None if raw.get("bipolar_gate_min") is None else float(raw.get("bipolar_gate_min")),
+        bipolar_gate_max=None if raw.get("bipolar_gate_max") is None else float(raw.get("bipolar_gate_max")),
     )
 
 
@@ -385,7 +395,12 @@ def _ternary_alpha_xnor_token_scores(
     same_nonzero = (q_event == k_event) & q_active & k_active
     same_zero = (~q_active) & (~k_active)
     opposite = (q_event == -k_event) & q_active & k_active
-    single_active = q_active ^ k_active
+    if cfg.single_active_penalty and cfg.single_active_penalty_grad in {"ste", "proxy", "soft"}:
+        q_active_proxy = _single_active_proxy(q_event, cfg)
+        k_active_proxy = _single_active_proxy(k_event, cfg)
+        single_active = q_active_proxy * (1.0 - k_active_proxy) + (1.0 - q_active_proxy) * k_active_proxy
+    else:
+        single_active = (q_active ^ k_active).to(dtype=q_orig.dtype)
     score = (
         same_nonzero.to(dtype=q_orig.dtype)
         + float(cfg.alpha0) * same_zero.to(dtype=q_orig.dtype)
@@ -396,6 +411,102 @@ def _ternary_alpha_xnor_token_scores(
     if cfg.consensus_score_norm == "active":
         active = (q_active | k_active).sum(dim=-1, keepdim=True).clamp_min(1)
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
+
+
+def _dual_channel_token_scores(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Excitation/inhibition token selector for signed ternary Q/K events.
+
+    Positive and negative spikes are handled as separate channels. Same-polarity
+    evidence excites the token, opposite-polarity and one-sided activity inhibit
+    it. This keeps H49's QKFormer-native K carrier while making the signed
+    ternary semantics explicit instead of folding everything into one XNOR term.
+    """
+
+    q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+    k_event = _ternary_sign_ste(k_orig)
+    q_pos = torch.relu(q_event)
+    q_neg = torch.relu(-q_event)
+    k_pos = torch.relu(k_event)
+    k_neg = torch.relu(-k_event)
+    q_zero = torch.clamp(1.0 - q_event.abs(), min=0.0, max=1.0)
+    k_zero = torch.clamp(1.0 - k_event.abs(), min=0.0, max=1.0)
+
+    excite = (q_pos * k_pos + q_neg * k_neg).sum(dim=-1, keepdim=True)
+    inhibit = (q_pos * k_neg + q_neg * k_pos).sum(dim=-1, keepdim=True)
+    if cfg.single_active_penalty:
+        q_active = q_pos + q_neg
+        k_active = k_pos + k_neg
+        one_sided = (q_active * k_zero + q_zero * k_active).sum(dim=-1, keepdim=True)
+        inhibit = inhibit + float(cfg.single_active_penalty) * one_sided
+    same_zero = (q_zero * k_zero).sum(dim=-1, keepdim=True)
+    score = excite - float(cfg.mismatch_penalty) * inhibit + float(cfg.alpha0) * same_zero
+
+    active = None
+    if cfg.consensus_score_norm == "active":
+        active = ((q_pos + q_neg) + (k_pos + k_neg)).sum(dim=-1, keepdim=True).clamp_min(1)
+    return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
+
+
+def _bipolar_token_score_components(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return TX, same-polarity, and opposite-polarity token scores.
+
+    H54 uses the same ternary evidence as TX, but keeps the positive and
+    negative evidence separated until after normalization. That lets the final
+    selector become signed while every Shiftmax branch remains nonnegative.
+    """
+
+    q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+    k_event = _ternary_sign_ste(k_orig)
+    q_pos = torch.relu(q_event)
+    q_neg = torch.relu(-q_event)
+    k_pos = torch.relu(k_event)
+    k_neg = torch.relu(-k_event)
+    q_zero = torch.clamp(1.0 - q_event.abs(), min=0.0, max=1.0)
+    k_zero = torch.clamp(1.0 - k_event.abs(), min=0.0, max=1.0)
+
+    same_nonzero = (q_pos * k_pos + q_neg * k_neg).sum(dim=-1, keepdim=True)
+    opposite = (q_pos * k_neg + q_neg * k_pos).sum(dim=-1, keepdim=True)
+    same_zero = (q_zero * k_zero).sum(dim=-1, keepdim=True)
+    one_sided = torch.zeros_like(opposite)
+    if cfg.single_active_penalty:
+        q_active = q_pos + q_neg
+        k_active = k_pos + k_neg
+        one_sided = (q_active * k_zero + q_zero * k_active).sum(dim=-1, keepdim=True)
+
+    same_score = same_nonzero + float(cfg.alpha0) * same_zero
+    opp_score = opposite + float(cfg.single_active_penalty) * one_sided
+    tx_score = same_score - float(cfg.mismatch_penalty) * opposite - float(cfg.single_active_penalty) * one_sided
+
+    active = None
+    if cfg.consensus_score_norm == "active":
+        active = ((q_pos + q_neg) + (k_pos + k_neg)).sum(dim=-1, keepdim=True).clamp_min(1)
+    return (
+        _normalize_consensus_score(tx_score, q_event.shape[-1], cfg, active=active),
+        _normalize_consensus_score(same_score, q_event.shape[-1], cfg, active=active),
+        _normalize_consensus_score(opp_score, q_event.shape[-1], cfg, active=active),
+    )
+
+
+def _center_token_scores(score: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    if cfg.center_scores:
+        return score - score.mean(dim=2, keepdim=True)
+    return score
+
+
+def _maybe_clamp_bipolar_gate(gate: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    if cfg.bipolar_gate_min is None and cfg.bipolar_gate_max is None:
+        return gate
+    min_value = -float("inf") if cfg.bipolar_gate_min is None else float(cfg.bipolar_gate_min)
+    max_value = float("inf") if cfg.bipolar_gate_max is None else float(cfg.bipolar_gate_max)
+    return gate.clamp(min=min_value, max=max_value)
 
 
 def _a2os2a_token_scores(
@@ -926,6 +1037,109 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
         attn = k_orig.mul(gate)
+    elif cfg.mode in {"ternary_alpha_xnor_qkselector_shiftmax", "tx_qkselector_shiftmax", "h49"}:
+        # H49: QKFormer-native ternary selector.
+        #
+        # Unlike H45/H47, this does not form an N x N attention matrix and does
+        # not mix K across tokens. It replaces QKFormer's Q-only token selector
+        # with a same-token ternary Q/K consistency selector:
+        #
+        #   score_i = TX(q_i, k_i)
+        #   selector = Shiftmax(score over tokens)
+        #   attn_i = k_i * selector_i
+        #
+        # This keeps the linear-complexity QKFormer carrier while avoiding the
+        # older H41 pattern of multiplying the native sn2(sum(Q)) gate by an
+        # extra TX gate.
+        scores = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"bipolar_qkselector_shiftmax", "tx_bipolar_two_score_shiftmax", "h54a"}:
+        # H54a: two-score bipolar selector.
+        #
+        # Split ternary TX evidence into same-polarity and opposite-polarity
+        # Shiftmax branches. The final modulation is signed:
+        #
+        #   gate = g_same - lambda * g_opp
+        #   attn = gate * K
+        #
+        # Shiftmax itself remains nonnegative and hardware-friendly, but the
+        # effective K carrier can now be attenuated or polarity-flipped.
+        _, same_scores, opp_scores = _bipolar_token_score_components(q_orig, k_orig, cfg)
+        same_scores = _center_token_scores(same_scores, cfg)
+        opp_scores = _center_token_scores(opp_scores, cfg)
+        same_gate = shiftmax(same_scores, dim=2, eps=cfg.eps)
+        opp_gate = shiftmax(opp_scores, dim=2, eps=cfg.eps)
+        if cfg.preserve_mean:
+            same_gate = same_gate * float(n_tokens)
+            opp_gate = opp_gate * float(n_tokens)
+        gate = same_gate - float(cfg.bipolar_lambda) * opp_gate
+        gate = _maybe_clamp_bipolar_gate(gate, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        scores = same_scores - float(cfg.bipolar_lambda) * opp_scores
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"tx_bipolar_qkselector_shiftmax", "tx_bipolar_three_score_shiftmax", "h54b"}:
+        # H54b: three-score TX + bipolar correction selector.
+        #
+        # The normal TX selector stays as the stable carrier, while same/opposite
+        # evidence supplies a signed correction:
+        #
+        #   gate = g_tx + mu * (g_same - lambda * g_opp)
+        #
+        # This can still flip K when the opposite evidence is strong, but it
+        # degenerates back to H49 when mu=0.
+        tx_scores, same_scores, opp_scores = _bipolar_token_score_components(q_orig, k_orig, cfg)
+        tx_scores = _center_token_scores(tx_scores, cfg)
+        same_scores = _center_token_scores(same_scores, cfg)
+        opp_scores = _center_token_scores(opp_scores, cfg)
+        tx_gate = shiftmax(tx_scores, dim=2, eps=cfg.eps)
+        same_gate = shiftmax(same_scores, dim=2, eps=cfg.eps)
+        opp_gate = shiftmax(opp_scores, dim=2, eps=cfg.eps)
+        if cfg.preserve_mean:
+            tx_gate = tx_gate * float(n_tokens)
+            same_gate = same_gate * float(n_tokens)
+            opp_gate = opp_gate * float(n_tokens)
+        gate = tx_gate + float(cfg.bipolar_mu) * (same_gate - float(cfg.bipolar_lambda) * opp_gate)
+        gate = _maybe_clamp_bipolar_gate(gate, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        scores = tx_scores + float(cfg.bipolar_mu) * (same_scores - float(cfg.bipolar_lambda) * opp_scores)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"dual_channel_qkselector_shiftmax", "excite_inhibit_qkselector_shiftmax", "h51"}:
+        # H51: signed dual-channel selector.
+        #
+        # It keeps H49's linear token selector form, but separates positive and
+        # negative spikes into excitation/inhibition evidence. The K carrier is
+        # still present, so this is a conservative attention change rather than
+        # a direct QKV replacement.
+        scores = _dual_channel_token_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"a2os2a_kasv_shiftmax", "key_as_value_a2os2a_shiftmax", "kasv_shiftmax", "h52"}:
+        # H52: Key-as-Proxy V A2OS2A adapter.
+        #
+        # A2OS2A's useful inductive bias is binary Q against nonnegative K. To
+        # avoid H47's unstable independent V branch, this branch uses K itself
+        # as the value proxy. It is a short-test candidate, not the current
+        # full-training mainline.
+        scores = _a2os2a_matrix_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=-1, keepdim=True)
+        gate = shiftmax(scores, dim=-1, eps=cfg.eps)
+        row_sum = gate.sum(dim=-1)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
+        attn = torch.matmul(gate, value)
     elif cfg.mode in {"ternary_alpha_xnor_shiftmax", "alpha_xnor_shiftmax", "h18a"}:
         # H18a: CVPR 2025 alpha-XNOR-inspired ternary gate.
         #
@@ -945,6 +1159,24 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
         attn = attn * gate
+    elif cfg.mode in {"ternary_alpha_xnor_shiftmax_residual", "h48"}:
+        # H48: residual TX gate preserves the original QKFormer carrier and adds
+        # the TX attention as an additive correction: attn = carrier * (1 + α*(gate-1)).
+        # α=0 means pure baseline carrier; α=1 means pure TX gate (same as h18a).
+        att_token = q_orig.sum(dim=-1, keepdim=True)
+        att_token = self.sn2_q(att_token)
+        att_gate = att_token.reshape(B_, self.num_heads, n_tokens, 1)
+        attn_carrier = k_orig.mul(att_gate)
+
+        scores = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        alpha = float(cfg.residual_alpha)
+        attn = attn_carrier * (1.0 + alpha * (gate - 1.0))
     elif cfg.mode in {"ternary_alpha_xnor_l1", "alpha_xnor_l1", "h18a_l1"}:
         # Same alpha-XNOR evidence, but exact L1 normalization instead of
         # Shiftmax. This tests whether the exponent-like normalization is the
@@ -1002,7 +1234,11 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "signed_consensus_shiftmax/h13b, signed_consensus_shiftmax_raw/h13b_raw, "
             "signed_consensus_shiftnorm/h13c, "
             "signed_consensus_popcount_l1/h13t, "
-            "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_l1/h18a_l1, "
+            "ternary_alpha_xnor_qkselector_shiftmax/h49, "
+            "bipolar_qkselector_shiftmax/h54a, tx_bipolar_qkselector_shiftmax/h54b, "
+            "dual_channel_qkselector_shiftmax/h51, a2os2a_kasv_shiftmax/h52, "
+            "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_shiftmax_residual/h48, "
+            "ternary_alpha_xnor_l1/h18a_l1, "
             "ternary_alpha_xnor_ssa_linear/h42b, ternary_alpha_xnor_ssa_qkv_linear/h42c, "
             "ternary_alpha_xnor_ssa_qkv_shiftmax/h42d, ternary_alpha_xnor_ssa_kreuse_shiftmax/h45, "
             "binary_alpha_xnor_matrix_shiftmax/l1, "

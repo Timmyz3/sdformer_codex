@@ -38,6 +38,9 @@ class ATLIFTernaryPSNConfig:
     output_mode: str = "ternary"
     threshold_mode: str = "asymmetric_scale"
     preserve_loaded_threshold: bool = False
+    stage_threshold_eta: Any = None
+    stage_threshold_lr_scale: Any = None
+    stage_target_rate_eta: Any = None
     stage_activity_eta: Any = None
     stage_max_threshold: Any = None
     stage_negative_threshold_scale: Any = None
@@ -80,6 +83,9 @@ def config_from_dict(raw: dict | None) -> ATLIFTernaryPSNConfig:
         output_mode=str(raw.get("output_mode", "ternary")),
         threshold_mode=str(raw.get("threshold_mode", "asymmetric_scale")),
         preserve_loaded_threshold=bool(raw.get("preserve_loaded_threshold", False)),
+        stage_threshold_eta=raw.get("stage_threshold_eta"),
+        stage_threshold_lr_scale=raw.get("stage_threshold_lr_scale"),
+        stage_target_rate_eta=raw.get("stage_target_rate_eta"),
         stage_activity_eta=raw.get("stage_activity_eta"),
         stage_max_threshold=raw.get("stage_max_threshold"),
         stage_negative_threshold_scale=raw.get("stage_negative_threshold_scale"),
@@ -185,7 +191,7 @@ def _configure_existing_atlif(module: ATLIFTernaryPSN, cfg: ATLIFTernaryPSNConfi
             "Loaded ATLIFTernaryPSN center_mode does not match config. "
             "Reload from a baseline checkpoint when changing centering semantics."
         )
-    module.sp = float(cfg.threshold_eta)
+    module.sp = float(_stage_value(cfg.stage_threshold_eta, stage_idx, cfg.threshold_eta))
     module.negative_threshold_scale = float(
         _stage_value(cfg.stage_negative_threshold_scale, stage_idx, cfg.negative_threshold_scale)
     )
@@ -196,13 +202,13 @@ def _configure_existing_atlif(module: ATLIFTernaryPSN, cfg: ATLIFTernaryPSNConfi
         if _stage_value(cfg.stage_max_threshold, stage_idx, cfg.max_threshold) is None
         else float(_stage_value(cfg.stage_max_threshold, stage_idx, cfg.max_threshold))
     )
-    module.threshold_lr_scale = cfg.threshold_lr_scale
+    module.threshold_lr_scale = float(_stage_value(cfg.stage_threshold_lr_scale, stage_idx, cfg.threshold_lr_scale))
     module.target_rate = (
         None
         if _stage_value(cfg.stage_target_rate, stage_idx, cfg.target_rate) is None
         else float(_stage_value(cfg.stage_target_rate, stage_idx, cfg.target_rate))
     )
-    module.target_rate_eta = float(cfg.target_rate_eta)
+    module.target_rate_eta = float(_stage_value(cfg.stage_target_rate_eta, stage_idx, cfg.target_rate_eta))
     module.target_rate_mode = str(cfg.target_rate_mode)
     module.negative_target_rate = (
         None
@@ -239,7 +245,7 @@ def _install_on_wrapper(
         T=getattr(current, "T", getattr(wrapper, "num_steps", 10)),
         base_psn=current,
         thresh=initial_threshold,
-        sparsity_eta=cfg.threshold_eta,
+        sparsity_eta=float(_stage_value(cfg.stage_threshold_eta, stage_idx, cfg.threshold_eta)),
         negative_threshold_scale=float(
             _stage_value(cfg.stage_negative_threshold_scale, stage_idx, cfg.negative_threshold_scale)
         ),
@@ -248,11 +254,11 @@ def _install_on_wrapper(
         max_threshold=None
         if _stage_value(cfg.stage_max_threshold, stage_idx, cfg.max_threshold) is None
         else float(_stage_value(cfg.stage_max_threshold, stage_idx, cfg.max_threshold)),
-        threshold_lr_scale=cfg.threshold_lr_scale,
+        threshold_lr_scale=float(_stage_value(cfg.stage_threshold_lr_scale, stage_idx, cfg.threshold_lr_scale)),
         target_rate=None
         if _stage_value(cfg.stage_target_rate, stage_idx, cfg.target_rate) is None
         else float(_stage_value(cfg.stage_target_rate, stage_idx, cfg.target_rate)),
-        target_rate_eta=cfg.target_rate_eta,
+        target_rate_eta=float(_stage_value(cfg.stage_target_rate_eta, stage_idx, cfg.target_rate_eta)),
         target_rate_mode=cfg.target_rate_mode,
         negative_target_rate=None
         if _stage_value(cfg.stage_negative_target_rate, stage_idx, cfg.negative_target_rate) is None
