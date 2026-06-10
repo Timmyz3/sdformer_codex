@@ -39,6 +39,7 @@ def configure_snn_backend(model, device, config, neurontype):
 
 
 def _require_cupy():
+    import torchvision  # fix CuPy context conflict on multi-GPU systems
     try:
         import cupy  # noqa: F401
     except Exception as exc:

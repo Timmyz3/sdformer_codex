@@ -121,6 +121,12 @@ def extract_train_health(train_log: Path) -> dict[str, float | int]:
         "ternary_zero_neg_modules": math.inf,
         "target_rate_control_modules": 0,
         "target_rate_bidirectional_modules": 0,
+        "raw_update_mean": 0.0,
+        "guarded_update_mean": 0.0,
+        "quantile_guard_mean": 1.0,
+        "importance_guard_mean": 1.0,
+        "quantile_value_mean": 0.0,
+        "importance_ema_mean": 0.0,
     }
     if not train_log.exists():
         return health
@@ -302,6 +308,12 @@ def write_tables(rows: list[dict[str, Any]], out_root: Path) -> None:
         "ternary_zero_neg_modules",
         "target_rate_control_modules",
         "target_rate_bidirectional_modules",
+        "raw_update_mean",
+        "guarded_update_mean",
+        "quantile_guard_mean",
+        "importance_guard_mean",
+        "quantile_value_mean",
+        "importance_ema_mean",
         "score",
         "train_seconds",
         "profile_seconds",
@@ -330,6 +342,15 @@ def write_tables(rows: list[dict[str, Any]], out_root: Path) -> None:
                 f"{row['firing']:.5f} | {row['ternary_zero_neg_modules']:.0f} | "
                 f"{row['ternary_worst_pos_neg_ratio']:.2f} | {row['threshold_mean']:.4f} | "
                 f"{row['score']:.4f} | `{row['summary']}` |\n"
+            )
+        handle.write("\n## ATLIF 控制指标\n\n")
+        handle.write("| name | raw_update | guarded_update | quantile_guard | importance_guard | quantile_value | importance_ema |\n")
+        handle.write("|---|---:|---:|---:|---:|---:|---:|\n")
+        for row in rows:
+            handle.write(
+                f"| {row['name']} | {row['raw_update_mean']:.3e} | {row['guarded_update_mean']:.3e} | "
+                f"{row['quantile_guard_mean']:.4f} | {row['importance_guard_mean']:.4f} | "
+                f"{row['quantile_value_mean']:.4f} | {row['importance_ema_mean']:.4f} |\n"
             )
 
 

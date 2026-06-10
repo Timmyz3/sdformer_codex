@@ -21,7 +21,7 @@ LOAD_MODEL_ANCHOR = """    model = load_model(args.prev_runid, model, device, re
 LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import register_shiftmax_pickle_compat
     register_shiftmax_pickle_compat()
     from models.STSwinNet_SNN.atlif_ternary_psn import apply_trainable_mode, atlif_ternary_summary, install_atlif_ternary_psn
-    from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, shiftmax_attention_summary, sync_independent_value_branch_from_k
+    from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, set_shiftmax_attention_step, shiftmax_attention_summary, sync_independent_value_branch_from_k
 
     def _h9_is_overlay_key(key):
         markers = (".linear_v.", ".bn_v.", ".sn_v.", ".spiking_neuron.thresh", ".spiking_neuron.center")
@@ -46,6 +46,16 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
                 key for key in pretrained_dict.keys()
                 if any(marker in key for marker in (".linear_v.", ".bn_v.", ".sn_v."))
             ]
+            # ── NTX-11 window compat: drop keys whose shape changed (e.g., positional_encoding) ──
+            _model_keys = dict(model.named_parameters())
+            _dropped_window_keys = []
+            for _k in list(pretrained_dict.keys()):
+                if _k in _model_keys and _model_keys[_k].shape != pretrained_dict[_k].shape:
+                    del pretrained_dict[_k]
+                    _dropped_window_keys.append(_k)
+            if _dropped_window_keys:
+                print(f"[H9] dropped {len(_dropped_window_keys)} shape-mismatched keys (window_size changed): {_dropped_window_keys[:5]}")
+            # ── end window compat ──
             incompatible = model.load_state_dict(pretrained_dict, strict=False)
             missing = list(getattr(incompatible, "missing_keys", []))
             unexpected = list(getattr(incompatible, "unexpected_keys", []))
@@ -102,6 +112,13 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
     if installed_h9_bsa:
         print(f"[H9] installed Shiftmax attention: {len(installed_h9_bsa)} modules")
         print(f"[H9] attention targets: {installed_h9_bsa[:8]}{' ...' if len(installed_h9_bsa) > 8 else ''}")
+
+    # ---- SimpleTernaryPSN (PSN+ternary, no ATLIF) ----
+    from models.STSwinNet_SNN.simple_ternary_installer import install_simple_ternary_psn
+    installed_st = install_simple_ternary_psn(model, config)
+    if installed_st:
+        print(f"[ST] installed SimpleTernaryPSN: {len(installed_st)} modules, "
+              f"theta_init={config.get('simple_ternary_psn', {}).get('theta_init', 1.0)}")
     if installed_h9 or installed_h9_bsa:
         print(f"[H9] trainable: {apply_trainable_mode(model, config.get('atlif_ternary_psn'))}")
         print(f"[H9] neuron summary after install: {atlif_ternary_summary(model)}")
@@ -137,7 +154,9 @@ SCALER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimiz
                     h8_threshold_lr = float(config.get("atlif_ternary_psn", {}).get("threshold_base_lr", optimizer.param_groups[0]["lr"]))
                     if h40_warmup_factor is not None:
                         h8_threshold_lr *= h40_warmup_factor
-                    h8_update_stats = threshold_update(model, h8_threshold_lr, config.get("atlif_ternary_psn"))
+                    h8_threshold_cfg = dict(config.get("atlif_ternary_psn", {}) or {})
+                    h8_threshold_cfg["_global_step"] = h40_global_step
+                    h8_update_stats = threshold_update(model, h8_threshold_lr, h8_threshold_cfg)
                     h6_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
                         if h40_lrs is not None:
@@ -160,7 +179,9 @@ OPTIMIZER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_opti
                     h8_threshold_lr = float(config.get("atlif_ternary_psn", {}).get("threshold_base_lr", optimizer.param_groups[0]["lr"]))
                     if h40_warmup_factor is not None:
                         h8_threshold_lr *= h40_warmup_factor
-                    h8_update_stats = threshold_update(model, h8_threshold_lr, config.get("atlif_ternary_psn"))
+                    h8_threshold_cfg = dict(config.get("atlif_ternary_psn", {}) or {})
+                    h8_threshold_cfg["_global_step"] = h40_global_step
+                    h8_update_stats = threshold_update(model, h8_threshold_lr, h8_threshold_cfg)
                     h6_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
                         if h40_lrs is not None:
@@ -187,6 +208,24 @@ EPOCH_STATS_PATCH = """        print(
             from models.STSwinNet_SNN.bsa_attention import shiftmax_attention_summary
             print(f"[H9] ATLIFTernaryPSN summary: {atlif_ternary_summary(model)}")
             print(f"[H9] Shiftmax attention summary: {shiftmax_attention_summary(model)}")
+"""
+
+MLFLOW_METRIC_STEP_ANCHOR = """            mlflow.log_metric("train_loss", epoch_loss, step=epoch)
+            mlflow.log_metric("lr", optimizer.param_groups[0]["lr"], step=epoch)
+            mlflow.log_metric("epoch_time_sec", epoch_time_sec, step=epoch)
+            mlflow.log_metric("train_step_time_sec", train_step_time_sec, step=epoch)
+            mlflow.log_metric("train_samples_per_sec", train_samples_per_sec, step=epoch)
+            mlflow.log_metric("max_gpu_mem_gib", max_gpu_mem_gib, step=epoch)
+"""
+
+MLFLOW_METRIC_STEP_PATCH = """            h9_epoch_offset = int(config.get("runtime", {}).get("epoch_offset", 0) or 0)
+            h9_log_epoch = epoch + h9_epoch_offset
+            mlflow.log_metric("train_loss", epoch_loss, step=h9_log_epoch)
+            mlflow.log_metric("lr", optimizer.param_groups[0]["lr"], step=h9_log_epoch)
+            mlflow.log_metric("epoch_time_sec", epoch_time_sec, step=h9_log_epoch)
+            mlflow.log_metric("train_step_time_sec", train_step_time_sec, step=h9_log_epoch)
+            mlflow.log_metric("train_samples_per_sec", train_samples_per_sec, step=h9_log_epoch)
+            mlflow.log_metric("max_gpu_mem_gib", max_gpu_mem_gib, step=h9_log_epoch)
 """
 
 TRAIN_STEP_ANCHOR = """            sample += 1
@@ -251,6 +290,13 @@ STATE_SAVE_PATCH = """                    if not bool(config.get("runtime", {}).
                     print(f"Local checkpoint saved to {checkpoint_path}")
 """
 
+CHECKPOINT_PATH_ANCHOR = """                    checkpoint_path = args.save_path.format(epoch)
+"""
+
+CHECKPOINT_PATH_PATCH = """                    h9_epoch_offset = int(config.get("runtime", {}).get("epoch_offset", 0) or 0)
+                    checkpoint_path = args.save_path.format(epoch + h9_epoch_offset)
+"""
+
 LOSS_FUNCTION_ANCHOR = """    # Define the loss function
     loss_function = flow_loss_supervised(config,device)
 """
@@ -259,6 +305,8 @@ LOSS_FUNCTION_PATCH = """    # Define the loss function
     loss_function = flow_loss_supervised(config,device)
     from models.STSwinNet_SNN.h9_losses import maybe_replace_flow_loss
     loss_function = maybe_replace_flow_loss(loss_function, config, device)
+    from models.STSwinNet_SNN.h55_teacher import build_teacher_model, teacher_forward
+    h55_teacher_model = build_teacher_model(config, device, remap)
 """
 
 OPTIMIZER_ANCHOR = """    # optimizers
@@ -273,6 +321,37 @@ OPTIMIZER_PATCH = """    # optimizers
     from models.STSwinNet_SNN.h28_optimizer import build_optimizer, describe_optimizer_groups
     optimizer = build_optimizer(model, config)
     print(f"[H28] optimizer groups: {describe_optimizer_groups(optimizer)}")
+"""
+
+TEACHER_FORWARD_ANCHOR = """                pred_list = model(chunk.to(device))
+                pred = pred_list["flow"]
+
+                #backward pass only the last flow pred
+                if config["metrics"]["mask_events"]:
+                    # event_mask = torch.unsqueeze(torch.sum(chunk, dim=1).bool(), dim=1)
+                    event_mask = torch.sum(torch.sum(chunk, dim=1),dim=1, keepdim=True).bool()
+                    curr_loss = loss_function(pred, label, mask*event_mask, gamma = config["loss"]["gamma"])/num_acc_steps
+                else:
+                    curr_loss = loss_function(pred, label, mask, gamma = config["loss"]["gamma"])/num_acc_steps
+"""
+
+TEACHER_FORWARD_PATCH = """                h9_global_step = epoch * len(train_dataloader) + sample + 1
+                set_shiftmax_attention_step(model, h9_global_step)
+                h55_teacher_pred = teacher_forward(h55_teacher_model, chunk.to(device), config)
+                pred_list = model(chunk.to(device))
+                pred = pred_list["flow"]
+
+                #backward pass only the last flow pred
+                if config["metrics"]["mask_events"]:
+                    # event_mask = torch.unsqueeze(torch.sum(chunk, dim=1).bool(), dim=1)
+                    event_mask = torch.sum(torch.sum(chunk, dim=1),dim=1, keepdim=True).bool()
+                    if hasattr(loss_function, "set_teacher_prediction"):
+                        loss_function.set_teacher_prediction(h55_teacher_pred)
+                    curr_loss = loss_function(pred, label, mask*event_mask, gamma = config["loss"]["gamma"])/num_acc_steps
+                else:
+                    if hasattr(loss_function, "set_teacher_prediction"):
+                        loss_function.set_teacher_prediction(h55_teacher_pred)
+                    curr_loss = loss_function(pred, label, mask, gamma = config["loss"]["gamma"])/num_acc_steps
 """
 
 
@@ -316,12 +395,15 @@ def _patch_source(source: str, baseline_entry: Path) -> str:
         (SCALER_STEP_ANCHOR, SCALER_STEP_PATCH),
         (OPTIMIZER_STEP_ANCHOR, OPTIMIZER_STEP_PATCH),
         (EPOCH_STATS_ANCHOR, EPOCH_STATS_PATCH),
+        (MLFLOW_METRIC_STEP_ANCHOR, MLFLOW_METRIC_STEP_PATCH),
         (TRAIN_STEP_ANCHOR, TRAIN_STEP_PATCH),
         (SAVE_ANCHOR, SAVE_PATCH),
         (MLFLOW_MODEL_LOGGING_ANCHOR, MLFLOW_MODEL_LOGGING_PATCH),
         (STATE_SAVE_ANCHOR, STATE_SAVE_PATCH),
+        (CHECKPOINT_PATH_ANCHOR, CHECKPOINT_PATH_PATCH),
         (LOSS_FUNCTION_ANCHOR, LOSS_FUNCTION_PATCH),
         (OPTIMIZER_ANCHOR, OPTIMIZER_PATCH),
+        (TEACHER_FORWARD_ANCHOR, TEACHER_FORWARD_PATCH),
     ):
         if anchor not in source:
             raise RuntimeError(f"Could not patch {baseline_entry}: missing anchor {anchor[:60]!r}")

@@ -120,8 +120,10 @@ def make_full_config(short_config: Path, out_config: Path, experiment: str, args
     cfg["experiment"] = experiment
     runtime = cfg.setdefault("runtime", {})
     runtime["max_train_steps"] = 0
-    runtime["skip_state_save"] = True
-    runtime["force_save_epochs"] = [9, 19, 29]
+    # Keep optimizer/scheduler/scaler state so interrupted full runs can resume
+    # from local checkpoints instead of restarting from weights only.
+    runtime["skip_state_save"] = False
+    runtime["force_save_epochs"] = [0, 4, 9, 14, 19, 24, 28, 29]
     runtime["use_mlflow_model_logging"] = False
     loader = cfg.setdefault("loader", {})
     loader["n_epochs"] = args.epochs

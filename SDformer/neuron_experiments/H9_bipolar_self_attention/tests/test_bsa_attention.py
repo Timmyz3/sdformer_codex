@@ -244,6 +244,57 @@ class ShiftmaxAttentionTest(unittest.TestCase):
         alpha_matrix_hard = _ternary_alpha_xnor_matrix_scores(q_orig, k_orig, cfg)
         self.assertTrue(torch.allclose(alpha_matrix_hard, alpha_matrix, atol=1e-6))
 
+    def test_motion_alpha_zero_matches_disabled_saliency(self):
+        from models.STSwinNet_SNN.bsa_attention import _signed_consensus_token_scores, config_from_dict
+
+        torch.manual_seed(0)
+        q_orig = torch.randn(2, 1, 2, 3, 4)
+        k_orig = torch.randn(1, 2, 6, 4)
+        base_cfg = config_from_dict(
+            {"enabled": True, "consensus_score_norm": "none", "motion_weight_alpha": 0.0}
+        )
+        off_cfg = config_from_dict({"enabled": True, "consensus_score_norm": "none"})
+        base_score = _signed_consensus_token_scores(q_orig, k_orig, base_cfg)
+        off_score = _signed_consensus_token_scores(q_orig, k_orig, off_cfg)
+        self.assertTrue(torch.allclose(base_score, off_score, atol=1e-6))
+
+    def test_temporal_motion_token_alignment_and_first_frame_zero(self):
+        from models.STSwinNet_SNN.bsa_attention import (
+            _signed_consensus_token_scores,
+            _temporal_motion_from_q_orig,
+            config_from_dict,
+        )
+
+        q_orig = torch.zeros(2, 1, 2, 3, 4)
+        q_orig[1, 0, 0, 1, :] = 2.0
+        q_orig[1, 0, 1, :, :] = -1.5
+        k_orig = torch.zeros(1, 2, 6, 4)
+        cfg = config_from_dict(
+            {"enabled": True, "consensus_score_norm": "none", "motion_weight_alpha": 0.1}
+        )
+
+        motion = _temporal_motion_from_q_orig(q_orig, cfg)
+        self.assertEqual(tuple(motion.shape), (1, 2, 6, 1))
+        self.assertTrue(torch.all(motion[:, :, :3, :] == 0))
+        self.assertTrue(motion.abs().sum() > 0)
+
+        score = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        self.assertEqual(tuple(score.shape), (1, 2, 6, 1))
+
+    def test_temporal_motion_normalizes_per_head(self):
+        from models.STSwinNet_SNN.bsa_attention import _temporal_motion_from_q_orig, config_from_dict
+
+        q_orig = torch.zeros(2, 1, 2, 2, 2)
+        q_orig[1, 0, 0, 0, :] = 10.0
+        q_orig[1, 0, 1, 1, :] = 0.01
+        cfg = config_from_dict({"enabled": True, "motion_weight_alpha": 0.1})
+
+        motion = _temporal_motion_from_q_orig(q_orig, cfg)
+        # Flatten order is t0*n0, t0*n1, t1*n0, t1*n1 per head.
+        self.assertAlmostEqual(float(motion[0, 0, 2, 0]), 1.0, places=5)
+        self.assertAlmostEqual(float(motion[0, 1, 3, 0]), 1.0, places=5)
+        self.assertLess(float(motion[0, 1, 2, 0]), 0.1)
+
     def test_signed_consensus_ste_single_active_keeps_forward_and_adds_gradient(self):
         from models.STSwinNet_SNN.bsa_attention import _signed_consensus_token_scores, config_from_dict
 
@@ -392,6 +443,247 @@ class ShiftmaxAttentionTest(unittest.TestCase):
             self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
             self.assertFalse(torch.isnan(out).any())
 
+    def test_tx_sc_fusion_applies_k_mag_on_tx_only(self):
+        from models.STSwinNet_SNN.bsa_attention import (
+            _signed_consensus_token_scores,
+            _ternary_alpha_xnor_token_scores,
+            _tx_sc_fusion_score_pair,
+            config_from_dict,
+        )
+
+        cfg = config_from_dict(
+            {
+                "enabled": True,
+                "mode": "tx_sc_score_residual_shiftmax",
+                "center_scores": False,
+                "preserve_mean": False,
+                "consensus_score_norm": "none",
+                "alpha0": 0.02,
+                "mismatch_penalty": 0.25,
+                "single_active_penalty": 0.0,
+                "k_magnitude_alpha": 0.2,
+            }
+        )
+        q_orig = torch.tensor(
+            [[[[[1.5, 0.0], [0.0, -1.0], [0.5, 0.0], [0.0, 1.2]]]]],
+            dtype=torch.float32,
+        )
+        k_orig = torch.tensor(
+            [[[[2.0, 0.0], [0.0, -2.0], [1.0, 0.0], [0.0, 2.5]]]],
+            dtype=torch.float32,
+        )
+
+        tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        tx_direct = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
+        sc_direct = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+
+        self.assertTrue(torch.allclose(tx_scores, tx_direct))
+        self.assertFalse(torch.allclose(sc_scores, sc_direct))
+        from dataclasses import asdict
+
+        cfg_no_kmag = config_from_dict({**asdict(cfg), "k_magnitude_alpha": 0.0})
+        sc_without_kmag = _signed_consensus_token_scores(q_orig, k_orig, cfg_no_kmag)
+        self.assertTrue(torch.allclose(sc_scores, sc_without_kmag))
+
+    def test_h57_tx_sc_residual_selector_runs_on_tiny_attention(self):
+        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, mu: float):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": "tx_sc_residual_selector_shiftmax",
+                        "center_scores": False,
+                        "preserve_mean": False,
+                        "consensus_score_norm": "none",
+                        "alpha0": 0.02,
+                        "mismatch_penalty": 0.25,
+                        "single_active_penalty": 0.05,
+                        "single_active_penalty_grad": "ste",
+                        "bipolar_mu": mu,
+                        "bipolar_lambda": 0.4,
+                    }
+                )
+
+        for mu in (0.0, 0.15):
+            module = TinyAttention(mu)
+            x = torch.randn(1, 2, 1, 2, 4)
+            out, spikes = _qk_shiftmax_gate_forward(module, x)
+
+            self.assertEqual(tuple(out.shape), (2, 2, 4))
+            self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+            self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
+            self.assertFalse(torch.isnan(out).any())
+
+        module = TinyAttention(0.05)
+        module._h9_shiftmax_cfg = config_from_dict(
+            {
+                "enabled": True,
+                "mode": "tx_sc_score_residual_shiftmax",
+                "center_scores": False,
+                "preserve_mean": False,
+                "consensus_score_norm": "none",
+                "alpha0": 0.02,
+                "mismatch_penalty": 0.25,
+                "single_active_penalty": 0.05,
+                "single_active_penalty_grad": "ste",
+                "bipolar_mu": 0.05,
+                "bipolar_lambda": 0.4,
+            }
+        )
+        x = torch.randn(1, 2, 1, 2, 4)
+        out, spikes = _qk_shiftmax_gate_forward(module, x)
+        self.assertEqual(tuple(out.shape), (2, 2, 4))
+        self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+        self.assertFalse(torch.isnan(out).any())
+
+    def test_h58_late_residual_schedule_matches_endpoint_mu(self):
+        from models.STSwinNet_SNN.bsa_attention import (
+            _qk_shiftmax_gate_forward,
+            config_from_dict,
+            set_shiftmax_attention_step,
+        )
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, mode: str, mu: float, schedule: bool = False):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": mode,
+                        "center_scores": False,
+                        "preserve_mean": False,
+                        "consensus_score_norm": "none",
+                        "alpha0": 0.02,
+                        "mismatch_penalty": 0.25,
+                        "single_active_penalty": 0.05,
+                        "single_active_penalty_grad": "ste",
+                        "bipolar_mu": mu,
+                        "bipolar_lambda": 0.4,
+                        "sc_mu_schedule_enabled": schedule,
+                        "sc_mu_start_step": 10,
+                        "sc_mu_warmup_steps": 10,
+                        "sc_mu_start": 0.0,
+                    }
+                )
+
+        torch.manual_seed(7)
+        control0 = TinyAttention("tx_sc_residual_selector_shiftmax", 0.0)
+        scheduled = TinyAttention("tx_sc_late_residual_selector_shiftmax", 0.10, schedule=True)
+        fixed = TinyAttention("tx_sc_residual_selector_shiftmax", 0.10)
+        scheduled.load_state_dict(control0.state_dict())
+        fixed.load_state_dict(control0.state_dict())
+        x = torch.randn(1, 2, 1, 2, 4)
+
+        set_shiftmax_attention_step(scheduled, 0)
+        out_start, _ = _qk_shiftmax_gate_forward(scheduled, x)
+        out_control, _ = _qk_shiftmax_gate_forward(control0, x)
+        self.assertTrue(torch.allclose(out_start, out_control, atol=1e-6))
+
+        set_shiftmax_attention_step(scheduled, 20)
+        out_final, _ = _qk_shiftmax_gate_forward(scheduled, x)
+        out_fixed, _ = _qk_shiftmax_gate_forward(fixed, x)
+        self.assertTrue(torch.allclose(out_final, out_fixed, atol=1e-6))
+
+    def test_h60_no_carrier_schedule_matches_endpoint_mu(self):
+        from models.STSwinNet_SNN.bsa_attention import (
+            _qk_shiftmax_gate_forward,
+            config_from_dict,
+            set_shiftmax_attention_step,
+        )
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, mu: float, schedule: bool = False):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": "h60",
+                        "center_scores": False,
+                        "preserve_mean": False,
+                        "consensus_score_norm": "none",
+                        "alpha0": 0.02,
+                        "mismatch_penalty": 0.25,
+                        "single_active_penalty": 0.05,
+                        "single_active_penalty_grad": "ste",
+                        "bipolar_mu": mu,
+                        "bipolar_lambda": 0.4,
+                        "k_magnitude_alpha": 0.0,
+                        "sc_mu_schedule_enabled": schedule,
+                        "sc_mu_start_step": 10,
+                        "sc_mu_warmup_steps": 10,
+                        "sc_mu_start": 0.0,
+                    }
+                )
+
+        torch.manual_seed(11)
+        control0 = TinyAttention(0.0)
+        scheduled = TinyAttention(0.10, schedule=True)
+        fixed = TinyAttention(0.10)
+        scheduled.load_state_dict(control0.state_dict())
+        fixed.load_state_dict(control0.state_dict())
+        x = torch.randn(1, 2, 1, 2, 4)
+
+        set_shiftmax_attention_step(scheduled, 0)
+        out_start, _ = _qk_shiftmax_gate_forward(scheduled, x)
+        out_control, _ = _qk_shiftmax_gate_forward(control0, x)
+        self.assertTrue(torch.allclose(out_start, out_control, atol=1e-6))
+
+        set_shiftmax_attention_step(scheduled, 20)
+        out_final, _ = _qk_shiftmax_gate_forward(scheduled, x)
+        out_fixed, _ = _qk_shiftmax_gate_forward(fixed, x)
+        self.assertTrue(torch.allclose(out_final, out_fixed, atol=1e-6))
+
     def test_strict_bsa_matrix_modes_use_bounded_shiftmax(self):
         from models.STSwinNet_SNN.bsa_attention import (
             _ensure_independent_value_branch,
@@ -461,6 +753,17 @@ class ShiftmaxAttentionTest(unittest.TestCase):
         self.assertEqual(tuple(out.shape), (2, 2, 4))
         self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
         self.assertFalse(torch.isnan(out).any())
+
+    def test_direct_tx_matrix_diag_bias_changes_attention_output(self):
+        from models.STSwinNet_SNN.bsa_attention import _add_matrix_diag_bias, config_from_dict
+
+        scores = torch.zeros(1, 2, 3, 3)
+        cfg = config_from_dict({"matrix_diag_bias": 1.25})
+        biased = _add_matrix_diag_bias(scores, cfg)
+
+        self.assertTrue(torch.allclose(torch.diagonal(biased[0, 0]), torch.full((3,), 1.25)))
+        self.assertEqual(float(biased[0, 0, 0, 1]), 0.0)
+        self.assertEqual(float(biased[0, 0, 1, 0]), 0.0)
 
     def test_independent_value_branch_can_sync_from_loaded_k(self):
         from models.STSwinNet_SNN.bsa_attention import (
@@ -563,6 +866,163 @@ class ShiftmaxAttentionTest(unittest.TestCase):
             x = torch.randn(1, 2, 1, 2, 4)
             out, spikes = _qk_shiftmax_gate_forward(module, x)
 
+            self.assertEqual(tuple(out.shape), (2, 2, 4))
+            self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+            self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
+            self.assertFalse(torch.isnan(out).any())
+
+
+    def test_faps_sparse_k_mag_respects_confidence_min_active(self):
+        from models.STSwinNet_SNN.bsa_attention import (
+            _faps_flow_aligned_token_scores,
+            config_from_dict,
+        )
+
+        cfg = config_from_dict(
+            {
+                "enabled": True,
+                "mode": "faps",
+                "center_scores": False,
+                "preserve_mean": False,
+                "consensus_score_norm": "none",
+                "directional_channels_enabled": False,
+                "k_magnitude_alpha": 0.2,
+                "confidence_min_active": 4,
+                "kmag_quantize_bits": 2,
+            }
+        )
+        q_orig = torch.tensor(
+            [[[[[2.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]]]],
+            dtype=torch.float32,
+        )
+        k_orig = torch.tensor(
+            [[[[[3.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]]]],
+            dtype=torch.float32,
+        )
+        low_active = _faps_flow_aligned_token_scores(q_orig, k_orig, cfg)
+        cfg_open = config_from_dict(
+            {
+                "enabled": True,
+                "mode": "faps",
+                "center_scores": False,
+                "preserve_mean": False,
+                "consensus_score_norm": "none",
+                "directional_channels_enabled": False,
+                "k_magnitude_alpha": 0.2,
+                "confidence_min_active": 0,
+                "kmag_quantize_bits": 2,
+            }
+        )
+        all_active = _faps_flow_aligned_token_scores(q_orig, k_orig, cfg_open)
+        self.assertNotEqual(float(low_active[0, 0, 0, 0]), float(all_active[0, 0, 0, 0]))
+
+    def test_faps_mode_runs_on_tiny_attention(self):
+        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, *, directional: bool, kmag: float):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": "faps",
+                        "center_scores": True,
+                        "preserve_mean": True,
+                        "consensus_score_norm": "head_dim",
+                        "alpha0": 0.02,
+                        "mismatch_penalty": 0.25,
+                        "single_active_penalty": 0.05,
+                        "single_active_penalty_grad": "ste",
+                        "directional_channels_enabled": directional,
+                        "directional_merge_mode": "mean",
+                        "k_magnitude_alpha": kmag,
+                        "confidence_min_active": 2 if kmag > 0 else 0,
+                        "kmag_quantize_bits": 2,
+                    }
+                )
+
+        for directional, kmag in ((True, 0.0), (True, 0.03125), (False, 0.0)):
+            module = TinyAttention(directional=directional, kmag=kmag)
+            x = torch.randn(1, 2, 1, 2, 4)
+            out, spikes = _qk_shiftmax_gate_forward(module, x)
+            self.assertEqual(tuple(out.shape), (2, 2, 4))
+            self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
+            self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)
+            self.assertFalse(torch.isnan(out).any())
+
+    def test_h62_confidence_is_high_for_active_agreement(self):
+        from models.STSwinNet_SNN.bsa_attention import _event_agree_confidence, config_from_dict
+
+        cfg = config_from_dict({"enabled": True, "mode": "h62"})
+        q_event = torch.tensor([[[[1.0, 1.0, 0.0, 0.0], [1.0, -1.0, 0.0, 0.0]]]])
+        k_event = torch.tensor([[[[1.0, 1.0, 0.0, 0.0], [-1.0, 1.0, 0.0, 0.0]]]])
+        conf = _event_agree_confidence(q_event, k_event, cfg)
+        self.assertGreater(float(conf[0, 0, 0, 0]), 0.70)
+        self.assertEqual(float(conf[0, 0, 1, 0]), 0.0)
+
+    def test_h62_mode_runs_on_tiny_attention(self):
+        from models.STSwinNet_SNN.bsa_attention import _qk_shiftmax_gate_forward, config_from_dict
+
+        class IdentitySN(nn.Module):
+            def forward(self, x):
+                return x
+
+        class TinyAttention(nn.Module):
+            def __init__(self, *, gamma: float, schedule: bool):
+                super().__init__()
+                self.num_heads = 2
+                self.norm_layer = None
+                self.proj_sn = IdentitySN()
+                self.linear_q = nn.Linear(4, 4, bias=False)
+                self.linear_k = nn.Linear(4, 4, bias=False)
+                self.sn_q = IdentitySN()
+                self.sn_k = IdentitySN()
+                self.sn2_q = IdentitySN()
+                self.attn_drop = nn.Identity()
+                self.attn_sn = IdentitySN()
+                self.proj = nn.Linear(4, 4, bias=False)
+                self.positional_encoding = nn.Parameter(torch.zeros(1, 2, 2, 2))
+                self._h9_shiftmax_cfg = config_from_dict(
+                    {
+                        "enabled": True,
+                        "mode": "h62",
+                        "center_scores": True,
+                        "preserve_mean": True,
+                        "consensus_score_norm": "head_dim",
+                        "alpha0": 0.02,
+                        "mismatch_penalty": 0.25,
+                        "single_active_penalty": 0.05,
+                        "single_active_penalty_grad": "ste",
+                        "bipolar_mu": 0.05,
+                        "k_magnitude_alpha": 0.02,
+                        "directional_residual_gamma": gamma,
+                        "sc_mu_schedule_enabled": schedule,
+                        "sc_mu_start": 0.0,
+                        "sc_mu_warmup_steps": 10,
+                    }
+                )
+                self._h9_global_step = 5
+
+        for gamma, schedule in ((0.0, False), (0.02, False), (0.02, True)):
+            module = TinyAttention(gamma=gamma, schedule=schedule)
+            x = torch.randn(1, 2, 1, 2, 4)
+            out, spikes = _qk_shiftmax_gate_forward(module, x)
             self.assertEqual(tuple(out.shape), (2, 2, 4))
             self.assertEqual(tuple(spikes.shape), (1, 2, 1, 2, 4))
             self.assertGreater(module.h9_shiftmax_row_sum_mean, 0.0)

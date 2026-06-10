@@ -1,116 +1,78 @@
-# Autoresearch: Hardware-Friendly Sparse Neuron Operators for SDformerFlow
+# Autoresearch: NSC Line — SC Attention Optimization for SDformerFlow
 
 ## Objective
 
-Design novel spiking neuron operators that are jointly optimized for:
-1. **Sparsity** — minimize SOPs (synaptic operations) via structured spike gating
-2. **Energy efficiency** — hardware-mappable primitives (clock-gating, AND-popcount, no multipliers)
-3. **Hardware co-design** — each neuron innovation should have a clear hardware accelerator mapping
-4. **Accuracy retention** — keep AEE within <10% of PSN baseline (1.5848), ideally <5%
+Close the AEE gap between SC (signed consensus) and TX (ternary alpha-XNOR) attention:
+- SC: AEE=1.77, AAE=11.42, spikes=32.3G
+- TX: AEE=1.53, AAE=10.29, spikes=34.6G
+- **Target**: AEE<1.60, spikes<35G, AAE<10
 
-**Story**: sparse, energy-efficient, hardware-friendly SNN for event-based optical flow.
-**Not**: SOTA accuracy chasing.
-
-## Baseline
+## Baseline (stride split)
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Neuron | PSN (Parallel Spiking Neuron) | `third_party/SDformerFlow` |
-| AEE | 1.5848 | valid40, epoch59 |
-| AAE | 7.5012 | valid40, epoch59 |
-| Firing rate | 0.08496 | valid40 |
-| SOPs | 3.6219G | valid40 |
-| Checkpoint | `experiments/checkpoints/bs4_resume_epoch15_to60_20260424_163657/checkpoint_epoch59.pth` | |
+| Model | MS_SpikingformerFlowNet_en4 (PSN) | upstream train_flow_parallel_supervised_SNN.py |
+| AEE | 1.489 | valid825, cupy, epoch59 |
+| AAE | 9.923 | valid825 |
+| total_spikes | 44.05G | valid825 |
+| energy | 37.6 mJ | valid825 |
+| Checkpoint | `experiments/baseline_stride_upstream/checkpoint_epoch59.pth` | |
 
-## Best Known Sparse Result
+## Best TX Result
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Experiment | G1 partial sparse gate (6 layer0 nodes) | |
-| AEE | 1.6056 (+1.3% vs PSN) | valid40, smoke epoch0 |
-| SOPs | 2.7134G (-25.1% vs PSN) | valid40 |
+| Experiment | NTX-01 (TX V2, ternary_alpha_xnor_shiftmax, S02, β=0.25) | |
+| AEE | 1.534 | valid825, epoch28 |
+| total_spikes | 34.61G | (-21% vs baseline) |
+| energy | 29.7 mJ | (-21%) |
+
+## Best SC Result
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| Experiment | NSC-01 (signed_consensus_shiftmax, S012, ang=0.02) | |
+| AEE | 1.771 | valid825, epoch29 |
+| total_spikes | 32.30G | (-27% vs baseline) |
+| energy | 28.23 mJ | (-25%) |
 
 ## Metrics
 
-- **Primary**: SOPs (lower is better) — estimated_total_sops from `tools/profile_sops.py`
-- **Secondary**: AEE (lower is better), AAE (lower is better), firing_rate (lower is better)
-- **Hardware**: gate_open_count, mean_gate_prob, spike_datapath_width
+- **Primary**: AEE (closer to baseline 1.489 is better)
+- **Secondary**: total_spikes (lower is better), AAE (lower is better), energy (lower is better)
+- **Constraint**: spikes must stay < 35G
 
-## How to Run
+## Available Knobs
 
-```bash
-# Evaluation only (no training, fast):
-cd /root/private_data/work/SDformer
-python tools/profile_sops.py \
-  --config <experiment_config.yml> \
-  --checkpoint <checkpoint.pth> \
-  --num-samples 40 \
-  --metrics AEE \
-  --output-dir <results_dir>
+| Category | Knob | Current SC | TX (working) | Notes |
+|----------|------|-----------|--------------|-------|
+| Attention | mode | signed_consensus_shiftmax | ternary_alpha_xnor_shiftmax | can also try sc_agree_disagree_shiftmax |
+| Attention | consensus_score_norm | head_dim | head_dim | |
+| Attention | score_scale | 1.0 | 1.0 | |
+| ATLIF | threshold_mode | symmetric_target_rate | symmetric_bsa_tsn | Key difference! |
+| ATLIF | target_rate | 0.05 | null | SC uses target_rate, TX doesn't |
+| ATLIF | activity_eta | 1.5 | 0.0 | |
+| FFN | range | S012 | S02 | SC replaces more stages |
+| FFN | mode | official_atlif | official_atlif | |
+| Optimizer | neuron_lr | 2e-5 | 3e-5 | TX uses higher neuron_lr |
+| Optimizer | backbone_lr | 2e-7 | 1e-6 | TX allows more backbone adaptation |
+| Optimizer | warmup | 300 steps | none | SC uses warmup, TX doesn't |
 
-# Training (wait for GPU to be free):
-python neuron_autoresearch/entrypoints/train.py \
-  --config <config.yml> \
-  --prev_runid <baseline_checkpoint>
-```
+## What's Been Tried (NSC Series)
 
-## Files in Scope
+| # | Experiment | Key Config | Result |
+|---|-----------|-----------|--------|
+| NSC-01 | SC S012C baseline | symmetric_target_rate, tr=0.05 | AEE=1.77 ✅ |
+| NSC-04d | SC blended μ=0.5 λ=0.6 | high mu, failed to converge | ❌ valid loss ~10 |
+| NSC-09d | SC μ=0.05 all stages | symmetric_bsa_tsn, no tr | 🔄 running |
 
-- `neuron_autoresearch/` — new experiment code (this directory)
-- `src/models/modules/spiking_neurons/` — neuron implementations (read reference, create variants)
-- `neuron_experiments/` — existing experiment results (read only for reference)
-- `tools/profile_sops.py` — evaluation harness (use as-is)
+## Key Hypothesis
 
-## Off Limits
+**SC's main weakness is token-level aggregation (O(N) vs TX's O(N²))**. The signed consensus computes Σ sign(Q)×sign(K) per token, losing pairwise token interactions. TX preserves N² interactions through matrix multiplication. To close the gap, SC needs either richer token representations (ReLU K, agree/disagree channels) or better training (higher LR, aligned ATLIF with TX).
 
-- `third_party/SDformerFlow/` — baseline, READ ONLY
-- `neuron_experiments/E*/`, `F*/`, `G*/`, `H*/` — existing experiments, READ ONLY
-- Any running training process — do NOT kill or interfere
-- Original dataset files
+## Experiment Queue (Phase 1: Align SC with TX's working setup)
 
-## Constraints
-
-- New code goes in `neuron_autoresearch/` only
-- Don't modify baseline PSN files
-- Don't start training while GPU is occupied (>50% memory used)
-- Training must use the experiment overlay pattern (source-patching, not editing baseline)
-- Every new neuron must have a documented hardware mapping
-- Prefer simplicity — 2 comparators better than 8, AND gates better than multipliers
-
-## What's Been Tried (from neuron_experiments/)
-
-### Blanket neuron replacements (E-series)
-- **E1 SN** (Simple Spiking Neuron): smoke only, worse than PSN
-- **E2 ATLIF**: adaptive threshold works for sparsity but destroys accuracy; best low-SOP run had AEE=3.75
-- **E3 LMHT**: trains cleanly but SOPs too high (9.7G), missing inference reparameterization
-- **E4 TS-LIF**: closest full replacement after PSN (AEE=2.18, SOPs=4.01G), but still worse
-- **E5b TSN** (Ternary Spike): failed completely (AEE=29.77), paradigm mismatch with event bins
-- **E6 ASN** (NASN): second-best accuracy among replacements (AEE=2.17), but 9.2x PSN SOPs
-
-### Fused approaches (F-series)
-- **F1-F5**: smoke-tested scaffolds only (fused adaptive PSN, LMH+ATLIF, adaptive TS-LIF, LMH+TS-LIF, signed hybrid)
-- None have full-run results yet
-
-### Partial gating (G/H-series)
-- **G1**: 6 layer0 nodes with HardSparseGate — **best sparse/accuracy tradeoff** (25% SOP reduction, 1.3% AEE increase)
-- **H1** (running now): extends G1 to all 36 encoder nodes with HardwareSparseNeuron (GTCN = gate + ATLIF threshold)
-
-### Key architectural insight
-Blanket neuron replacement (replacing all PSN neurons with a new type) consistently fails — either accuracy collapses or SOPs explode. The winning strategy is **targeted/partial insertion**: apply novel mechanisms only to specific high-impact nodes while keeping PSN elsewhere.
-
-## Experiment Queue (Phase 1: Neuron Operators)
-
-### Queue Priority
-
-1. **A1 — FSN multi-level on G1 nodes**: Take G1's 6 winning nodes, upgrade from HardSparseGate to FusedSparseNeuron with num_levels=2 (ternary-style for optical flow polarity). Hypothesis: multi-level spikes carry more information per spike → can close more gates without accuracy loss.
-
-2. **A2 — Leakage-as-gate**: Use the PSN's decay parameter as a dynamic gate signal instead of a fixed parameter. Neurons with high decay (forgetful) get lower gate probability. Hardware: decay threshold detector replaces learned gate_logit.
-
-3. **A3 — Hierarchical shared gates**: Group neurons by layer stage, share one gate across all neurons in a group. Dramatically reduces gate parameter count (36 → 4) and hardware control wires. Test with stage-level shared gates.
-
-4. **A4 — Spike-timing-dependent gate**: Gate probability depends on spike timing within the 10-bin sequence. Early bins (noise-dominated) get lower gate probability. Late bins (signal) get higher. Hardware: bin-counter + LUT.
-
-5. **A5 — Refractory-period pruning**: After a neuron spikes, enforce a hardware-enforced refractory period (skip N timesteps). Reduces temporal firing density without affecting spatial pattern. Hardware: simple counter per neuron.
-
-### Ideas Backlog (autoresearch.ideas.md)
-See `autoresearch.ideas.md` for detailed experiment designs and lower-priority ideas.
+1. **NSC-10a — SC + TX ATLIF**: symmetric_bsa_tsn, no target_rate, neuron_lr=3e-5, backbone_lr=1e-6, 30ep. (NSC-09d is close to this)
+2. **NSC-10b — SC + ReLU K**: Keep Q ternary, K as continuous ReLU. Richer K signal. 30ep.
+3. **NSC-10c — SC agree/disagree λ sweep**: λ=[0.3, 0.5, 0.8, 1.2], 360-step short screening.
+4. **NSC-10d — SC S02 only**: Reduce FFN replacement from S012 to S02 (match TX range). 30ep.

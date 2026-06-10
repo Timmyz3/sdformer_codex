@@ -65,12 +65,15 @@ def main() -> None:
         batch_size=cfg["runtime"].get("batch_size", 1),
         shuffle=True,
         num_workers=cfg["runtime"]["num_workers"],
+        drop_last=True,
+        pin_memory=True,
     )
     eval_loader = DataLoader(
         eval_dataset,
         batch_size=1,
         shuffle=False,
         num_workers=cfg["runtime"]["num_workers"],
+        pin_memory=True,
     )
 
     model = build_model(cfg).to(device)
@@ -86,9 +89,13 @@ def main() -> None:
     loss_fn = build_loss(cfg, device)
 
     start_epoch = 0
+    use_amp = cfg["optimizer"].get("use_amp", True)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     if args.checkpoint:
         state = load_checkpoint(args.checkpoint, model, optimizer, scheduler, map_location=str(device))
         start_epoch = int(state.get("epoch", 0)) + 1
+        if state.get("scaler") is not None:
+            scaler.load_state_dict(state["scaler"])
 
     best_aee = float("inf")
     epochs = args.epochs or cfg["runtime"].get("epochs", len(cfg["optimizer"]["milestones"]))
@@ -102,13 +109,16 @@ def main() -> None:
         for batch in tqdm(train_loader, desc=f"train-{epoch}", leave=False):
             batch = move_batch_to_device(batch, device)
             optimizer.zero_grad()
-            outputs = model(batch)
-            flow_list = outputs["aux"]["flow_list"]
-            loss = loss_fn(flow_list, batch["gt_flow"], batch["valid_mask"], gamma=cfg["loss"]["gamma"])
-            loss.backward()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                outputs = model(batch)
+                flow_list = outputs["aux"]["flow_list"]
+                loss = loss_fn(flow_list, batch["gt_flow"], batch["valid_mask"], gamma=cfg["loss"]["gamma"])
+            scaler.scale(loss).backward()
             if cfg["loss"]["clip_grad"] is not None:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["loss"]["clip_grad"])
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             running_loss += float(loss.item())
 
         scheduler.step()
@@ -117,14 +127,14 @@ def main() -> None:
         eval_results["epoch"] = epoch
 
         checkpoint_path = output_dir / f"{cfg['model']['name']}_epoch{epoch}.pth"
-        save_checkpoint(checkpoint_path, model, optimizer, scheduler, epoch, eval_results)
+        save_checkpoint(checkpoint_path, model, optimizer, scheduler, epoch, eval_results, scaler)
         write_json(output_dir / f"{cfg['model']['name']}_epoch{epoch}.json", eval_results)
         history.append(eval_results)
         write_csv(output_dir / f"{cfg['model']['name']}_history.csv", history)
 
         if eval_results.get("AEE", float("inf")) < best_aee:
             best_aee = eval_results["AEE"]
-            save_checkpoint(output_dir / f"{cfg['model']['name']}_best.pth", model, optimizer, scheduler, epoch, eval_results)
+            save_checkpoint(output_dir / f"{cfg['model']['name']}_best.pth", model, optimizer, scheduler, epoch, eval_results, scaler)
 
 
 if __name__ == "__main__":

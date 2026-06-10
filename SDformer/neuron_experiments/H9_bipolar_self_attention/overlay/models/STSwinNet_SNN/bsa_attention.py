@@ -29,6 +29,7 @@ class ShiftmaxAttentionConfig:
     eps: float = 1.0e-6
     consensus_score_norm: str = "head_dim"
     consensus_bias: float = 0.0
+    matrix_diag_bias: float = 0.0
     value_mode: str = "threshold"
     value_branch: str = "reuse_k"
     value_init: str = "copy_k"
@@ -44,6 +45,24 @@ class ShiftmaxAttentionConfig:
     bipolar_lambda: float = 0.8
     bipolar_gate_min: float | None = None
     bipolar_gate_max: float | None = None
+    deadzone_epsilon: float = 0.0
+    confidence_enabled: bool = False
+    k_consistency_mod: bool = False
+    k_magnitude_alpha: float = 0.0  # K magnitude correction: score += α × sign(Q) × |K_before_sign|
+    temporal_consistency_alpha: float = 0.0  # S3: penalty on gate time variation
+    motion_weight_alpha: float = 0.0  # S1: scale motion magnitude bonus
+    directional_channels_enabled: bool = False  # S2: split Q/K by x/y direction
+    directional_merge_mode: str = "sum"  # S2: "sum" or "mean"
+    confidence_min_active: int = 0  # FAPS: sparse K_mag only when active channels >= tau
+    flow_disagreement_gamma: float = 0.0  # FAPS: penalize |S_x - S_y| when directional
+    directional_residual_gamma: float = 0.0  # H62: confidence-gated directional residual strength
+    confidence_floor: float = 0.0  # H62: minimum residual confidence
+    kmag_quantize_bits: int = 2  # FAPS: quantize threshold-margin lane to N-bit levels
+    sc_warm_start_gate: bool = False
+    sc_mu_schedule_enabled: bool = False
+    sc_mu_start_step: int = 0
+    sc_mu_warmup_steps: int = 0
+    sc_mu_start: float = 0.0
 
 
 def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
@@ -62,6 +81,7 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         eps=float(raw.get("eps", 1.0e-6)),
         consensus_score_norm=str(raw.get("consensus_score_norm", "head_dim")),
         consensus_bias=float(raw.get("consensus_bias", 0.0)),
+        matrix_diag_bias=float(raw.get("matrix_diag_bias", 0.0)),
         value_mode=str(raw.get("value_mode", "threshold")),
         value_branch=str(raw.get("value_branch", "reuse_k")),
         value_init=str(raw.get("value_init", "copy_k")),
@@ -77,6 +97,24 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         bipolar_lambda=float(raw.get("bipolar_lambda", 0.8)),
         bipolar_gate_min=None if raw.get("bipolar_gate_min") is None else float(raw.get("bipolar_gate_min")),
         bipolar_gate_max=None if raw.get("bipolar_gate_max") is None else float(raw.get("bipolar_gate_max")),
+        deadzone_epsilon=float(raw.get("deadzone_epsilon", 0.0)),
+        confidence_enabled=bool(raw.get("confidence_enabled", False)),
+        k_consistency_mod=bool(raw.get("k_consistency_mod", False)),
+        k_magnitude_alpha=float(raw.get("k_magnitude_alpha", 0.0)),
+        temporal_consistency_alpha=float(raw.get("temporal_consistency_alpha", 0.0)),
+        motion_weight_alpha=float(raw.get("motion_weight_alpha", 0.0)),
+        directional_channels_enabled=bool(raw.get("directional_channels_enabled", False)),
+        directional_merge_mode=str(raw.get("directional_merge_mode", "sum")),
+        confidence_min_active=int(raw.get("confidence_min_active", 0) or 0),
+        flow_disagreement_gamma=float(raw.get("flow_disagreement_gamma", 0.0)),
+        directional_residual_gamma=float(raw.get("directional_residual_gamma", 0.0)),
+        confidence_floor=float(raw.get("confidence_floor", 0.0)),
+        kmag_quantize_bits=int(raw.get("kmag_quantize_bits", 2) or 2),
+        sc_warm_start_gate=bool(raw.get("sc_warm_start_gate", False)),
+        sc_mu_schedule_enabled=bool(raw.get("sc_mu_schedule_enabled", False)),
+        sc_mu_start_step=int(raw.get("sc_mu_start_step", 0) or 0),
+        sc_mu_warmup_steps=int(raw.get("sc_mu_warmup_steps", 0) or 0),
+        sc_mu_start=float(raw.get("sc_mu_start", 0.0)),
     )
 
 
@@ -160,6 +198,44 @@ def _qkformer_token_q(q_orig: torch.Tensor) -> torch.Tensor:
         q_orig.shape[0] * q_orig.shape[3],
         q_orig.shape[4],
     )
+
+
+def _temporal_motion_from_q_orig(
+    q_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor | None:
+    """Q temporal saliency per token, layout [B, num_heads, T*N, 1].
+
+    ``q_orig`` is ``[T, B, num_heads, N, head_dim]`` inside one Swin window.
+    Saliency is the channel-mean ``|Q_t - Q_{t-1}|``; ``t=0`` is zero because
+    there is no prior step inside the window. Normalization is per batch item
+    and head over time and window tokens (not one global max across heads).
+
+    With default ``window_size[0]=2`` only one inter-step difference exists
+    within the window; this is not long-range temporal context.
+    """
+
+    if float(cfg.motion_weight_alpha) <= 0.0:
+        return None
+    if q_orig.ndim != 5:
+        raise ValueError("q_orig must be [T, B, num_heads, N, head_dim] for motion saliency")
+
+    t_steps, batch, num_heads, n_tokens, _ = q_orig.shape
+    if t_steps < 2:
+        return torch.zeros(
+            batch,
+            num_heads,
+            t_steps * n_tokens,
+            1,
+            device=q_orig.device,
+            dtype=q_orig.dtype,
+        )
+
+    q_diff = (q_orig[1:] - q_orig[:-1]).abs().mean(dim=-1)  # [T-1, B, H, N]
+    q_diff = torch.cat([torch.zeros_like(q_diff[:1]), q_diff], dim=0)  # [T, B, H, N]
+    q_diff = q_diff / q_diff.amax(dim=(0, 3), keepdim=True).clamp_min(1e-6)
+    motion = q_diff.permute(1, 2, 0, 3).reshape(batch, num_heads, t_steps * n_tokens, 1)
+    return motion.to(dtype=q_orig.dtype)
 
 
 def _ensure_independent_value_branch(attn: nn.Module, cfg: ShiftmaxAttentionConfig) -> None:
@@ -267,11 +343,32 @@ def _signed_consensus_token_scores(
     remaining power-of-two friendly for head_dim values.
     """
 
+    _motion = _temporal_motion_from_q_orig(q_orig, cfg)
+
     q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
     k_event = _ternary_sign_ste(k_orig)
     q_active = q_event.ne(0)
     k_active = k_event.ne(0)
-    score = (q_event * k_event).sum(dim=-1, keepdim=True)
+    if cfg.directional_channels_enabled:
+        # S2: split head_dim into two halves (x/y direction channels), compute SC separately
+        d = q_event.shape[-1]
+        d2 = d // 2
+        q_x, q_y = q_event[..., :d2], q_event[..., d2:]
+        k_x, k_y = k_event[..., :d2], k_event[..., d2:]
+        score_x = (q_x * k_x).sum(dim=-1, keepdim=True)
+        score_y = (q_y * k_y).sum(dim=-1, keepdim=True)
+        if cfg.directional_merge_mode == "mean":
+            score = (score_x + score_y) / 2.0
+        else:
+            score = score_x + score_y
+    else:
+        score = (q_event * k_event).sum(dim=-1, keepdim=True)
+    if _motion is not None:
+        score = score * (1.0 + float(cfg.motion_weight_alpha) * _motion)
+    if cfg.k_magnitude_alpha:
+        k_mag = torch.relu(k_orig - k_event.detach())
+        mag_correction = (q_event * k_mag).sum(dim=-1, keepdim=True)
+        score = score + float(cfg.k_magnitude_alpha) * mag_correction
     if cfg.single_active_penalty:
         if cfg.single_active_penalty_grad in {"ste", "proxy", "soft"}:
             q_active_proxy = _single_active_proxy(q_event, cfg)
@@ -378,6 +475,7 @@ def _ternary_alpha_xnor_token_scores(
     q_orig: torch.Tensor,
     k_orig: torch.Tensor,
     cfg: ShiftmaxAttentionConfig,
+    beta: float | None = None,
 ) -> torch.Tensor:
     """Ternary extension of CVPR 2025 alpha-XNOR spike similarity.
 
@@ -401,12 +499,19 @@ def _ternary_alpha_xnor_token_scores(
         single_active = q_active_proxy * (1.0 - k_active_proxy) + (1.0 - q_active_proxy) * k_active_proxy
     else:
         single_active = (q_active ^ k_active).to(dtype=q_orig.dtype)
+    _mismatch = beta if beta is not None else float(cfg.mismatch_penalty)
     score = (
         same_nonzero.to(dtype=q_orig.dtype)
         + float(cfg.alpha0) * same_zero.to(dtype=q_orig.dtype)
-        - float(cfg.mismatch_penalty) * opposite.to(dtype=q_orig.dtype)
+        - _mismatch * opposite.to(dtype=q_orig.dtype)
         - float(cfg.single_active_penalty) * single_active.to(dtype=q_orig.dtype)
     ).sum(dim=-1, keepdim=True)
+    # ── NTX-11: K magnitude correction (additive, off by default) ──
+    if cfg.k_magnitude_alpha:
+        k_mag = torch.relu(k_orig - k_event.detach())  # |K| before sign binarization
+        mag_correction = (q_event * k_mag).sum(dim=-1, keepdim=True)
+        score = score + float(cfg.k_magnitude_alpha) * mag_correction
+    # ── end K magnitude ──
     active = None
     if cfg.consensus_score_norm == "active":
         active = (q_active | k_active).sum(dim=-1, keepdim=True).clamp_min(1)
@@ -501,12 +606,257 @@ def _center_token_scores(score: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> t
     return score
 
 
+def _tx_sc_fusion_score_pair(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """TX/SC fusion scores with K_mag applied on TX only (not SC)."""
+
+    k_mag = float(cfg.k_magnitude_alpha)
+    if k_mag > 0:
+        object.__setattr__(cfg, "k_magnitude_alpha", 0.0)
+    sc_scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+    if k_mag > 0:
+        object.__setattr__(cfg, "k_magnitude_alpha", k_mag)
+    tx_scores = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
+    return tx_scores, sc_scores
+
+
+def _faps_dyadic_channel_score(
+    q_event: torch.Tensor,
+    k_event: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Unified dyadic popcount for one x or y channel group.
+
+    Compile-time weights absorb TX(alpha0/mismatch/single) + SC(mu=1/8):
+    +4 same-sign, +1 silence, -1 softened opposite, -4 single-active.
+    """
+
+    q_active = q_event.ne(0)
+    k_active = k_event.ne(0)
+    same_nonzero = (q_event == k_event) & q_active & k_active
+    same_zero = (~q_active) & (~k_active)
+    opposite = (q_event == -k_event) & q_active & k_active
+    if cfg.single_active_penalty and cfg.single_active_penalty_grad in {"ste", "proxy", "soft"}:
+        q_active_proxy = _single_active_proxy(q_event, cfg)
+        k_active_proxy = _single_active_proxy(k_event, cfg)
+        single_active = q_active_proxy * (1.0 - k_active_proxy) + (1.0 - q_active_proxy) * k_active_proxy
+    else:
+        single_active = (q_active ^ k_active).to(dtype=q_event.dtype)
+    score = (
+        4.0 * same_nonzero.to(dtype=q_event.dtype)
+        + 1.0 * same_zero.to(dtype=q_event.dtype)
+        - 1.0 * opposite.to(dtype=q_event.dtype)
+        - 4.0 * single_active
+    ).sum(dim=-1, keepdim=True)
+    return score
+
+
+def _quantize_margin_bits(margin: torch.Tensor, bits: int) -> torch.Tensor:
+    levels = max(2, int(bits))
+    max_margin = margin.amax(dim=-1, keepdim=True).clamp_min(1.0e-6)
+    normalized = (margin / max_margin).clamp(0.0, 1.0)
+    quantized = torch.round(normalized * float(levels - 1)) / float(levels - 1)
+    return quantized * max_margin
+
+
+def _faps_sparse_k_magnitude(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    q_event: torch.Tensor,
+    k_event: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Sparse 2-bit threshold-margin lane on high-confidence tokens only."""
+
+    k_mag = torch.relu(k_orig - k_event.detach())
+    k_mag = _quantize_margin_bits(k_mag, cfg.kmag_quantize_bits)
+    mag_correction = (q_event * k_mag).sum(dim=-1, keepdim=True)
+    min_active = int(cfg.confidence_min_active)
+    if min_active > 0:
+        active_count = (q_event.ne(0) | k_event.ne(0)).sum(dim=-1, keepdim=True)
+        mask = (active_count >= min_active).to(dtype=mag_correction.dtype)
+        mag_correction = mag_correction * mask
+    return float(cfg.k_magnitude_alpha) * mag_correction
+
+
+def _faps_flow_aligned_token_scores(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """FAPS: flow-aligned unified dyadic popcount with optional sparse K_mag."""
+
+    q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+    k_event = _ternary_sign_ste(k_orig)
+    if cfg.directional_channels_enabled:
+        head_dim = q_event.shape[-1]
+        half = head_dim // 2
+        score_x = _faps_dyadic_channel_score(q_event[..., :half], k_event[..., :half], cfg)
+        score_y = _faps_dyadic_channel_score(q_event[..., half:], k_event[..., half:], cfg)
+        gamma = float(cfg.flow_disagreement_gamma)
+        if gamma > 0.0:
+            score = score_x + score_y - gamma * (score_x - score_y).abs()
+        elif cfg.directional_merge_mode == "mean":
+            score = (score_x + score_y) / 2.0
+        else:
+            score = score_x + score_y
+    else:
+        score = _faps_dyadic_channel_score(q_event, k_event, cfg)
+    if cfg.k_magnitude_alpha:
+        score = score + _faps_sparse_k_magnitude(q_orig, k_orig, q_event, k_event, cfg)
+    active = None
+    if cfg.consensus_score_norm == "active":
+        active = (q_event.ne(0) | k_event.ne(0)).sum(dim=-1, keepdim=True).clamp_min(1)
+    return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
+
+
+def _event_agree_confidence(
+    q_event: torch.Tensor,
+    k_event: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Hardware-friendly residual confidence from active and agree popcounts."""
+
+    q_active = q_event.ne(0)
+    k_active = k_event.ne(0)
+    active = (q_active | k_active).sum(dim=-1, keepdim=True).to(dtype=q_event.dtype)
+    agree = ((q_event == k_event) & q_active & k_active).sum(dim=-1, keepdim=True).to(dtype=q_event.dtype)
+    active_frac = active / float(max(1, q_event.shape[-1]))
+    agree_ratio = agree / active.clamp_min(1.0)
+    conf = torch.sqrt(active_frac.clamp_min(0.0)) * agree_ratio.clamp(0.0, 1.0)
+    floor = float(cfg.confidence_floor)
+    if floor > 0.0:
+        conf = torch.clamp(conf, min=floor)
+    return conf
+
+
+def _faps_directional_residual_score(
+    q_event: torch.Tensor,
+    k_event: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Small x/y group residual used by H62, normalized like the other scores."""
+
+    head_dim = q_event.shape[-1]
+    half = head_dim // 2
+    if half <= 0 or half == head_dim:
+        score = _faps_dyadic_channel_score(q_event, k_event, cfg)
+    else:
+        score_x = _faps_dyadic_channel_score(q_event[..., :half], k_event[..., :half], cfg)
+        score_y = _faps_dyadic_channel_score(q_event[..., half:], k_event[..., half:], cfg)
+        score = (score_x + score_y) / 2.0
+    active = None
+    if cfg.consensus_score_norm == "active":
+        active = (q_event.ne(0) | k_event.ne(0)).sum(dim=-1, keepdim=True).clamp_min(1)
+    return _normalize_consensus_score(score, head_dim, cfg, active=active)
+
+
+def _confidence_calibrated_nts_scores(
+    module: nn.Module,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """H62: NTS score with confidence-gated SC and optional directional residual.
+
+    The base TX score stays identical to NTS/H60. SC and directional evidence are
+    only injected when Q/K have enough active, same-sign event support, making the
+    residual easy to implement with popcount counters and safer than full FAPS.
+    """
+
+    tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+    q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+    k_event = _ternary_sign_ste(k_orig)
+    conf = _event_agree_confidence(q_event, k_event, cfg)
+    mu = _scheduled_bipolar_mu(module, cfg)
+    residual = mu * sc_scores
+    gamma = float(cfg.directional_residual_gamma)
+    if gamma != 0.0:
+        residual = residual + gamma * _faps_directional_residual_score(q_event, k_event, cfg)
+    return tx_scores + conf * residual
+
+
 def _maybe_clamp_bipolar_gate(gate: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
     if cfg.bipolar_gate_min is None and cfg.bipolar_gate_max is None:
         return gate
     min_value = -float("inf") if cfg.bipolar_gate_min is None else float(cfg.bipolar_gate_min)
     max_value = float("inf") if cfg.bipolar_gate_max is None else float(cfg.bipolar_gate_max)
     return gate.clamp(min=min_value, max=max_value)
+
+
+def _scheduled_bipolar_mu(module: nn.Module, cfg: ShiftmaxAttentionConfig) -> float:
+    final_mu = float(cfg.bipolar_mu)
+    if not cfg.sc_mu_schedule_enabled:
+        return final_mu
+    step = getattr(module, "_h9_global_step", None)
+    if step is None:
+        return final_mu
+    step = int(step)
+    start_step = max(0, int(cfg.sc_mu_start_step))
+    warmup_steps = max(0, int(cfg.sc_mu_warmup_steps))
+    start_mu = float(cfg.sc_mu_start)
+    if step <= start_step:
+        return start_mu
+    if warmup_steps <= 0:
+        return final_mu
+    progress = min(1.0, max(0.0, float(step - start_step) / float(warmup_steps)))
+    return start_mu + (final_mu - start_mu) * progress
+
+
+def _sc_agree_disagree_gate(
+    scores: torch.Tensor,
+    n_tokens: int,
+    head_dim: int,
+    cfg: ShiftmaxAttentionConfig,
+    q_event: torch.Tensor | None = None,
+    k_event: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """SC-native signed gate: split popcount score into agree/disagree.
+
+    agree    = max(score, 0)   — same-polarity evidence
+    disagree = max(-score, 0)  — opposite-polarity evidence
+
+    gate = Shiftmax(agree) - λ × Shiftmax(disagree)
+
+    Optional add-ons (all SC-native, no extra scoring):
+      - deadzone: |score|<ε tokens get uniform 1/N weight
+      - confidence: low-activity tokens regress toward 1/N
+    """
+
+    agree = torch.relu(scores)
+    disagree = torch.relu(-scores)
+
+    dead_mask = None
+    dead_fraction = 0.0
+    if cfg.deadzone_epsilon > 0:
+        dead_mask = scores.abs() < float(cfg.deadzone_epsilon)
+        dead_fraction = dead_mask.float().sum(dim=2, keepdim=True) / float(n_tokens)
+        agree = agree * (~dead_mask).float()
+        disagree = disagree * (~dead_mask).float()
+
+    agree_gate = shiftmax(agree, dim=2, eps=cfg.eps)
+    disagree_gate = shiftmax(disagree, dim=2, eps=cfg.eps)
+    if cfg.preserve_mean:
+        agree_gate = agree_gate * float(n_tokens)
+        disagree_gate = disagree_gate * float(n_tokens)
+
+    live_scale = 1.0 - dead_fraction
+    gate = (agree_gate - float(cfg.bipolar_lambda) * disagree_gate) * live_scale
+
+    if dead_mask is not None:
+        gate = gate + dead_mask.float() * (1.0 / float(n_tokens))
+
+    if cfg.confidence_enabled and q_event is not None and k_event is not None:
+        q_active = q_event.ne(0)
+        k_active = k_event.ne(0)
+        active = (q_active | k_active).sum(dim=-1, keepdim=True).float().clamp_min(1)
+        confidence = torch.sqrt(active / float(head_dim))
+        gate = confidence * gate + (1.0 - confidence) * (1.0 / float(n_tokens))
+
+    return _maybe_clamp_bipolar_gate(gate, cfg)
 
 
 def _a2os2a_token_scores(
@@ -611,6 +961,17 @@ def _ternary_alpha_xnor_matrix_scores_ste(
         else:
             active = both_active
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
+
+
+def _add_matrix_diag_bias(scores: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    """Add a same-token prior to direct token-token attention scores."""
+
+    bias = float(cfg.matrix_diag_bias)
+    if bias == 0.0:
+        return scores
+    n_query, n_key = scores.shape[-2], scores.shape[-1]
+    diag = torch.eye(n_query, n_key, device=scores.device, dtype=scores.dtype)
+    return scores + bias * diag
 
 
 def _binary_alpha_xnor_matrix_scores(
@@ -792,6 +1153,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         # the original carrier is not preserved, and K is reused as V because
         # the baseline QK block has no separate value projection.
         scores = _ternary_alpha_xnor_matrix_scores(q_orig, k_orig, cfg)
+        scores = _add_matrix_diag_bias(scores, cfg)
         if cfg.center_scores:
             scores = scores - scores.mean(dim=-1, keepdim=True)
         gate = shiftmax(scores, dim=-1, eps=cfg.eps)
@@ -814,6 +1176,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         # score transform and a value matmul. The baseline block has no live V
         # branch, so K is intentionally reused as V.
         scores = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        scores = _add_matrix_diag_bias(scores, cfg)
         if cfg.center_scores:
             scores = scores - scores.mean(dim=-1, keepdim=True)
         gate = scores + float(cfg.consensus_bias)
@@ -833,6 +1196,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         # initialized from K when installed, giving stable baseline continuation
         # while allowing V to specialize during fine-tuning.
         scores = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        scores = _add_matrix_diag_bias(scores, cfg)
         if cfg.center_scores:
             scores = scores - scores.mean(dim=-1, keepdim=True)
         gate = scores + float(cfg.consensus_bias)
@@ -851,6 +1215,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         # stable BSA-style Shiftmax normalization already used by existing H
         # experiments. V is an independent overlay branch initialized from K.
         scores = _ternary_alpha_xnor_matrix_scores_ste(q_orig, k_orig, cfg)
+        scores = _add_matrix_diag_bias(scores, cfg)
         if cfg.center_scores:
             scores = scores - scores.mean(dim=-1, keepdim=True)
         gate = shiftmax(scores, dim=-1, eps=cfg.eps)
@@ -1051,7 +1416,79 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         # This keeps the linear-complexity QKFormer carrier while avoiding the
         # older H41 pattern of multiplying the native sn2(sum(Q)) gate by an
         # extra TX gate.
+        # ── NTX-11 stage-β: override mismatch_penalty per stage (additive) ──
+        _stage_betas = getattr(cfg, "stage_mismatch_penalty", None)
+        if _stage_betas is not None:
+            _stage = getattr(self, "_h9_stage", 0)
+            if _stage < len(_stage_betas):
+                _override_beta = float(_stage_betas[_stage])
+            else:
+                _override_beta = float(cfg.mismatch_penalty)
+        else:
+            _override_beta = float(cfg.mismatch_penalty)
+        scores = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg, beta=_override_beta)
+        # ── end stage-β ──
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        # ── NTX-11 gate smooth: EMA across timesteps (optional, additive) ──
+        _alpha = getattr(cfg, "gate_smooth_alpha", 0.0)
+        if _alpha > 0 and _alpha < 1:
+            _prev = getattr(self, "_h9_prev_gate", None)
+            if _prev is not None and _prev.shape == gate.shape:
+                gate = _alpha * gate + (1.0 - _alpha) * _prev
+            self._h9_prev_gate = gate.detach()
+        # ── end gate smooth ──
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"ternary_alpha_xnor_local_shiftmax", "tx_local_shiftmax", "h59_local"}:
+        # H59_local / NTX-10: H49 selector + local spatial neighbor interaction.
+        #
+        # Same-token TX selector as H49, augmented with a lightweight
+        # pairwise consistency term over spatial neighbors within the SWIN window:
+        #
+        #   self_i    = TX(q_i, k_i)
+        #   neighbor_i = mean_{j in N(i)} TX(q_i, k_j)   [local pairwise]
+        #   score_i   = self_i + lambda * neighbor_i
+        #   selector  = Shiftmax(score)
+        #   attn_i    = k_i * selector_i
+        #
+        # The window_size = [T, H, W] spatial layout is recovered to identify
+        # local neighbors. lambda=0 degenerates to plain H49.  No new parameters.
         scores = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
+        # ── local neighbor interaction ──
+        local_lambda = float(getattr(cfg, "local_lambda", 0.2))
+        if local_lambda > 0:
+            import math
+            N = scores.shape[2]  # total tokens in window
+            T_dim, H_dim, W_dim = 2, 9, 9  # SWIN window_size
+            if T_dim * H_dim * W_dim == N:
+                try:
+                    # scores may have leading T dim (from q_orig) or not.
+                    # Reshape to ensure (T, B_, heads, H, W, 1)
+                    if scores.shape[0] == T_dim:
+                        ss = scores.reshape(T_dim, -1, scores.shape[1], H_dim, W_dim, 1)
+                    else:
+                        ss = scores.reshape(-1, scores.shape[1], T_dim, H_dim, W_dim, 1).permute(2, 0, 1, 3, 4, 5)
+                    # Neighbor average: roll along H dim (3) and W dim (4)
+                    nbr = torch.zeros_like(ss)
+                    n = 0
+                    for d in (1, -1):
+                        nbr = nbr + torch.roll(ss, shifts=d, dims=3)  # H neighbors
+                        nbr = nbr + torch.roll(ss, shifts=d, dims=4)  # W neighbors
+                        n += 2
+                    nbr = nbr / n
+                    # Flatten back to match scores shape
+                    if scores.shape[0] == T_dim:
+                        nbr = nbr.reshape(scores.shape)
+                    else:
+                        nbr = nbr.permute(1, 2, 0, 3, 4, 5).reshape(scores.shape)
+                    scores = scores + local_lambda * nbr
+                except Exception:
+                    pass
+        # ── end local interaction ──
         if cfg.center_scores:
             scores = scores - scores.mean(dim=2, keepdim=True)
         gate = shiftmax(scores, dim=2, eps=cfg.eps)
@@ -1140,6 +1577,241 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             gate = gate * float(n_tokens)
         value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
         attn = torch.matmul(gate, value)
+    elif cfg.mode in {"sc_agree_disagree_shiftmax", "h56a"}:
+        # H56a: SC-native agree/disagree signed gate.
+        #
+        # The baseline SC score = Σ sign(q)·sign(k)/d is a clean agree-minus-
+        # disagree net. This mode splits it by sign, runs two Shiftmax branches,
+        # and subtracts: gate = g_agree - λ·g_disagree.
+        #
+        # Unlike TX bipolar (H54b), no extra score computation — just split the
+        # existing popcount score.
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"sc_agree_disagree_residual_shiftmax", "h56r"}:
+        # H56r: residual SC agree/disagree gate.
+        #
+        # Keep the original QKFormer carrier and use SC agree/disagree as a
+        # bounded modulation. This tests whether H56a failed because the pure
+        # signed gate replaced the carrier too aggressively.
+        att_token = q_orig.sum(dim=-1, keepdim=True)
+        att_token = self.sn2_q(att_token)
+        attn_carrier = k_orig.mul(att_token.reshape(B_, self.num_heads, n_tokens, 1))
+
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        alpha = float(cfg.residual_alpha)
+        attn = attn_carrier * (1.0 + alpha * (gate - 1.0))
+    elif cfg.mode in {"sc_ad_carrier_blend_shiftmax", "sc_agree_disagree_carrier_blend_shiftmax", "h56m"}:
+        # H56m: carrier/gate blend for the repaired SC route.
+        #
+        # H56r modulates the native QKFormer carrier multiplicatively, so an
+        # inactive carrier cannot be corrected by SC evidence. This branch keeps
+        # the same no-new-weights SC score, but blends the native carrier token
+        # with the signed agree/disagree gate before multiplying K:
+        #
+        #   output = K * ((1 - mu) * carrier_q + mu * sc_signed_gate)
+        #
+        # It is compatible with old checkpoints and only activates when a new
+        # config explicitly selects this mode.
+        att_token = q_orig.sum(dim=-1, keepdim=True)
+        att_token = self.sn2_q(att_token)
+        carrier_gate = att_token.reshape(B_, self.num_heads, n_tokens, 1)
+
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        sc_gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg)
+        mu = float(cfg.bipolar_mu)
+        gate = (1.0 - mu) * carrier_gate + mu * sc_gate
+        gate = _maybe_clamp_bipolar_gate(gate, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {
+        "tx_sc_residual_selector_shiftmax",
+        "tx_sc_hybrid_selector_shiftmax",
+        "tx_sc_late_residual_selector_shiftmax",
+        "tx_sc_score_residual_shiftmax",
+        "h57",
+        "h57a",
+        "h58",
+        "h58a",
+        "h59",
+        "h59a",
+    }:
+        # H57: NTX-01-compatible TX selector with a small SC residual.
+        #
+        # NSC-04/05 showed that replacing the carrier with a signed SC gate is
+        # too aggressive. This branch keeps the same native QKFormer carrier as
+        # NTX-01, keeps the TX gate as the stable base, and only blends in SC
+        # agree/disagree as a residual selector:
+        #
+        #   carrier = K * sn2_q(sum(Q))
+        #   gate    = (1 - mu) * TX(Q,K) + mu * SC_agree_disagree(Q,K)
+        #   output  = carrier * gate
+        #
+        # mu=0 is the NTX-01/TX gate; small mu tests whether SC evidence helps
+        # without forcing a new module to learn the whole attention behavior.
+        att_token = q_orig.sum(dim=-1, keepdim=True)
+        att_token = self.sn2_q(att_token)
+        att_gate = att_token.reshape(B_, self.num_heads, n_tokens, 1)
+        attn_carrier = k_orig.mul(att_gate)
+
+        tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        tx_scores = _center_token_scores(tx_scores, cfg)
+        tx_gate = shiftmax(tx_scores, dim=2, eps=cfg.eps)
+        if cfg.preserve_mean:
+            tx_gate = tx_gate * float(n_tokens)
+
+        sc_scores = _center_token_scores(sc_scores, cfg)
+        mu = _scheduled_bipolar_mu(self, cfg)
+        if cfg.mode in {"tx_sc_score_residual_shiftmax", "h59", "h59a"}:
+            scores = tx_scores + mu * sc_scores
+            gate = shiftmax(scores, dim=2, eps=cfg.eps)
+            if cfg.preserve_mean:
+                gate = gate * float(n_tokens)
+            gate = _maybe_clamp_bipolar_gate(gate, cfg)
+            row_sum = gate.abs().sum(dim=2)
+            attn = attn_carrier.mul(gate)
+        else:
+            q_event = _ternary_sign_ste(_qkformer_token_q(q_orig)) if cfg.confidence_enabled else None
+            k_event = _ternary_sign_ste(k_orig) if cfg.confidence_enabled else None
+            sc_gate = _sc_agree_disagree_gate(sc_scores, n_tokens, head_dim, cfg, q_event=q_event, k_event=k_event)
+            if cfg.k_consistency_mod:
+                consistency = torch.clamp(sc_scores + 1.0, 0.0, 2.0) / 2.0
+                sc_gate = sc_gate * consistency
+            gate = (1.0 - mu) * tx_gate + mu * sc_gate
+            gate = _maybe_clamp_bipolar_gate(gate, cfg)
+            row_sum = gate.abs().sum(dim=2)
+            scores = (1.0 - mu) * tx_scores + mu * sc_scores
+            attn = attn_carrier.mul(gate)
+    elif cfg.mode in {"faps", "h61", "flow_aligned_popcount_selector"}:
+        # FAPS: unified dyadic popcount + flow-aligned x/y channels + sparse K_mag.
+        #   scores = unified_dyadic(Q,K) [+ sparse 2-bit K_mag on active>=tau]
+        #   gate = Shiftmax(scores)
+        #   attn = K * gate                         (NO carrier)
+        scores = _faps_flow_aligned_token_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"h62", "nts_conf_residual_shiftmax", "confidence_calibrated_nts"}:
+        # H62: NTS base score + confidence-calibrated SC/FAPS residual.
+        #   conf  = sqrt(active/head_dim) * agree/active
+        #   score = TX + conf * (mu * SC + gamma * DIR)
+        #   gate  = Shiftmax(score)
+        #   attn  = K * gate                         (NO carrier)
+        scores = _confidence_calibrated_nts_scores(self, q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"h60", "tx_sc_k_mag_no_carrier_shiftmax"}:
+        # h60: H49 no-carrier + SC score residual + K magnitude.
+        #   tx_scores = TX(q,k) [+ K_mag if cfg.k_magnitude_alpha]
+        #   sc_scores = SC(q,k)
+        #   scores = tx_scores + mu * sc_scores    (score-level fusion, not gate)
+        #   gate = Shiftmax(scores)
+        #   attn = K * gate                         (NO carrier)
+        mu = _scheduled_bipolar_mu(self, cfg)
+        tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        scores = tx_scores + mu * sc_scores
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {
+        "sc_ad_confidence_carrier_blend_shiftmax",
+        "sc_agree_disagree_confidence_carrier_blend_shiftmax",
+        "h56mc",
+    }:
+        # H56mc: confidence/dead-zone SC gate blended with the native carrier.
+        #
+        # NSC-04's H56m lets SC evidence correct an inactive carrier, but its
+        # SC branch treats weak low-activity votes like confident votes. This
+        # mode keeps H56m's no-new-weights carrier blend while enabling the
+        # confidence/dead-zone path from H56c:
+        #
+        #   sc_gate = confidence * SC(agree, disagree) + (1-confidence)/N
+        #   output  = K * ((1 - mu) * carrier_q + mu * sc_gate)
+        q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+        k_event = _ternary_sign_ste(k_orig)
+        att_token = q_orig.sum(dim=-1, keepdim=True)
+        att_token = self.sn2_q(att_token)
+        carrier_gate = att_token.reshape(B_, self.num_heads, n_tokens, 1)
+
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        sc_gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg, q_event=q_event, k_event=k_event)
+        if cfg.k_consistency_mod:
+            consistency = torch.clamp(scores + 1.0, 0.0, 2.0) / 2.0
+            sc_gate = sc_gate * consistency
+        mu = float(cfg.bipolar_mu)
+        gate = (1.0 - mu) * carrier_gate + mu * sc_gate
+        gate = _maybe_clamp_bipolar_gate(gate, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"sc_ad_deadzone_shiftmax", "h56b"}:
+        # H56b: SC agree/disagree + dead-zone.
+        #
+        # Tokens with |score| < epsilon are treated as "no opinion" and given
+        # uniform 1/N weight. The remaining tokens share (1 - dead_fraction)
+        # of the attention budget via agree/disagree Shiftmax.
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"sc_ad_confidence_shiftmax", "h56c"}:
+        # H56c: SC agree/disagree + dead-zone + confidence gating.
+        #
+        # Low-activity tokens (few channels voting) have their gate regressed
+        # toward 1/N: effective = confidence×gate + (1-confidence)/N.
+        # Confidence = sqrt(active_channels / head_dim).
+        q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+        k_event = _ternary_sign_ste(k_orig)
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg, q_event=q_event, k_event=k_event)
+        row_sum = gate.abs().sum(dim=2)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"sc_ad_confidence_kmod_shiftmax", "h56d"}:
+        # H56d: SC agree/disagree + dead-zone + confidence + K consistency mod.
+        #
+        # Before gating, K is modulated by consistency = clamp(score+1,0,2)/2.
+        # score=+1 → K fully trusted; score=0 → K halved; score=-1 → K zeroed.
+        q_event = _ternary_sign_ste(_qkformer_token_q(q_orig))
+        k_event = _ternary_sign_ste(k_orig)
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg, q_event=q_event, k_event=k_event)
+        row_sum = gate.abs().sum(dim=2)
+        consistency = torch.clamp(scores + 1.0, 0.0, 2.0) / 2.0
+        attn = k_orig.mul(gate * consistency)
+    elif cfg.mode in {"sc_ad_activenorm_shiftmax", "h56e"}:
+        # H56e: SC agree/disagree + active-norm denominator.
+        #
+        # Score is divided by the actual number of active channels instead of
+        # the fixed head_dim=32. Fewer active channels → score magnitude is
+        # naturally penalized without needing explicit confidence gating.
+        scores = _signed_consensus_token_scores(q_orig, k_orig, cfg)
+        scores = _center_token_scores(scores, cfg)
+        gate = _sc_agree_disagree_gate(scores, n_tokens, head_dim, cfg)
+        row_sum = gate.abs().sum(dim=2)
+        attn = k_orig.mul(gate)
     elif cfg.mode in {"ternary_alpha_xnor_shiftmax", "alpha_xnor_shiftmax", "h18a"}:
         # H18a: CVPR 2025 alpha-XNOR-inspired ternary gate.
         #
@@ -1237,6 +1909,17 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "ternary_alpha_xnor_qkselector_shiftmax/h49, "
             "bipolar_qkselector_shiftmax/h54a, tx_bipolar_qkselector_shiftmax/h54b, "
             "dual_channel_qkselector_shiftmax/h51, a2os2a_kasv_shiftmax/h52, "
+            "sc_agree_disagree_shiftmax/h56a, sc_ad_deadzone_shiftmax/h56b, "
+            "sc_ad_confidence_shiftmax/h56c, sc_ad_confidence_kmod_shiftmax/h56d, "
+            "sc_ad_activenorm_shiftmax/h56e, sc_agree_disagree_residual_shiftmax/h56r, "
+            "sc_ad_carrier_blend_shiftmax/h56m, "
+            "tx_sc_residual_selector_shiftmax/h57, tx_sc_late_residual_selector_shiftmax/h58, "
+            "tx_sc_score_residual_shiftmax/h59, "
+            "faps/h61/flow_aligned_popcount_selector, "
+            "h62/nts_conf_residual_shiftmax, "
+            "h60/tx_sc_k_mag_no_carrier_shiftmax, "
+            "ternary_alpha_xnor_local_shiftmax/h59_local, "
+            "sc_ad_confidence_carrier_blend_shiftmax/h56mc, "
             "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_shiftmax_residual/h48, "
             "ternary_alpha_xnor_l1/h18a_l1, "
             "ternary_alpha_xnor_ssa_linear/h42b, ternary_alpha_xnor_ssa_qkv_linear/h42c, "
@@ -1294,6 +1977,10 @@ def install_shiftmax_attention(model: nn.Module, raw_config: dict | None) -> lis
         if not hasattr(module, "_h9_original_forward"):
             module._h9_original_forward = module.forward
         module._h9_shiftmax_cfg = cfg
+        # ── NTX-11: store stage index for per-stage enhancements ──
+        _stage = int(name.split(".")[1]) if name.startswith("layers.") else 0
+        module._h9_stage = _stage
+        # ── end stage index ──
         module.forward = MethodType(_qk_shiftmax_gate_forward, module)
         installed.append(name)
     return installed
@@ -1326,3 +2013,12 @@ def shiftmax_attention_summary(model: nn.Module) -> dict[str, float | int]:
         "gate_mean": sum(gate_means) / len(gate_means),
         "score_mean": sum(score_means) / len(score_means),
     }
+
+
+def set_shiftmax_attention_step(model: nn.Module, step: int) -> int:
+    count = 0
+    for module in model.modules():
+        if hasattr(module, "_h9_shiftmax_cfg"):
+            module._h9_global_step = int(step)
+            count += 1
+    return count

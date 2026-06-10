@@ -468,6 +468,50 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
         self.assertEqual(float(node.update_value), 0.0)
         self.assertEqual(stats["official_atlif_modules"], 1)
 
+    def test_threshold_update_reports_actual_mean_delta_with_module_scales(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node_a = ATLIFTernaryPSN(T=3, base_psn=DummyPSN(T=3), thresh=1.0, sparsity_eta=0.0)
+        node_b = ATLIFTernaryPSN(T=3, base_psn=DummyPSN(T=3), thresh=1.0, sparsity_eta=0.0)
+        node_a.update_value = torch.tensor(1.0)
+        node_b.update_value = torch.tensor(1.0)
+        node_a.threshold_lr_scale = 2.0
+        node_b.threshold_lr_scale = 4.0
+        model = nn.ModuleList([node_a, node_b])
+
+        stats = threshold_update(
+            model,
+            lr=0.5,
+            raw_config={"enabled": True, "threshold_lr_scale": 100.0, "min_threshold": None, "max_threshold": None},
+        )
+
+        self.assertAlmostEqual(float(node_a.thresh.detach()), 2.0, places=6)
+        self.assertAlmostEqual(float(node_b.thresh.detach()), 3.0, places=6)
+        self.assertAlmostEqual(float(stats["effective_update_mean"]), 1.5, places=6)
+
+    def test_threshold_update_freezes_after_configured_global_step(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(T=3, base_psn=DummyPSN(T=3), thresh=1.0, sparsity_eta=0.0)
+        node.update_value = torch.tensor(1.0)
+
+        stats = threshold_update(
+            node,
+            lr=0.5,
+            raw_config={
+                "enabled": True,
+                "threshold_lr_scale": 4.0,
+                "threshold_freeze_after_step": 100,
+                "_global_step": 100,
+                "min_threshold": None,
+                "max_threshold": None,
+            },
+        )
+
+        self.assertAlmostEqual(float(node.thresh.detach()), 1.0, places=6)
+        self.assertAlmostEqual(float(stats["effective_update_mean"]), 0.0, places=6)
+        self.assertEqual(int(stats["threshold_updates_frozen"]), 1)
+
     def test_official_atlif_rejects_ternary_output(self):
         from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
 
@@ -478,6 +522,90 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
                 output_mode="ternary",
                 threshold_mode="official_atlif",
             )
+
+    def test_quantile_guard_slows_update_after_threshold_reaches_distribution_budget(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=1.0,
+            sparsity_eta=1e-3,
+            output_mode="ternary",
+            threshold_mode="symmetric_bsa_tsn",
+            quantile_q=0.5,
+            quantile_momentum=0.0,
+            quantile_guard_margin=0.25,
+            quantile_min_guard=0.0,
+        )
+        x = torch.tensor([[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
+        _ = node(x)
+        before = float(node.thresh.detach())
+
+        stats = threshold_update(
+            node,
+            lr=10.0,
+            raw_config={"enabled": True, "threshold_lr_scale": 1000.0, "min_threshold": None},
+        )
+
+        self.assertEqual(float(node.thresh.detach()), before)
+        self.assertLess(float(stats["quantile_guard_mean"]), 0.01)
+        self.assertGreater(float(stats["raw_update_mean"]), 0.0)
+
+    def test_importance_guard_uses_backward_saliency_without_blocking_gradients(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            sparsity_eta=1e-3,
+            output_mode="binary",
+            threshold_mode="official_atlif",
+            importance_enabled=True,
+            importance_momentum=0.0,
+            importance_scale=10.0,
+            importance_min_guard=0.1,
+        )
+        x = torch.full((3, 4), 0.5, requires_grad=True)
+        out = node(x)
+        loss = (out * 3.0).sum()
+        loss.backward()
+
+        self.assertIsNotNone(x.grad)
+        self.assertGreater(float(x.grad.abs().sum()), 0.0)
+        self.assertGreater(float(node.importance_ema), 0.0)
+        before = float(node.thresh.detach())
+        stats = threshold_update(
+            node,
+            lr=10.0,
+            raw_config={"enabled": True, "threshold_lr_scale": 1.0, "min_threshold": None, "max_threshold": None},
+        )
+
+        self.assertGreater(float(node.thresh.detach()), before)
+        self.assertLess(float(node.thresh.detach()), before + 1e-2)
+        self.assertLess(float(stats["importance_guard_mean"]), 1.0)
+
+    def test_importance_saliency_is_stable_under_global_loss_scaling(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+
+        def run(scale: float) -> float:
+            node = ATLIFTernaryPSN(
+                T=3,
+                base_psn=DummyPSN(T=3),
+                thresh=0.5,
+                sparsity_eta=1e-3,
+                output_mode="binary",
+                threshold_mode="official_atlif",
+                importance_enabled=True,
+                importance_momentum=0.0,
+                importance_scale=10.0,
+            )
+            x = torch.full((3, 4), 0.5, requires_grad=True)
+            (node(x).sum() * scale).backward()
+            return float(node.importance_ema)
+
+        self.assertAlmostEqual(run(1.0), run(100.0), places=5)
 
 
 if __name__ == "__main__":

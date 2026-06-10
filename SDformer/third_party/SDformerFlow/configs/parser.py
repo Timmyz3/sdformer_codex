@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import torch
 import yaml
@@ -96,10 +98,13 @@ class YAMLParser:
         np.random.seed(np.random.get_state()[1][0] + worker_id)
 
     def init_seeds(self):
-        torch.manual_seed(self._config["loader"]["seed"])
-        #if torch.cuda.is_available():
-        #    torch.cuda.manual_seed(self._config["loader"]["seed"])
-        #    torch.cuda.manual_seed_all(self._config["loader"]["seed"])
+        seed = int(self._config["loader"]["seed"])
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
 
     def merge_configs(self, run):
         """

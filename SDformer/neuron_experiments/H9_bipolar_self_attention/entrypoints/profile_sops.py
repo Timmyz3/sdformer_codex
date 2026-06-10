@@ -69,6 +69,10 @@ INIT_PATCH = """    model.to(device)
         installed_h9 = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
         print(f"[H9] installed ATLIFTernaryPSN before profile load: {len(installed_h9)} modules")
         print(f"[H9] neuron summary before profile load: {atlif_ternary_summary(model)}")
+    if config.get("simple_ternary_psn", {}).get("enabled", False):
+        from models.STSwinNet_SNN.simple_ternary_installer import install_simple_ternary_psn
+        installed_st = install_simple_ternary_psn(model, config)
+        print(f"[ST] installed SimpleTernaryPSN before profile load: {len(installed_st)} modules")
     if config.get("bsa_attention", {}).get("enabled", False):
         from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, register_shiftmax_pickle_compat, shiftmax_attention_summary
         register_shiftmax_pickle_compat()

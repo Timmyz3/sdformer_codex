@@ -23,6 +23,7 @@ class ATLIFTernaryPSNConfig:
     threshold_eta: float = 1.0e-3
     threshold_lr_scale: float = 1.0
     threshold_grad_scale: float = 1.0
+    threshold_freeze_after_step: int | None = None
     min_threshold: float | None = 1.0e-3
     max_threshold: float | None = None
     activity_eta: float = 0.0
@@ -37,6 +38,15 @@ class ATLIFTernaryPSNConfig:
     center_mode: str = "zero"
     output_mode: str = "ternary"
     threshold_mode: str = "asymmetric_scale"
+    quantile_q: float | None = None
+    quantile_momentum: float = 0.9
+    quantile_guard_margin: float = 0.25
+    quantile_min_guard: float = 0.0
+    quantile_sample_size: int = 4096
+    importance_enabled: bool = False
+    importance_momentum: float = 0.9
+    importance_scale: float = 0.0
+    importance_min_guard: float = 0.1
     preserve_loaded_threshold: bool = False
     stage_threshold_eta: Any = None
     stage_threshold_lr_scale: Any = None
@@ -66,6 +76,9 @@ def config_from_dict(raw: dict | None) -> ATLIFTernaryPSNConfig:
         threshold_eta=float(raw.get("threshold_eta", 1.0e-3)),
         threshold_lr_scale=float(raw.get("threshold_lr_scale", 1.0)),
         threshold_grad_scale=float(raw.get("threshold_grad_scale", 1.0)),
+        threshold_freeze_after_step=None
+        if raw.get("threshold_freeze_after_step") is None
+        else int(raw.get("threshold_freeze_after_step")),
         min_threshold=None if raw.get("min_threshold") is None else float(raw.get("min_threshold", 1.0e-3)),
         max_threshold=None if raw.get("max_threshold") is None else float(raw.get("max_threshold")),
         activity_eta=float(raw.get("activity_eta", 0.0)),
@@ -82,6 +95,15 @@ def config_from_dict(raw: dict | None) -> ATLIFTernaryPSNConfig:
         center_mode=str(raw.get("center_mode", "zero")),
         output_mode=str(raw.get("output_mode", "ternary")),
         threshold_mode=str(raw.get("threshold_mode", "asymmetric_scale")),
+        quantile_q=None if raw.get("quantile_q") is None else float(raw.get("quantile_q")),
+        quantile_momentum=float(raw.get("quantile_momentum", 0.9)),
+        quantile_guard_margin=float(raw.get("quantile_guard_margin", 0.25)),
+        quantile_min_guard=float(raw.get("quantile_min_guard", 0.0)),
+        quantile_sample_size=int(raw.get("quantile_sample_size", 4096)),
+        importance_enabled=bool(raw.get("importance_enabled", False)),
+        importance_momentum=float(raw.get("importance_momentum", 0.9)),
+        importance_scale=float(raw.get("importance_scale", 0.0)),
+        importance_min_guard=float(raw.get("importance_min_guard", 0.1)),
         preserve_loaded_threshold=bool(raw.get("preserve_loaded_threshold", False)),
         stage_threshold_eta=raw.get("stage_threshold_eta"),
         stage_threshold_lr_scale=raw.get("stage_threshold_lr_scale"),
@@ -218,6 +240,15 @@ def _configure_existing_atlif(module: ATLIFTernaryPSN, cfg: ATLIFTernaryPSNConfi
     module.negative_target_eta = float(cfg.negative_target_eta)
     module.negative_scale_min = cfg.negative_scale_min
     module.negative_scale_max = cfg.negative_scale_max
+    module.quantile_q = cfg.quantile_q
+    module.quantile_momentum = cfg.quantile_momentum
+    module.quantile_guard_margin = cfg.quantile_guard_margin
+    module.quantile_min_guard = cfg.quantile_min_guard
+    module.quantile_sample_size = cfg.quantile_sample_size
+    module.importance_enabled = cfg.importance_enabled
+    module.importance_momentum = cfg.importance_momentum
+    module.importance_scale = cfg.importance_scale
+    module.importance_min_guard = cfg.importance_min_guard
     _apply_threshold_grad_hook(module, cfg.threshold_grad_scale)
 
 
@@ -269,6 +300,15 @@ def _install_on_wrapper(
         center_mode=cfg.center_mode,
         output_mode=cfg.output_mode,
         threshold_mode=cfg.threshold_mode,
+        quantile_q=cfg.quantile_q,
+        quantile_momentum=cfg.quantile_momentum,
+        quantile_guard_margin=cfg.quantile_guard_margin,
+        quantile_min_guard=cfg.quantile_min_guard,
+        quantile_sample_size=cfg.quantile_sample_size,
+        importance_enabled=cfg.importance_enabled,
+        importance_momentum=cfg.importance_momentum,
+        importance_scale=cfg.importance_scale,
+        importance_min_guard=cfg.importance_min_guard,
     ).to(device)
     _apply_threshold_grad_hook(wrapper.spiking_neuron, cfg.threshold_grad_scale)
     return True
@@ -295,6 +335,15 @@ def _config_for_group(base: ATLIFTernaryPSNConfig, group: dict[str, Any]) -> ATL
         "center_mode",
         "output_mode",
         "threshold_mode",
+        "quantile_q",
+        "quantile_momentum",
+        "quantile_guard_margin",
+        "quantile_min_guard",
+        "quantile_sample_size",
+        "importance_enabled",
+        "importance_momentum",
+        "importance_scale",
+        "importance_min_guard",
     ):
         if key in group:
             value = group[key]
@@ -315,8 +364,19 @@ def _config_for_group(base: ATLIFTernaryPSNConfig, group: dict[str, Any]) -> ATL
                 "negative_target_eta",
                 "negative_scale_min",
                 "negative_scale_max",
+                "quantile_q",
+                "quantile_momentum",
+                "quantile_guard_margin",
+                "quantile_min_guard",
+                "importance_momentum",
+                "importance_scale",
+                "importance_min_guard",
             }:
                 overrides[key] = float(value)
+            elif key == "quantile_sample_size":
+                overrides[key] = int(value)
+            elif key == "importance_enabled":
+                overrides[key] = bool(value)
             else:
                 overrides[key] = value
     return replace(base, **overrides)
@@ -404,13 +464,31 @@ def regularize_activity(model: nn.Module, raw_config: dict | None) -> torch.Tens
     return torch.stack(losses).sum()
 
 
+def _apply_positive_update_guard(update_tensor: torch.Tensor, guard: float) -> torch.Tensor:
+    if guard >= 0.999999:
+        return update_tensor
+    guard_tensor = update_tensor.detach().new_tensor(float(guard))
+    return torch.where(update_tensor > 0, update_tensor * guard_tensor, update_tensor)
+
+
 def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> dict[str, float | int]:
     cfg = config_from_dict(raw_config)
     if not cfg.enabled:
         return {"num_modules": 0}
+    global_step = raw_config.get("_global_step") if raw_config else None
+    freeze_after_step = cfg.threshold_freeze_after_step
+    freeze_updates = (
+        freeze_after_step is not None
+        and global_step is not None
+        and int(global_step) >= int(freeze_after_step)
+    )
     updates: list[float] = []
+    raw_updates: list[float] = []
     feedbacks: list[float] = []
     negative_scale_feedbacks: list[float] = []
+    quantile_guards: list[float] = []
+    importance_guards: list[float] = []
+    effective_updates: list[float] = []
     for _, module in iter_atlif_ternary_psn(model):
         update_value = module.update_value
         if isinstance(update_value, Number):
@@ -419,6 +497,21 @@ def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> di
             update_tensor = update_value.detach().to(device=module.thresh.device, dtype=module.thresh.dtype)
         else:
             continue
+        raw_updates.append(float(update_tensor.detach().cpu()))
+        if getattr(module, "quantile_q", None) is not None and getattr(module, "_quantile_initialized", False):
+            theta = float(module.thresh.detach().cpu())
+            q_value = float(getattr(module, "quantile_value", 0.0))
+            margin = max(abs(theta) * float(getattr(module, "quantile_guard_margin", 0.25)), 1.0e-12)
+            guard = (q_value - theta) / margin
+            guard = min(1.0, max(float(getattr(module, "quantile_min_guard", 0.0)), guard))
+            update_tensor = _apply_positive_update_guard(update_tensor, guard)
+            quantile_guards.append(float(guard))
+        if bool(getattr(module, "importance_enabled", False)) and float(getattr(module, "importance_scale", 0.0)) > 0.0:
+            importance = float(getattr(module, "importance_ema", 0.0))
+            guard = 1.0 / (1.0 + float(getattr(module, "importance_scale", 0.0)) * max(0.0, importance))
+            guard = min(1.0, max(float(getattr(module, "importance_min_guard", 0.1)), guard))
+            update_tensor = _apply_positive_update_guard(update_tensor, guard)
+            importance_guards.append(float(guard))
         target_rate = getattr(module, "target_rate", cfg.target_rate)
         target_feedback = 0.0
         official_mode = getattr(module, "threshold_mode", cfg.threshold_mode) == "official_atlif"
@@ -441,7 +534,9 @@ def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> di
         feedbacks.append(float(target_feedback))
         module_scale = getattr(module, "threshold_lr_scale", None)
         threshold_lr_scale = cfg.threshold_lr_scale if module_scale is None else float(module_scale)
-        module.thresh.data = module.thresh.data + update_tensor * float(lr) * float(threshold_lr_scale)
+        before_thresh = module.thresh.detach().clone()
+        if not freeze_updates:
+            module.thresh.data = module.thresh.data + update_tensor * float(lr) * float(threshold_lr_scale)
         min_threshold = getattr(module, "min_threshold", None)
         max_threshold = getattr(module, "max_threshold", None)
         min_threshold = cfg.min_threshold if min_threshold is None else min_threshold
@@ -450,6 +545,7 @@ def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> di
             min_value = -float("inf") if min_threshold is None else float(min_threshold)
             max_value = float("inf") if max_threshold is None else float(max_threshold)
             module.thresh.data.clamp_(min=min_value, max=max_value)
+        effective_updates.append(float((module.thresh.detach() - before_thresh).mean().cpu()))
         negative_target_rate = getattr(module, "negative_target_rate", cfg.negative_target_rate)
         negative_target_eta = float(getattr(module, "negative_target_eta", cfg.negative_target_eta))
         if (
@@ -470,12 +566,18 @@ def threshold_update(model: nn.Module, lr: float, raw_config: dict | None) -> di
             negative_scale_feedbacks.append(float(negative_scale_feedback))
         module.update_value = 0.0
     summary = atlif_ternary_summary(model)
-    summary["raw_update_mean"] = sum(updates) / len(updates) if updates else 0.0
-    summary["effective_update_mean"] = summary["raw_update_mean"] * float(lr) * cfg.threshold_lr_scale
+    summary["raw_update_mean"] = sum(raw_updates) / len(raw_updates) if raw_updates else 0.0
+    summary["guarded_update_mean"] = sum(updates) / len(updates) if updates else 0.0
+    summary["effective_update_mean"] = (
+        sum(effective_updates) / len(effective_updates) if effective_updates else 0.0
+    )
     summary["target_feedback_mean"] = sum(feedbacks) / len(feedbacks) if feedbacks else 0.0
     summary["negative_scale_feedback_mean"] = (
         sum(negative_scale_feedbacks) / len(negative_scale_feedbacks) if negative_scale_feedbacks else 0.0
     )
+    summary["quantile_guard_mean"] = sum(quantile_guards) / len(quantile_guards) if quantile_guards else 1.0
+    summary["importance_guard_mean"] = sum(importance_guards) / len(importance_guards) if importance_guards else 1.0
+    summary["threshold_updates_frozen"] = int(freeze_updates)
     return summary
 
 
@@ -516,6 +618,22 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
     center_modes = [str(getattr(module, "center_mode", "zero")) for _, module in modules]
     negative_target_rates = [
         module.negative_target_rate for _, module in modules if getattr(module, "negative_target_rate", None) is not None
+    ]
+    quantile_modules = [
+        module for _, module in modules if getattr(module, "quantile_q", None) is not None
+    ]
+    importance_modules = [
+        module for _, module in modules if bool(getattr(module, "importance_enabled", False))
+    ]
+    quantile_values = [
+        float(getattr(module, "quantile_value", 0.0))
+        for module in quantile_modules
+        if bool(getattr(module, "_quantile_initialized", False))
+    ]
+    importance_values = [
+        float(getattr(module, "importance_ema", 0.0))
+        for module in importance_modules
+        if bool(getattr(module, "_importance_initialized", False))
     ]
     return {
         "num_modules": len(modules),
@@ -568,4 +686,8 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
         "negative_target_rate_mean": sum(float(value) for value in negative_target_rates) / len(negative_target_rates)
         if negative_target_rates
         else 0.0,
+        "quantile_modules": len(quantile_modules),
+        "quantile_value_mean": sum(quantile_values) / len(quantile_values) if quantile_values else 0.0,
+        "importance_modules": len(importance_modules),
+        "importance_ema_mean": sum(importance_values) / len(importance_values) if importance_values else 0.0,
     }

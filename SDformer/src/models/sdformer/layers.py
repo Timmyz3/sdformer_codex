@@ -81,6 +81,9 @@ def build_upstream_config(cfg: Dict[str, Any], mode: str) -> Dict[str, Any]:
     upstream_cfg["spiking_neuron"]["surrogate_fun"] = model["neuron"]["surrogate_fun"]
     upstream_cfg["spiking_neuron"]["spike_norm"] = "BN" if model["norm"]["type"] == "RMSNorm" else model["norm"]["type"]
 
+    # merge spiking_neuron into model dict (required by upstream STTFlowNet.__init__)
+    upstream_cfg["model"]["spiking_neuron"] = upstream_cfg["spiking_neuron"]
+
     upstream_cfg["optimizer"]["lr"] = optimizer["lr"]
     upstream_cfg["optimizer"]["wd"] = optimizer["weight_decay"]
     upstream_cfg["optimizer"]["scheduler"] = optimizer["scheduler"]

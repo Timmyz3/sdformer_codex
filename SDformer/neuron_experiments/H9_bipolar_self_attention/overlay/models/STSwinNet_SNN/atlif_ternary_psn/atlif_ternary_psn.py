@@ -114,6 +114,15 @@ class ATLIFTernaryPSN(nn.Module):
         center_mode: str = "zero",
         output_mode: str = "ternary",
         threshold_mode: str = "asymmetric_scale",
+        quantile_q: float | None = None,
+        quantile_momentum: float = 0.9,
+        quantile_guard_margin: float = 0.25,
+        quantile_min_guard: float = 0.0,
+        quantile_sample_size: int = 4096,
+        importance_enabled: bool = False,
+        importance_momentum: float = 0.9,
+        importance_scale: float = 0.0,
+        importance_min_guard: float = 0.1,
     ) -> None:
         super().__init__()
         self.T = int(T)
@@ -148,6 +157,20 @@ class ATLIFTernaryPSN(nn.Module):
         self.negative_target_eta = float(negative_target_eta)
         self.negative_scale_min = negative_scale_min
         self.negative_scale_max = negative_scale_max
+        self.quantile_q = None if quantile_q is None else float(quantile_q)
+        self.quantile_momentum = float(quantile_momentum)
+        self.quantile_guard_margin = float(quantile_guard_margin)
+        self.quantile_min_guard = float(quantile_min_guard)
+        self.quantile_sample_size = int(quantile_sample_size)
+        self.quantile_value = 0.0
+        self._quantile_initialized = False
+        self.importance_enabled = bool(importance_enabled)
+        self.importance_momentum = float(importance_momentum)
+        self.importance_scale = float(importance_scale)
+        self.importance_min_guard = float(importance_min_guard)
+        self.importance_ema = 0.0
+        self.importance_last = 0.0
+        self._importance_initialized = False
         self.r = 0.0
         self.pos_r = 0.0
         self.neg_r = 0.0
@@ -171,6 +194,20 @@ class ATLIFTernaryPSN(nn.Module):
         h_seq = torch.addmm(self.bias, self.weight, x_seq.flatten(1))
         if self.center_mode != "zero":
             h_seq = h_seq - self.center.to(device=h_seq.device, dtype=h_seq.dtype)
+        if self.quantile_q is not None:
+            with torch.no_grad():
+                values = h_seq.detach().abs().float().reshape(-1)
+                if self.quantile_sample_size > 0 and values.numel() > self.quantile_sample_size:
+                    stride = max(1, values.numel() // self.quantile_sample_size)
+                    values = values[::stride][: self.quantile_sample_size]
+                q = torch.quantile(values, self.quantile_q)
+                q_value = float(q.detach().cpu())
+                if not self._quantile_initialized:
+                    self.quantile_value = q_value
+                    self._quantile_initialized = True
+                else:
+                    momentum = min(max(self.quantile_momentum, 0.0), 1.0)
+                    self.quantile_value = momentum * self.quantile_value + (1.0 - momentum) * q_value
         if self.output_mode == "ternary":
             negative_scale = 1.0 if self.threshold_mode in {"symmetric_bsa_tsn", "symmetric_target_rate"} else self.negative_threshold_scale
             spike, thre_updates = self.act(h_seq, self.thresh, self.sp, negative_scale)
@@ -188,6 +225,24 @@ class ATLIFTernaryPSN(nn.Module):
             self.pos_r = ternary.gt(0).float().mean().item()
             self.neg_r = ternary.lt(0).float().mean().item()
         self.act_value = out.abs().reshape(out.size(0), -1).mean(1).sum()
+        if self.importance_enabled and out.requires_grad:
+            activation = out.detach()
+
+            def _capture_importance(grad: torch.Tensor) -> torch.Tensor:
+                with torch.no_grad():
+                    grad_abs_mean = grad.detach().float().abs().mean().clamp_min(1.0e-12)
+                    saliency = (activation.float() * grad.detach().float()).abs().mean() / grad_abs_mean
+                    value = float(saliency.detach().cpu())
+                    self.importance_last = value
+                    if not self._importance_initialized:
+                        self.importance_ema = value
+                        self._importance_initialized = True
+                    else:
+                        momentum = min(max(self.importance_momentum, 0.0), 1.0)
+                        self.importance_ema = momentum * self.importance_ema + (1.0 - momentum) * value
+                return grad
+
+            out.register_hook(_capture_importance)
         return out
 
     def extra_repr(self) -> str:

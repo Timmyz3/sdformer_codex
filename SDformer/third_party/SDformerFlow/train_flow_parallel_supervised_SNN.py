@@ -3,6 +3,7 @@ import mlflow
 import os
 import time
 import torch
+import torchvision  # must import before cupy to avoid circular import
 from torch.optim import *
 from configs.parser import YAMLParser
 from loss.flow_supervised import *
