@@ -159,6 +159,34 @@ def _target_names(target: str) -> tuple[str, ...]:
     raise ValueError("target must be qk, q, k, none, or custom")
 
 
+def _is_qk_attention_path(path: str) -> bool:
+    """Paths reserved for ternary Q/K expressiveness; everything else can be binary ATLIF."""
+    return path.endswith(".sn_q") or path.endswith(".sn_k") or path.endswith(".sn2_q")
+
+
+def iter_non_qk_spiking_neuron_paths(
+    model: nn.Module,
+    seen: set[str] | None = None,
+    *,
+    exclude_path_prefixes: tuple[str, ...] | list[str] = (),
+) -> list[str]:
+    """Return all Spiking_neuron wrapper paths except attention Q/K (and already-installed paths)."""
+    skip = seen or set()
+    prefixes = tuple(str(prefix) for prefix in exclude_path_prefixes)
+    paths: list[str] = []
+    for name, module in model.named_modules():
+        if module.__class__.__name__ != "Spiking_neuron":
+            continue
+        if _is_qk_attention_path(name):
+            continue
+        if name in skip:
+            continue
+        if prefixes and any(name.startswith(prefix) for prefix in prefixes):
+            continue
+        paths.append(name)
+    return sorted(paths)
+
+
 def _get_module_by_path(model: nn.Module, path: str) -> nn.Module:
     modules = dict(model.named_modules())
     if path not in modules:
@@ -408,9 +436,20 @@ def install_atlif_ternary_psn(model: nn.Module, raw_config: dict | None) -> list
         installed.append(path)
     for group_index, group in enumerate(cfg.target_groups):
         group_cfg = _config_for_group(cfg, group)
-        paths = group.get("paths", ())
-        if isinstance(paths, str):
-            paths = [paths]
+        path_selection = str(group.get("path_selection", "")).strip()
+        if path_selection == "all_non_qk":
+            exclude_prefixes = group.get("exclude_path_prefixes", ())
+            if isinstance(exclude_prefixes, str):
+                exclude_prefixes = [exclude_prefixes]
+            paths = iter_non_qk_spiking_neuron_paths(
+                model,
+                seen,
+                exclude_path_prefixes=tuple(str(prefix) for prefix in exclude_prefixes),
+            )
+        else:
+            paths = group.get("paths", ())
+            if isinstance(paths, str):
+                paths = [paths]
         for path in paths:
             path = str(path)
             if path in seen:

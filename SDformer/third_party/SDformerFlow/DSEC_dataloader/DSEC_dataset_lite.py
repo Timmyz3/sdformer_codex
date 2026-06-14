@@ -82,7 +82,26 @@ class DSECDatasetLite(Dataset):
             #     break
             file_list = file_list+"_split_seq.csv"
             sequence_file = os.path.join(self.config['data']['path'], 'sequence_lists', file_list)
-        self.files = pd.read_csv(sequence_file, header=None)
+        import csv
+        rows = []
+        with open(sequence_file, newline='') as f:
+            for row in csv.reader(f):
+                if row:  # skip empty lines
+                    rows.append(row)
+        # Simple list-of-lists wrapper with iloc compatibility
+        class _CSVList:
+            def __init__(self, data): self._data = data
+            def __len__(self): return len(self._data)
+            def __getitem__(self, idx):
+                if isinstance(idx, tuple):
+                    return self._data[idx[0]][idx[1]]
+                return self._data[idx]
+            @property
+            def iloc(self): return _ILoc(self._data)
+        class _ILoc:
+            def __init__(self, data): self._data = data
+            def __getitem__(self, idx): return self._data[idx[0]][idx[1]]
+        self.files = _CSVList(rows)
         self.transform = transform
 
     def __len__(self):

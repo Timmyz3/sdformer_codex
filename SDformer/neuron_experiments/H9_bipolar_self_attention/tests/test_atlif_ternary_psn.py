@@ -131,6 +131,82 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
         stats = apply_trainable_mode(model, {"trainable": "threshold_only"})
         self.assertEqual(stats["trainable_parameters"], 4)
 
+    def test_installer_all_non_qk_binary_group(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, install_atlif_ternary_psn
+
+        model = DummyModel()
+        extra_sn = type("Spiking_neuron", (DummyWrapper,), {})()
+        model.sttmultires_unet.extra_sn = extra_sn
+
+        installed = install_atlif_ternary_psn(
+            model,
+            {
+                "enabled": True,
+                "stage_selection": "all",
+                "target": "qk",
+                "output_mode": "ternary",
+                "threshold_mode": "symmetric_bsa_tsn",
+                "target_groups": [
+                    {
+                        "name": "all_non_qk_binary",
+                        "path_selection": "all_non_qk",
+                        "output_mode": "binary",
+                        "threshold_mode": "official_atlif",
+                        "center_mode": "zero",
+                    }
+                ],
+            },
+        )
+
+        self.assertTrue(any("extra_sn" in item for item in installed))
+        qk = model.sttmultires_unet.encoders.swin3d.layers[0].swin_blocks[0].attn.sn_q.spiking_neuron
+        non_qk = model.sttmultires_unet.extra_sn.spiking_neuron
+        self.assertIsInstance(qk, ATLIFTernaryPSN)
+        self.assertEqual(qk.output_mode, "ternary")
+        self.assertIsInstance(non_qk, ATLIFTernaryPSN)
+        self.assertEqual(non_qk.output_mode, "binary")
+        self.assertEqual(non_qk.threshold_mode, "official_atlif")
+
+    def test_installer_all_non_qk_respects_exclude_prefixes(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, install_atlif_ternary_psn
+
+        SpikingNeuron = type("Spiking_neuron", (DummyWrapper,), {})
+
+        class DummyDecoderHead(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.sn = SpikingNeuron()
+
+        model = DummyModel()
+        model.sttmultires_unet.decoders = nn.ModuleList([DummyDecoderHead()])
+        model.sttmultires_unet.extra_sn = SpikingNeuron()
+
+        installed = install_atlif_ternary_psn(
+            model,
+            {
+                "enabled": True,
+                "stage_selection": "all",
+                "target": "qk",
+                "output_mode": "ternary",
+                "threshold_mode": "symmetric_bsa_tsn",
+                "target_groups": [
+                    {
+                        "name": "encoder_only_binary",
+                        "path_selection": "all_non_qk",
+                        "exclude_path_prefixes": ["sttmultires_unet.decoders."],
+                        "output_mode": "binary",
+                        "threshold_mode": "official_atlif",
+                        "center_mode": "zero",
+                    }
+                ],
+            },
+        )
+
+        self.assertTrue(any("extra_sn" in item for item in installed))
+        self.assertFalse(any("decoders.0.sn" in item for item in installed))
+        self.assertIsInstance(model.sttmultires_unet.decoders[0].sn.spiking_neuron, DummyPSN)  # still vanilla
+        self.assertIsInstance(model.sttmultires_unet.extra_sn.spiking_neuron, ATLIFTernaryPSN)
+
     def test_installer_applies_stage_overrides(self):
         from models.STSwinNet_SNN.atlif_ternary_psn import install_atlif_ternary_psn
 

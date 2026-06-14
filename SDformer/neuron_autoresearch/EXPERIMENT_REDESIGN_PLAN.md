@@ -6517,3 +6517,18 @@ valid825 ep29：AEE=**1.480**, AAE=**9.64°**, 38.98G（-11.5%）。
 如需再跑实验，应单条命令前台或一条 nohup 启动，避免并行多个 watcher/screen。
 
 **关于 "retrying"**：此前异常来自 agent 工具层（后台 `&` 与 `block_until_ms` 冲突、偶发路径读失败后的重试），**不是 `conda activate sdformerflow` 或训练环境故障**。环境已验证：`pandas 2.3.3` 正常。后续执行规范：一次命令、先查 PID 再启动、避免重复 nohup。
+
+
+### NTS-10d S23 full30 宕机续训 + valid825（自动追加）
+
+- 时间：`2026-06-11T10:30:59`
+- 短测目录：`/root/private_data/work/sdformer_codex/SDformer/neuron_experiments/H9_bipolar_self_attention/results/nts10_blocks_20260610_141114`
+- 全量配置：`/root/private_data/work/sdformer_codex/SDformer/neuron_experiments/H9_bipolar_self_attention/configs/nts10d_hw_h60_s23_freeze1224_s1224_steps1224_auto_full_20260610_151207.yml`
+- 全量目录：`/root/private_data/work/sdformer_codex/SDformer/neuron_experiments/H9_bipolar_self_attention/results/nts10d_hw_h60_s23_freeze1224_s1224_steps1224_auto_full_bs6_20260610_151207_setsid`
+- 方法：NTS09e freeze1224 基座，S2+S3（8 block）扩大替换。
+
+| epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 19 | 1.5922 | 10.2966 | 0.5353 | 0.2155 | 0.1062 | 41.2055G | 8.8944% | 33772.15 |
+| 24 | 1.4624 | 9.8079 | 0.5089 | 0.1817 | 0.0808 | 41.1386G | 8.8800% | 33799.99 |
+| 29 | 1.4781 | 9.6899 | 0.5118 | 0.1902 | 0.0874 | 39.2954G | 8.4821% | 32301.37 |
