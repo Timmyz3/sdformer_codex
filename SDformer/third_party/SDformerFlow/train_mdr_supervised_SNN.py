@@ -1,4 +1,5 @@
 import os,sys
+import time
 prjt_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(prjt_path)
 import argparse
@@ -27,6 +28,20 @@ from MDR_dataloader.MDR import MDREventFlow
 
 
 use_ml_flow = True
+
+
+def _env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name):
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return None
+    return int(value)
 
 def train(args, config_parser):
     ########## configs ##########
@@ -190,6 +205,17 @@ def train(args, config_parser):
 
     best_loss = 1.0e6
     grads_w = []
+    detect_anomaly = _env_flag("SDFORMER_MDR_DETECT_ANOMALY", True)
+    max_train_batches = _env_int("SDFORMER_MDR_MAX_TRAIN_BATCHES")
+    max_valid_batches = _env_int("SDFORMER_MDR_MAX_VALID_BATCHES")
+    skip_validation = _env_flag("SDFORMER_MDR_SKIP_VALIDATION", False)
+    print(
+        "[MDR runtime] "
+        f"detect_anomaly={detect_anomaly}, "
+        f"max_train_batches={max_train_batches}, "
+        f"max_valid_batches={max_valid_batches}, "
+        f"skip_validation={skip_validation}"
+    )
 
     # training loop
 
@@ -199,9 +225,10 @@ def train(args, config_parser):
         model.train()
         sample = 0
         train_loss = 0.
+        train_loop_start = time.monotonic()
         # spiking_rates = collections.defaultdict(list)
         for data in tqdm(train_dataloader):
-            torch.autograd.set_detect_anomaly(True)
+            torch.autograd.set_detect_anomaly(detect_anomaly)
 
             functional.reset_net(model)
             functional.set_step_mode(model, config['data']['step_mode']) #layer-by-layer
@@ -320,6 +347,9 @@ def train(args, config_parser):
 
             # print training info
             sample += 1
+            if max_train_batches is not None and sample >= max_train_batches:
+                print(f"[MDR runtime] stopping epoch after {sample} train batches")
+                break
 
 
         # save grads to file
@@ -328,6 +358,15 @@ def train(args, config_parser):
             grads_w = []
 
         epoch_loss = train_loss / sample
+        train_loop_elapsed = time.monotonic() - train_loop_start
+        train_samples = sample * config["loader"]["batch_size"]
+        print(
+            "[MDR runtime] "
+            f"train_loop_elapsed_s={train_loop_elapsed:.3f}, "
+            f"train_batches={sample}, "
+            f"train_samples={train_samples}, "
+            f"train_samples_per_s={train_samples / train_loop_elapsed:.3f}"
+        )
         print(f'Epoch loss = {epoch_loss}')
 
 
@@ -337,14 +376,14 @@ def train(args, config_parser):
         # save model
         with torch.no_grad():
             if epoch_loss < best_loss:
-                save_model(model)
+                save_model(model, epoch=epoch)
                 save_state_dict(optimizer, scheduler, scaler, epoch)
                 best_loss = epoch_loss
 
 
         #####validate after each 5 epoch############
         # Validation Dataset
-        if epoch % config["test"]["n_valid"] == 0:
+        if (not skip_validation) and epoch % config["test"]["n_valid"] == 0:
             sample = 0
             model.eval()
             epoch_loss_valid = 0.
@@ -435,6 +474,9 @@ def train(args, config_parser):
 
                     epoch_loss_valid += total_loss.item() * config["loader"]["batch_size"]
                     sample += 1
+                    if max_valid_batches is not None and sample >= max_valid_batches:
+                        print(f"[MDR runtime] stopping validation after {sample} batches")
+                        break
 
 
             epoch_loss_valid = epoch_loss_valid/sample

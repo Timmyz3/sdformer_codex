@@ -409,7 +409,10 @@ def valid_test(args, config_parser):
 
 
 
+    max_samples = int(getattr(args, "max_samples", 0) or 0)
     for chunk, mask, label in tqdm(valid_dataloader):
+        if max_samples > 0 and sample >= max_samples:
+            break
 
         functional.reset_net(model)
 
@@ -655,6 +658,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--path_results", default="results_inference/")
     parser.add_argument("--mode", default="valid")
+    parser.add_argument("--max-samples", type=int, default=0, help="optional cap for quick valid smoke tests")
 
     args = parser.parse_args()
 

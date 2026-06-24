@@ -92,6 +92,7 @@ def load_checkpoint_with_h9_audit(
         return model
 
     overlay_checkpoint_keys = [key for key in pretrained_dict if is_h9_overlay_key(key)]
+    overlay_model_keys = [key for key in model.state_dict() if is_h9_overlay_key(key)]
     h9_enabled = config_requires_h9_overlay(config)
     if overlay_checkpoint_keys and not h9_enabled:
         raise RuntimeError(
@@ -99,9 +100,9 @@ def load_checkpoint_with_h9_audit(
             "ATLIF/BSA/simple ternary modules; this requires an H9 config. "
             f"Example keys: {overlay_checkpoint_keys[:8]}"
         )
-    if h9_enabled and not overlay_checkpoint_keys:
+    if overlay_model_keys and not overlay_checkpoint_keys:
         raise RuntimeError(
-            "Config enables H9 overlay modules but checkpoint does not contain H9 overlay "
+            "Model contains stateful H9 overlay modules but checkpoint does not contain H9 overlay "
             f"parameters: {checkpoint}"
         )
 
@@ -112,7 +113,7 @@ def load_checkpoint_with_h9_audit(
     overlay_unexpected = [key for key in unexpected if is_h9_overlay_key(key)]
     print(
         f"[H9] load audit: checkpoint_overlay_keys={len(overlay_checkpoint_keys)}, "
-        f"missing={len(missing)}, unexpected={len(unexpected)}"
+        f"model_overlay_keys={len(overlay_model_keys)}, missing={len(missing)}, unexpected={len(unexpected)}"
     )
     if missing:
         print(f"[H9] missing keys sample: {missing[:12]}")

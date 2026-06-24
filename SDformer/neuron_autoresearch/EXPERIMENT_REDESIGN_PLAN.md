@@ -6518,6 +6518,201 @@ valid825 ep29：AEE=**1.480**, AAE=**9.64°**, 38.98G（-11.5%）。
 
 **关于 "retrying"**：此前异常来自 agent 工具层（后台 `&` 与 `block_until_ms` 冲突、偶发路径读失败后的重试），**不是 `conda activate sdformerflow` 或训练环境故障**。环境已验证：`pandas 2.3.3` 正常。后续执行规范：一次命令、先查 PID 再启动、避免重复 nohup。
 
+### 38.10 NTS-11 代码/链路/硬件审阅记录（2026-06-15）
+
+本次审阅对象：`NTS-11bd / 11bd-v2 / 11bj`，重点检查加载链路、神经元/注意力范式混合、以及是否存在“指标好但硬件代价被低估”的问题。
+
+**加载链路结论**
+
+- `nts11bd_u12_ds_w720_fastlr_full30_20260613_223042_bs8_20260613_223042_setsid` 训练从 NB0 加载时：
+  - `installed ATLIFTernaryPSN: 105 modules`
+  - `installed Shiftmax attention: 12 modules`
+  - `checkpoint_overlay_keys=0, missing=210, unexpected=0`
+  - 这是预期状态：NB0 没有 overlay 参数，210 个 ATLIF `thresh/center` 由安装器初始化。
+- 该 run 的 valid825 评估日志显示：
+  - `checkpoint_overlay_keys=210, missing=0, unexpected=0`
+  - 说明保存后的 NTS-11 权重能被标准 eval 正确加载，不是 baseline config 误评。
+- `runtime.skip_state_save=false` 已在 full/fine-tune 配置中生效，目录中存在 `checkpoint_epoch*_state_dict.pth`，后续可正规 resume。
+
+**发现并修复的小问题**
+
+- `11bd-v2` 生成器把 5ep fine-tune 的 `force_save_epochs` 写成 `[0, 2, 4, 5]`，但 baseline 训练循环 `range(0, n_epochs)` 实际只会保存 `epoch0..4`。
+- `run_nts11bj_full_ft_valid825.sh` 也请求了 `--epoch 5`。评估脚本会跳过不存在的 checkpoint，因此不会污染已有指标，但记录容易误导。
+- 已修正：
+  - `make_nts11bd_v2_tune_configs.py`: 5ep 改为保存 `[0, 2, 4]`
+  - `run_nts11bj_full_ft_valid825.sh`: valid825 改为评估 `epoch0..4`
+  - 已生成的 `nts11bj_u12_ds_w720_stdlr_ftbd19_ft5.yml`: 删除残留的 `force_save_epochs: 5`
+  - `run_h9_standard_valid825_eval.py`: 对缺失 checkpoint 增加 `skipped missing checkpoints` 提示，避免静默跳过造成误判
+
+**范式混合与硬件口径风险**
+
+- `NTS-11bd` 是 **unified all12 H60 attention**：
+  - attention 替换范围从 NTS07/09 的 S2-only 6 block 扩大到 S0/S1/S2/S3 全 12 block。
+  - 这有利于讲“整个 encoder 统一范式”，但不是低代价改动；attention 控制逻辑数量约翻倍。
+- `NTS-11bd u12_ds` 的神经元安装规模为：
+  - 27 个 ternary `symmetric_bsa_tsn` 模块：24 个 Q/K + 3 个 downsample
+  - 78 个 binary `official_atlif` 模块：由 `all_non_qk` 自动覆盖，包含 resblocks/decoders 等非 Q/K spiking neuron
+  - 总计 105 个 ATLIF 模块，明显大于 NTS07/09 的 34 模块。
+- 因此 NTS-11 的硬件叙事不能只说“total_spikes 下降”。还必须额外报告：
+  - Shiftmax attention modules: `12`
+  - ATLIF modules: `105`
+  - ternary modules: `27`
+  - binary official ATLIF modules: `78`
+  - eval/training wall-time 或至少说明控制逻辑面积显著增加
+
+**当前 NTS-11bd 结果定位**
+
+- `NTS-11bd u12_ds fastlr` valid825 最佳为 epoch19：
+  - AEE `1.5647`
+  - AAE `9.9213`
+  - total_spikes `29.1676G`
+  - 相对 NB0 `44.0488G` 约 `-33.8%`
+- 精度在 baseline 约 5% 误差内，稀疏明显达标；但硬件面积/控制复杂度不如 NTS07/09 简洁。
+- 它适合作为“统一 encoder attention + 更强稀疏”的候选，但若投 DATE，必须把面积复杂度讲清楚，不能只按 spike 数声称更硬件友好。
+
+**当前正在跑的 11bj**
+
+- `nts11bj_u12_ds_w720_stdlr_ftbd19_ft5` 是从 `NTS-11bd epoch19` 权重加载后做 5ep fine-tune。
+- 训练命令使用 `--prev_runid checkpoint_epoch19.pth`，不是 `--resume`，因此这是 **weight-only fine-tune**，不是 optimizer/scheduler/scaler 的严格续训。
+- 当前 valid825 正在评估 `epoch0..4`；已完成 epoch0：
+  - AEE `1.5571`
+  - AAE `10.1128`
+  - total_spikes `29.6176G`
+  - firing `6.4006%`
+  - energy `23492.38uJ`
+- epoch0 相比 11bd ep19 AEE 略好（`1.5571` vs `1.5647`），但 AAE 更差（`10.1128` vs `9.9213`），且 spikes 更高（`29.62G` vs `29.17G`）。需等 epoch1..4 完整结果再判断是否值得保留；如果只能小幅改善 AEE/AAE，但保持 105 ATLIF + 12 attention，那么论文主线仍需谨慎。
+
+**11bj valid825 完整结果（已完成）**
+
+标准推理目录：`results/nts11bj_u12_ds_w720_stdlr_ftbd19_ft5_bs8_20260614_233224_setsid/standard_valid825`。该 run 已完成 `epoch0..4` 的标准 valid825，`profile_ranking_valid825.md` 已生成。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5159 | 9.9611 | 0.5203 | 0.1954 | 0.0912 | 29.0414G | 6.2761% | 23032.66 |
+| 2 | 4 | 1.5218 | 9.7917 | 0.5154 | 0.1981 | 0.0941 | 29.0964G | 6.2880% | 23178.42 |
+| 3 | 0 | 1.5571 | 10.1128 | 0.5245 | 0.2031 | 0.0973 | 29.6176G | 6.4006% | 23492.38 |
+| 4 | 3 | 1.5592 | 10.1564 | 0.5286 | 0.2038 | 0.0967 | 31.0770G | 6.7160% | 24599.59 |
+| 5 | 1 | 1.5915 | 10.3802 | 0.5368 | 0.2105 | 0.1009 | 30.5921G | 6.6112% | 24222.91 |
+
+相对 `NTS11bd ep19`（AEE `1.5647` / AAE `9.9213` / `29.1676G` / `23108.92uJ`）：
+
+- `11bj ep2` 明显改善 AEE（`1.5159`），AAE 基本同级（`9.9611`），spikes/energy 略低（`29.0414G` / `23032.66uJ`）。按综合 ranking 选 ep2。
+- `11bj ep4` AAE 最好（`9.7917`），AEE 也接近 ep2（`1.5218`），spikes/energy 略高。若论文更重视方向角，可同时报告 ep4。
+- 结论：11bj 不是无效 fine-tune；它把 NTS11 的 best AEE 从 `1.5647` 拉到 `1.5159`，且维持约 `-34%` spikes / `-39%` energy。NTS11 作为 full-network unified hardware 主线更有支撑。
+
+### 38.11 DATE11 全量替换消融矩阵（2026-06-15）
+
+目的：暂时不讨论 S2/S23/all12 替换范围，先固定为 **full all12 attention scope**，按 DATE 论文需要拆开两个正交机制：
+
+1. 神经元：`PSN` / `all_binary_atlif` / `all_ternary_atlif`
+2. 注意力：`original` / `TX` / `SC` / `TXSC(NTS/H60)`
+
+生成器：
+
+```text
+neuron_experiments/H9_bipolar_self_attention/entrypoints/make_date11_full_factorial_configs.py
+```
+
+manifest：
+
+```text
+neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_full_factorial_manifest.json
+```
+
+共同训练口径：
+
+- `prev_runid`: `experiments/baseline_stride_upstream/checkpoint_epoch59.pth`
+- `loader.n_epochs=30`, `batch_size=8`
+- `warmup=720`, fastlr recipe, `threshold_freeze_after_step=1224`
+- standard valid825 评估 epoch: `9/14/19/24/28/29`
+- 每个结果必须检查：
+  - `ATLIFTernaryPSN count`
+  - `Shiftmax attention count`
+  - `checkpoint_overlay_keys`
+  - `missing=0, unexpected=0`（从自身 checkpoint 做 valid825 时）
+
+#### 主矩阵与优先级
+
+| 优先级 | 实验 | 神经元 | Attention | 预期 ATLIF | 预期 Shiftmax | 状态 | 配置 / 结果 |
+|---|---|---|---|---:|---:|---|---|
+| P0 | NB0 | PSN | original | 0 | 0 | 已跑 | `results_inference/nb0_baseline_epoch59_valid825_fixed_eval_20260601_140852`：AEE `1.4872`, AAE `9.9300`, total_spikes `44.0488G` |
+| Main | NTS11 best/main ref | mixed: 27 ternary + 78 binary ATLIF | NTS/H60 all12 | 105 | 12 | **已跑完，当前主线参考** | `NTS11bl ep4`: AEE `1.4956`, AAE `9.7167`, total_spikes `29.3567G`, energy `23440.75uJ`; deploy 等价 checkpoint 用 `NTS11bj ep2`: AEE `1.5159`, AAE `9.9611`, total_spikes `29.0414G`, energy `23032.66uJ` |
+| P0 | binary ATLIF only | all binary ATLIF | original | 105 | 0 | **已跑完** | config: `configs/generated/date11full_all_binary_atlif_original_w720_fastlr_full30.yml`; run: `results/date11full_all_binary_atlif_original_w720_fastlr_full30_bs8_20260615_214142_setsid`; best rank ep29: AEE `1.5900`, AAE `9.9413`, total_spikes `22.9163G`, energy `20166.57uJ` |
+| P0 | ternary ATLIF only | all ternary ATLIF | original | 105 | 0 | **已跑完，负例** | config: `configs/generated/date11full_all_ternary_atlif_original_w720_fastlr_full30.yml`; run: `results/date11full_all_ternary_atlif_original_w720_fastlr_full30_bs8_20260615_220540_setsid`; best rank ep29: AEE `3.2733`, AAE `18.4266`, total_spikes `79.3630G`, energy `67644.66uJ` |
+| P0 | ternary + TX | all ternary ATLIF | TX (`ternary_alpha_xnor_shiftmax`) | 105 | 12 | **已跑完，负例** | config: `configs/generated/date11full_all_ternary_atlif_tx_w720_fastlr_full30.yml`; run: `results/date11full_all_ternary_atlif_tx_w720_fastlr_full30_bs8_20260616_022014_setsid`; best rank ep29: AEE `3.2885`, AAE `18.6194`, total_spikes `79.0967G`, energy `67486.37uJ` |
+| P0 | ternary + SC | all ternary ATLIF | SC (`signed_consensus_shiftmax`) | 105 | 12 | **已跑完，负例** | config: `configs/generated/date11full_all_ternary_atlif_sc_w720_fastlr_full30.yml`; run: `results/date11full_all_ternary_atlif_sc_w720_fastlr_full30_bs8_20260616_121203_setsid`; best rank ep29: AEE `3.2706`, AAE `18.2325`, total_spikes `80.1816G`, energy `68346.52uJ` |
+| P0 | ternary + TXSC/NTS | all ternary ATLIF | NTS/H60 | 105 | 12 | **已跑完，负例** | config: `configs/generated/date11full_all_ternary_atlif_nts_w720_fastlr_full30.yml`; run: `results/date11full_all_ternary_atlif_nts_w720_fastlr_full30_bs8_20260617_033508_setsid`; best rank ep29: AEE `3.2809`, AAE `18.3304`, total_spikes `80.0070G`, energy `68269.43uJ` |
+| P1 | binary + TX | all binary ATLIF | TX | 105 | 12 | **已跑完** | config: `configs/generated/date11full_all_binary_atlif_tx_w720_fastlr_full30.yml`; run: `results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid`; best rank ep19: AEE `1.5831`, AAE `9.9381`, total_spikes `22.4706G`, energy `19780.93uJ` |
+| P1 | binary + SC | all binary ATLIF | SC | 105 | 12 | **已跑完** | config: `configs/generated/date11full_all_binary_atlif_sc_w720_fastlr_full30.yml`; run: `results/date11full_all_binary_atlif_sc_w720_fastlr_full30_bs8_20260617_160046_setsid`; best rank ep19: AEE `1.5815`, AAE `9.9454`, total_spikes `22.6911G`, energy `20009.89uJ`; eval audit: ATLIF `105`, Shiftmax `12`, `checkpoint_overlay_keys=210, missing=0, unexpected=0` |
+| P1 | binary + TXSC/NTS | all binary ATLIF | NTS/H60 | 105 | 12 | **已跑完** | config: `configs/generated/date11full_all_binary_atlif_nts_w720_fastlr_full30.yml`; run: `results/date11full_all_binary_atlif_nts_w720_fastlr_full30_bs8_20260617_200451_setsid`; best rank ep19: AEE `1.5800`, AAE `9.9255`, total_spikes `22.7684G`, energy `20095.94uJ`; pipeline summary shows ATLIF `105`, Shiftmax `12`; valid825 append audit line has a stale `Shiftmax=0` count and should not be used for the table |
+| P2 | PSN + TX | PSN | TX | 0 | 12 | **训练已完成，valid825 待修审计后补跑** | config: `configs/generated/date11full_psn_tx_w720_fastlr_full30.yml`; run: `results/date11full_psn_tx_w720_fastlr_full30_bs8_20260618_011517_setsid`; train full30 completed; standard valid825 failed at epoch9 because attention-only PSN checkpoint has no ATLIF overlay keys and current H9 load audit rejects it |
+| P2 | PSN + SC | PSN | SC | 0 | 12 | 已生成，低优先级 | `configs/generated/date11full_psn_sc_w720_fastlr_full30.yml` |
+| P2 | PSN + TXSC/NTS | PSN | NTS/H60 | 0 | 12 | **已跑完（仅 ep29 valid825）** | config: `configs/generated/date11full_psn_nts_w720_fastlr_full30.yml`; run: `results/date11full_psn_nts_w720_fastlr_full30_bs8_20260618_073920_setsid`; ep29: AEE `1.5390`, AAE `10.0527`, total_spikes `44.3434G`, energy `38004.71uJ`; 其他标准点 checkpoint 已缺失，未评估 |
+
+#### 跑法建议
+
+P0 先跑，P1 视 P0 结果决定是否需要全跑。P2 只在 reviewer 要求“attention-only without ATLIF”时再跑，因为 PSN + TX/SC/NTS 的硬件定义不如 ATLIF 事件化输入干净。
+
+推荐分工：
+
+1. 本机：`binary ATLIF only`，先证明 ATLIF 本身是否足以降 spikes。
+2. 另一台服务器：`ternary ATLIF only` 或 `ternary + TX`，用于打开 attention 机制对照。
+3. 如果 P0 中 `ternary+TX/SC/NTS` 全部明显劣于 NTS11bl，论文表中保留它们作为 DATE mechanism ablation，不继续扩 P1。
+
+当前接棒安排（2026-06-16）：本机 `binary ATLIF only` 已完成 full30 + standard valid825，并已触发 `ternary + TX`。`ternary + TX` 当前运行目录为 `results/date11full_all_ternary_atlif_tx_w720_fastlr_full30_bs8_20260616_022014_setsid`。
+
+`binary ATLIF only` 结论：spikes/energy 降幅非常强（相对 NB0 total_spikes 约 `-48.0%`，energy 约 `-46.4%`），但 AEE 从 `1.4872` 到 `1.5900`，相对上升约 `+6.9%`，略超 DATE 主目标的 `5%` 精度窗口；适合作为“ATLIF-only 可大幅降能但需要 attention/ternary 或 fine-tune 找回精度”的消融点。
+
+`ternary ATLIF only` 结论：这是明确负例，不是单纯“轮次不够”。ep9→ep29 的 AEE 有下降（`4.7046`→`3.2733`），说明训练仍在适应，但最终 AEE/AAE 和 total_spikes 都远差于 NB0；同时 full ternary ATLIF 在 original attention 下把 spikes 推高到 `79.3630G`，说明全网三值神经元若没有匹配的 attention/门控数据流，会产生过高活动率和精度崩坏。论文中可作为“ternary neuron alone is insufficient; attention path is required”的机制消融。
+
+`ternary + TX` 结论：同样是明确负例。引入 TX attention 后 best ep29 为 AEE `3.2885` / AAE `18.6194` / total_spikes `79.0967G`，几乎没有修复 `ternary ATLIF only` 的崩坏；说明问题主要来自“全网 105 个模块全部 ternary ATLIF”的神经元覆盖过强，而不是 original attention 缺 TX。下一步应跑 `binary + TX`，验证 TX attention 在 binary ATLIF 事件化输入上是否仍能保持 `binary ATLIF only` 的低 spikes，同时找回一部分精度。
+
+当前接棒安排（2026-06-17）：NTS11 部署量化 valid825 已完成；接棒 watcher `2366118` 已进入 `binary + TX` 队列，当前先跑 `verify_nts11_chain.py`，运行目录 `results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid`。
+
+### NTS11 部署量化可行性验证（2026-06-17）
+
+目的：在进入硬件设计前，验证 NTS11bj ep2 的 H60 推理路径能否替换为硬件友好的定点近似，而不是只依赖 float attention score / float gate。所有量化开关均为 `bsa_attention` 下新增可选字段，默认关闭；旧实验配置不设置这些字段，因此旧实验行为不变。
+
+新增可选字段：
+
+- `hardware_quant_enabled`
+- `hardware_mu_pow2_shift`
+- `hardware_score_step`
+- `hardware_score_min/max`
+- `hardware_gate_step`
+- `hardware_gate_min/max`
+
+生成配置：
+
+- `configs/generated/nts11bj_deploy_float_ref.yml`
+- `configs/generated/nts11bj_deploy_score_int8.yml`
+- `configs/generated/nts11bj_deploy_score_int8_mu_pow2.yml`
+- `configs/generated/nts11bj_deploy_score_int8_mu_pow2_gate_int8.yml`
+
+valid40 smoke 目录：`results/nts11_deployment_quant_eval_20260617_023434`。
+
+| config | samples | AEE | AAE | total_spikes | firing | energy_uj |
+|---|---:|---:|---:|---:|---:|---:|
+| float_ref | 40 | 1.3854 | 13.0232 | 1.4725G | 6.5631% | 1175.15 |
+| score_int8 | 40 | 1.3928 | 13.0942 | 1.4722G | 6.5620% | 1175.08 |
+| score_int8_mu_pow2 | 40 | 1.3814 | 12.8367 | 1.4727G | 6.5641% | 1175.35 |
+| score_int8_mu_pow2_gate_int8 | 40 | 1.3719 | 12.7837 | 1.4728G | 6.5645% | 1175.44 |
+
+full valid825 目录：`results/nts11_deployment_quant_full825_20260617_023728`。
+
+| config | samples | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| float_ref | 825 | 1.5159 | 9.9611 | 0.5203 | 0.1954 | 0.0912 | 29.0414G | 6.2761% | 23032.66 |
+| score_int8_mu_pow2_gate_int8 | 825 | 1.5203 | 9.9316 | 0.5202 | 0.1960 | 0.0917 | 29.0492G | 6.2778% | 23038.29 |
+
+部署量化设置：
+
+- `mu`：从 float schedule 近似为 power-of-two，`hardware_mu_pow2_shift=4`，即 `mu=1/16=0.0625`
+- score：`step=1/128`，clamp 到 `[-2, 2]`
+- gate：`step=1/128`，clamp 到 `[0, 2]`
+
+结论：硬件近似几乎不掉点。相对 float_ref，AEE 仅 `+0.0044`，AAE 反而略好 `-0.0295`，spikes/energy 基本不变（`29.0414G -> 29.0492G`，`23032.66uJ -> 23038.29uJ`）。这说明 NTS11bj ep2 可以作为 DATE 硬件主线的部署等价 checkpoint：TX/SC score、`mu`、Shiftmax gate 均可用定点近似进入硬件方案，不需要保留 float score/gate 作为部署假设。
+
 
 ### NTS-10d S23 full30 宕机续训 + valid825（自动追加）
 
@@ -6532,3 +6727,567 @@ valid825 ep29：AEE=**1.480**, AAE=**9.64°**, 38.98G（-11.5%）。
 | 19 | 1.5922 | 10.2966 | 0.5353 | 0.2155 | 0.1062 | 41.2055G | 8.8944% | 33772.15 |
 | 24 | 1.4624 | 9.8079 | 0.5089 | 0.1817 | 0.0808 | 41.1386G | 8.8800% | 33799.99 |
 | 29 | 1.4781 | 9.6899 | 0.5118 | 0.1902 | 0.0874 | 39.2954G | 8.4821% | 32301.37 |
+
+
+### DATE11 自动结果追加：ternary ATLIF only（2026-06-16 12:12:03）
+
+<!-- DATE11_APPEND::date11full_all_ternary_atlif_original_w720_fastlr_full30_bs8_20260615_220540_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_ternary_atlif_original_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_original_w720_fastlr_full30_bs8_20260615_220540_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_original_w720_fastlr_full30_bs8_20260615_220540_setsid/profile_ranking_valid825.md`
+- 加载审计：ATLIF `105`，Shiftmax `12`，`checkpoint_overlay_keys=0, missing=210, unexpected=0`
+- best：epoch `29`，AEE `3.2733`，AAE `18.4266`，total_spikes `79.3630G`，firing `17.1179%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 3.2733 | 18.4266 | 0.7863 | 0.4836 | 0.3033 | 79.3630G | 17.1179% | 67644.66 |
+| 2 | 19 | 3.4243 | 19.4353 | 0.8009 | 0.5110 | 0.3304 | 80.6874G | 17.4035% | 68725.23 |
+| 3 | 24 | 3.5567 | 19.2077 | 0.8082 | 0.5259 | 0.3459 | 82.4424G | 17.7821% | 70258.87 |
+| 4 | 14 | 3.7553 | 20.5947 | 0.8181 | 0.5455 | 0.3701 | 81.7911G | 17.6416% | 69557.19 |
+| 5 | 9 | 4.7046 | 24.5051 | 0.8605 | 0.6290 | 0.4603 | 84.4629G | 18.2179% | 71769.36 |
+| 6 | 28 | 3.9935 | 21.6348 | 0.8218 | 0.5574 | 0.3833 | 88.7817G | 19.1494% | 75627.06 |
+
+
+### DATE11 自动结果追加：ternary + TX（2026-06-17 01:17:00）
+
+<!-- DATE11_APPEND::date11full_all_ternary_atlif_tx_w720_fastlr_full30_bs8_20260616_022014_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_ternary_atlif_tx_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_tx_w720_fastlr_full30_bs8_20260616_022014_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_tx_w720_fastlr_full30_bs8_20260616_022014_setsid/profile_ranking_valid825.md`
+- 加载审计：该 run 目录未保留标准 `pipeline.log`；结果已产出完整 standard valid825 ranking，若写论文表前需要从 watcher/训练日志补核安装计数与 train-load audit。
+- best：epoch `29`，AEE `3.2885`，AAE `18.6194`，total_spikes `79.0967G`，firing `17.0604%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 3.2885 | 18.6194 | 0.7860 | 0.4826 | 0.3023 | 79.0967G | 17.0604% | 67486.37 |
+| 2 | 19 | 3.4092 | 19.4361 | 0.8018 | 0.5112 | 0.3306 | 80.6300G | 17.3911% | 68709.19 |
+| 3 | 24 | 3.5886 | 19.4201 | 0.8069 | 0.5233 | 0.3447 | 82.4463G | 17.7829% | 70312.16 |
+| 4 | 14 | 3.8196 | 21.0811 | 0.8230 | 0.5535 | 0.3774 | 81.7139G | 17.6249% | 69522.32 |
+| 5 | 9 | 4.8055 | 24.9302 | 0.8645 | 0.6367 | 0.4681 | 84.3358G | 18.1905% | 71683.83 |
+| 6 | 28 | 4.0361 | 22.1459 | 0.8213 | 0.5557 | 0.3820 | 88.8157G | 19.1567% | 75727.01 |
+
+
+### DATE11 自动结果追加：ternary + SC（2026-06-17 03:34:47）
+
+<!-- DATE11_APPEND::date11full_all_ternary_atlif_sc_w720_fastlr_full30_bs8_20260616_121203_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_ternary_atlif_sc_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_sc_w720_fastlr_full30_bs8_20260616_121203_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_sc_w720_fastlr_full30_bs8_20260616_121203_setsid/profile_ranking_valid825.md`
+- 加载审计：ATLIF `105`，Shiftmax `12`，`checkpoint_overlay_keys=0, missing=210, unexpected=0`
+- best：epoch `29`，AEE `3.2706`，AAE `18.2325`，total_spikes `80.1816G`，firing `17.3280%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 3.2706 | 18.2325 | 0.7840 | 0.4813 | 0.3024 | 80.1816G | 17.3280% | 68346.52 |
+| 2 | 19 | 3.3839 | 19.0939 | 0.7969 | 0.5044 | 0.3237 | 81.5162G | 17.6164% | 69445.10 |
+| 3 | 24 | 3.5487 | 19.2428 | 0.8056 | 0.5251 | 0.3475 | 83.5034G | 18.0459% | 71143.98 |
+| 4 | 28 | 4.0506 | 21.8423 | 0.8212 | 0.5598 | 0.3882 | 89.5171G | 19.3455% | 76257.62 |
+
+
+### DATE11 自动结果追加：ternary + TXSC/NTS（2026-06-17 18:11:27）
+
+<!-- DATE11_APPEND::date11full_all_ternary_atlif_nts_w720_fastlr_full30_bs8_20260617_033508_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_ternary_atlif_nts_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_nts_w720_fastlr_full30_bs8_20260617_033508_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_ternary_atlif_nts_w720_fastlr_full30_bs8_20260617_033508_setsid/profile_ranking_valid825.md`
+- 加载审计：ATLIF `105`，Shiftmax `12`，`checkpoint_overlay_keys=0, missing=210, unexpected=0`
+- best：epoch `29`，AEE `3.2809`，AAE `18.3304`，total_spikes `80.0070G`，firing `17.2903%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 3.2809 | 18.3304 | 0.7852 | 0.4845 | 0.3062 | 80.0070G | 17.2903% | 68269.43 |
+| 2 | 19 | 3.4843 | 19.5988 | 0.7998 | 0.5117 | 0.3326 | 81.3750G | 17.5859% | 69377.40 |
+| 3 | 24 | 3.5752 | 19.3414 | 0.8046 | 0.5220 | 0.3447 | 83.3902G | 18.0214% | 71119.32 |
+| 4 | 14 | 3.7744 | 20.9740 | 0.8197 | 0.5496 | 0.3738 | 82.5721G | 17.8446% | 70329.72 |
+| 5 | 9 | 4.6406 | 24.0679 | 0.8587 | 0.6264 | 0.4583 | 85.1294G | 18.3973% | 72456.86 |
+| 6 | 28 | 4.0938 | 21.7471 | 0.8228 | 0.5623 | 0.3906 | 89.3769G | 19.3152% | 76217.19 |
+
+
+### DATE11 自动结果追加：binary + TX（2026-06-17 20:04:51）
+
+<!-- DATE11_APPEND::date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_tx_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/profile_ranking_valid825.md`
+- best：epoch `19`，AEE `1.5831`，AAE `9.9381`，total_spikes `22.4706G`，firing `4.8467%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 19 | 1.5831 | 9.9381 | 0.5348 | 0.2136 | 0.1041 | 22.4706G | 4.8467% | 19780.93 |
+| 2 | 29 | 1.5921 | 9.8577 | 0.5321 | 0.2159 | 0.1075 | 23.0106G | 4.9632% | 20270.08 |
+| 3 | 24 | 1.5868 | 10.1702 | 0.5347 | 0.2128 | 0.1042 | 22.9146G | 4.9425% | 20196.28 |
+| 4 | 28 | 1.5849 | 10.2686 | 0.5361 | 0.2102 | 0.1024 | 24.8565G | 5.3613% | 21893.70 |
+| 5 | 14 | 1.6644 | 10.3322 | 0.5578 | 0.2303 | 0.1140 | 21.8241G | 4.7073% | 19151.32 |
+| 6 | 9 | 1.7087 | 10.7106 | 0.5500 | 0.2244 | 0.1125 | 21.4632G | 4.6294% | 18809.85 |
+
+
+### DATE11 自动结果追加：binary + TXSC/NTS（2026-06-18 07:37:46）
+
+<!-- DATE11_APPEND::date11full_all_binary_atlif_nts_w720_fastlr_full30_bs8_20260617_200451_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_nts_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_w720_fastlr_full30_bs8_20260617_200451_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_w720_fastlr_full30_bs8_20260617_200451_setsid/profile_ranking_valid825.md`
+- 加载审计：ATLIF `105`；pipeline summary 显示 Shiftmax attention `12`；该自动追加段原 audit 行里的 `Shiftmax=0` 是计数脚本对 NTS/H60 wrapper 的漏报，不作为论文表依据。
+- best：epoch `19`，AEE `1.5800`，AAE `9.9255`，total_spikes `22.7684G`，firing `4.9205%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 19 | 1.5800 | 9.9255 | 0.5313 | 0.2123 | 0.1040 | 22.7684G | 4.9205% | 20095.94 |
+| 2 | 29 | 1.5813 | 9.8990 | 0.5275 | 0.2125 | 0.1058 | 23.3601G | 5.0483% | 20624.58 |
+| 3 | 28 | 1.5854 | 10.1919 | 0.5314 | 0.2091 | 0.1020 | 25.2138G | 5.4489% | 22263.00 |
+| 4 | 24 | 1.5903 | 10.1569 | 0.5328 | 0.2131 | 0.1050 | 23.3411G | 5.0442% | 20617.51 |
+| 5 | 14 | 1.6679 | 10.4208 | 0.5562 | 0.2287 | 0.1133 | 22.2122G | 4.8003% | 19541.89 |
+| 6 | 9 | 1.7130 | 10.8293 | 0.5568 | 0.2284 | 0.1136 | 22.0002G | 4.7544% | 19326.96 |
+
+
+### DATE11 自动结果追加：binary + SC（2026-06-18）
+
+<!-- DATE11_APPEND::date11full_all_binary_atlif_sc_w720_fastlr_full30_bs8_20260617_160046_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_sc_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_sc_w720_fastlr_full30_bs8_20260617_160046_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_sc_w720_fastlr_full30_bs8_20260617_160046_setsid/profile_ranking_valid825.md`
+- 加载审计：ATLIF `105`，Shiftmax `12`，`checkpoint_overlay_keys=210, missing=0, unexpected=0`
+- best：epoch `19`，AEE `1.5815`，AAE `9.9454`，total_spikes `22.6911G`，firing `4.9038%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 19 | 1.5815 | 9.9454 | 0.5322 | 0.2112 | 0.1036 | 22.6911G | 4.9038% | 20009.89 |
+| 2 | 29 | 1.5847 | 9.8680 | 0.5264 | 0.2114 | 0.1053 | 23.3229G | 5.0403% | 20577.59 |
+| 3 | 28 | 1.5894 | 10.2182 | 0.5308 | 0.2087 | 0.1020 | 25.1582G | 5.4369% | 22195.98 |
+| 4 | 24 | 1.5990 | 10.1763 | 0.5318 | 0.2123 | 0.1045 | 23.2862G | 5.0324% | 20556.05 |
+| 5 | 14 | 1.6673 | 10.4728 | 0.5551 | 0.2278 | 0.1125 | 22.2190G | 4.8017% | 19545.52 |
+| 6 | 9 | 1.7609 | 11.0274 | 0.5575 | 0.2293 | 0.1150 | 21.8732G | 4.7270% | 19200.01 |
+
+
+### DATE11 状态追加：PSN + TX（2026-06-18）
+
+<!-- DATE11_APPEND::date11full_psn_tx_w720_fastlr_full30_bs8_20260618_011517_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_psn_tx_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_psn_tx_w720_fastlr_full30_bs8_20260618_011517_setsid`
+- 训练：full30 已完成，最后保存 `checkpoint_epoch29.pth` / `checkpoint_epoch29_state_dict.pth`。
+- 标准 valid825：未产出 ranking。`standard_valid825/epoch9/eval.log` 在加载审计处失败：
+
+```text
+RuntimeError: Config enables H9 overlay modules but checkpoint does not contain H9 overlay parameters
+```
+
+解释：这是 PSN + TX 的 attention-only 消融，配置安装了 `12` 个 H9 Shiftmax attention，但神经元仍是 PSN，因此 checkpoint 没有 ATLIF overlay 参数。当前 `load_checkpoint_with_h9_audit` 把“启用 H9 overlay 但 checkpoint 无 overlay keys”视为错误，适用于 ATLIF 训练后自身 valid825，但不适用于 PSN + attention-only 消融。
+
+处理建议：先新增一个仅用于 attention-only PSN 消融的 eval/audit 分支，允许 `expected_atlif=0` 且 `expected_shiftmax=12` 的 checkpoint 通过，然后再补跑 PSN+TX 的 standard valid825。该实验低于 NTS11/binary ATLIF 主线优先级，不建议在未修审计前重复训练。
+
+
+### DATE11 阶段结论（2026-06-18）
+
+- binary 全替换组整体成立为“低能但略掉点”的消融：`binary only` AEE `1.5900`，`binary+TX` `1.5831`，`binary+SC` `1.5815`，`binary+TXSC/NTS` `1.5800`；相对 NB0 的 spikes 都约 `22.5G-22.9G`，降幅约 `48%`，但 AEE 比 NB0 `1.4872` 高约 `6.2%-6.9%`，略超 DATE 主目标的 `5%` 精度窗口。
+- all ternary ATLIF 组是明确负例：无论 original/TX/SC/NTS attention，AEE 都在 `3.27-3.29`，spikes 在 `79G-80G`，说明“全网三值 ATLIF”覆盖过强，会把活动率和误差同时推高。
+- 当前论文主线仍应放在 NTS11 mixed ATLIF + NTS/H60 all12：`NTS11bl ep4` AEE `1.4956`、spikes `29.3567G`，兼顾精度窗口和硬件统一性；部署等价用 `NTS11bj ep2`，量化后 AEE `1.5203`、spikes `29.0492G`，硬件近似基本不掉点。
+- 后续最有价值的补实验不是继续扩大 all ternary，而是 NTS11-lite：保持 all12 H60 attention，减少非 QK ATLIF 覆盖，验证面积/控制复杂度与精度之间的 tradeoff。
+
+
+### DATE11 追加实验：all-binary 精度恢复 fine-tune（2026-06-18）
+
+动机：如果 `all binary ATLIF + NTS/H60` 可以通过轻量 fine-tune 把 AEE 拉回 NB0 `+5%` 窗口内，那么硬件实现会比 mixed binary/ternary 更简单：全网只需 `{0,+1}` 事件，不需要 ternary sign rail 或 pos/neg 双 rail。
+
+配置：
+
+- `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_nts_stdlr_ft_ep29_ft5.yml`
+- 起点：`results/date11full_all_binary_atlif_nts_w720_fastlr_full30_bs8_20260617_200451_setsid/checkpoint_epoch29.pth`
+- 结构：`105` 个 binary ATLIF，`12` 个 NTS/H60 attention；无 ternary ATLIF。
+- 训练：5 epoch，`stdlr` fine-tune 口径，`backbone_lr=1e-6`，`neuron_lr=3e-5`，`threshold_lr=5e-6`，warmup `720`，保存 epoch `0..4`。
+- valid825：训练完成后自动评估 epoch `0..4`。
+
+链路审计：
+
+- verify config：PASS
+- preload install：ATLIF `105`，attention `12`
+- neuron modes：`{'ternary': 0, 'binary': 105, 'other': 0}`
+- saved checkpoint reload audit：`checkpoint_overlay_keys=210, missing=0, unexpected=0`
+
+当前状态：
+
+- run dir：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep29_ft5_bs8_20260618_141011_setsid`
+- 状态：**已完成 full5 + standard valid825**。
+- ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep29_ft5_bs8_20260618_141011_setsid/profile_ranking_valid825.md`
+- 目标：AEE 低于 `1.5616` 即进入 NB0 `+5%` 窗口；该 run best ep2 达标。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.4891 | 9.7785 | 0.5151 | 0.1924 | 0.0898 | 23.8206G | 5.1479% | 21045.91 |
+| 2 | 4 | 1.5131 | 9.8042 | 0.5149 | 0.1970 | 0.0934 | 23.9705G | 5.1803% | 21193.41 |
+| 3 | 0 | 1.5385 | 10.0256 | 0.5210 | 0.2008 | 0.0960 | 24.1349G | 5.2158% | 21327.85 |
+| 4 | 3 | 1.5480 | 10.0104 | 0.5253 | 0.2028 | 0.0958 | 25.4267G | 5.4949% | 22457.95 |
+| 5 | 1 | 1.5767 | 10.1547 | 0.5312 | 0.2083 | 0.1013 | 25.0779G | 5.4196% | 22146.16 |
+
+结论：all-binary NTS/H60 经过短 fine-tune 后达到 DATE 主目标。相对 NB0 baseline，AEE `1.4872 -> 1.4891` 基本持平（约 `+0.13%`），AAE `9.9300 -> 9.7785` 略好，total_spikes `44.0488G -> 23.8206G` 下降约 `45.9%`，energy `37638.01uJ -> 21045.91uJ` 下降约 `44.1%`。这使 **all-binary ATLIF + all12 NTS/H60 + short fine-tune** 成为当前最硬件友好的主线候选；mixed NTS11 仍可作为机制参考或精度/结构对照。
+
+
+### DATE11 自动结果追加：PSN + TXSC/NTS（2026-06-18 15:48:08）
+
+<!-- DATE11_APPEND::date11full_psn_nts_w720_fastlr_full30_bs8_20260618_073920_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_psn_nts_w720_fastlr_full30.yml`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_psn_nts_w720_fastlr_full30_bs8_20260618_073920_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_psn_nts_w720_fastlr_full30_bs8_20260618_073920_setsid/profile_ranking_valid825.md`
+- 加载审计：ATLIF `0`，Shiftmax `12`，`checkpoint_overlay_keys=0, missing=0, unexpected=0`
+- 说明：当前 run 目录只保留 `checkpoint_epoch29.pth`，standard valid825 补跑跳过缺失的 `9/14/19/24/28`，本段仅代表 ep29。
+- best：epoch `29`，AEE `1.5390`，AAE `10.0527`，total_spikes `44.3434G`，firing `9.5830%`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 1.5390 | 10.0527 | 0.5265 | 0.2032 | 0.0957 | 44.3434G | 9.5830% | 38004.71 |
+
+
+### DATE11 最终 all-binary 主线最小补实验（2026-06-20 启动）
+
+依据当前结果，主线候选切换为 **all-binary ATLIF + all12 NTS/H60 + short FT**：
+`date11full_all_binary_atlif_nts_stdlr_ft_ep29_ft5_bs8_20260618_141011_setsid/checkpoint_epoch2.pth`
+（AEE `1.4891`，AAE `9.7785`，total_spikes `23.8206G`，energy `21045.91uJ`）。
+
+本轮只补最小必要实验，不再扩大全矩阵：
+
+| 优先级 | 实验 | 目的 | 状态 |
+|---|---|---|---|
+| P0 | all-binary + original attention + 同样 FT5 | 判断是不是 FT 本身即可救回精度；如果 original 也追平，则最终硬件可不需要 H60 attention。 | **已完成**；best ep2 AEE `1.5049`，AAE `9.8872`，spikes `23.2877G`；见下方自动结果段 |
+| P0 | all-binary + NTS/H60 deploy quant | 新主线必须重做 int8 score / μ pow2 / gate int8 部署验证。 | **已完成**；最强 deploy 变体 `score_int8_mu_pow2_gate_int8` AEE `1.4919`；见下方自动结果段 |
+| P1 | all-binary + TX FT5 | 判断 NTS/H60 是否明显优于更简单 attention；先跑 TX。 | **已完成**；best ep2 AEE `1.5077`，AAE `9.8912`，spikes `22.7231G`，energy `20010.68uJ`；见下方 P1 队列结果 |
+| P1 | all-binary + NTS/H60 从 ep19 FT5 | 验证 ep29 起点不是偶然 cherry-pick。 | **已完成**；best ep2 AEE `1.5072`，AAE `9.8772`，spikes `23.0841G`，energy `20378.47uJ`；见下方 P1 队列结果 |
+
+P1 队列启动记录（2026-06-21）：
+
+- queue PID：`2691052`
+- queue log：`neuron_experiments/H9_bipolar_self_attention/results/date11_allbinary_p1_ft_queue_20260621_035025.log`
+- TX FT5 run：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_stdlr_ft_ep19_ft5_bs8_20260621_035025_setsid`
+- NTS ep19 FT5 run：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep19_ft5_bs8_20260621_035025_setsid`
+- 执行顺序：先 TX FT5 full5 + standard valid825，再 NTS/H60 ep19 FT5 full5 + standard valid825。
+- 两个配置均已通过 verify：preload ATLIF `105`、attention `12`、neuron modes `0 ternary / 105 binary`、saved reload `checkpoint_overlay_keys=210, missing=0, unexpected=0`。
+
+P1 队列结果（2026-06-21）：
+
+- 队列已完成：`2026-06-21T09:21:13+08:00`。
+- GPU 训练进程已结束；结果均为 standard valid825 ranking。
+- 结论：两个 ep19-start FT5 都进入 NB0 约 5% 精度窗口，但没有追平当前主线 `all-binary + NTS/H60 ep29-start FT5` 的 AEE `1.4891`。TX FT5 能耗最低，适合作为“更简单 attention”强消融；NTS/H60 ep19 FT5 说明 ep29-start 不是唯一可行起点，但最终主线仍应选 ep29-start 的 best ep2。
+
+all-binary + TX FT5（ep19 start）：
+
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_tx_stdlr_ft_ep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_stdlr_ft_ep19_ft5_bs8_20260621_035025_setsid`
+- ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_stdlr_ft_ep19_ft5_bs8_20260621_035025_setsid/profile_ranking_valid825.md`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5077 | 9.8912 | 0.5215 | 0.1959 | 0.0921 | 22.7231G | 4.9012% | 20010.68 |
+| 2 | 4 | 1.5202 | 9.7697 | 0.5182 | 0.1992 | 0.0950 | 22.8847G | 4.9360% | 20173.51 |
+| 3 | 0 | 1.5569 | 10.1261 | 0.5303 | 0.2065 | 0.0993 | 23.1008G | 4.9826% | 20350.71 |
+
+all-binary + NTS/H60 FT5（ep19 start）：
+
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_nts_stdlr_ft_ep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_w720_fastlr_full30_bs8_20260617_200451_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep19_ft5_bs8_20260621_035025_setsid`
+- ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep19_ft5_bs8_20260621_035025_setsid/profile_ranking_valid825.md`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5072 | 9.8772 | 0.5171 | 0.1960 | 0.0929 | 23.0841G | 4.9887% | 20378.47 |
+| 2 | 4 | 1.5409 | 9.9166 | 0.5213 | 0.2031 | 0.0982 | 23.1757G | 5.0085% | 20476.28 |
+| 3 | 0 | 1.5578 | 10.1405 | 0.5296 | 0.2081 | 0.1004 | 23.4814G | 5.0745% | 20733.58 |
+
+
+### DATE11 自动结果追加：all-binary original attention FT5（2026-06-20 04:42:48）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_original_stdlr_ft_ep29_ft5_bs8_20260620_015804_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_original_stdlr_ft_ep29_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_original_w720_fastlr_full30_bs8_20260615_214142_setsid/checkpoint_epoch29.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_original_stdlr_ft_ep29_ft5_bs8_20260620_015804_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_original_stdlr_ft_ep29_ft5_bs8_20260620_015804_setsid/profile_ranking_valid825.md`
+- best：epoch `2`，AEE `1.5049`，AAE `9.8872`，total_spikes `23.2877G`，firing `5.0229%`，energy `20509.47uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5049 | 9.8872 | 0.5185 | 0.1924 | 0.0896 | 23.2877G | 5.0229% | 20509.47 |
+| 2 | 4 | 1.5129 | 9.7119 | 0.5154 | 0.1964 | 0.0938 | 23.4788G | 5.0642% | 20695.59 |
+| 3 | 0 | 1.5529 | 10.0801 | 0.5242 | 0.2009 | 0.0959 | 23.6388G | 5.0987% | 20829.11 |
+| 4 | 1 | 1.5703 | 10.0840 | 0.5313 | 0.2057 | 0.0991 | 24.5282G | 5.2905% | 21599.38 |
+| 5 | 3 | 1.5706 | 10.0885 | 0.5319 | 0.2064 | 0.0985 | 24.9302G | 5.3772% | 21944.83 |
+
+
+### DATE11 自动结果追加：all-binary NTS/H60 deploy quant（2026-06-20 16:38:41）
+
+<!-- DATE11_DEPLOY_QUANT::date11_binary_nts_deploy_quant_full825_20260620_154820 -->
+- 主 checkpoint：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep29_ft5_bs8_20260618_141011_setsid/checkpoint_epoch2.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11_binary_nts_deploy_quant_full825_20260620_154820`
+- 目的：验证 all-binary NTS/H60 FT ep2 主线在 int8 score / pow2 μ / int8 gate 下是否保持等价。
+
+| config | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `date11_binary_nts_ft_ep29_deploy_float_ref` | 1.4891 | 9.7817 | 0.5152 | 0.1924 | 0.0898 | 23.8205G | 5.1478% | 21045.84 |
+| `date11_binary_nts_ft_ep29_deploy_score_int8` | 1.4953 | 9.8057 | 0.5141 | 0.1930 | 0.0904 | 23.8238G | 5.1485% | 21048.75 |
+| `date11_binary_nts_ft_ep29_deploy_score_int8_mu_pow2` | 1.5036 | 9.8169 | 0.5133 | 0.1927 | 0.0904 | 23.8238G | 5.1485% | 21048.71 |
+| `date11_binary_nts_ft_ep29_deploy_score_int8_mu_pow2_gate_int8` | 1.4919 | 9.7804 | 0.5140 | 0.1921 | 0.0899 | 23.8240G | 5.1486% | 21048.87 |
+
+
+### DATE11 MVSEC/MDR 跨数据集检查（2026-06-20）
+
+目标：按 SDformerFlow 原工程的 MVSEC/MDR 路线做最小跑通检查，不启动 MDR 训练，不改模型代码。
+
+SDformerFlow 参考配置与当前数据状态：
+
+- MVSEC 官方入口：`third_party/SDformerFlow/eval_MV_flow_SNN.py`；本工程包装：`neuron_experiments/H9_bipolar_self_attention/entrypoints/run_h9_standard_mvsec_eval.py`。
+- SDformerFlow 原 MVSEC 配置：`third_party/SDformerFlow/configs/eval_MV_supervised.yml`，默认 `resolution=[260,346]`、`crop=[256,256]`、`window_size=[2,8,8]`。
+- 当前 DATE/DSEC checkpoint 使用 `window_size=[2,9,9]`，直接沿用 `crop=[256,256]` 会在最深层得到 `8x8` token，与 checkpoint 的 `positional_encoding` 形状 `2*9*9=162` 不匹配；旧 NB0 MVSEC run 已出现过该形状错误。
+- 配置层修正：新增 `neuron_experiments/H9_bipolar_self_attention/configs/generated/eval_mvsec_dt1_all_binary_nts_crop288.yml`，保留 all-binary ATLIF + NTS/H60 主线结构，只把 MVSEC eval crop 设为 `288x288`。MVSEC dataloader 使用 `torchvision.transforms.CenterCrop`，当 crop 大于原图高度时会 padding，因此最深层恢复为 `9x9`，无需代码改动。
+- 本地 MVSEC 已具备 `indoor_flying3` dt1：`event=2951`，`flowgt_dt1=2434`。
+- 本地 MDR 仍未 ready：`third_party/SDformerFlow/data/Datasets/MDR` 下只有 `MDR_dt1_official.pth` 与 `_gdown_tmp/*.tar/*.pth.tar`，按现有 `MDR_dataloader/MDR.py` 所需的预处理 `*.npz` 数量为 `0`。
+
+MVSEC full profile：
+
+- checkpoint：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep29_ft5_bs8_20260618_141011_setsid/checkpoint_epoch2.pth`
+- out dir：`results_inference/mvsec_date11_all_binary_nts_ft_ep2_crop288_dt1/indoor_flying3`
+- 命令：`python -u neuron_experiments/H9_bipolar_self_attention/entrypoints/run_h9_standard_mvsec_eval.py --config neuron_experiments/H9_bipolar_self_attention/configs/generated/eval_mvsec_dt1_all_binary_nts_crop288.yml --checkpoint neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_stdlr_ft_ep29_ft5_bs8_20260618_141011_setsid/checkpoint_epoch2.pth --out-dir results_inference/mvsec_date11_all_binary_nts_ft_ep2_crop288_dt1 --sequence indoor_flying3`
+- ranking：`results_inference/mvsec_date11_all_binary_nts_ft_ep2_crop288_dt1/mvsec_ranking.md`
+- profile：`results_inference/mvsec_date11_all_binary_nts_ft_ep2_crop288_dt1/indoor_flying3/spike_profile.json`
+- 状态：完整跑完 `1885/1885`，exit_code `0`；耗时约 `1:26:55`。
+
+| sequence | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | effective_flops | dense_flops | energy_uj |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| indoor_flying3 | 2.4140 | 73.7652 | 0.7871 | 0.4905 | 0.2657 | 25.9757G | 3.3552% | 31.0402G | 925.1325G | 23060.49 |
+
+结论：MVSEC 对当前 all-binary NTS/H60 主线可用纯配置方式完整跑通；室内 flying3 指标为 AEE `2.4140`，spikes/energy 仍明显低于 DSEC NB0 量级。MDR 当前缺预处理/组织好的 `*.npz` 数据，上传或解包整理前不启动 MDR。
+
+### DATE11 MVSEC/MDR 标准化训练接管（2026-06-22）
+
+用户已上传 MDR train 压缩包，本轮接管目标是把 **MDR train -> MVSEC indoor_flying3 validation/eval** 走成可复现标准流程，并保持和 baseline 官方入口一致。
+
+已确认的数据状态：
+
+- MDR archive root：`/root/private_data/mdr/train`
+- 已发现 `batch_1.tar.gz` 到 `batch_12.tar.gz`，压缩体积约 `79G`。
+- 抽样检查：
+  - `batch_1`: `events1=8564`, `events2=8564`, `best_density_events1=1434`, `best_density_events2=1434`, `flow=1434`
+  - `batch_12`: `events1=8547`, `events2=8547`, `best_density_events1=1428`, `best_density_events2=1428`, `flow=1428`
+- 当前目标目录 `third_party/SDformerFlow/data/Datasets/MDR/dt1/train/{events1,events2,best_density_events1,best_density_events2,flow}` 原本为空。
+- MVSEC 当前已具备 `indoor_flying3` dt1：`event=2951`, `flowgt_dt1=2434`；`indoor_flying1/2` 尚未完整编码，`flowgt_dt4` 当前为 `0`。
+
+关键代码事实：
+
+- SDformerFlow 官方 MDR 训练入口：`third_party/SDformerFlow/train_mdr_supervised_SNN.py`。
+- 官方 MDR baseline config：`third_party/SDformerFlow/configs/train_MDR_supervised_SDformerFlow.yml`；本工程标准 route config：`configs/generated/train_mdr_baseline_mvsec_route.yml`。
+- 训练 dataloader `MDR_dataloader/MDR.py::MDREventFlow.get_train_sequence()` 当前硬编码读取 `dt1/train/...`，不随 `config.data.event_interval` 切换训练目录；`event_interval=dt4` 主要影响 MVSEC validation loader 选择 `MvsecEventFlow_dt4`。
+- 因此本轮先把用户上传的 MDR batch archive 组织到 `dt1/train`，按仓库现有官方 baseline route 跑通 MDR->MVSEC。若后续要做严格 dt4 MVSEC protocol，需要补齐/生成 MVSEC `flowgt_dt4` 和对应 event 目录，并单独配置。
+
+新增脚本：
+
+- `scripts/prepare_mdr_from_archives.py`
+  - 从 `/root/private_data/mdr/train/batch_*.tar.gz` 解包到 `third_party/SDformerFlow/data/Datasets/MDR/dt1/train`
+  - 只整理 `batch_*` 目录，避免官方 `MDR_menage.py` 在重复运行时误处理已经存在的平铺 `events1/flow` 目录
+  - 最终统计 `events1/events2/best_density_events1/best_density_events2/flow` 数量
+- `neuron_experiments/H9_bipolar_self_attention/entrypoints/run_mdr_mvsec_standard_pipeline.sh`
+  - 第一步：准备 MDR archive
+  - 第二步：构造 `MDREventFlow` 做 dataset smoke test，确认 train sample 数量非零
+  - 第三步：启动 `third_party/SDformerFlow/train_mdr_supervised_SNN.py --config ../../../configs/generated/train_mdr_baseline_mvsec_route.yml`
+  - 训练配置为 baseline PSN / original SDFormerFlow，`loader.n_epochs=60`，每 `5` epoch 在 MVSEC `indoor_flying3` 上 validation
+
+标准运行命令：
+
+```bash
+cd /root/private_data/work/sdformer_codex/SDformer
+nohup bash neuron_experiments/H9_bipolar_self_attention/entrypoints/run_mdr_mvsec_standard_pipeline.sh \
+  > neuron_experiments/H9_bipolar_self_attention/results/mdr_mvsec_standard_pipeline_20260622.log 2>&1 &
+```
+
+当前决策：
+
+- **不需要用户立刻补传 dt1**：按当前仓库代码，MDR train loader 读取的是 `dt1/train`，本轮 archive 只要包含 `events1/events2/best_density_events1/best_density_events2/flow` 即可跑官方 baseline route。
+- **暂不启动 dt4 MVSEC eval**：本机 MVSEC `flowgt_dt4` 为空，dt4 validation loader 路径还指向 `third_party/SDformerFlow/dataset/MVSEC/...`，需要单独准备后再跑。
+- **先跑 baseline MDR->MVSEC**：这是 DATE 论文外部泛化表的 baseline 参照。all-binary NTS/H60 的 MDR 训练入口需要后续把 H9 overlay 安装逻辑接入 `train_mdr_supervised_SNN.py` 或新增 H9 MDR train entrypoint，不能直接复用 DSEC 训练配置。
+
+启动记录（2026-06-22）：
+
+- pipeline log：`neuron_experiments/H9_bipolar_self_attention/results/mdr_mvsec_standard_pipeline_20260622.log`
+- 第一次后台启动留下了未完成的 `batch_1` 临时目录；已修正 `prepare_mdr_from_archives.py`，增加 `.extract_done` 标记，重跑时会删除半解包目录再重新提取。
+- 当前 setsid pipeline PID：`2772369`
+- 当前阶段：`prepare_mdr_from_archives.py` 正在重新解包 `batch_1.tar.gz`；训练尚未开始，GPU 可能空闲。
+
+环境修正（2026-06-22 14:58）：
+
+- MDR 已成功解包并整理：`events1=85720`, `events2=85720`, `best_density_events1=17190`, `best_density_events2=17190`, `flow=17190`。
+- 第一次 smoke test 使用系统 `python3`，失败于 `ModuleNotFoundError: torch`。
+- 第二次改用 `/opt/conda/bin/python`，失败于 `ModuleNotFoundError: cv2`。
+- 已将 pipeline 默认解释器改为 `/opt/conda/envs/sdformerflow/bin/python`；该环境已验证 `torch/cv2/mlflow/spikingjelly` 均可导入。
+- 已优化 `prepare_mdr_from_archives.py`：平铺 MDR tree 已存在时直接跳过解包，避免重复解压和全目录计数。
+
+启动修正（2026-06-22 15:00）：
+
+- 将 smoke test 从完整构建 `MDREventFlow` 改为轻量检查五类文件各至少一个样本，避免和训练脚本重复扫全量数据。
+- 修正训练配置相对路径：从 `third_party/SDformerFlow` 启动时应使用 `../../configs/generated/train_mdr_baseline_mvsec_route.yml`。
+- 当前 pipeline PID：`2791114`。
+- 当前训练进程：`/opt/conda/envs/sdformerflow/bin/python train_mdr_supervised_SNN.py --config ../../configs/generated/train_mdr_baseline_mvsec_route.yml --path_mlflow file:///root/private_data/sdformer_mlflow`。
+- 日志已进入 `Training Dataset ...`，说明训练脚本已启动；当前仍在构建 MDR dataset 索引，尚未进入 epoch/GPU 训练。
+
+链路审计补充（2026-06-22 18:35）：
+
+- 当前运行的是 **baseline MDR**，不是 DATE11 all-binary/NTS 主线：
+  - 入口：`third_party/SDformerFlow/train_mdr_supervised_SNN.py`
+  - config：`configs/generated/train_mdr_baseline_mvsec_route.yml`
+  - 模型：`MS_SpikingformerFlowNet_en4`
+  - `event_interval=dt1`
+  - `spiking_neuron.num_steps=5`
+  - `metrics.mask_events=false`
+  - 无 `atlif_ternary_psn`
+  - 无 `bsa_attention`
+  - 启动命令没有传 `--prev_runid`，因此按 baseline MDR 范式从初始化训练；日志没有 `Model restored from local checkpoint`，也没有 `[H9] installed ATLIFTernaryPSN/Shiftmax`。
+- 与官方 MDR baseline 配置相比，当前只做了运行层差异：
+  - `test_sequence` 从官方示例的 `outdoor_day1` 改为本机已准备完整的 `indoor_flying3`，与 `eval_MV_supervised.yml` 的默认 MVSEC eval sequence 一致。
+  - `n_epochs` 当前先设为 `60`；官方 MDR config 是 `100`。若需要完全复刻论文 baseline，应补跑或续跑到 100 epoch。
+- 当前训练已进入 epoch0 并通过首批 batch；GPU 正在训练。后续可用该 baseline MDR 模型在 MVSEC dt1 上评估，作为 DATE11 主线 MDR/MVSEC 对比的 baseline。
+
+MDR 训练过慢复核与 fast 口径（2026-06-22 19:10）：
+
+- 已停止慢速 baseline MDR 进程：原配置 `batch_size=4`、`n_workers=4`、`use_amp=false`、`n_epochs=60`，且训练循环默认每个 batch 开 `torch.autograd.set_detect_anomaly(True)`；epoch0 约 3.4 小时仅到 76%。
+- 论文复核：
+  - SDformerFlow arXiv 2409.04082 的 DSEC 主实验写明：3 张 RTX 2080 Ti，AdamW，80 epoch，随后 full-resolution fine-tune 30 epoch。
+  - MVSEC 表的协议写明：MDR 约 `80000` training samples、`6000` validation samples，训练 `50` epoch 后在 MVSEC 上做 sparse flow evaluation。
+  - 因此，仓库 `train_MDR_supervised_SDformerFlow.yml` 的 `n_epochs=100` 是代码默认配置，不是论文 MVSEC/MDR 表的最小复现实验；本工程 baseline MDR 应按 `50` epoch 作为论文口径。
+- 本地 MDR 数据量确认：
+  - `events1=85720`，`flow=17190`。
+  - `MDREventFlow.get_train_sequence()` 遍历 `events1/*/*.npz`，不是只遍历 flow 文件；因此一个 epoch 实际是 `85720 / batch_size` 个 batch。旧配置 `batch_size=4` 得到 `21430` steps/epoch，和日志一致。
+- 已在 `third_party/SDformerFlow/train_mdr_supervised_SNN.py` 新增可选 runtime 环境变量，默认兼容旧行为：
+  - `SDFORMER_MDR_DETECT_ANOMALY=0/1`：控制 anomaly debug；默认仍为 `1`，pipeline fast 默认设为 `0`。
+  - `SDFORMER_MDR_MAX_TRAIN_BATCHES` / `SDFORMER_MDR_MAX_VALID_BATCHES`：测速/短测用 batch 上限。
+  - `SDFORMER_MDR_SKIP_VALIDATION=1`：测速时跳过 validation。
+  - 训练循环新增 `train_samples_per_s` 打印，用于估算 epoch 时间。
+- Fast benchmark（A800 80GB，MDR baseline PSN，crop `256x256`，torch backend）：
+
+| candidate | batch | workers | AMP | train samples/s | 结论 |
+|---|---:|---:|---:|---:|---|
+| old route | 4 | 4 | 0 | 约 5.28 | 过慢，约 4.5h/epoch |
+| bs8_w8 | 8 | 8 | 0 | 6.83 | 小幅提升 |
+| bs12_w8 | 12 | 8 | 0 | 8.34 | 可用但不优 |
+| bs16_w8 | 16 | 8 | 0 | 9.21 | 稳定 |
+| bs24_w8_amp1 | 24 | 8 | 1 | 11.06 | 稳定 |
+| **bs32_w8_amp1** | **32** | **8** | **1** | **15.40**（160-batch 稳定性测试） | **当前最快稳定默认** |
+| bs32_w8_amp0 | 32 | 8 | 0 | OOM | 不用 |
+
+- 新增配置：
+  - `configs/generated/train_mdr_baseline_mvsec_route_paper_strict.yml`：论文 MDR 50 epoch 口径，保留 `batch_size=4`、`use_amp=false`。
+  - `configs/generated/train_mdr_baseline_mvsec_route_fast.yml`：默认快速复现，`n_epochs=50`、`batch_size=32`、`n_workers=8`、`use_amp=true`。
+- `run_mdr_mvsec_standard_pipeline.sh` 默认切到 fast 配置，并默认 `SDFORMER_MDR_DETECT_ANOMALY=0`；若要回到严格 batch=4，可显式：
+
+```bash
+CONFIG=configs/generated/train_mdr_baseline_mvsec_route_paper_strict.yml \
+bash neuron_experiments/H9_bipolar_self_attention/entrypoints/run_mdr_mvsec_standard_pipeline.sh
+```
+
+- 重要边界：这个 batch=32+AMP 只在 **MDR baseline PSN / crop256** 上实测稳定；不能直接套到 DATE11 DSEC all-binary/ATLIF/Shiftmax 消融。DSEC DATE11 消融仍保持现有 batch 配置，若要加速需另做同样的短 batch benchmark。
+- 已重启正式 fast baseline MDR run：
+  - pipeline PID：`2972644`
+  - train PID：`2972665`
+  - log：`neuron_experiments/H9_bipolar_self_attention/results/mdr_mvsec_fast_pipeline_20260622_194135.log`
+  - MLflow dir：`file:///root/private_data/sdformer_mlflow/285508689205532009/6fcd5ea103b14a02bc895da13ee44d90/`
+  - 启动审计：`detect_anomaly=False`、`max_train_batches=None`、`skip_validation=False`、`batch_size=32`、AMP enabled；已进入 `Epoch 0`，约 `16/2678` step 时 GPU 显存约 `50GB`，无 OOM。
+- 2026-06-24 运行状态与恢复：
+  - 原 fast run 已完成到 epoch23 train loop；epoch23 train loss `0.350138`，但在 `2026-06-24 11:20:41 +0800` 后卡在 `mlflow.pytorch.log_model` 保存阶段，GPU 空闲、日志不再更新。
+  - 已确认旧 run 的 training state 只安全保存到 epoch22，因此终止卡住进程后从旧 MLflow run `6fcd5ea103b14a02bc895da13ee44d90` 恢复。
+  - 为避免再次卡在重型 MLflow model logging，新增可选环境变量 `SDFORMER_MDR_SKIP_MLFLOW_MODEL_LOG=1` 与 `SDFORMER_MDR_LOCAL_CHECKPOINT_DIR=...`；默认行为不变，resume run 只写本地 checkpoint。
+  - resume run：`neuron_experiments/H9_bipolar_self_attention/results/mdr_mvsec_fast_resume_nomlflowmodel_20260624_155919.log`；新 MLflow dir：`file:///root/private_data/sdformer_mlflow/285508689205532009/dccdcd219120407eb98759a049bcdff4/`；本地 checkpoint 目录：`neuron_experiments/H9_bipolar_self_attention/results/mdr_fast_local_ckpts_20260624`。
+  - 恢复审计：已从 `Epoch 23` 继续训练，GPU 100%，不是从头重跑；epoch23 会重复一次，这是为了使用 epoch22 optimizer/scheduler/scaler state 保持一致。
+
+### DATE11 完整消融矩阵配置与二服务器标准流程（2026-06-22）
+
+目标：给另一台服务器一个可复现入口，按 DATE 论文 full-replacement ablation 矩阵生成配置、训练 full30、跑 standard valid825，并保留每个实验的加载审计和 ranking。
+
+新增 runner：
+
+```text
+neuron_experiments/H9_bipolar_self_attention/entrypoints/run_date11_ablation_matrix.py
+```
+
+依赖环境：
+
+- 必须用 `sdformerflow` 环境或等价环境，系统 `/usr/bin/python3` 缺 `yaml/torch/cv2/mlflow/spikingjelly`，不能直接跑。
+- 本机验证命令：
+
+```bash
+/opt/conda/envs/sdformerflow/bin/python \
+  neuron_experiments/H9_bipolar_self_attention/entrypoints/run_date11_ablation_matrix.py \
+  --preset date-paper-core --priority P0 --dry-run --generate
+```
+
+dry-run 已通过，会生成/刷新：
+
+```text
+neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_full_factorial_manifest.json
+```
+
+完整矩阵：
+
+| 优先级 | 实验名 | 神经元 | Attention | ATLIF | Shiftmax | 配置 | 当前状态 |
+|---|---|---|---|---:|---:|---|---|
+| P0 | NB0 | PSN | original | 0 | 0 | `configs/generated/upstream_baseline_stride.yml` | 已完成 baseline |
+| P0 | `date11full_all_binary_atlif_original_w720_fastlr` | all binary ATLIF | original | 105 | 0 | `configs/generated/date11full_all_binary_atlif_original_w720_fastlr_full30.yml` | 已完成 |
+| P0 | `date11full_all_ternary_atlif_original_w720_fastlr` | all ternary ATLIF | original | 105 | 0 | `configs/generated/date11full_all_ternary_atlif_original_w720_fastlr_full30.yml` | 已完成，负例 |
+| P0 | `date11full_all_ternary_atlif_tx_w720_fastlr` | all ternary ATLIF | TX | 105 | 12 | `configs/generated/date11full_all_ternary_atlif_tx_w720_fastlr_full30.yml` | 已完成，负例 |
+| P0 | `date11full_all_ternary_atlif_sc_w720_fastlr` | all ternary ATLIF | SC | 105 | 12 | `configs/generated/date11full_all_ternary_atlif_sc_w720_fastlr_full30.yml` | 已完成，负例 |
+| P0 | `date11full_all_ternary_atlif_nts_w720_fastlr` | all ternary ATLIF | NTS/H60 | 105 | 12 | `configs/generated/date11full_all_ternary_atlif_nts_w720_fastlr_full30.yml` | 已完成，负例 |
+| P1 | `date11full_all_binary_atlif_tx_w720_fastlr` | all binary ATLIF | TX | 105 | 12 | `configs/generated/date11full_all_binary_atlif_tx_w720_fastlr_full30.yml` | 已完成 |
+| P1 | `date11full_all_binary_atlif_sc_w720_fastlr` | all binary ATLIF | SC | 105 | 12 | `configs/generated/date11full_all_binary_atlif_sc_w720_fastlr_full30.yml` | 已完成 |
+| P1 | `date11full_all_binary_atlif_nts_w720_fastlr` | all binary ATLIF | NTS/H60 | 105 | 12 | `configs/generated/date11full_all_binary_atlif_nts_w720_fastlr_full30.yml` | 已完成；最终主线基底 |
+| P2 | `date11full_psn_tx_w720_fastlr` | PSN | TX | 0 | 12 | `configs/generated/date11full_psn_tx_w720_fastlr_full30.yml` | 训练已做过；valid825 审计需谨慎 |
+| P2 | `date11full_psn_sc_w720_fastlr` | PSN | SC | 0 | 12 | `configs/generated/date11full_psn_sc_w720_fastlr_full30.yml` | 未跑/低优先 |
+| P2 | `date11full_psn_nts_w720_fastlr` | PSN | NTS/H60 | 0 | 12 | `configs/generated/date11full_psn_nts_w720_fastlr_full30.yml` | 已跑 ep29 valid825；非主线 |
+
+runner preset：
+
+- `--preset date-paper-core`：8 个 DATE 主矩阵实验，包含 all-binary/all-ternary × original/TX/SC/NTS；不含 PSN attention-only。
+- `--preset full`：11 个 full-factorial 实验，包含 P2 PSN+TX/SC/NTS。
+- `--preset psn-attention-only`：只跑 P2 attention-only 对照。
+
+标准运行命令（另一台服务器从头跑完整 DATE 主矩阵）：
+
+```bash
+cd /root/private_data/work/sdformer_codex/SDformer
+/opt/conda/envs/sdformerflow/bin/python \
+  neuron_experiments/H9_bipolar_self_attention/entrypoints/run_date11_ablation_matrix.py \
+  --preset date-paper-core \
+  --generate \
+  --skip-existing
+```
+
+只跑某个优先级：
+
+```bash
+/opt/conda/envs/sdformerflow/bin/python \
+  neuron_experiments/H9_bipolar_self_attention/entrypoints/run_date11_ablation_matrix.py \
+  --preset date-paper-core \
+  --priority P1 \
+  --generate \
+  --skip-existing
+```
+
+只跑单个配置：
+
+```bash
+/opt/conda/envs/sdformerflow/bin/python \
+  neuron_experiments/H9_bipolar_self_attention/entrypoints/run_date11_ablation_matrix.py \
+  --preset full \
+  --name date11full_psn_sc_w720_fastlr \
+  --generate \
+  --skip-existing
+```
+
+每个实验的标准流程：
+
+1. `make_date11_full_factorial_configs.py` 生成配置与 manifest。
+2. `verify_nts11_chain.py <config>` 检查 ATLIF/Shiftmax 安装和 checkpoint overlay 预期。
+3. `entrypoints/train.py --config <config> --prev_runid experiments/baseline_stride_upstream/checkpoint_epoch59.pth --save_path <run_dir>/checkpoint_epoch{}.pth`
+4. `run_h9_standard_valid825_eval.py --config <config> --run-dir <run_dir> --epoch 9 --epoch 14 --epoch 19 --epoch 24 --epoch 28 --epoch 29`
+5. 输出：
+   - `<run_dir>/pipeline.log`
+   - `<run_dir>/profile_ranking_valid825.md`
+   - `<run_dir>/standard_valid825/epoch*/spike_profile.json`
+   - driver 目录：`results/date11_ablation_matrix_driver_<stamp>/plan.json` 和 `status.jsonl`
+
+注意：
+
+- P2 PSN+TX/SC/NTS 是 reviewer 可能要求的 attention-only 控制，不是 DATE 主线。此前 PSN+TX 标准 valid825 曾因 attention-only checkpoint 的 overlay 审计口径出过问题；如跑 P2，必须人工检查 `pipeline.log` 中 `checkpoint_overlay_keys/missing/unexpected`，不能只看脚本退出码。
+- 当前论文主线仍是 `all-binary ATLIF + all12 NTS/H60 + FT5`；full30 矩阵用于机制消融，FT5/部署量化是 final-mainline 补实验。

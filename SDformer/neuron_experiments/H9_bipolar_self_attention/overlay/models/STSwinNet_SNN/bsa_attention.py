@@ -63,6 +63,14 @@ class ShiftmaxAttentionConfig:
     sc_mu_start_step: int = 0
     sc_mu_warmup_steps: int = 0
     sc_mu_start: float = 0.0
+    hardware_quant_enabled: bool = False
+    hardware_mu_pow2_shift: int = 0
+    hardware_score_step: float = 0.0
+    hardware_score_min: float | None = None
+    hardware_score_max: float | None = None
+    hardware_gate_step: float = 0.0
+    hardware_gate_min: float | None = None
+    hardware_gate_max: float | None = None
 
 
 def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
@@ -115,6 +123,14 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         sc_mu_start_step=int(raw.get("sc_mu_start_step", 0) or 0),
         sc_mu_warmup_steps=int(raw.get("sc_mu_warmup_steps", 0) or 0),
         sc_mu_start=float(raw.get("sc_mu_start", 0.0)),
+        hardware_quant_enabled=bool(raw.get("hardware_quant_enabled", False)),
+        hardware_mu_pow2_shift=int(raw.get("hardware_mu_pow2_shift", 0) or 0),
+        hardware_score_step=float(raw.get("hardware_score_step", 0.0) or 0.0),
+        hardware_score_min=None if raw.get("hardware_score_min") is None else float(raw.get("hardware_score_min")),
+        hardware_score_max=None if raw.get("hardware_score_max") is None else float(raw.get("hardware_score_max")),
+        hardware_gate_step=float(raw.get("hardware_gate_step", 0.0) or 0.0),
+        hardware_gate_min=None if raw.get("hardware_gate_min") is None else float(raw.get("hardware_gate_min")),
+        hardware_gate_max=None if raw.get("hardware_gate_max") is None else float(raw.get("hardware_gate_max")),
     )
 
 
@@ -129,6 +145,137 @@ def shiftmax(scores: torch.Tensor, dim: int = -1, eps: float = 1.0e-6) -> torch.
     denom_power = torch.ceil(torch.log2(numerator.sum(dim=dim, keepdim=True).clamp_min(eps)))
     denominator = torch.pow(2.0, denom_power)
     return numerator / denominator
+
+
+def _quantize_ste(value: torch.Tensor, step: float) -> torch.Tensor:
+    if step <= 0.0:
+        return value
+    quantized = torch.round(value / float(step)) * float(step)
+    return value + (quantized - value).detach()
+
+
+def _apply_hardware_score_quant(scores: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    if not cfg.hardware_quant_enabled:
+        return scores
+    if cfg.hardware_score_min is not None or cfg.hardware_score_max is not None:
+        min_value = -float("inf") if cfg.hardware_score_min is None else float(cfg.hardware_score_min)
+        max_value = float("inf") if cfg.hardware_score_max is None else float(cfg.hardware_score_max)
+        scores = scores.clamp(min=min_value, max=max_value)
+    return _quantize_ste(scores, float(cfg.hardware_score_step))
+
+
+def _apply_hardware_gate_quant(gate: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    if not cfg.hardware_quant_enabled:
+        return gate
+    if cfg.hardware_gate_min is not None or cfg.hardware_gate_max is not None:
+        min_value = -float("inf") if cfg.hardware_gate_min is None else float(cfg.hardware_gate_min)
+        max_value = float("inf") if cfg.hardware_gate_max is None else float(cfg.hardware_gate_max)
+        gate = gate.clamp(min=min_value, max=max_value)
+    return _quantize_ste(gate, float(cfg.hardware_gate_step))
+
+
+def _apply_hardware_mu_quant(mu: float, cfg: ShiftmaxAttentionConfig) -> float:
+    if not cfg.hardware_quant_enabled or int(cfg.hardware_mu_pow2_shift) <= 0:
+        return float(mu)
+    return 1.0 / float(1 << int(cfg.hardware_mu_pow2_shift))
+
+
+def _safe_float_stat(tensor: torch.Tensor | None, op: str) -> float | None:
+    if tensor is None:
+        return None
+    data = tensor.detach().float()
+    if data.numel() == 0:
+        return 0.0
+    if op == "mean":
+        return float(data.mean().item())
+    if op == "std":
+        return float(data.std(unbiased=False).item())
+    if op == "min":
+        return float(data.min().item())
+    if op == "max":
+        return float(data.max().item())
+    raise ValueError(op)
+
+
+def _maybe_emit_h60_profile(
+    module: nn.Module,
+    *,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    tx_scores: torch.Tensor,
+    sc_scores: torch.Tensor,
+    fused_scores: torch.Tensor,
+    gate: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> None:
+    collector = getattr(module, "_h9_profile_collector", None)
+    if collector is None:
+        return
+    with torch.no_grad():
+        gate_data = gate.detach().float()
+        token_dim = 2 if gate_data.ndim >= 3 else -2
+        gate_abs = gate_data.abs()
+        gate_sum = gate_abs.sum(dim=token_dim, keepdim=True).clamp_min(float(cfg.eps))
+        prob = gate_abs / gate_sum
+        entropy = -(prob.clamp_min(float(cfg.eps)).log2() * prob).sum(dim=token_dim)
+        sorted_prob = torch.sort(prob, dim=token_dim, descending=True).values
+        top1_mass = sorted_prob.narrow(token_dim, 0, 1).sum(dim=token_dim)
+        top4 = min(4, sorted_prob.shape[token_dim])
+        top4_mass = sorted_prob.narrow(token_dim, 0, top4).sum(dim=token_dim)
+        eff_tokens = 1.0 / (prob.square().sum(dim=token_dim).clamp_min(float(cfg.eps)))
+
+        q_active = q_orig.detach().ne(0).float()
+        k_active = k_orig.detach().ne(0).float()
+        q_token_active = q_active.any(dim=-1).float()
+        k_token_active = k_active.any(dim=-1).float()
+
+        bundle_stats: dict[str, float] = {}
+        if q_token_active.ndim >= 4:
+            t_len = q_token_active.shape[0]
+            for bundle_t in (1, 2, 4):
+                usable = (t_len // bundle_t) * bundle_t
+                if usable <= 0:
+                    continue
+                grouped = q_token_active[:usable].reshape(bundle_t, -1, *q_token_active.shape[1:]).amax(dim=0)
+                density = grouped.float().mean(dim=-1)
+                bundle_stats[f"ttb{bundle_t}_empty_ratio"] = float((density <= 0).float().mean().item())
+                bundle_stats[f"ttb{bundle_t}_low_density_ratio"] = float(((density > 0) & (density <= 0.125)).float().mean().item())
+                bundle_stats[f"ttb{bundle_t}_high_density_ratio"] = float((density >= 0.5).float().mean().item())
+
+        stats = {
+            "mode": str(cfg.mode),
+            "stage": int(getattr(module, "_h9_stage", -1)),
+            "block": int(getattr(module, "_h9_block", -1)),
+            "num_heads": int(getattr(module, "num_heads", 0)),
+            "tokens": int(k_orig.shape[2]) if k_orig.ndim >= 3 else 0,
+            "head_dim": int(k_orig.shape[-1]) if k_orig.ndim >= 1 else 0,
+            "tx_mean": _safe_float_stat(tx_scores, "mean"),
+            "tx_std": _safe_float_stat(tx_scores, "std"),
+            "tx_min": _safe_float_stat(tx_scores, "min"),
+            "tx_max": _safe_float_stat(tx_scores, "max"),
+            "sc_mean": _safe_float_stat(sc_scores, "mean"),
+            "sc_std": _safe_float_stat(sc_scores, "std"),
+            "sc_min": _safe_float_stat(sc_scores, "min"),
+            "sc_max": _safe_float_stat(sc_scores, "max"),
+            "fused_mean": _safe_float_stat(fused_scores, "mean"),
+            "fused_std": _safe_float_stat(fused_scores, "std"),
+            "fused_min": _safe_float_stat(fused_scores, "min"),
+            "fused_max": _safe_float_stat(fused_scores, "max"),
+            "gate_mean": _safe_float_stat(gate_data, "mean"),
+            "gate_std": _safe_float_stat(gate_data, "std"),
+            "gate_min": _safe_float_stat(gate_data, "min"),
+            "gate_max": _safe_float_stat(gate_data, "max"),
+            "gate_entropy_mean": _safe_float_stat(entropy, "mean"),
+            "top1_mass_mean": _safe_float_stat(top1_mass, "mean"),
+            "top4_mass_mean": _safe_float_stat(top4_mass, "mean"),
+            "effective_tokens_mean": _safe_float_stat(eff_tokens, "mean"),
+            "q_active_density": _safe_float_stat(q_active, "mean"),
+            "k_active_density": _safe_float_stat(k_active, "mean"),
+            "q_token_active_density": _safe_float_stat(q_token_active, "mean"),
+            "k_token_active_density": _safe_float_stat(k_token_active, "mean"),
+            **bundle_stats,
+        }
+    collector(module, stats)
 
 
 def shiftmax_raw(scores: torch.Tensor, dim: int = -1, eps: float = 1.0e-6) -> torch.Tensor:
@@ -1723,15 +1870,27 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         #   scores = tx_scores + mu * sc_scores    (score-level fusion, not gate)
         #   gate = Shiftmax(scores)
         #   attn = K * gate                         (NO carrier)
-        mu = _scheduled_bipolar_mu(self, cfg)
+        mu = _apply_hardware_mu_quant(_scheduled_bipolar_mu(self, cfg), cfg)
         tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
         scores = tx_scores + mu * sc_scores
         if cfg.center_scores:
             scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _apply_hardware_score_quant(scores, cfg)
         gate = shiftmax(scores, dim=2, eps=cfg.eps)
         row_sum = gate.sum(dim=2)
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
+        _maybe_emit_h60_profile(
+            self,
+            q_orig=q_orig,
+            k_orig=k_orig,
+            tx_scores=tx_scores,
+            sc_scores=sc_scores,
+            fused_scores=scores,
+            gate=gate,
+            cfg=cfg,
+        )
         attn = k_orig.mul(gate)
     elif cfg.mode in {
         "sc_ad_confidence_carrier_blend_shiftmax",

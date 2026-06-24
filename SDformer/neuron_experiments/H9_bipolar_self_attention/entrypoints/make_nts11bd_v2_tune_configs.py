@@ -77,7 +77,7 @@ def make_ft_config(
     if n_epochs <= 3:
         runtime["force_save_epochs"] = [0, 1, 2]
     else:
-        runtime["force_save_epochs"] = [0, 2, 4, 5] if n_epochs == 5 else [0, 4, 9, 14]
+        runtime["force_save_epochs"] = [0, 2, 4] if n_epochs == 5 else [0, 4, 9, 14]
 
     cfg.setdefault("metrics", {})["name"] = ["AEE", "AAE"]
     cfg.setdefault("test", {})["sample"] = 10

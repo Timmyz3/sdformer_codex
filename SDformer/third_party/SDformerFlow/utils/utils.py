@@ -187,7 +187,16 @@ def create_model_dir(path_results, runid):
     return path_results
 
 
-def save_model(model):
+def save_model(model, epoch=None):
+    local_dir = os.environ.get("SDFORMER_MDR_LOCAL_CHECKPOINT_DIR")
+    if local_dir:
+        os.makedirs(local_dir, exist_ok=True)
+        name = "checkpoint_latest.pth" if epoch is None else f"checkpoint_epoch{epoch}.pth"
+        path = os.path.join(local_dir, name)
+        torch.save({"model_state_dict": model.state_dict()}, path)
+        print(f"Model checkpoint saved locally at {path}\n")
+    if os.environ.get("SDFORMER_MDR_SKIP_MLFLOW_MODEL_LOG", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
     mlflow.pytorch.log_model(model, "model")
 
 

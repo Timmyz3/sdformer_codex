@@ -78,9 +78,11 @@ def main() -> int:
     epochs = args.epoch or [19, 24, 29]
 
     rows: list[dict[str, Any]] = []
+    skipped_epochs: list[int] = []
     for epoch in epochs:
         checkpoint = run_dir / f"checkpoint_epoch{epoch}.pth"
         if not checkpoint.exists():
+            skipped_epochs.append(epoch)
             continue
         out_dir = run_dir / "standard_valid825" / f"epoch{epoch}"
         profile = out_dir / "spike_profile.json"
@@ -107,6 +109,8 @@ def main() -> int:
 
     if not rows:
         raise RuntimeError(f"no standard valid825 rows produced for {run_dir}")
+    if skipped_epochs:
+        print(f"skipped missing checkpoints: {', '.join(str(epoch) for epoch in skipped_epochs)}")
 
     rows = sorted(rows, key=candidate_score)
     ranking = run_dir / "profile_ranking_valid825.md"
