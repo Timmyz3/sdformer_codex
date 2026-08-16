@@ -599,6 +599,37 @@ class ATLIFTernaryPSNTest(unittest.TestCase):
                 threshold_mode="official_atlif",
             )
 
+    def test_symmetric_binary_abs_fires_for_equal_positive_and_negative_magnitudes(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+
+        node = ATLIFTernaryPSN(
+            T=3,
+            base_psn=DummyPSN(T=3),
+            thresh=0.5,
+            output_mode="binary",
+            threshold_mode="symmetric_binary_abs",
+        )
+        x = torch.tensor([[0.6, -0.6, 0.4, -0.4], [0.5, -0.5, 0.0, 0.0], [0.8, -0.8, 0.1, -0.1]])
+
+        out = node(x)
+
+        self.assertTrue(set(torch.unique(out).tolist()).issubset({0.0, 0.5}))
+        self.assertTrue(torch.equal(out[:, 0], out[:, 1]))
+        self.assertGreater(node.positive_trigger_r, 0.0)
+        self.assertGreater(node.negative_trigger_r, 0.0)
+        self.assertAlmostEqual(node.positive_trigger_r, node.negative_trigger_r, places=6)
+
+    def test_symmetric_binary_abs_rejects_ternary_output(self):
+        from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+
+        with self.assertRaises(ValueError):
+            ATLIFTernaryPSN(
+                T=3,
+                base_psn=DummyPSN(T=3),
+                output_mode="ternary",
+                threshold_mode="symmetric_binary_abs",
+            )
+
     def test_quantile_guard_slows_update_after_threshold_reaches_distribution_budget(self):
         from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN, threshold_update
 

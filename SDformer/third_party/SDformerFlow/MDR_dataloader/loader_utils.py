@@ -83,9 +83,20 @@ Note that this is flow in terms of pixel displacement, with units of pixels, not
 Inputs:
   x_flow_in, y_flow_in - list of numpy arrays, each array corresponds to per pixel flow at each timestamp.
   gt_timestamps - timestamp for each flow array.  start_time, end_time - gt flow will be estimated between start_time and end time."""
-def estimate_corresponding_gt_flow(x_flow_in, y_flow_in, gt_timestamps, start_time, end_time):
-    x_flow_in = numpy.array(x_flow_in, dtype=numpy.float64)
-    y_flow_in = numpy.array(y_flow_in, dtype=numpy.float64)
+def estimate_corresponding_gt_flow(
+    x_flow_in,
+    y_flow_in,
+    gt_timestamps,
+    start_time,
+    end_time,
+    copy_inputs=True,
+):
+    if copy_inputs:
+        x_flow_in = numpy.array(x_flow_in, dtype=numpy.float64)
+        y_flow_in = numpy.array(y_flow_in, dtype=numpy.float64)
+    else:
+        x_flow_in = numpy.asarray(x_flow_in)
+        y_flow_in = numpy.asarray(y_flow_in)
     gt_timestamps = numpy.array(gt_timestamps, dtype=numpy.float64)
     start_time = numpy.array(start_time, dtype=numpy.float64)
     end_time = numpy.array(end_time, dtype=numpy.float64)
@@ -575,4 +586,3 @@ class EventSequenceToVoxelGrid_Pytorch(object):
                     voxel_grid[mask] = voxel_grid[mask] - mean
 
         return voxel_grid
-

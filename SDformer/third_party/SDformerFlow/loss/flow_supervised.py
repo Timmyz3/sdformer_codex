@@ -149,6 +149,30 @@ class AEE(torch.nn.Module):
         return AEE, PE1, PE2, PE3, percent_AEE
 
 
+class DSEC_Fl(torch.nn.Module):
+    """Standard DSEC Fl-all percentage using GT flow magnitude."""
+
+    def __init__(self, pred, label, mask, flow_scaling=128):
+        super().__init__()
+        self.flow = pred
+        self.label = label
+        self.mask = mask
+        self.flow_scaling = flow_scaling
+
+    def forward(self):
+        flow = self.flow * self.flow_scaling
+        error = (flow - self.label).pow(2).sum(1).sqrt()
+        gt_magnitude = self.label.pow(2).sum(1).sqrt()
+        mask = self.mask.reshape(flow.shape[0], -1).to(dtype=flow.dtype)
+        outlier = ((error > 3.0) & (error > 0.05 * gt_magnitude)).reshape(
+            flow.shape[0], -1
+        )
+        valid = mask.sum(dim=1)
+        return (outlier.to(dtype=flow.dtype) * mask).sum(dim=1) / (
+            valid + 1e-9
+        ) * 100.0
+
+
 class AAE(torch.nn.Module):
 
     def __init__(self, pred, label, mask, flow_scaling=128):
@@ -173,3 +197,37 @@ class AAE(torch.nn.Module):
         AAE =  torch.sum(torch.acos(cosine) * self.mask) / num_valid_px
 
         return  AAE* 180 / math.pi,
+
+
+class AAE_Benchmark(torch.nn.Module):
+    """DSEC/Barron angular error using space-time vectors (u, v, 1).
+
+    The legacy ``AAE`` above measures only the 2-D direction angle.  Keep it
+    unchanged for historical experiment comparability and use this metric for
+    comparisons with the official DSEC benchmark.
+    """
+
+    def __init__(self, pred, label, mask, flow_scaling=128):
+        super().__init__()
+        self.flow = pred
+        self.label = label
+        self.mask = mask
+        self.flow_scaling = flow_scaling
+
+    def forward(self):
+        flow = self.flow * self.flow_scaling
+        mask = self.mask.reshape(flow.shape[0], -1).to(dtype=flow.dtype)
+
+        dot_product = (
+            flow[:, 0] * self.label[:, 0]
+            + flow[:, 1] * self.label[:, 1]
+            + 1.0
+        )
+        flow_norm = torch.sqrt(flow.pow(2).sum(1) + 1.0)
+        label_norm = torch.sqrt(self.label.pow(2).sum(1) + 1.0)
+        cosine = dot_product / (flow_norm * label_norm).clamp_min(1e-7)
+        cosine = torch.clamp(cosine, min=-1.0 + 1e-7, max=1.0 - 1e-7)
+
+        angle = torch.acos(cosine).reshape(flow.shape[0], -1)
+        num_valid_px = mask.sum(dim=1)
+        return (angle * mask).sum(dim=1) / (num_valid_px + 1e-9) * 180.0 / math.pi

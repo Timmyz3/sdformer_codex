@@ -80,6 +80,85 @@ class H9LoadAuditTest(unittest.TestCase):
         )
 
         self.assertIs(loaded, model)
+        self.assertEqual(loaded._h9_load_audit["checkpoint_overlay_keys"], 1)
+        self.assertEqual(loaded._h9_load_audit["missing_count"], 0)
+        self.assertEqual(loaded._h9_load_audit["unexpected_count"], 0)
+
+    def test_v1_remap_applies_interpolated_state_dict(self):
+        from models.STSwinNet_SNN.h9_load_audit import load_checkpoint_with_h9_audit
+
+        source = DummyModel()
+        with torch.no_grad():
+            source.linear.weight.fill_(3.25)
+            source.sn_q.spiking_neuron.thresh.fill_(1.75)
+        checkpoint = self._save(source.state_dict())
+
+        target = DummyModel()
+        with torch.no_grad():
+            target.linear.weight.zero_()
+            target.sn_q.spiking_neuron.thresh.zero_()
+        loaded = load_checkpoint_with_h9_audit(
+            checkpoint,
+            target,
+            torch.device("cpu"),
+            config={"atlif_ternary_psn": {"enabled": True}},
+            remap="v1",
+        )
+
+        self.assertIs(loaded, target)
+        self.assertTrue(torch.equal(target.linear.weight, source.linear.weight))
+        self.assertTrue(
+            torch.equal(
+                target.sn_q.spiking_neuron.thresh,
+                source.sn_q.spiking_neuron.thresh,
+            )
+        )
+
+    def test_lc4_coefficients_are_overlay_owned(self):
+        from models.STSwinNet_SNN.h9_load_audit import is_h9_overlay_key
+
+        self.assertTrue(
+            is_h9_overlay_key(
+                "sttmultires_unet.encoders.swin3d.layers.0.swin_blocks.0."
+                "attn._h9_lc4_coefficients"
+            )
+        )
+
+    def test_cf10_beta_is_overlay_owned_and_uses_new_module_lr(self):
+        from models.STSwinNet_SNN.h28_optimizer import build_optimizer
+        from models.STSwinNet_SNN.h9_load_audit import is_h9_overlay_key
+
+        key = (
+            "sttmultires_unet.encoders.swin3d.layers.0.swin_blocks.0."
+            "attn._h9_cf10_beta"
+        )
+        self.assertTrue(is_h9_overlay_key(key))
+
+        class CF10Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.attn = nn.Module()
+                self.attn.register_parameter("_h9_cf10_beta", nn.Parameter(torch.zeros(3, 2)))
+                self.backbone = nn.Linear(2, 2, bias=False)
+
+        optimizer = build_optimizer(
+            CF10Model(),
+            {
+                "optimizer": {
+                    "name": "AdamW",
+                    "lr": 2.0e-5,
+                    "wd": 0.01,
+                    "param_groups": {
+                        "enabled": True,
+                        "backbone_lr": 2.0e-6,
+                        "new_module_lr": 5.0e-5,
+                    },
+                }
+            },
+        )
+        groups = {group["name"]: group for group in optimizer.param_groups}
+        self.assertIn("new_module", groups)
+        self.assertEqual(groups["new_module"]["lr"], 5.0e-5)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 # 模块接口划分与协议定义
 
+> **废止提示（2026-07-13）**：本文是早期 NTS07/ternary/98-token 方案，不能作为 H67/H68/TESSA RTL 依据。当前规范以 `docs/58_TESSA模块接口存储与RTL前规格.md` 和 `spec/tessa_attention_subsystem_spec.json` 为准。本文仅保留用于追溯设计演化。
+
 ## 1. 顶层层次结构
 
 ```

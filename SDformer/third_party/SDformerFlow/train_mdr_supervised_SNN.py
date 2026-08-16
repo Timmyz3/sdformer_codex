@@ -1,6 +1,10 @@
 import os,sys
 import time
 prjt_path = os.path.dirname(os.path.abspath(__file__))
+repo_path = os.path.abspath(os.path.join(prjt_path, "..", ".."))
+h9_overlay_path = os.path.join(repo_path, "neuron_experiments", "H9_bipolar_self_attention", "overlay")
+if os.path.isdir(h9_overlay_path):
+    sys.path.insert(0, h9_overlay_path)
 sys.path.append(prjt_path)
 import argparse
 import mlflow
@@ -22,12 +26,19 @@ from utils.mlflow import log_config, log_results
 import torch.nn.functional as F
 import cv2
 import random
+import numpy as np
 from spikingjelly.activation_based import functional,neuron
 from models.STSwinNet_SNN.Spiking_submodules import *
 from MDR_dataloader.MDR import MDREventFlow
+from MDR_dataloader.mvsec_protocol import event_activity_mask
 
 
-use_ml_flow = True
+use_ml_flow = os.environ.get("SDFORMER_MDR_USE_MLFLOW", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 
 def _env_flag(name, default=False):
@@ -42,6 +53,127 @@ def _env_int(name):
     if value is None or value.strip() == "":
         return None
     return int(value)
+
+
+def _h9_enabled(config):
+    return bool(config.get("atlif_ternary_psn", {}).get("enabled", False)) or bool(config.get("bsa_attention", {}).get("enabled", False))
+
+
+def _configure_runtime_seed(config):
+    seed = config.get("runtime", {}).get("seed")
+    if seed is None:
+        return None, None
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    train_generator = torch.Generator().manual_seed(seed)
+    valid_generator = torch.Generator().manual_seed(seed + 1)
+    print(
+        f"[MDR runtime] seed={seed}, data_order_seeded=True, "
+        "reproducibility=seeded_data_order_non_bit_exact"
+    )
+    return train_generator, valid_generator
+
+
+def _h9_is_overlay_key(key):
+    markers = (".linear_v.", ".bn_v.", ".sn_v.", ".spiking_neuron.thresh", ".spiking_neuron.center")
+    return any(marker in key for marker in markers)
+
+
+def _h9_load_model_with_audit(prev_runid, model, device, config, remap=None):
+    if not (prev_runid and os.path.isfile(prev_runid)):
+        return load_model(prev_runid, model, device, remap)
+
+    from utils.utils import _extract_pretrained_state_dict, load_pretrained_interpolate, remap_pretrained_keys_swin
+    from models.STSwinNet_SNN.bsa_attention import sync_independent_value_branch_from_k
+
+    pretrained_model = torch.load(prev_runid, map_location=device, weights_only=False)
+    pretrained_dict = _extract_pretrained_state_dict(pretrained_model, test=False)
+    if remap == "v2":
+        print(">>>>>>>>>> Remapping pre-trained keys for SWIN ..........")
+        pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
+    elif remap == "v1":
+        load_pretrained_interpolate(model, pretrained_dict)
+        del pretrained_model
+        torch.cuda.empty_cache()
+        print("Model restored from local checkpoint " + prev_runid + "\n")
+        return model
+
+    overlay_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_overlay_key(key)]
+    overlay_v_checkpoint_keys = [
+        key for key in pretrained_dict.keys()
+        if any(marker in key for marker in (".linear_v.", ".bn_v.", ".sn_v."))
+    ]
+    model_keys = dict(model.named_parameters())
+    dropped_shape_keys = []
+    for key in list(pretrained_dict.keys()):
+        if key in model_keys and model_keys[key].shape != pretrained_dict[key].shape:
+            del pretrained_dict[key]
+            dropped_shape_keys.append(key)
+    if dropped_shape_keys:
+        print(f"[H9-MDR] dropped {len(dropped_shape_keys)} shape-mismatched keys: {dropped_shape_keys[:5]}")
+
+    incompatible = model.load_state_dict(pretrained_dict, strict=False)
+    missing = list(getattr(incompatible, "missing_keys", []))
+    unexpected = list(getattr(incompatible, "unexpected_keys", []))
+    overlay_missing = [key for key in missing if _h9_is_overlay_key(key)]
+    overlay_unexpected = [key for key in unexpected if _h9_is_overlay_key(key)]
+    print(
+        f"[H9-MDR] load audit: checkpoint_overlay_keys={len(overlay_checkpoint_keys)}, "
+        f"missing={len(missing)}, unexpected={len(unexpected)}"
+    )
+    if missing:
+        print(f"[H9-MDR] missing keys sample: {missing[:12]}")
+    if unexpected:
+        print(f"[H9-MDR] unexpected keys sample: {unexpected[:12]}")
+    if overlay_unexpected:
+        raise RuntimeError("[H9-MDR] overlay checkpoint keys were not registered before load: " + str(overlay_unexpected[:20]))
+    if overlay_checkpoint_keys and overlay_missing:
+        raise RuntimeError("[H9-MDR] checkpoint contains overlay parameters but matching model keys are missing: " + str(overlay_missing[:20]))
+    if not overlay_v_checkpoint_keys:
+        synced_v = sync_independent_value_branch_from_k(model, config.get("bsa_attention"))
+        if synced_v:
+            print(f"[H9-MDR] initialized independent V from loaded K branches: {synced_v} modules")
+
+    del pretrained_model
+    torch.cuda.empty_cache()
+    print("Model restored from local checkpoint " + prev_runid + "\n")
+    return model
+
+
+def _reset_optimizer_lrs_from_config(optimizer, scheduler, config):
+    opt_cfg = config.get("optimizer", {}) or {}
+    group_cfg = opt_cfg.get("param_groups") or {}
+    base_lr = float(opt_cfg.get("lr", optimizer.param_groups[0]["lr"]))
+    backbone_lr = float(group_cfg.get("backbone_lr", base_lr))
+    norm_lr = float(group_cfg.get("norm_lr", backbone_lr))
+    neuron_lr = float(group_cfg.get("neuron_lr", group_cfg.get("new_module_lr", base_lr)))
+    new_module_lr = float(group_cfg.get("v_branch_lr", group_cfg.get("new_module_lr", neuron_lr)))
+    threshold_lr = float(group_cfg.get("threshold_lr", neuron_lr))
+    by_name = {
+        "backbone": backbone_lr,
+        "backbone_norm_bias": norm_lr,
+        "new_module": new_module_lr,
+        "new_module_no_decay": new_module_lr,
+        "atlif_neuron": neuron_lr,
+        "atlif_neuron_no_decay": neuron_lr,
+        "atlif_threshold": threshold_lr,
+    }
+    assigned = []
+    for index, group in enumerate(optimizer.param_groups):
+        name = str(group.get("name", f"group{index}"))
+        lr = float(by_name.get(name, base_lr))
+        group["lr"] = lr
+        group["initial_lr"] = lr
+        assigned.append({"index": index, "name": name, "lr": lr})
+    if scheduler is not None and hasattr(scheduler, "base_lrs"):
+        scheduler.base_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+        if hasattr(scheduler, "_last_lr"):
+            scheduler._last_lr = [float(group["lr"]) for group in optimizer.param_groups]
+    print(f"[MDR runtime] reset optimizer lrs from config after resume: {assigned}")
 
 def train(args, config_parser):
     ########## configs ##########
@@ -64,6 +196,7 @@ def train(args, config_parser):
         print("MLflow dir:", mlflow.active_run().info.artifact_uri[:-9])
 
     config = config_parser.combine_entries(config)
+    train_generator, valid_generator = _configure_runtime_seed(config)
 
     #use mix-precision training
     if config['optimizer']['use_amp']:
@@ -86,18 +219,37 @@ def train(args, config_parser):
 
     # Create training dataset
     print("Training Dataset ...")
-    train_dataset = MDREventFlow(
-        config = config,
-        train=True,
-        aug=True,
-    )
+    training_dataset = str(config["data"].get("training_dataset", "mdr")).lower()
+    if training_dataset == "mdr":
+        train_dataset = MDREventFlow(
+            config=config,
+            train=True,
+            aug=True,
+        )
+    elif training_dataset == "mvsec_dt1":
+        if config["data"]["event_interval"] != "dt1":
+            raise RuntimeError("Direct MVSEC training only supports the dt1 protocol")
+        from MDR_dataloader.MVSEC import MvsecEventFlow
+        train_dataset = MvsecEventFlow(
+            config=config,
+            train=True,
+            aug=True,
+            manifest_role=config["data"].get("mvsec_train_split", "train"),
+        )
+    else:
+        raise RuntimeError(f"Unsupported training dataset: {training_dataset}")
 
-    if(config["data"]["event_interval"] == "dt1"):
+    if config["data"]["event_interval"] == "dt1":
         from MDR_dataloader.MVSEC import MvsecEventFlow
         valid_dataset = MvsecEventFlow(
-            config= config,
+            config=config,
             train=False,
             aug=False,
+            manifest_role=(
+                config["data"].get("mvsec_valid_split", "validation")
+                if training_dataset == "mvsec_dt1"
+                else None
+            ),
         )
     elif(config["data"]["event_interval"]  == "dt4"):
         from MDR_dataloader.MVSEC import MvsecEventFlow_dt4
@@ -111,18 +263,38 @@ def train(args, config_parser):
 
 
     # Instantiate Dataloader
-    train_dataloader = DataLoader(train_dataset,
-                                batch_size=config["loader"]["batch_size"],
-                                shuffle=True,
-                                num_workers=config["loader"]["n_workers"],
-                                pin_memory=True,
-                                drop_last=True)
-    valid_dataloader = DataLoader(valid_dataset,
-                                 batch_size=config["loader"]["batch_size"],
-                                 shuffle=False,
-                                 num_workers=config["loader"]["n_workers"],
-                                 pin_memory=True,
-                                 drop_last=True)
+    loader_workers = int(config["loader"]["n_workers"])
+    common_loader_kwargs = {
+        "num_workers": loader_workers,
+        "pin_memory": bool(config["loader"].get("pin_memory", True)),
+    }
+    if loader_workers > 0:
+        common_loader_kwargs["persistent_workers"] = bool(
+            config["loader"].get("persistent_workers", False)
+        )
+        common_loader_kwargs["prefetch_factor"] = int(
+            config["loader"].get("prefetch_factor", 2)
+        )
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=config["loader"]["batch_size"],
+        shuffle=True,
+        drop_last=bool(config["loader"].get("drop_last_train", True)),
+        generator=train_generator,
+        **common_loader_kwargs,
+    )
+    valid_dataloader = DataLoader(
+        valid_dataset,
+        batch_size=int(config["loader"].get("validation_batch_size", config["loader"]["batch_size"])),
+        shuffle=False,
+        drop_last=bool(config["loader"].get("drop_last_valid", training_dataset == "mdr")),
+        generator=valid_generator,
+        **common_loader_kwargs,
+    )
+    print(
+        f"[MDR runtime] training_dataset={training_dataset}, "
+        f"train_samples={len(train_dataset)}, valid_samples={len(valid_dataset)}"
+    )
 
 
     ############## Training ###############
@@ -148,8 +320,46 @@ def train(args, config_parser):
     epoch_initial = 0
     remap = None
 
+    h9_active = _h9_enabled(config)
+    if h9_active:
+        from models.STSwinNet_SNN.bsa_attention import (
+            install_shiftmax_attention,
+            register_shiftmax_pickle_compat,
+            shiftmax_attention_summary,
+            sync_independent_value_branch_from_k,
+        )
+        from models.STSwinNet_SNN.atlif_ternary_psn import (
+            apply_trainable_mode,
+            atlif_ternary_summary,
+            install_atlif_ternary_psn,
+        )
 
-    model = load_model(args.prev_runid, model, device, remap)
+        register_shiftmax_pickle_compat()
+        installed_h9_preload = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
+        installed_h9_attn_preload = install_shiftmax_attention(model, config.get("bsa_attention"))
+        if installed_h9_preload:
+            print(f"[H9-MDR] installed ATLIFTernaryPSN before load: {len(installed_h9_preload)} modules")
+            print(f"[H9-MDR] preload neuron targets: {installed_h9_preload[:8]}{' ...' if len(installed_h9_preload) > 8 else ''}")
+        if installed_h9_attn_preload:
+            print(f"[H9-MDR] installed Shiftmax attention before load: {len(installed_h9_attn_preload)} modules")
+            print(f"[H9-MDR] preload attention targets: {installed_h9_attn_preload[:8]}{' ...' if len(installed_h9_attn_preload) > 8 else ''}")
+        model = _h9_load_model_with_audit(args.prev_runid, model, device, config, remap)
+        installed_h9 = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
+        installed_h9_attn = install_shiftmax_attention(model, config.get("bsa_attention"))
+        if installed_h9:
+            print(f"[H9-MDR] installed ATLIFTernaryPSN: {len(installed_h9)} modules")
+        if installed_h9_attn:
+            print(f"[H9-MDR] installed Shiftmax attention: {len(installed_h9_attn)} modules")
+        if installed_h9 or installed_h9_attn or installed_h9_preload or installed_h9_attn_preload:
+            if not any(".linear_v." in name for name, _ in model.named_parameters()):
+                synced_v = sync_independent_value_branch_from_k(model, config.get("bsa_attention"))
+                if synced_v:
+                    print(f"[H9-MDR] initialized independent V from K after install: {synced_v} modules")
+            print(f"[H9-MDR] trainable: {apply_trainable_mode(model, config.get('atlif_ternary_psn'))}")
+            print(f"[H9-MDR] neuron summary after install: {atlif_ternary_summary(model)}")
+            print(f"[H9-MDR] attention summary after install: {shiftmax_attention_summary(model)}")
+    else:
+        model = load_model(args.prev_runid, model, device, remap)
 
     #reset SNN, step model, backend
     functional.reset_net(model)
@@ -179,7 +389,11 @@ def train(args, config_parser):
         mlflow.log_param("number of params", count_parameters(model))
 
     # optimizers
-    if config["optimizer"]["name"] == 'AdamW':
+    if h9_active:
+        from models.STSwinNet_SNN.h28_optimizer import build_optimizer, describe_optimizer_groups
+        optimizer = build_optimizer(model, config)
+        print(f"[H9-MDR] optimizer groups: {describe_optimizer_groups(optimizer)}")
+    elif config["optimizer"]["name"] == 'AdamW':
         optimizer = eval(config["optimizer"]["name"])(model.parameters(), lr=config["optimizer"]["lr"],weight_decay=config["optimizer"]["wd"])
 
     else:
@@ -197,6 +411,8 @@ def train(args, config_parser):
 
     if args.resume:
         optimizer, scheduler, scaler, epoch_initial = resume_model(args.prev_runid, optimizer, scheduler, scaler, epoch_initial, device)
+        if _env_flag("SDFORMER_MDR_RESET_LR_FROM_CONFIG", False):
+            _reset_optimizer_lrs_from_config(optimizer, scheduler, config)
 
     # Define the loss function
     loss_function = flow_loss_supervised(config,device)
@@ -204,6 +420,15 @@ def train(args, config_parser):
     # simulation variables
 
     best_loss = 1.0e6
+    checkpoint_metric = str(config.get("runtime", {}).get("checkpoint_metric", "train_loss"))
+    if checkpoint_metric not in {"train_loss", "valid_loss"}:
+        raise RuntimeError(f"Unsupported checkpoint metric: {checkpoint_metric}")
+    train_mask_events = bool(
+        config["metrics"].get("train_mask_events", config["metrics"]["mask_events"])
+    )
+    valid_mask_events = bool(
+        config["metrics"].get("valid_mask_events", config["metrics"]["mask_events"])
+    )
     grads_w = []
     detect_anomaly = _env_flag("SDFORMER_MDR_DETECT_ANOMALY", True)
     max_train_batches = _env_int("SDFORMER_MDR_MAX_TRAIN_BATCHES")
@@ -292,15 +517,24 @@ def train(args, config_parser):
                     chunk[chunk > config['data']['spike_th']] = 1
                     chunk[chunk < config['data']['spike_th']] = 0
 
+                if h9_active:
+                    from models.STSwinNet_SNN.bsa_attention import set_shiftmax_attention_step
+                    h9_global_step = epoch * len(train_dataloader) + sample + 1
+                    set_shiftmax_attention_step(model, h9_global_step)
                 pred_list = model(chunk.to(device))
                 pred = pred_list["flow"]
 
                 #backward pass
-                if config["metrics"]["mask_events"]:
-                    event_mask = torch.unsqueeze(torch.sum(chunk, dim=1).bool(), dim=1)
+                if train_mask_events:
+                    event_mask = event_activity_mask(chunk)
                     curr_loss = loss_function(pred, label, mask*event_mask, gamma = config["loss"]["gamma"])/num_acc_steps
                 else:
                     curr_loss = loss_function(pred, label, mask, gamma = config["loss"]["gamma"])/num_acc_steps
+                if h9_active:
+                    from models.STSwinNet_SNN.atlif_ternary_psn import regularize_activity
+                    h9_penalty = regularize_activity(model, config.get("atlif_ternary_psn"))
+                    if h9_penalty is not None:
+                        curr_loss = curr_loss + h9_penalty / num_acc_steps
                 # print("loss: ", curr_loss.item())
 
                 if np.isnan(curr_loss.item()):
@@ -319,11 +553,29 @@ def train(args, config_parser):
                 grads_w.append(get_grads(model.named_parameters()))
             if ((sample + 1) % num_acc_steps == 0) or (sample + 1 == len(train_dataloader)):
                 # Update Optimizer
+                if h9_active:
+                    from models.STSwinNet_SNN.h28_optimizer import apply_lr_warmup
+                    h9_global_step = epoch * len(train_dataloader) + sample + 1
+                    apply_lr_warmup(optimizer, h9_global_step, config)
                 if scaler is not None:
                     scaler.step(optimizer)
-                    scaler.update()
                 else:
                     optimizer.step()
+                if h9_active:
+                    from models.STSwinNet_SNN.atlif_ternary_psn import threshold_update
+                    from models.STSwinNet_SNN.h28_optimizer import lr_warmup_factor
+                    h9_warmup_factor = lr_warmup_factor(h9_global_step, config)
+                    h9_threshold_lr = float(config.get("atlif_ternary_psn", {}).get("threshold_base_lr", optimizer.param_groups[0]["lr"]))
+                    if h9_warmup_factor is not None:
+                        h9_threshold_lr *= h9_warmup_factor
+                    h9_threshold_cfg = dict(config.get("atlif_ternary_psn", {}) or {})
+                    h9_threshold_cfg["_global_step"] = h9_global_step
+                    h9_update_stats = threshold_update(model, h9_threshold_lr, h9_threshold_cfg)
+                    h9_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
+                    if h9_log_interval > 0 and (sample + 1) % h9_log_interval == 0:
+                        print(f"[H9-MDR] step {sample + 1} update: {h9_update_stats}")
+                if scaler is not None:
+                    scaler.update()
 
                 # zero grad
                 optimizer.zero_grad()
@@ -339,7 +591,7 @@ def train(args, config_parser):
                 flow_vis = pred_list["flow"][-1].clone()
                 # flow_vis *= mask
                 if config["vis"]["mask_events"]:
-                    event_mask = torch.sum(chunk, dim=1).bool()
+                    event_mask = event_activity_mask(chunk)
                     flow_vis *= event_mask
 
                 with torch.no_grad():
@@ -375,7 +627,7 @@ def train(args, config_parser):
 
         # save model
         with torch.no_grad():
-            if epoch_loss < best_loss:
+            if checkpoint_metric == "train_loss" and epoch_loss < best_loss:
                 save_model(model, epoch=epoch)
                 save_state_dict(optimizer, scheduler, scaler, epoch)
                 best_loss = epoch_loss
@@ -400,6 +652,7 @@ def train(args, config_parser):
                         chunk_old = data['event_volume_old'].to(device=device, dtype=torch.float32)
                         chunk = torch.cat((chunk_old, chunk), dim=1)
                     label = data['flow'].to(device=device, dtype=torch.float32)
+                    mask = data['valid'].unsqueeze(dim=1).to(device=device, dtype=torch.float32)
 
                     with torch.no_grad():
                         # forward pass
@@ -452,6 +705,10 @@ def train(args, config_parser):
                             chunk[chunk > config['data']['spike_th']] = 1
                             chunk[chunk < config['data']['spike_th']] = 0
 
+                        if h9_active:
+                            from models.STSwinNet_SNN.bsa_attention import set_shiftmax_attention_step
+                            h9_valid_step = epoch * len(valid_dataloader) + sample + 1
+                            set_shiftmax_attention_step(model, h9_valid_step)
                         pred_list = model(chunk.to(device))
                         pred = pred_list["flow"][-1]
 
@@ -460,14 +717,14 @@ def train(args, config_parser):
                             flow_vis = pred_list["flow"][-1].clone()
                             # flow_vis *= mask
                             if config["vis"]["mask_events"]:
-                                event_mask = torch.unsqueeze(torch.sum(chunk, dim=1).bool(), dim=1)
+                                event_mask = event_activity_mask(chunk)
                                 flow_vis *= event_mask
 
                             vis.update(chunk_vis, label, mask, flow_vis, None)
 
                     # backward pass
-                    if config["metrics"]["mask_events"]:
-                        event_mask = torch.unsqueeze(torch.sum(chunk, dim=1).bool(), dim=1)
+                    if valid_mask_events:
+                        event_mask = event_activity_mask(chunk)
                         total_loss = loss_function([pred], label, mask * event_mask)
                     else:
                         total_loss = loss_function([pred], label, mask)
@@ -483,6 +740,10 @@ def train(args, config_parser):
             print('Epoch loss (Validation): {} \n'.format(epoch_loss_valid))
             if use_ml_flow:
                 mlflow.log_metric("valid_loss", epoch_loss_valid, step=epoch)
+            if checkpoint_metric == "valid_loss" and epoch_loss_valid < best_loss:
+                save_model(model, epoch=epoch)
+                save_state_dict(optimizer, scheduler, scaler, epoch)
+                best_loss = epoch_loss_valid
 
 
         # update learning rate

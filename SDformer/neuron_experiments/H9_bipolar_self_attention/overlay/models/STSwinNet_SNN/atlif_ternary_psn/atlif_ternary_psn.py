@@ -58,6 +58,31 @@ class BinarySurrogate(torch.autograd.Function):
         return grad_input, grad_thre, None
 
 
+class SymmetricBinarySurrogate(torch.autograd.Function):
+    """Equal-magnitude +/- threshold detection with one-bit output."""
+
+    @staticmethod
+    def forward(ctx, input: torch.Tensor, thre: torch.Tensor, sp: float):
+        pos_active = (input >= thre).float()
+        neg_active = (input <= -thre).float()
+        active = torch.maximum(pos_active, neg_active)
+        pos_updates = zif_backward(input - thre, thre) * pos_active
+        neg_updates = zif_backward((-input) - thre, thre) * neg_active
+        thre_updates = (sp * (pos_updates + neg_updates)).sum(0).mean().item()
+        ctx.save_for_backward(input, thre)
+        return active * thre, thre_updates
+
+    @staticmethod
+    def backward(ctx, grad_input: torch.Tensor, _dummy):
+        input, thre = ctx.saved_tensors
+        pos_tmp = (1.0 - ((input - thre) / thre).abs()).clamp(min=0)
+        neg_tmp = (1.0 - (((-input) - thre) / thre).abs()).clamp(min=0)
+        tmp = torch.maximum(pos_tmp, neg_tmp)
+        grad_input = grad_input * tmp
+        grad_thre = -(grad_input.abs() * tmp).mean()
+        return grad_input, grad_thre, None
+
+
 class OfficialATLIFSurrogate(torch.autograd.Function):
     """Official Activity-Pruning-SNN binary ATLIF surrogate.
 
@@ -128,19 +153,30 @@ class ATLIFTernaryPSN(nn.Module):
         self.T = int(T)
         if output_mode not in {"ternary", "binary"}:
             raise ValueError("output_mode must be ternary or binary")
-        if center_mode not in {"zero", "bias"}:
-            raise ValueError("center_mode must be zero or bias")
-        if threshold_mode not in {"asymmetric_scale", "symmetric_bsa_tsn", "symmetric_target_rate", "official_atlif"}:
+        if center_mode not in {"zero", "bias", "calibrated"}:
+            raise ValueError("center_mode must be zero, bias, or calibrated")
+        if threshold_mode not in {
+            "asymmetric_scale",
+            "symmetric_bsa_tsn",
+            "symmetric_target_rate",
+            "symmetric_binary_abs",
+            "official_atlif",
+        }:
             raise ValueError(
-                "threshold_mode must be asymmetric_scale, symmetric_bsa_tsn, symmetric_target_rate, or official_atlif"
+                "threshold_mode must be asymmetric_scale, symmetric_bsa_tsn, symmetric_target_rate, "
+                "symmetric_binary_abs, or official_atlif"
             )
         if threshold_mode == "official_atlif" and output_mode != "binary":
             raise ValueError("official_atlif follows the official binary ATLIF output {0, thresh}")
+        if threshold_mode == "symmetric_binary_abs" and output_mode != "binary":
+            raise ValueError("symmetric_binary_abs requires one-bit binary output")
         self.output_mode = output_mode
         self.threshold_mode = threshold_mode
         self.center_mode = center_mode
         if threshold_mode == "official_atlif":
             self.act = OfficialATLIFSurrogate.apply
+        elif threshold_mode == "symmetric_binary_abs":
+            self.act = SymmetricBinarySurrogate.apply
         else:
             self.act = TernarySurrogate.apply if output_mode == "ternary" else BinarySurrogate.apply
         self.thresh = nn.Parameter(torch.tensor(float(thresh)), requires_grad=True)
@@ -174,6 +210,8 @@ class ATLIFTernaryPSN(nn.Module):
         self.r = 0.0
         self.pos_r = 0.0
         self.neg_r = 0.0
+        self.positive_trigger_r = 0.0
+        self.negative_trigger_r = 0.0
         self.act_value = 0.0
         self.update_value = 0.0
 
@@ -194,6 +232,9 @@ class ATLIFTernaryPSN(nn.Module):
         h_seq = torch.addmm(self.bias, self.weight, x_seq.flatten(1))
         if self.center_mode != "zero":
             h_seq = h_seq - self.center.to(device=h_seq.device, dtype=h_seq.dtype)
+        observer = getattr(self, "_h9_calibration_observer", None)
+        if observer is not None:
+            observer(h_seq.detach(), self.thresh.detach())
         if self.quantile_q is not None:
             with torch.no_grad():
                 values = h_seq.detach().abs().float().reshape(-1)
@@ -224,6 +265,8 @@ class ATLIFTernaryPSN(nn.Module):
             self.r = active.mean().item()
             self.pos_r = ternary.gt(0).float().mean().item()
             self.neg_r = ternary.lt(0).float().mean().item()
+            self.positive_trigger_r = h_seq.ge(thresh).float().mean().item()
+            self.negative_trigger_r = h_seq.le(-thresh).float().mean().item()
         self.act_value = out.abs().reshape(out.size(0), -1).mean(1).sum()
         if self.importance_enabled and out.requires_grad:
             activation = out.detach()

@@ -26,6 +26,11 @@ def main() -> int:
     elif "gt_flow_dist" in keys and "gt_flow_dist_ts" in keys:
         flow = np.asarray(payload["gt_flow_dist"], dtype=np.float32)
         flow_ts = np.asarray(payload["gt_flow_dist_ts"], dtype=np.float64)
+    elif {"x_flow_dist", "y_flow_dist", "timestamps"}.issubset(keys):
+        x_flow = np.asarray(payload["x_flow_dist"], dtype=np.float32)
+        y_flow = np.asarray(payload["y_flow_dist"], dtype=np.float32)
+        flow = np.stack((x_flow, y_flow), axis=1)
+        flow_ts = np.asarray(payload["timestamps"], dtype=np.float64)
     else:
         raise KeyError(f"Unsupported npz schema: {keys}")
 

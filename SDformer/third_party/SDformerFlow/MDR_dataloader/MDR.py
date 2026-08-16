@@ -26,6 +26,13 @@ Adapted from [ICCV 2023]. Learning Optical Flow from Event Camera with Rendered 
 https://github.com/boomluo02/ADMFlow
 '''
 
+def _env_flag(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
 class MDREventFlow(Dataset):
     def __init__(self, config, train = True, aug = False):
         super(MDREventFlow, self)
@@ -47,10 +54,12 @@ class MDREventFlow(Dataset):
         elif(self.type == 'val'):
             self.change_test_sequence(config['data']['valid_sequence'])
 
+        voxel_gpu = _env_flag("SDFORMER_MDR_VOXEL_GPU", True)
+        print(f"[MDR dataloader] voxel_gpu={voxel_gpu}")
         self.voxel = EventSequenceToVoxelGrid_Pytorch(
             num_bins=self.num_frames_per_ts,
             normalize=True, 
-            gpu=True,
+            gpu=voxel_gpu,
             pol=self.pol
         )
         self.cropper = transforms.RandomCrop((self.config['loader']['crop'][0], self.config['loader']['crop'][1]))

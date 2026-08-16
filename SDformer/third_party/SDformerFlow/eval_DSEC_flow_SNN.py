@@ -3,6 +3,7 @@ import sys
 import torch
 import torchvision  # must import before cupy to avoid circular import
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -70,6 +71,7 @@ def _install_h9_modules(model, config):
 from tqdm import tqdm
 from utils.mlflow import log_config, log_results
 from utils.runtime_backend import configure_snn_backend
+from utils.metric_aggregation import FlowMetricAggregationAudit
 from utils.utils import load_model,  create_model_dir,save_csv, save_model, count_parameters,print_parameters
 from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.DSEC_dataset_lite import DSECDatasetLite
@@ -80,6 +82,26 @@ from spikingjelly.activation_based import functional,neuron
 from models.STSwinNet_SNN.Spiking_submodules import *
 
 import random
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _h9_module_counts(model):
+    modules = list(model.modules())
+    return {
+        "ATLIFTernaryPSN": sum(
+            module.__class__.__name__ == "ATLIFTernaryPSN" for module in modules
+        ),
+        "ShiftmaxAttention": sum(
+            hasattr(module, "_h9_shiftmax_cfg") for module in modules
+        ),
+    }
 
 # ── Architecture constants for SOPs ─────────────────────────────────
 _ARCH = {
@@ -115,7 +137,11 @@ def _compute_total_dense_flops(crop_h, crop_w, config=None):
 
     total = 0.0
     T, Cb, depths, heads = 10, 96, _ARCH["swin_depths"], _ARCH["swin_num_heads"]
-    win = _ARCH["window_size"]
+    win = tuple(
+        config.get("swin_transformer", {}).get("window_size", _ARCH["window_size"])
+        if config
+        else _ARCH["window_size"]
+    )
     H0, W0 = crop_h, crop_w
 
     # Patch Embed
@@ -159,6 +185,35 @@ def _compute_total_dense_flops(crop_h, crop_w, config=None):
         total += _conv_flops(Cp, 2, 3, Hp, Wp)
 
     return total
+
+
+def _configure_batch_norm_evaluation(model, policy):
+    """Optionally evaluate BN layers from current-batch statistics.
+
+    The upstream paper reports disabling running-stat tracking for evaluation.
+    Keep the historical behavior as the default and expose the paper protocol as
+    an explicit opt-in so old evaluations remain reproducible.
+    """
+    policy = str(policy or "running").lower()
+    if policy not in {"running", "no_running"}:
+        raise ValueError(f"unsupported BN evaluation policy: {policy}")
+    if policy == "running":
+        print("[EVAL PROTOCOL] batch_norm=running")
+        return 0
+
+    from torch.nn.modules.batchnorm import _BatchNorm
+
+    changed = 0
+    for module in model.modules():
+        if not isinstance(module, _BatchNorm):
+            continue
+        module.track_running_stats = False
+        module.running_mean = None
+        module.running_var = None
+        module.num_batches_tracked = None
+        changed += 1
+    print(f"[EVAL PROTOCOL] batch_norm=no_running modules={changed}")
+    return changed
 
 # 45nm CMOS energy constants
 E_AC = 0.9e-12
@@ -260,8 +315,17 @@ def valid_test(args, config_parser):
     # ── H9 overlay ──
     _install_h9_overlay(args.config)
 
-    # Eval requires batch_size=1 for correct metric computation
-    config["loader"]["batch_size"] = 1
+    # Legacy AAE returns one batch-reduced value, so the released evaluator's
+    # batch-size-1 constraint is a correctness requirement rather than a tuning
+    # parameter.
+    eval_batch_size = int(config.get("test", {}).get("eval_batch_size", 1))
+    if eval_batch_size != 1:
+        raise ValueError(
+            "DSEC evaluation currently requires test.eval_batch_size=1 because "
+            "the legacy AAE implementation returns one batch-reduced value"
+        )
+    config["loader"]["batch_size"] = eval_batch_size
+    print(f"[EVAL PROTOCOL] eval_batch_size={eval_batch_size}")
 
     # Fix relative data path (H9 configs use ../../data/... relative to baseline_root)
     if not os.path.isabs(config["data"]["path"]):
@@ -310,10 +374,13 @@ def valid_test(args, config_parser):
 
 
 
+    # Training and evaluation batches are intentionally independent. This is
+    # required by the released DSEC validation protocol, and is especially
+    # important when BatchNorm evaluates from current-batch statistics.
     # Define validation dataloader
     valid_dataloader = torch.utils.data.DataLoader(
         dataset=valid_dataset,
-        batch_size=config["loader"]["batch_size"],
+        batch_size=eval_batch_size,
         shuffle=False,
         drop_last=False,
         pin_memory=True
@@ -378,6 +445,12 @@ def valid_test(args, config_parser):
 
     # Validation Dataset
     model.eval()
+    bn_policy = (
+        args.bn_policy
+        if args.bn_policy is not None
+        else config.get("test", {}).get("bn_policy", "running")
+    )
+    bn_modules_changed = _configure_batch_norm_evaluation(model, bn_policy)
 
     # Attach spike profiler for sparsity metrics
     spike_profiler = _SpikeProfiler()
@@ -386,6 +459,7 @@ def valid_test(args, config_parser):
     print('Validating... (test sequence)')
     sample = 0
     val_results = {}
+    metric_aggregation_audit = FlowMetricAggregationAudit()
     for metric in config["metrics"]["name"]:
         val_results[metric] = {}
         val_results[metric]["metric"] = 0
@@ -410,6 +484,7 @@ def valid_test(args, config_parser):
 
 
     max_samples = int(getattr(args, "max_samples", 0) or 0)
+    dataset_offset = 0
     for chunk, mask, label in tqdm(valid_dataloader):
         if max_samples > 0 and sample >= max_samples:
             break
@@ -498,6 +573,20 @@ def valid_test(args, config_parser):
             event_mask = torch.sum(torch.sum(chunk, dim=1), dim=1, keepdim=True).bool()
             mask = mask * event_mask
 
+        sequence_ids = []
+        for batch in range(pred.shape[0]):
+            row = valid_dataset.files[dataset_offset + batch]
+            target_file = row[1] if valid_dataset.num_chunks == 2 else row[0]
+            sequence_ids.append("_".join(target_file.split("_")[:-1]))
+        metric_aggregation_audit.update(
+            pred,
+            label,
+            mask,
+            config['metrics']['flow_scaling'],
+            sequence_ids,
+        )
+        dataset_offset += pred.shape[0]
+
 
         total_loss = loss_function([pred], label, mask)
         print(total_loss)
@@ -543,6 +632,7 @@ def valid_test(args, config_parser):
         sample += 1
 
 
+    metric_aggregation_summary = metric_aggregation_audit.summary()
     results = {}
     if "metrics" in config.keys():
         for metric in config["metrics"]["name"]:
@@ -574,13 +664,21 @@ def valid_test(args, config_parser):
 
             print(results[metric], results[ "AEE_PE1"], results["AEE_PE2"], results["AEE_PE3"], results["AEE_outliers"] )
 
+    # Keep the released AEE_outliers field unchanged and add the standard DSEC
+    # Fl-all percentage under an unambiguous new name.
+    results["DSEC_Fl"] = str(
+        metric_aggregation_summary["frame_equal_mean"]["DSEC_Fl"]
+    )
+
     # ── Spike & SOPs profiling summary ─────────────────────────────
     spike_profiler.close()
     sp = spike_profiler.summary()
 
     # SOPs computation
-    crop = config["loader"]["crop"]
-    dense_flops = _compute_total_dense_flops(crop[0], crop[1], config)
+    eval_geometry = config["loader"].get("crop") or config["loader"]["resolution"]
+    dense_flops = _compute_total_dense_flops(
+        int(eval_geometry[0]), int(eval_geometry[1]), config
+    )
     total_elements = sp["total_elements"]
     effective_flops = 0.0
     synops_mac = 0.0
@@ -613,8 +711,32 @@ def valid_test(args, config_parser):
 
     # Save full profile
     if not use_ml_flow and args.checkpoint:
+        config_path = os.path.abspath(args.config)
+        checkpoint_path = os.path.abspath(args.checkpoint)
+        checkpoint_stat = os.stat(checkpoint_path)
         profile = {
             "metrics": results,
+            "metric_contract": {
+                "AAE": "legacy_2d_direction_angle_degrees_between_uv",
+                "AAE_Benchmark": (
+                    "middlebury_barron_3d_angle_degrees_between_normalized_uv1"
+                ),
+                "DSEC_Fl": (
+                    "percentage_epe_gt_3px_and_gt_5pct_of_ground_truth_flow_magnitude"
+                ),
+                "AEE_outliers": (
+                    "legacy_percentage_fraction_using_prediction_flow_magnitude"
+                ),
+                "aggregation": (
+                    "masked_mean_per_frame_then_equal_mean_over_validation_frames"
+                ),
+                "population": "local_DSEC_valid_file_list_not_official_hidden_test",
+            },
+            "metric_aggregation_audit": metric_aggregation_summary,
+            "validation_file_list": {
+                "path": valid_dataset.sequence_file,
+                "sha256": _file_sha256(valid_dataset.sequence_file),
+            },
             "samples": next(iter(val_results.values()))["it"] if val_results else 0,
             "total_spikes": sp["total_spikes"],
             "global_firing_rate": sp["global_firing_rate"],
@@ -624,8 +746,34 @@ def valid_test(args, config_parser):
             "synops_mac": synops_mac, "synops_logic": synops_logic,
             "synops_total": synops_mac + synops_logic,
             "energy_uj": energy_j * 1e6,
+            "energy_scope": "spike_activity_proxy_only_excludes_overlay_attention_control_reduction_and_memory",
+            "energy_constants_pj": {"spike_ac": E_AC * 1e12, "attention_logic": E_LOGIC * 1e12},
             "profiled_layers": sp["profiled_layers"],
             "layer_firing_rates": sp["layer_firing_rates"],
+            "eval_protocol": {
+                "resolution": list(config["loader"]["resolution"]),
+                "crop": config["loader"].get("crop"),
+                "window_size": list(config["swin_transformer"]["window_size"]),
+                "remap": config["loader"].get("remap"),
+                "bn_policy": bn_policy,
+                "bn_modules_changed": bn_modules_changed,
+                "eval_batch_size": eval_batch_size,
+            },
+            "checkpoint_load_audit": getattr(model, "_h9_load_audit", None),
+            "module_counts": _h9_module_counts(model),
+            "artifact_identity": {
+                "config_path": config_path,
+                "config_sha256": hashlib.sha256(
+                    Path(config_path).read_bytes()
+                ).hexdigest(),
+                "checkpoint_path": checkpoint_path,
+                "checkpoint_size": checkpoint_stat.st_size,
+                "checkpoint_mtime_ns": checkpoint_stat.st_mtime_ns,
+                "checkpoint_sha256": _file_sha256(checkpoint_path),
+            },
+            "deployment_contract": config.get("runtime", {}).get(
+                "deployment_contract"
+            ),
         }
         spike_path = os.path.join(path_results, "spike_profile.json")
         os.makedirs(path_results, exist_ok=True)
@@ -659,6 +807,12 @@ if __name__ == "__main__":
     parser.add_argument("--path_results", default="results_inference/")
     parser.add_argument("--mode", default="valid")
     parser.add_argument("--max-samples", type=int, default=0, help="optional cap for quick valid smoke tests")
+    parser.add_argument(
+        "--bn-policy",
+        choices=("running", "no_running"),
+        default=None,
+        help="override config test.bn_policy for BatchNorm evaluation",
+    )
 
     args = parser.parse_args()
 

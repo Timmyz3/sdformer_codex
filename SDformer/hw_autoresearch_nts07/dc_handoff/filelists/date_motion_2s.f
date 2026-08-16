@@ -1,0 +1,12 @@
+rtl_ttx/ttx_ceil_log2_u32.sv
+rtl_ttx/ttx_exp2_lut_q8.sv
+rtl_ttx/ttx_gate_quant_q17.sv
+rtl_h67/h67_motionxor_score_q7.sv
+rtl_h67/h67_mssb5_score_pair.sv
+rtl_h67/h67_mssb5_temporal_slot_encoder.sv
+rtl_h67/h67_temporal_slot_encoder.sv
+rtl_h67/h67_temporal_slot_fifo_2s.sv
+rtl_h67/h67_sync_dual_bank_k_store.sv
+rtl_h67/h67_temporal_weighted_scs_directory_2s.sv
+rtl_h67/h67_temporal_slot_shiftmax_sync_k_2s_top.sv
+dc_handoff/rtl/date_motion_dc_tops.sv

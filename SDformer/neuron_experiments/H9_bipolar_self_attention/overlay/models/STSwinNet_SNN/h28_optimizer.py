@@ -25,7 +25,10 @@ def _under_prefix(name: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def _is_h9_new_attention_param(name: str) -> bool:
-    markers = (".linear_v.", ".bn_v.", ".sn_v.")
+    markers = (
+        ".linear_v.", ".bn_v.", ".sn_v.",
+        "._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta",
+    )
     return any(marker in name for marker in markers)
 
 
@@ -175,3 +178,29 @@ def describe_optimizer_groups(optimizer: torch.optim.Optimizer) -> list[dict[str
             }
         )
     return description
+
+
+def freeze_threshold_gradients(
+    model: nn.Module,
+    step: int,
+    config: dict[str, Any],
+) -> int:
+    """Drop ATLIF threshold gradients after an explicitly requested boundary.
+
+    ``threshold_freeze_after_step`` historically freezes only the separate
+    homeostatic update. Gradient freezing is intentionally opt-in so existing
+    experiments retain their original optimizer semantics.
+    """
+    atlif_cfg = config.get("atlif_ternary_psn") or {}
+    if not bool(atlif_cfg.get("freeze_threshold_grad_after_step", False)):
+        return 0
+    freeze_after = atlif_cfg.get("threshold_freeze_after_step")
+    if freeze_after is None or int(step) < int(freeze_after):
+        return 0
+    frozen = 0
+    for _, module in iter_atlif_ternary_psn(model):
+        threshold = getattr(module, "thresh", None)
+        if threshold is not None and threshold.grad is not None:
+            threshold.grad = None
+            frozen += 1
+    return frozen

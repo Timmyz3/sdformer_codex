@@ -649,6 +649,8 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
     ]
     active_target_rate_modes = [str(getattr(module, "target_rate_mode", "upper_bound")) for module in target_control_modules]
     negative_scales = [float(module.negative_threshold_scale) for _, module in modules]
+    positive_trigger_rates = [float(getattr(module, "positive_trigger_r", 0.0)) for _, module in modules]
+    negative_trigger_rates = [float(getattr(module, "negative_trigger_r", 0.0)) for _, module in modules]
     threshold_modes = [
         str(getattr(module, "threshold_mode", "asymmetric_scale"))
         for _, module in modules
@@ -715,13 +717,21 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
         "negative_scale_mean": sum(negative_scales) / len(negative_scales),
         "negative_scale_min": min(negative_scales),
         "negative_scale_max": max(negative_scales),
+        "positive_trigger_mean": sum(positive_trigger_rates) / len(positive_trigger_rates),
+        "negative_trigger_mean": sum(negative_trigger_rates) / len(negative_trigger_rates),
         "asymmetric_scale_modules": sum(1 for mode in threshold_modes if mode == "asymmetric_scale"),
         "symmetric_bsa_tsn_modules": sum(1 for mode in threshold_modes if mode == "symmetric_bsa_tsn"),
         "symmetric_target_rate_modules": sum(1 for mode in threshold_modes if mode == "symmetric_target_rate"),
         "official_atlif_modules": sum(
             1 for _, module in modules if getattr(module, "threshold_mode", "asymmetric_scale") == "official_atlif"
         ),
+        "symmetric_binary_abs_modules": sum(
+            1
+            for _, module in modules
+            if getattr(module, "threshold_mode", "asymmetric_scale") == "symmetric_binary_abs"
+        ),
         "center_bias_modules": sum(1 for mode in center_modes if mode == "bias"),
+        "center_calibrated_modules": sum(1 for mode in center_modes if mode == "calibrated"),
         "negative_target_rate_mean": sum(float(value) for value in negative_target_rates) / len(negative_target_rates)
         if negative_target_rates
         else 0.0,

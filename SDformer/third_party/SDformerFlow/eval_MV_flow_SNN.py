@@ -279,7 +279,12 @@ def valid_test(args, config_parser):
     print(f"Creating MVSEC Validation Dataset ({sequence}) ...")
     if config["data"]["event_interval"] == "dt1":
         from MDR_dataloader.MVSEC import MvsecEventFlow
-        valid_dataset = MvsecEventFlow(config=config, train=False, aug=False)
+        valid_dataset = MvsecEventFlow(
+            config=config,
+            train=False,
+            aug=False,
+            manifest_role=config["data"].get("mvsec_eval_split"),
+        )
     elif config["data"]["event_interval"] == "dt4":
         from MDR_dataloader.MVSEC import MvsecEventFlow_dt4
         valid_dataset = MvsecEventFlow_dt4(config=config, train=False, aug=False)
@@ -354,6 +359,8 @@ def valid_test(args, config_parser):
 
     print(f"Validating MVSEC sequence={sequence} ...")
     val_results = {}
+    valid_pixel_count = 0
+    endpoint_error_sum = 0.0
     for metric in config["metrics"]["name"]:
         val_results[metric] = {"metric": 0, "it": 0}
         if metric == "AEE":
@@ -412,6 +419,10 @@ def valid_test(args, config_parser):
         if config["metrics"]["mask_events"]:
             event_mask = torch.sum(torch.sum(chunk, dim=1), dim=1, keepdim=True).bool()
             mask = mask * event_mask
+
+        endpoint_error = torch.sqrt(torch.sum((pred - label) ** 2, dim=1, keepdim=True))
+        valid_pixel_count += int(mask.sum().item())
+        endpoint_error_sum += float((endpoint_error * mask).sum().item())
 
         total_loss = loss_function([pred], label, mask)
         print(total_loss)
@@ -508,6 +519,10 @@ def valid_test(args, config_parser):
             "metrics": results,
             "sequence": sequence,
             "samples": next(iter(val_results.values()))["it"] if val_results else 0,
+            "valid_pixels": valid_pixel_count,
+            "valid_pixel_weighted_aee": (
+                endpoint_error_sum / valid_pixel_count if valid_pixel_count else float("nan")
+            ),
             "total_spikes": sp["total_spikes"],
             "global_firing_rate": sp["global_firing_rate"],
             "dense_flops": dense_flops,

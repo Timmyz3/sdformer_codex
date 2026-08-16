@@ -18,6 +18,11 @@ from torchvision import transforms
 
 from loader_utils import get_events
 from loader_utils import FlowAugmentor, DenseSparseAugmentor, EventSequence, EventSequenceToVoxelGrid_Pytorch
+from mvsec_protocol import (
+    MVSECDirectAugmentor,
+    apply_mvsec_source_valid_region,
+    load_mvsec_split_manifest,
+)
 
 import pdb
 
@@ -25,6 +30,13 @@ import pdb
 Adapted from [ICCV 2023]. Learning Optical Flow from Event Camera with Rendered Dataset. 
 https://github.com/boomluo02/ADMFlow
 '''
+
+def _env_flag(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
 
 Valid_Time_Index = {
     'indoor_flying1': [(314, 2197)],
@@ -36,7 +48,7 @@ Valid_Time_Index = {
 }
 
 class MvsecEventFlow(Dataset):
-    def __init__(self, config, train = True, aug = False):
+    def __init__(self, config, train=True, aug=False, manifest_role=None):
         super(MvsecEventFlow, self)
         self.config = config
         # self.flow_path = os.path.join(self.config['data']['path'], 'gt_tensors')
@@ -50,20 +62,79 @@ class MvsecEventFlow(Dataset):
         self.input_type = 'events'
         self.type = 'train' if train else 'val'
         self.change_test_sequence(config['data']['test_sequence'])
+        if manifest_role is not None:
+            manifest_path = config['data'].get('mvsec_split_manifest')
+            if not manifest_path:
+                raise RuntimeError('MVSEC manifest_role requires data.mvsec_split_manifest')
+            indices, manifest_sha256 = load_mvsec_split_manifest(
+                manifest_path,
+                manifest_role,
+                config['data']['test_sequence'],
+            )
+            self._select_dt1_indices(indices)
+            print(
+                f"[MVSEC dataloader] manifest_role={manifest_role}, "
+                f"samples={len(indices)}, manifest_sha256={manifest_sha256}"
+            )
         self.pol = config['loader']['polarity']
+        voxel_gpu = _env_flag("SDFORMER_MDR_VOXEL_GPU", True)
+        print(f"[MVSEC dataloader] voxel_gpu={voxel_gpu}")
         self.voxel = EventSequenceToVoxelGrid_Pytorch(
             num_bins=self.num_frames_per_ts,
             normalize=True, 
-            gpu=True,
+            gpu=voxel_gpu,
             pol=self.pol
         )
         self.cropper = transforms.CenterCrop((self.config['loader']['crop'][0], self.config['loader']['crop'][1]))
         
         if aug:
-            self.augmentor = FlowAugmentor(config["loader"]["crop"], min_scale=config["loader"]["crop"], max_scale=config["loader"]["crop"], do_flip=True)
-            self.dense_augmentor = DenseSparseAugmentor(config["loader"]["crop"], min_scale=config["loader"]["crop"], max_scale=config["loader"]["crop"], do_flip=True)
+            direct_config = config['data'].get('mvsec_direct_augmentation') or {}
+            if direct_config.get('enabled', False):
+                self.direct_augmentor = MVSECDirectAugmentor(
+                    config['loader']['crop'],
+                    horizontal_flip_probability=direct_config.get(
+                        'horizontal_flip_probability', 0.5
+                    ),
+                    vertical_flip_probability=direct_config.get(
+                        'vertical_flip_probability', 0.5
+                    ),
+                )
+                self.augmentor = None
+                self.dense_augmentor = None
+            else:
+                min_scale = config['loader'].get('min_scale', -0.2)
+                max_scale = config['loader'].get('max_scale', 0.5)
+                self.augmentor = FlowAugmentor(
+                    config['loader']['crop'],
+                    min_scale=min_scale,
+                    max_scale=max_scale,
+                    do_flip=True,
+                )
+                self.dense_augmentor = DenseSparseAugmentor(
+                    config['loader']['crop'],
+                    min_scale=min_scale,
+                    max_scale=max_scale,
+                    do_flip=True,
+                )
+                self.direct_augmentor = None
         else:
             self.augmentor = None
+            self.dense_augmentor = None
+            self.direct_augmentor = None
+
+    def _select_dt1_indices(self, indices):
+        self.names = list(indices)
+        self.flow_list = [
+            os.path.join(self.flowgt_path, '{:d}.npy'.format(index))
+            for index in self.names
+        ]
+        self.event_list = [
+            os.path.join(self.event_path, '{:06d}.h5'.format(index + 1))
+            for index in self.names
+        ]
+        self.event_list.append(
+            os.path.join(self.event_path, '{:06d}.h5'.format(self.names[-1] + 2))
+        )
 
     def change_test_sequence(self, sequence):
 
@@ -171,11 +242,29 @@ class MvsecEventFlow(Dataset):
                 d_event1 = sample['d_event_volume_old'].permute(1,2,0).numpy()
                 d_event2 = sample['d_event_volume_new'].permute(1,2,0).numpy()
                 
-                event1, event2, d_event1, d_event2, flow_crop = self.dense_augmentor(event1, event2, d_event1, d_event2, flow)
-
-                valid = np.logical_and(np.logical_and(~np.isinf(flow_crop[:, :, 0]), ~np.isinf(flow_crop[:, :, 1])), np.linalg.norm(flow_crop, axis=2) > 0)
+                valid = np.logical_and(
+                    np.logical_and(~np.isinf(flow[:, :, 0]), ~np.isinf(flow[:, :, 1])),
+                    np.linalg.norm(flow, axis=2) > 0,
+                )
                 if self.sequence == 'outdoor_day2':
-                    sample['valid'][193:, :] = False
+                    valid[193:, :] = False
+                if self.direct_augmentor is not None:
+                    event1, event2, d_event1, d_event2, flow_crop, valid = self.direct_augmentor(
+                        event1, event2, d_event1, d_event2, flow, valid
+                    )
+                else:
+                    event1, event2, d_event1, d_event2, flow_crop = self.dense_augmentor(
+                        event1, event2, d_event1, d_event2, flow
+                    )
+                    valid = np.logical_and(
+                        np.logical_and(
+                            ~np.isinf(flow_crop[:, :, 0]),
+                            ~np.isinf(flow_crop[:, :, 1]),
+                        ),
+                        np.linalg.norm(flow_crop, axis=2) > 0,
+                    )
+                    if self.sequence == 'outdoor_day2':
+                        valid[193:, :] = False
                 sample['event_volume_old'] = torch.from_numpy(event1).permute(2, 0, 1).float()
                 sample['event_volume_new'] = torch.from_numpy(event2).permute(2, 0, 1).float()
                 sample['d_event_volume_old'] = torch.from_numpy(d_event1).permute(2, 0, 1).float()
@@ -196,11 +285,21 @@ class MvsecEventFlow(Dataset):
                     sample['valid'][193:, :] = False
 
         elif self.type == 'val':
-
-            sample['flow'] = self.cropper(sample['flow'])
-            sample['valid'] = (sample['flow'][0].abs() < 1000) & (sample['flow'][1].abs() < 1000)
-            if self.sequence == 'outdoor_day1':
-                sample['valid'][193:, :] = False
+            if self.config['data'].get('mvsec_source_valid_before_crop', False):
+                sample['valid'] = (
+                    (sample['flow'][0].abs() < 1000)
+                    & (sample['flow'][1].abs() < 1000)
+                )
+                sample['valid'] = apply_mvsec_source_valid_region(
+                    sample['valid'], self.sequence
+                )
+                sample['valid'] = self.cropper(sample['valid'])
+                sample['flow'] = self.cropper(sample['flow'])
+            else:
+                sample['flow'] = self.cropper(sample['flow'])
+                sample['valid'] = (sample['flow'][0].abs() < 1000) & (sample['flow'][1].abs() < 1000)
+                if self.sequence == 'outdoor_day1':
+                    sample['valid'][193:, :] = False
             sample['event_volume_old'] = self.cropper(sample['event_volume_old'])
             sample['event_volume_new'] = self.cropper(sample['event_volume_new'])
             sample['event_valid'] = self.cropper(sample['event_valid'])

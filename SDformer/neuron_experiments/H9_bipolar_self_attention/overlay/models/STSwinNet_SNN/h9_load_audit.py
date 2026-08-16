@@ -14,6 +14,9 @@ H9_OVERLAY_KEY_MARKERS = (
     ".linear_v.",
     ".bn_v.",
     ".sn_v.",
+    "._h9_match_code_weight",
+    "._h9_lc4_coefficients",
+    "._h9_cf10_beta",
     ".spiking_neuron.thresh",
     ".spiking_neuron.center",
 )
@@ -86,10 +89,7 @@ def load_checkpoint_with_h9_audit(
         from utils.utils import load_pretrained_interpolate
 
         load_pretrained_interpolate(model, pretrained_dict)
-        del pretrained_model
-        torch.cuda.empty_cache()
-        print("Model restored from local checkpoint " + checkpoint + "\n")
-        return model
+        print("[H9] remap=v1 interpolation complete; applying interpolated state dict")
 
     overlay_checkpoint_keys = [key for key in pretrained_dict if is_h9_overlay_key(key)]
     overlay_model_keys = [key for key in model.state_dict() if is_h9_overlay_key(key)]
@@ -129,6 +129,18 @@ def load_checkpoint_with_h9_audit(
             "[H9] checkpoint contains overlay parameters but matching model keys are missing: "
             + str(overlay_missing[:20])
         )
+    model._h9_load_audit = {
+        "checkpoint": checkpoint,
+        "checkpoint_overlay_keys": len(overlay_checkpoint_keys),
+        "model_overlay_keys": len(overlay_model_keys),
+        "missing_count": len(missing),
+        "unexpected_count": len(unexpected),
+        "overlay_missing_count": len(overlay_missing),
+        "overlay_unexpected_count": len(overlay_unexpected),
+        "missing_sample": missing[:12],
+        "unexpected_sample": unexpected[:12],
+        "remap": remap,
+    }
 
     del pretrained_model
     torch.cuda.empty_cache()

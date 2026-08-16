@@ -85,7 +85,10 @@ class FlowModel:
 
 def load_calibration(calib_zip: Path) -> FlowModel:
     with zipfile.ZipFile(calib_zip) as handle:
-        with handle.open("camchain-imucam-indoor_flying.yaml") as stream:
+        yaml_names = [name for name in handle.namelist() if name.startswith("camchain-imucam-") and name.endswith(".yaml")]
+        if len(yaml_names) != 1:
+            raise KeyError(f"Expected one camchain-imucam YAML in {calib_zip}, found {yaml_names}")
+        with handle.open(yaml_names[0]) as stream:
             calib = yaml.safe_load(stream)
     cam0 = calib["cam0"]
     return FlowModel(cam0["intrinsics"], cam0["projection_matrix"], tuple(cam0["resolution"]))

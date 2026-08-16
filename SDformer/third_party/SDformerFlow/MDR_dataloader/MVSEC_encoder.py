@@ -11,7 +11,7 @@ import argparse
 import time
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 import pandas as pd
 import numpy as np
 
@@ -45,7 +45,12 @@ class Events(object):
         t_index = 0
         encoding_length = split_interval - (dt_time_temp - 1)
 
-        for i in range(split_interval - (dt_time_temp - 1)):
+        index_start = max(0, int(args.index_start))
+        index_end = min(
+            encoding_length,
+            int(args.index_end) if args.index_end is not None else encoding_length,
+        )
+        for i in range(index_start, index_end):
             
             if(osp.exists(osp.join(event_dir, "{:06d}.h5".format(i)))):
                 print('{:s} event {:05d} already exists'.format(args.save_env, i))
@@ -65,7 +70,10 @@ class Events(object):
 
                 new_frame = np.stack((ts,x,y,p), axis=1)
                 df_data = pd.DataFrame(new_frame, columns=['ts', 'x', 'y', 'p'])
-                df_data.to_hdf(os.path.join(event_dir, "{:06d}.h5".format(i)),"myDataset")
+                df_data.to_hdf(
+                    os.path.join(event_dir, "{:06d}.h5".format(i)),
+                    key="myDataset",
+                )
 
             t_index = t_index + 1
 
@@ -127,14 +135,17 @@ class Test_loading_dt4(Dataset):
         return self.length
 
 
-def generate_flowgt(test_loader, flowgt_path):
+def generate_flowgt(test_loader, flowgt_path, index_offset=0):
     global args, image_resize, sp_threshold
     d_label = h5py.File(gt_file, 'r')
     gt_temp = np.float32(d_label['davis']['left']['flow_dist'])
     gt_ts_temp = np.float64(d_label['davis']['left']['flow_dist_ts'])
+    U_gt_all = np.array(gt_temp[:, 0, :, :])
+    V_gt_all = np.array(gt_temp[:, 1, :, :])
     
     # pdb.set_trace()
-    for i, data in enumerate(test_loader, 0):
+    for local_index, data in enumerate(test_loader, 0):
+        i = local_index + index_offset
         
         if osp.exists(osp.join(flowgt_path, str(i)+'.npy')):
             print('flowgt_dt{:d} of {:s} frame {:05d} already exists'.format(args.dt, args.save_env, i))
@@ -145,10 +156,14 @@ def generate_flowgt(test_loader, flowgt_path):
         if torch.sum(inputs_on + inputs_off) > 0:
             time_start = time.time()
 
-            U_gt_all = np.array(gt_temp[:, 0, :, :])
-            V_gt_all = np.array(gt_temp[:, 1, :, :])
-
-            U_gt, V_gt = estimate_corresponding_gt_flow(U_gt_all, V_gt_all, gt_ts_temp, np.array(st_time), np.array(ed_time))
+            U_gt, V_gt = estimate_corresponding_gt_flow(
+                U_gt_all,
+                V_gt_all,
+                gt_ts_temp,
+                np.array(st_time),
+                np.array(ed_time),
+                copy_inputs=not args.fast_flowgt,
+            )
             gt_flow = np.stack((U_gt, V_gt), axis=2)
 
             curr_path = osp.join(flowgt_path, str(i))
@@ -172,6 +187,9 @@ if __name__ == '__main__':
     parser.add_argument('--dt', '-dt', type=int, default=1, help='time interval')
     parser.add_argument('--image_resize', type=int, default=256)
     parser.add_argument('--only_event', action='store_true')
+    parser.add_argument('--index-start', type=int, default=0)
+    parser.add_argument('--index-end', type=int, default=None, help='exclusive sample index')
+    parser.add_argument('--fast-flowgt', action='store_true', help='reuse read-only float32 GT arrays')
     args = parser.parse_args()
     os.environ["HDF5_USE_FILE_LOCKING"] = 'FALSE'
 
@@ -217,12 +235,18 @@ if __name__ == '__main__':
         elif args.dt == 4:
             Test_dataset = Test_loading_dt4()
 
-        test_loader = DataLoader(dataset=Test_dataset,
+        index_start = max(0, int(args.index_start))
+        index_end = min(
+            len(Test_dataset),
+            int(args.index_end) if args.index_end is not None else len(Test_dataset),
+        )
+        test_subset = Subset(Test_dataset, range(index_start, index_end))
+        test_loader = DataLoader(dataset=test_subset,
                                 batch_size=1,
                                 shuffle=False,
                                 num_workers=args.workers)
 
-        generate_flowgt(test_loader, flowgt_path)
+        generate_flowgt(test_loader, flowgt_path, index_offset=index_start)
 
         raw_data = None
 

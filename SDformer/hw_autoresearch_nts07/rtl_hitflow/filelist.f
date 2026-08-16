@@ -1,0 +1,10 @@
+rtl_hitflow/hitflow_single_event_buffer.sv
+rtl_hitflow/hitflow_fanout_event_buffer.sv
+rtl_hitflow/hitflow_qk_pair_assembler.sv
+rtl_hitflow/hitflow_event_lifetime_router.sv
+rtl_hitflow/hitflow_dptme_array.sv
+rtl_hitflow/hitflow_nmf_g1_builder.sv
+rtl_hitflow/hitflow_gate_product_engine.sv
+rtl_hitflow/hitflow_segmented_multicast.sv
+rtl_hitflow/hitflow_banked_accumulator.sv
+rtl_hitflow/hitflow_g1_projection_top.sv

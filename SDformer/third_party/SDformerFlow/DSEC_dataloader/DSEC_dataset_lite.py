@@ -82,6 +82,7 @@ class DSECDatasetLite(Dataset):
             #     break
             file_list = file_list+"_split_seq.csv"
             sequence_file = os.path.join(self.config['data']['path'], 'sequence_lists', file_list)
+        self.sequence_file = os.path.abspath(sequence_file)
         import csv
         rows = []
         with open(sequence_file, newline='') as f:
@@ -194,7 +195,6 @@ if __name__ == "__main__":
         print(torch.max(chunk))
         print(torch.min(chunk))
         pass
-
 
 
 

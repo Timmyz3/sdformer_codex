@@ -15,6 +15,30 @@ PIN_MEMORY_ANCHOR = """"pin_memory": True,
 PIN_MEMORY_PATCH = """"pin_memory": bool(config["loader"].get("pin_memory", True)),
 """
 
+SEED_ANCHOR = """    config = config_parser.combine_entries(config)
+
+    runtime_cfg = config.get("runtime", {})
+"""
+
+SEED_PATCH = """    config = config_parser.combine_entries(config)
+
+    runtime_cfg = config.get("runtime", {})
+    h9_seed = runtime_cfg.get("seed")
+    if h9_seed is not None:
+        import numpy as h9_numpy
+        h9_seed = int(h9_seed)
+        random.seed(h9_seed)
+        h9_numpy.random.seed(h9_seed)
+        torch.manual_seed(h9_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(h9_seed)
+        h9_deterministic = bool(runtime_cfg.get("deterministic", False))
+        torch.backends.cudnn.deterministic = h9_deterministic
+        if h9_deterministic:
+            torch.backends.cudnn.benchmark = False
+        print(f"[runtime] seed={h9_seed}, deterministic={h9_deterministic}")
+"""
+
 LOAD_MODEL_ANCHOR = """    model = load_model(args.prev_runid, model, device, remap)
 """
 
@@ -24,8 +48,11 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
     from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, set_shiftmax_attention_step, shiftmax_attention_summary, sync_independent_value_branch_from_k
 
     def _h9_is_overlay_key(key):
-        markers = (".linear_v.", ".bn_v.", ".sn_v.", ".spiking_neuron.thresh", ".spiking_neuron.center")
+        markers = (".linear_v.", ".bn_v.", ".sn_v.", "._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta", ".spiking_neuron.thresh", ".spiking_neuron.center")
         return any(marker in key for marker in markers)
+
+    def _h9_is_match_candidate_key(key):
+        return any(marker in key for marker in ("._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta"))
 
     def _h9_load_model_with_audit(prev_runid, model, device, remap=None):
         if prev_runid and os.path.isfile(prev_runid):
@@ -37,11 +64,9 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
                 pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
             elif remap == "v1":
                 load_pretrained_interpolate(model, pretrained_dict)
-                del pretrained_model
-                torch.cuda.empty_cache()
-                print("Model restored from local checkpoint " + prev_runid + "\\n")
-                return model
+                print("[H9] remap=v1 interpolation complete; applying interpolated state dict")
             overlay_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_overlay_key(key)]
+            match_candidate_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_match_candidate_key(key)]
             overlay_v_checkpoint_keys = [
                 key for key in pretrained_dict.keys()
                 if any(marker in key for marker in (".linear_v.", ".bn_v.", ".sn_v."))
@@ -60,6 +85,11 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
             missing = list(getattr(incompatible, "missing_keys", []))
             unexpected = list(getattr(incompatible, "unexpected_keys", []))
             overlay_missing = [key for key in missing if _h9_is_overlay_key(key)]
+            match_code_missing = [key for key in missing if "._h9_match_code_weight" in key]
+            round3_aux_missing = [key for key in missing if "._h9_lc4_coefficients" in key]
+            round4_aux_missing = [key for key in missing if "._h9_cf10_beta" in key]
+            match_candidate_missing = [key for key in missing if _h9_is_match_candidate_key(key)]
+            non_candidate_overlay_missing = [key for key in overlay_missing if not _h9_is_match_candidate_key(key)]
             overlay_unexpected = [key for key in unexpected if _h9_is_overlay_key(key)]
             print(
                 f"[H9] load audit: checkpoint_overlay_keys={len(overlay_checkpoint_keys)}, "
@@ -74,11 +104,36 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
                     "[H9] overlay checkpoint keys were not registered before load: "
                     + str(overlay_unexpected[:20])
                 )
-            if overlay_checkpoint_keys and overlay_missing:
+            if overlay_checkpoint_keys and non_candidate_overlay_missing:
                 raise RuntimeError(
                     "[H9] checkpoint contains overlay parameters but matching model keys are missing: "
-                    + str(overlay_missing[:20])
+                    + str(non_candidate_overlay_missing[:20])
                 )
+            if match_candidate_checkpoint_keys and match_candidate_missing:
+                raise RuntimeError(
+                    "[H9] Match-Code candidate checkpoint is incomplete for the current model: "
+                    + str(match_candidate_missing[:20])
+                )
+            if match_candidate_missing and not match_candidate_checkpoint_keys:
+                match_modes = {
+                    "binary_de9_match_code", "de9_match_code",
+                    "binary_mc49_match_code", "mc49_match_code",
+                    "binary_ax17_match_code", "ax17_match_code",
+                    "binary_pc9_patch_match_code", "pc9_patch_match_code", "h76_pc9",
+                    "binary_lc4_match_code", "lc4_match_code", "h77_lc4",
+                    "binary_g4_match_code", "g4_match_code", "h78_g4",
+                    "binary_cf10_match_code", "cf10_match_code", "h79_cf10",
+                    "binary_dn9_match_code", "dn9_match_code", "h80_dn9",
+                }
+                current_mode = str(config.get("bsa_attention", {}).get("mode", ""))
+                if current_mode not in match_modes:
+                    raise RuntimeError("[H9] unexpected missing Match-Code candidate weights outside a Match-Code config")
+                if match_code_missing:
+                    print(f"[H9] initialized new Match-Code weights: {len(match_code_missing)}")
+                if round3_aux_missing:
+                    print(f"[H9] initialized new Round3 auxiliary parameters: {len(round3_aux_missing)}")
+                if round4_aux_missing:
+                    print(f"[H9] initialized new Round4 auxiliary parameters: {len(round4_aux_missing)}")
             if not overlay_v_checkpoint_keys:
                 synced_v = sync_independent_value_branch_from_k(model, config.get("bsa_attention"))
                 if synced_v:
@@ -148,6 +203,8 @@ SCALER_STEP_ANCHOR = """                    scaler.step(optimizer)
 SCALER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimizer import apply_lr_warmup, lr_warmup_factor
                     h40_global_step = epoch * len(train_dataloader) + sample + 1
                     h40_lrs = apply_lr_warmup(optimizer, h40_global_step, config)
+                    from models.STSwinNet_SNN.h28_optimizer import freeze_threshold_gradients
+                    h40_frozen_threshold_grads = freeze_threshold_gradients(model, h40_global_step, config)
                     scaler.step(optimizer)
                     from models.STSwinNet_SNN.atlif_ternary_psn import threshold_update
                     h40_warmup_factor = lr_warmup_factor(h40_global_step, config)
@@ -161,6 +218,8 @@ SCALER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimiz
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
                         if h40_lrs is not None:
                             print(f"[H40] step {sample + 1} lr_warmup: {h40_lrs}")
+                        if h40_frozen_threshold_grads:
+                            print(f"[H40] step {sample + 1} frozen threshold gradients: {h40_frozen_threshold_grads}")
                         print(f"[H9] step {sample + 1} update: {h8_update_stats}")
                     scaler.update()
 """
@@ -173,6 +232,8 @@ OPTIMIZER_STEP_ANCHOR = """                    optimizer.step()
 OPTIMIZER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimizer import apply_lr_warmup, lr_warmup_factor
                     h40_global_step = epoch * len(train_dataloader) + sample + 1
                     h40_lrs = apply_lr_warmup(optimizer, h40_global_step, config)
+                    from models.STSwinNet_SNN.h28_optimizer import freeze_threshold_gradients
+                    h40_frozen_threshold_grads = freeze_threshold_gradients(model, h40_global_step, config)
                     optimizer.step()
                     from models.STSwinNet_SNN.atlif_ternary_psn import threshold_update
                     h40_warmup_factor = lr_warmup_factor(h40_global_step, config)
@@ -186,6 +247,8 @@ OPTIMIZER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_opti
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
                         if h40_lrs is not None:
                             print(f"[H40] step {sample + 1} lr_warmup: {h40_lrs}")
+                        if h40_frozen_threshold_grads:
+                            print(f"[H40] step {sample + 1} frozen threshold gradients: {h40_frozen_threshold_grads}")
                         print(f"[H9] step {sample + 1} update: {h8_update_stats}")
 
                 # zero grad
@@ -244,11 +307,19 @@ SAVE_ANCHOR = """            should_save_model = epoch_loss < best_loss or epoch
 """
 
 SAVE_PATCH = """            force_save_epochs = set(int(item) for item in config.get("runtime", {}).get("force_save_epochs", []) or [])
-            should_save_model = (
-                epoch_loss < best_loss
-                or epoch == config["loader"]["n_epochs"] - 1
-                or epoch in force_save_epochs
-            ) and not bool(config.get("runtime", {}).get("skip_save", False))
+            save_only_force_epochs = bool(config.get("runtime", {}).get("save_only_force_epochs", False))
+            if save_only_force_epochs:
+                should_save_model = (
+                    epoch in force_save_epochs
+                    or epoch == config["loader"]["n_epochs"] - 1
+                )
+            else:
+                should_save_model = (
+                    epoch_loss < best_loss
+                    or epoch == config["loader"]["n_epochs"] - 1
+                    or epoch in force_save_epochs
+                )
+            should_save_model = should_save_model and not bool(config.get("runtime", {}).get("skip_save", False))
 """
 
 MLFLOW_MODEL_LOGGING_ANCHOR = """                if use_ml_flow and use_mlflow_model_logging:
@@ -275,7 +346,13 @@ STATE_SAVE_ANCHOR = """                    state_path = checkpoint_path.replace(
                     print(f"Local training state saved to {state_path}")
 """
 
-STATE_SAVE_PATCH = """                    if not bool(config.get("runtime", {}).get("skip_state_save", False)):
+STATE_SAVE_PATCH = """                    state_save_epochs = set(int(item) for item in config.get("runtime", {}).get("state_save_epochs", []) or [])
+                    should_save_state = (
+                        not state_save_epochs
+                        or epoch in state_save_epochs
+                        or epoch == config["loader"]["n_epochs"] - 1
+                    )
+                    if should_save_state and not bool(config.get("runtime", {}).get("skip_state_save", False)):
                         state_path = checkpoint_path.replace(".pth", "_state_dict.pth")
                         torch.save(
                             {
@@ -370,7 +447,7 @@ def _install_optional_mlflow_stub() -> None:
 
 
 def _absolutize_path_args(extra_args: list[str]) -> list[str]:
-    path_flags = {"--save_path", "--resume", "--finetune", "--path_mlflow", "--prev_runid"}
+    path_flags = {"--save_path", "--path_mlflow", "--prev_runid"}
     normalized = list(extra_args)
     index = 0
     while index < len(normalized):
@@ -390,6 +467,7 @@ def _absolutize_path_args(extra_args: list[str]) -> list[str]:
 def _patch_source(source: str, baseline_entry: Path) -> str:
     for anchor, replacement in (
         (PIN_MEMORY_ANCHOR, PIN_MEMORY_PATCH),
+        (SEED_ANCHOR, SEED_PATCH),
         (LOAD_MODEL_ANCHOR, LOAD_MODEL_PATCH),
         (LOSS_ANCHOR, LOSS_PATCH),
         (SCALER_STEP_ANCHOR, SCALER_STEP_PATCH),

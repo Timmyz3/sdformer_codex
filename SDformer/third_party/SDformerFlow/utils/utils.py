@@ -80,6 +80,7 @@ def load_model(prev_runid, model, device, remap = None, test=False):
             pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
         elif remap == "v1":
             load_pretrained_interpolate(model, pretrained_dict)
+            model.load_state_dict(pretrained_dict, strict=False)
             del pretrained_model
             torch.cuda.empty_cache()
             print("Model restored from local checkpoint " + prev_runid + "\n")
@@ -207,7 +208,19 @@ def save_state_dict(optimizer,scheduler,scaler, epoch):
         "epoch": epoch,
         "scaler": scaler.state_dict() if scaler else None,
     }
-    mlflow.pytorch.log_state_dict(state_dict, artifact_path="training_state_dict")
+    local_dir = os.environ.get("SDFORMER_MDR_LOCAL_CHECKPOINT_DIR")
+    if local_dir:
+        os.makedirs(local_dir, exist_ok=True)
+        state_path = os.path.join(local_dir, f"checkpoint_epoch{epoch}_state_dict.pth")
+        torch.save(state_dict, state_path)
+        print(f"Training state saved locally at {state_path}\n")
+    if os.environ.get("SDFORMER_MDR_SKIP_MLFLOW_STATE_LOG", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        mlflow.pytorch.log_state_dict(state_dict, artifact_path="training_state_dict")
 
 
 def save_csv(data, fname):

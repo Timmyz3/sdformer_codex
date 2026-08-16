@@ -8,7 +8,10 @@ baseline attention block has no separate V projection.
 
 from __future__ import annotations
 
+import base64
 import copy
+import math
+import zlib
 from dataclasses import dataclass
 from types import MethodType
 from typing import Any, Iterable
@@ -51,10 +54,32 @@ class ShiftmaxAttentionConfig:
     k_magnitude_alpha: float = 0.0  # K magnitude correction: score += α × sign(Q) × |K_before_sign|
     temporal_consistency_alpha: float = 0.0  # S3: penalty on gate time variation
     motion_weight_alpha: float = 0.0  # S1: scale motion magnitude bonus
+    binary_motion_xor_alpha: float = 0.0  # H67: dyadic temporal K XOR bias
+    castling_matrix_aux_weight: float = 0.0  # H68: training-only full-matrix branch
+    castling_matrix_aux_end_step: int = 0
+    event_temperature_enabled: bool = False  # H70: activity-conditioned dyadic inverse-temperature
+    event_temperature_max_shift: int = 3
+    context_broadcast_enabled: bool = False  # H71: parameter-free window context mixing
+    match_code_seed: int = 6701
+    match_code_weight_quant_enabled: bool = False
+    match_code_weight_step: float = 1.0 / 128.0
+    match_code_weight_min: float = -1.0
+    match_code_weight_max: float = 127.0 / 128.0
+    lc4_coefficient_quant_enabled: bool = False
+    lc4_coefficient_step: float = 1.0 / 64.0
+    lc4_coefficient_min: float = -1.0
+    lc4_coefficient_max: float = 1.0
+    cf10_beta_step: float = 1.0 / 64.0
+    cf10_beta_min: float = -1.0
+    cf10_beta_max: float = 1.0
     directional_channels_enabled: bool = False  # S2: split Q/K by x/y direction
     directional_merge_mode: str = "sum"  # S2: "sum" or "mean"
     confidence_min_active: int = 0  # FAPS: sparse K_mag only when active channels >= tau
     flow_disagreement_gamma: float = 0.0  # FAPS: penalize |S_x - S_y| when directional
+    faps_same_nonzero_weight: float = 4.0
+    faps_same_zero_weight: float = 1.0
+    faps_opposite_weight: float = 1.0
+    faps_single_active_weight: float = 4.0
     directional_residual_gamma: float = 0.0  # H62: confidence-gated directional residual strength
     confidence_floor: float = 0.0  # H62: minimum residual confidence
     kmag_quantize_bits: int = 2  # FAPS: quantize threshold-margin lane to N-bit levels
@@ -71,6 +96,11 @@ class ShiftmaxAttentionConfig:
     hardware_gate_step: float = 0.0
     hardware_gate_min: float | None = None
     hardware_gate_max: float | None = None
+    hardware_rtl_shiftmax_enabled: bool = False
+    hardware_mask_invalid_candidates: bool = False
+    direct_shiftmax_groups: int = 1
+    direct_shiftmax_center_output: bool = False
+    direct_shiftmax_signed_events: bool = False
 
 
 def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
@@ -111,10 +141,32 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         k_magnitude_alpha=float(raw.get("k_magnitude_alpha", 0.0)),
         temporal_consistency_alpha=float(raw.get("temporal_consistency_alpha", 0.0)),
         motion_weight_alpha=float(raw.get("motion_weight_alpha", 0.0)),
+        binary_motion_xor_alpha=float(raw.get("binary_motion_xor_alpha", 0.0)),
+        castling_matrix_aux_weight=float(raw.get("castling_matrix_aux_weight", 0.0)),
+        castling_matrix_aux_end_step=int(raw.get("castling_matrix_aux_end_step", 0) or 0),
+        event_temperature_enabled=bool(raw.get("event_temperature_enabled", False)),
+        event_temperature_max_shift=int(raw.get("event_temperature_max_shift", 3) or 0),
+        context_broadcast_enabled=bool(raw.get("context_broadcast_enabled", False)),
+        match_code_seed=int(raw.get("match_code_seed", 6701) or 6701),
+        match_code_weight_quant_enabled=bool(raw.get("match_code_weight_quant_enabled", False)),
+        match_code_weight_step=float(raw.get("match_code_weight_step", 1.0 / 128.0) or 0.0),
+        match_code_weight_min=float(raw.get("match_code_weight_min", -1.0)),
+        match_code_weight_max=float(raw.get("match_code_weight_max", 127.0 / 128.0)),
+        lc4_coefficient_quant_enabled=bool(raw.get("lc4_coefficient_quant_enabled", False)),
+        lc4_coefficient_step=float(raw.get("lc4_coefficient_step", 1.0 / 64.0) or 0.0),
+        lc4_coefficient_min=float(raw.get("lc4_coefficient_min", -1.0)),
+        lc4_coefficient_max=float(raw.get("lc4_coefficient_max", 1.0)),
+        cf10_beta_step=float(raw.get("cf10_beta_step", 1.0 / 64.0) or 0.0),
+        cf10_beta_min=float(raw.get("cf10_beta_min", -1.0)),
+        cf10_beta_max=float(raw.get("cf10_beta_max", 1.0)),
         directional_channels_enabled=bool(raw.get("directional_channels_enabled", False)),
         directional_merge_mode=str(raw.get("directional_merge_mode", "sum")),
         confidence_min_active=int(raw.get("confidence_min_active", 0) or 0),
         flow_disagreement_gamma=float(raw.get("flow_disagreement_gamma", 0.0)),
+        faps_same_nonzero_weight=float(raw.get("faps_same_nonzero_weight", 4.0)),
+        faps_same_zero_weight=float(raw.get("faps_same_zero_weight", 1.0)),
+        faps_opposite_weight=float(raw.get("faps_opposite_weight", 1.0)),
+        faps_single_active_weight=float(raw.get("faps_single_active_weight", 4.0)),
         directional_residual_gamma=float(raw.get("directional_residual_gamma", 0.0)),
         confidence_floor=float(raw.get("confidence_floor", 0.0)),
         kmag_quantize_bits=int(raw.get("kmag_quantize_bits", 2) or 2),
@@ -131,6 +183,13 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         hardware_gate_step=float(raw.get("hardware_gate_step", 0.0) or 0.0),
         hardware_gate_min=None if raw.get("hardware_gate_min") is None else float(raw.get("hardware_gate_min")),
         hardware_gate_max=None if raw.get("hardware_gate_max") is None else float(raw.get("hardware_gate_max")),
+        hardware_rtl_shiftmax_enabled=bool(raw.get("hardware_rtl_shiftmax_enabled", False)),
+        hardware_mask_invalid_candidates=bool(
+            raw.get("hardware_mask_invalid_candidates", False)
+        ),
+        direct_shiftmax_groups=int(raw.get("direct_shiftmax_groups", 1) or 1),
+        direct_shiftmax_center_output=bool(raw.get("direct_shiftmax_center_output", False)),
+        direct_shiftmax_signed_events=bool(raw.get("direct_shiftmax_signed_events", False)),
     )
 
 
@@ -164,6 +223,35 @@ def _apply_hardware_score_quant(scores: torch.Tensor, cfg: ShiftmaxAttentionConf
     return _quantize_ste(scores, float(cfg.hardware_score_step))
 
 
+def _hardware_score_clip_stats(
+    scores: torch.Tensor | None,
+    cfg: ShiftmaxAttentionConfig,
+) -> dict[str, int | float]:
+    """Count deployment score clipping without changing the quantized path."""
+
+    if scores is None or not cfg.hardware_quant_enabled:
+        return {}
+    data = scores.detach()
+    total = int(data.numel())
+    low = (
+        int((data < float(cfg.hardware_score_min)).sum().item())
+        if cfg.hardware_score_min is not None
+        else 0
+    )
+    high = (
+        int((data > float(cfg.hardware_score_max)).sum().item())
+        if cfg.hardware_score_max is not None
+        else 0
+    )
+    clipped = low + high
+    return {
+        "score_quant_total": total,
+        "score_clip_low": low,
+        "score_clip_high": high,
+        "score_clip_ratio": clipped / total if total else 0.0,
+    }
+
+
 def _apply_hardware_gate_quant(gate: torch.Tensor, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
     if not cfg.hardware_quant_enabled:
         return gate
@@ -172,6 +260,69 @@ def _apply_hardware_gate_quant(gate: torch.Tensor, cfg: ShiftmaxAttentionConfig)
         max_value = float("inf") if cfg.hardware_gate_max is None else float(cfg.hardware_gate_max)
         gate = gate.clamp(min=min_value, max=max_value)
     return _quantize_ste(gate, float(cfg.hardware_gate_step))
+
+
+def _rtl_shiftmax_gate_q17(
+    scores: torch.Tensor,
+    *,
+    dim: int,
+    preserve_mean: bool,
+    valid_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Bit-exact model of the RTL LUT Shiftmax and unsigned Q1.7 gate.
+
+    ``scores`` must already be quantized to Q7. The RTL subtracts the row
+    maximum, approximates ``2**delta`` with a 16-entry Q8 LUT, normalizes by
+    the next power-of-two integer row sum, and rounds the final gate to nearest
+    with ties to even. The output is saturated to the deployment range [0, 2].
+    """
+
+    score_q7 = torch.round(scores * 128.0).to(dtype=torch.int64)
+    if valid_mask is not None:
+        valid_mask = valid_mask.to(device=scores.device, dtype=torch.bool)
+        valid_mask = torch.broadcast_to(valid_mask, scores.shape)
+        score_min = torch.iinfo(score_q7.dtype).min // 4
+        row_max_q7 = score_q7.masked_fill(~valid_mask, score_min).amax(
+            dim=dim, keepdim=True
+        )
+    else:
+        row_max_q7 = score_q7.amax(dim=dim, keepdim=True)
+    delta_q7 = score_q7 - row_max_q7
+    abs_delta = (-delta_q7).clamp_min(0)
+    integer_shift = torch.bitwise_right_shift(abs_delta, 7).clamp_max(8)
+    fraction_q7 = torch.bitwise_and(abs_delta, 127)
+    fraction_index = torch.div(fraction_q7 + 7, 8, rounding_mode="floor").clamp_max(15)
+    lut = torch.tensor(
+        [256, 245, 234, 224, 215, 205, 196, 188, 181, 173, 165, 158, 152, 145, 139, 133],
+        dtype=torch.int64,
+        device=scores.device,
+    )
+    exp_q8 = torch.bitwise_right_shift(lut[fraction_index], integer_shift)
+    if valid_mask is not None:
+        exp_q8 = exp_q8.masked_fill(~valid_mask, 0)
+    row_sum_q8 = exp_q8.sum(dim=dim, keepdim=True)
+
+    probe = (row_sum_q8 - 1).clamp_min(0)
+    denominator_shift = torch.zeros_like(probe)
+    for _ in range(32):
+        denominator_shift = denominator_shift + probe.ne(0).to(dtype=torch.int64)
+        probe = torch.bitwise_right_shift(probe, 1)
+
+    token_scale = scores.shape[dim] if preserve_mean else 1
+    scaled = exp_q8 * int(token_scale) * 128
+    quotient = torch.bitwise_right_shift(scaled, denominator_shift)
+    remainder = scaled - torch.bitwise_left_shift(quotient, denominator_shift)
+    half = torch.bitwise_left_shift(
+        torch.ones_like(denominator_shift),
+        (denominator_shift - 1).clamp_min(0),
+    )
+    increment = denominator_shift.ne(0) & (
+        remainder.gt(half) | (remainder.eq(half) & torch.bitwise_and(quotient, 1).ne(0))
+    )
+    gate_q17 = (quotient + increment.to(dtype=torch.int64)).clamp(min=0, max=256)
+    if valid_mask is not None:
+        gate_q17 = gate_q17.masked_fill(~valid_mask, 0)
+    return gate_q17.to(dtype=scores.dtype) / 128.0
 
 
 def _apply_hardware_mu_quant(mu: float, cfg: ShiftmaxAttentionConfig) -> float:
@@ -197,6 +348,851 @@ def _safe_float_stat(tensor: torch.Tensor | None, op: str) -> float | None:
     raise ValueError(op)
 
 
+def _encode_ordered_count_trace(counts: torch.Tensor) -> dict[str, Any]:
+    """Encode a profiling-only ordered count tensor without retaining Python lists."""
+
+    values = counts.detach().to(device="cpu", dtype=torch.long).contiguous()
+    if values.numel() == 0:
+        min_value = max_value = 0
+    else:
+        min_value = int(values.amin().item())
+        max_value = int(values.amax().item())
+    if -(1 << 15) <= min_value and max_value < (1 << 15):
+        cpu = values.to(dtype=torch.int16)
+        dtype = "int16_le"
+        payload_bytes = cpu.numpy().astype("<i2", copy=False).tobytes()
+    elif -(1 << 31) <= min_value and max_value < (1 << 31):
+        cpu = values.to(dtype=torch.int32)
+        dtype = "int32_le"
+        payload_bytes = cpu.numpy().astype("<i4", copy=False).tobytes()
+    else:
+        raise OverflowError(
+            f"ordered count trace超出int32范围: [{min_value}, {max_value}]"
+        )
+    payload = zlib.compress(payload_bytes, level=6)
+    return {
+        "shape": list(cpu.shape),
+        "dtype": dtype,
+        "codec": "zlib_base64",
+        "data": base64.b64encode(payload).decode("ascii"),
+    }
+
+
+def _delta_locality_stats(
+    q_toggle: torch.Tensor,
+    k_toggle: torch.Tensor,
+    *,
+    include_ordered_trace: bool = False,
+) -> dict[str, Any]:
+    """Return raw, element-weightable locality counts for exact Delta-TTX."""
+
+    if q_toggle.dtype != torch.bool or k_toggle.dtype != torch.bool:
+        raise ValueError("Delta-TTX toggle tensors must be boolean")
+    if q_toggle.shape != k_toggle.shape or q_toggle.ndim != 4:
+        raise ValueError("Delta-TTX toggles must share [B, heads, tokens, lanes] shape")
+    update = q_toggle | k_toggle
+    update_count = update.sum(dim=-1)
+    lanes = int(update.shape[-1])
+    changed_token = update_count > 0
+    token_heads = int(update_count.numel())
+    changed_tokens = int(changed_token.sum().item())
+    previous = torch.nn.functional.pad(changed_token[..., :-1], (1, 0), value=False)
+    run_starts = changed_token & ~previous
+    stats = {
+        "delta_token_heads": token_heads,
+        "delta_zero_update_token_heads": token_heads - changed_tokens,
+        "delta_changed_token_heads": changed_tokens,
+        "delta_changed_token_runs": int(run_starts.sum().item()),
+        "delta_update_count_0": int((update_count == 0).sum().item()),
+        "delta_update_count_1": int((update_count == 1).sum().item()),
+        "delta_update_count_2": int((update_count == 2).sum().item()),
+        "delta_update_count_3_4": int(((update_count >= 3) & (update_count <= 4)).sum().item()),
+        "delta_update_count_5_8": int(((update_count >= 5) & (update_count <= 8)).sum().item()),
+        "delta_update_count_9_16": int(((update_count >= 9) & (update_count <= 16)).sum().item()),
+        "delta_update_count_17_plus": int((update_count >= 17).sum().item()),
+        "delta_update_histogram": torch.bincount(
+            update_count.reshape(-1), minlength=lanes + 1
+        ).cpu().tolist(),
+    }
+    for threshold in (2, 4, 8, 12, 16):
+        sparse = (update_count > 0) & (update_count <= threshold)
+        stats[f"delta_active_le{threshold}"] = int(sparse.sum().item())
+        stats[f"delta_active_lane_sum_le{threshold}"] = int(update_count[sparse].sum().item())
+    for bundle in (4, 8):
+        token_count = int(changed_token.shape[-1])
+        groups = (token_count + bundle - 1) // bundle
+        padded = torch.nn.functional.pad(changed_token, (0, groups * bundle - token_count), value=False)
+        bundle_changed = padded.reshape(*padded.shape[:-1], groups, bundle).any(dim=-1)
+        stats[f"delta_bundle{bundle}_total"] = int(bundle_changed.numel())
+        stats[f"delta_bundle{bundle}_empty"] = int((~bundle_changed).sum().item())
+    if include_ordered_trace:
+        stats["delta_update_ordered_trace"] = _encode_ordered_count_trace(update_count)
+    return stats
+
+
+def _token_time_bundle_stats(
+    q_binary: torch.Tensor,
+    k_binary: torch.Tensor,
+    *,
+    include_ordered_trace: bool = False,
+) -> dict[str, Any]:
+    """Raw counts for true T=2 by spatial-token hardware bundles.
+
+    Activity routing uses ``Q OR K``. K-zero bundles are reported separately
+    because they permit exact value/projection gating but do not, by themselves,
+    permit dropping a score from the window-wide Shiftmax denominator.
+    """
+
+    if q_binary.dtype != torch.bool or k_binary.dtype != torch.bool:
+        raise ValueError("TTB tensors must be boolean")
+    if q_binary.ndim != 5 or k_binary.ndim != 5:
+        raise ValueError("TTB tensors must use [T,B,heads,tokens,lanes]")
+    if q_binary.shape != k_binary.shape or q_binary.shape[0] != 2:
+        raise ValueError("TTB requires matching Q/K tensors with T=2")
+
+    t_steps, batch, heads, tokens, lanes = q_binary.shape
+    union = q_binary | k_binary
+    motion = k_binary[0] ^ k_binary[1]
+    stats: dict[str, Any] = {}
+    for bundle in (1, 2, 4, 8):
+        groups = (tokens + bundle - 1) // bundle
+        pad_tokens = groups * bundle - tokens
+        union_padded = torch.nn.functional.pad(union, (0, 0, 0, pad_tokens), value=False)
+        k_padded = torch.nn.functional.pad(k_binary, (0, 0, 0, pad_tokens), value=False)
+        motion_padded = torch.nn.functional.pad(motion, (0, 0, 0, pad_tokens), value=False)
+        union_count = union_padded.reshape(
+            t_steps, batch, heads, groups, bundle, lanes
+        ).sum(dim=(0, 4, 5))
+        k_count = k_padded.reshape(
+            t_steps, batch, heads, groups, bundle, lanes
+        ).sum(dim=(0, 4, 5))
+        motion_count = motion_padded.reshape(
+            batch, heads, groups, bundle, lanes
+        ).sum(dim=(3, 4))
+        prefix = f"ttb_tok{bundle}"
+        stats[f"{prefix}_total"] = int(union_count.numel())
+        stats[f"{prefix}_empty"] = int((union_count == 0).sum().item())
+        stats[f"{prefix}_active_lanes"] = int(union_count.sum().item())
+        stats[f"{prefix}_capacity_lanes"] = int(t_steps * batch * heads * tokens * lanes)
+        stats[f"{prefix}_kzero"] = int((k_count == 0).sum().item())
+        stats[f"{prefix}_motion_zero"] = int((motion_count == 0).sum().item())
+        stats[f"{prefix}_active_histogram"] = torch.bincount(
+            union_count.reshape(-1), minlength=t_steps * bundle * lanes + 1
+        ).cpu().tolist()
+        if include_ordered_trace and bundle in (4, 8):
+            stats[f"{prefix}_active_ordered_trace"] = _encode_ordered_count_trace(union_count)
+            stats[f"{prefix}_k_ordered_trace"] = _encode_ordered_count_trace(k_count)
+            stats[f"{prefix}_motion_ordered_trace"] = _encode_ordered_count_trace(motion_count)
+        for threshold in (2, 4, 8, 12, 16, 32):
+            sparse = (union_count > 0) & (union_count <= threshold)
+            stats[f"{prefix}_active_le{threshold}"] = int(sparse.sum().item())
+            stats[f"{prefix}_active_lane_sum_le{threshold}"] = int(
+                union_count[sparse].sum().item()
+            )
+    return stats
+
+
+def _spatial_pair_locality_stats(
+    q_binary: torch.Tensor,
+    k_binary: torch.Tensor,
+) -> dict[str, Any]:
+    """Measure exact spatial locality and sparse-bank pressure for a T=2 window."""
+
+    if q_binary.shape != k_binary.shape or q_binary.ndim != 5 or q_binary.shape[0] != 2:
+        raise ValueError("spatial pair tensors must share [2,B,H,N,D] shape")
+    tokens = int(q_binary.shape[-2])
+    side = math.isqrt(tokens)
+    if side * side != tokens:
+        return {}
+
+    token_active = (q_binary | k_binary).any(dim=-1)
+    union = token_active.any(dim=0)
+    persistent = token_active[0] & token_active[1]
+    changed = token_active[0] ^ token_active[1]
+    grid = union.reshape(*union.shape[:-1], side, side)
+    row_total = int(union.shape[0] * union.shape[1])
+    union_count = union.sum(dim=-1).to(dtype=torch.long)
+
+    stats: dict[str, Any] = {
+        "spatial_row_total": row_total,
+        "spatial_union_tokens": int(union.sum().item()),
+        "spatial_persistent_tokens": int(persistent.sum().item()),
+        "spatial_changed_tokens": int(changed.sum().item()),
+        "spatial_union_count_histogram": torch.bincount(
+            union_count.reshape(-1), minlength=tokens + 1
+        ).cpu().tolist(),
+    }
+    adjacency = {
+        "horizontal": (grid[..., :, :-1], grid[..., :, 1:]),
+        "vertical": (grid[..., :-1, :], grid[..., 1:, :]),
+        "diag_down": (grid[..., :-1, :-1], grid[..., 1:, 1:]),
+        "diag_up": (grid[..., 1:, :-1], grid[..., :-1, 1:]),
+    }
+    for name, (left, right) in adjacency.items():
+        stats[f"spatial_{name}_adjacent_active"] = int((left & right).sum().item())
+        stats[f"spatial_{name}_adjacent_total"] = int(left.numel())
+
+    rows = torch.arange(side, device=union.device).view(side, 1).expand(side, side)
+    cols = torch.arange(side, device=union.device).view(1, side).expand(side, side)
+    linear = torch.arange(tokens, device=union.device).reshape(side, side)
+    for banks in (4, 8):
+        mappings = {
+            "rowmajor": torch.remainder(linear, banks),
+            "diagonal": torch.remainder(rows + cols, banks),
+            "xor": torch.remainder(torch.bitwise_xor(rows, cols), banks),
+        }
+        for name, mapping in mappings.items():
+            # CUDA does not implement Long matmul; use float32 for counting.
+            bank_select = torch.nn.functional.one_hot(
+                mapping.reshape(-1), num_classes=banks
+            ).to(dtype=torch.float32)
+            loads = union.to(dtype=torch.float32) @ bank_select
+            cycles = loads.amax(dim=-1).to(dtype=torch.long)
+            stats[f"spatial_bank{banks}_{name}_cycles_sum"] = int(cycles.sum().item())
+            stats[f"spatial_bank{banks}_{name}_cycles_histogram"] = torch.bincount(
+                cycles.reshape(-1), minlength=tokens + 1
+            ).cpu().tolist()
+    return stats
+
+
+def _binary_temporal_pair_stats(
+    q_binary: torch.Tensor,
+    k_binary: torch.Tensor,
+    *,
+    gate_q17_code: torch.Tensor | None = None,
+    windows_per_sample: int | None = None,
+    include_ordered_trace: bool = False,
+) -> dict[str, Any]:
+    """Return sufficient statistics for TTX and H67 temporal-pair hardware.
+
+    The input layout is ``[T=2, B, heads, spatial_tokens, lanes]``.  Per-time
+    Q/K cardinalities and intersections are sufficient to reconstruct the
+    dyadic TTX score.  The K temporal XOR cardinality adds the H67 motion term.
+    """
+
+    if q_binary.dtype != torch.bool or k_binary.dtype != torch.bool:
+        raise ValueError("binary temporal-pair tensors must be boolean")
+    if q_binary.shape != k_binary.shape or q_binary.ndim != 5 or q_binary.shape[0] != 2:
+        raise ValueError("binary temporal-pair tensors must share [2,B,H,N,D] shape")
+
+    lanes = int(q_binary.shape[-1])
+    q_count = q_binary.sum(dim=-1).to(dtype=torch.long)
+    k_count = k_binary.sum(dim=-1).to(dtype=torch.long)
+    overlap = (q_binary & k_binary).sum(dim=-1).to(dtype=torch.long)
+    same_zero = lanes - q_count - k_count + overlap
+    motion = (k_binary[0] ^ k_binary[1]).sum(dim=-1).to(dtype=torch.long)
+    k_temporal_intersection = (k_binary[0] & k_binary[1]).sum(dim=-1).to(dtype=torch.long)
+    k_temporal_union = (k_binary[0] | k_binary[1]).sum(dim=-1).to(dtype=torch.long)
+    update = ((q_binary[0] ^ q_binary[1]) | (k_binary[0] ^ k_binary[1])).sum(
+        dim=-1
+    ).to(dtype=torch.long)
+    four_vector_events = (q_count + k_count).sum(dim=0)
+    four_vector_union = (
+        q_binary[0] | q_binary[1] | k_binary[0] | k_binary[1]
+    ).sum(dim=-1).to(dtype=torch.long)
+
+    # Q7 deployment units: round-to-nearest-even((64*overlap + same_zero
+    # + 16*motion)/16).  Omitting the final term gives TTX/H68 deployment.
+    ttx_numerator = 64 * overlap + same_zero
+    h67_numerator = ttx_numerator + 16 * motion.unsqueeze(0)
+
+    def rne_div_pow2(numerator: torch.Tensor, denominator: int) -> torch.Tensor:
+        if denominator <= 0 or denominator & (denominator - 1):
+            raise ValueError("RNE denominator must be a positive power of two")
+        quotient = torch.div(numerator, denominator, rounding_mode="floor")
+        remainder = torch.remainder(numerator, denominator)
+        half = denominator // 2
+        increment = remainder.gt(half) | (
+            remainder.eq(half) & quotient.bitwise_and(1).ne(0)
+        )
+        return quotient + increment.to(dtype=quotient.dtype)
+
+    ttx_score_q7 = rne_div_pow2(ttx_numerator, 16)
+    h67_score_q7 = rne_div_pow2(h67_numerator, 16)
+    # The exact H67 numerator represents score * 2^11. These counters expose
+    # fractional-precision sensitivity without changing the model forward.
+    # They are workload statistics, not claims that the Q5/Q6/Q8 RTL exists.
+    h67_scores_by_fractional_bits = {
+        bits: rne_div_pow2(h67_numerator, 1 << (11 - bits))
+        for bits in (5, 6, 7, 8)
+    }
+    pair_empty = four_vector_events.eq(0)
+    kzero_mask = k_count[0].eq(0).to(dtype=torch.long) | (
+        k_count[1].eq(0).to(dtype=torch.long) << 1
+    )
+    score_pair_equal_ttx = ttx_score_q7[0].eq(ttx_score_q7[1])
+    score_pair_equal_h67 = h67_score_q7[0].eq(h67_score_q7[1])
+    score_pair_equal_h67_by_fractional_bits = {
+        bits: scores[0].eq(scores[1])
+        for bits, scores in h67_scores_by_fractional_bits.items()
+    }
+    row_scores_ttx = ttx_score_q7.permute(1, 2, 0, 3).reshape(
+        q_binary.shape[1], q_binary.shape[2], -1
+    )
+    row_scores_h67 = h67_score_q7.permute(1, 2, 0, 3).reshape(
+        q_binary.shape[1], q_binary.shape[2], -1
+    )
+    row_k_binary = k_binary.permute(1, 2, 0, 3, 4).reshape(
+        q_binary.shape[1], q_binary.shape[2], -1, lanes
+    )
+
+    def projection_class_channel_terms(
+        row_scores: torch.Tensor,
+        num_classes: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[int, torch.Tensor]]:
+        """Count unique class-channel products and their maximum token fanout."""
+
+        rows = int(row_scores.shape[0] * row_scores.shape[1])
+        score_index = row_scores.reshape(rows, -1).clamp(
+            min=0, max=num_classes - 1
+        )
+        k_lanes = row_k_binary.reshape(rows, -1, lanes).to(dtype=torch.int32)
+        class_channel_counts = torch.zeros(
+            rows,
+            num_classes,
+            lanes,
+            dtype=torch.int32,
+            device=row_scores.device,
+        )
+        class_channel_counts.scatter_add_(
+            1,
+            score_index.unsqueeze(-1).expand(-1, -1, lanes),
+            k_lanes,
+        )
+        terms = class_channel_counts.ne(0).sum(dim=(1, 2)).reshape(
+            row_scores.shape[0], row_scores.shape[1]
+        ).to(dtype=torch.long)
+        max_fanout = class_channel_counts.amax(dim=(1, 2)).reshape(
+            row_scores.shape[0], row_scores.shape[1]
+        ).to(dtype=torch.long)
+        delivery_cycles = {
+            width: torch.div(
+                class_channel_counts + width - 1, width, rounding_mode="floor"
+            ).sum(dim=(1, 2)).reshape(
+                row_scores.shape[0], row_scores.shape[1]
+            ).to(dtype=torch.long)
+            for width in (1, 2, 4, 8, 16)
+        }
+        return terms, max_fanout, delivery_cycles
+
+    def projection_factorized_segment_stats(
+        row_scores: torch.Tensor,
+        num_classes: int,
+        *,
+        segment_tokens: int = 64,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """统计 class×lane 因子化位平面的物理分段扫描工作。"""
+
+        rows = int(row_scores.shape[0] * row_scores.shape[1])
+        tokens = int(row_scores.shape[-1])
+        score_index = row_scores.reshape(rows, tokens).clamp(
+            min=0, max=num_classes - 1
+        )
+        k_lanes = row_k_binary.reshape(rows, tokens, lanes).to(dtype=torch.int32)
+        class_segments = torch.zeros(
+            rows, dtype=torch.long, device=row_scores.device
+        )
+        class_lane_segments = torch.zeros_like(class_segments)
+        for start in range(0, tokens, segment_tokens):
+            stop = min(tokens, start + segment_tokens)
+            segment_counts = torch.zeros(
+                rows,
+                num_classes,
+                lanes,
+                dtype=torch.int32,
+                device=row_scores.device,
+            )
+            segment_counts.scatter_add_(
+                1,
+                score_index[:, start:stop].unsqueeze(-1).expand(
+                    -1, -1, lanes
+                ),
+                k_lanes[:, start:stop],
+            )
+            presence = segment_counts.ne(0)
+            class_segments += presence.any(dim=2).sum(dim=1)
+            class_lane_segments += presence.sum(dim=(1, 2))
+        return (
+            class_segments.reshape(row_scores.shape[0], row_scores.shape[1]),
+            class_lane_segments.reshape(
+                row_scores.shape[0], row_scores.shape[1]
+            ),
+        )
+
+    def projection_gate_group_terms(
+        gate_code: torch.Tensor,
+    ) -> dict[str, Any]:
+        """统计最终Q1.7 gate码驱动的逐row和跨窗口唯一乘积项。"""
+
+        if gate_code.shape != row_scores_ttx.shape:
+            raise ValueError("gate_q17_code必须与[B,heads,2N] row布局一致")
+        batch_windows, heads, tokens = gate_code.shape
+        sample_windows = (
+            batch_windows if windows_per_sample is None else int(windows_per_sample)
+        )
+        if sample_windows <= 0 or batch_windows % sample_windows != 0:
+            raise ValueError(
+                "windows_per_sample必须为正且整除batch_windows："
+                f"{sample_windows} vs {batch_windows}"
+            )
+        rows = batch_windows * heads
+        gate_index = gate_code.reshape(rows, tokens).clamp(min=0, max=256)
+        k_lanes = row_k_binary.reshape(rows, tokens, lanes).to(dtype=torch.int32)
+        # gate=0 的 gated-K 输出恒为零，不应进入 term、delivery 或 PPDI。
+        k_lanes = k_lanes * gate_index.ne(0).unsqueeze(-1)
+        class_channel_counts = torch.zeros(
+            rows, 257, lanes, dtype=torch.int32, device=gate_code.device
+        )
+        class_channel_counts.scatter_add_(
+            1,
+            gate_index.unsqueeze(-1).expand(-1, -1, lanes),
+            k_lanes,
+        )
+        destination_id = torch.arange(
+            tokens,
+            device=gate_code.device,
+            dtype=torch.long,
+        )
+        parity_counts = torch.zeros(
+            rows, 2, 257, lanes, dtype=torch.int32, device=gate_code.device
+        )
+        for parity in (0, 1):
+            parity_lanes = k_lanes * destination_id.bitwise_and(1).eq(
+                parity
+            ).reshape(1, tokens, 1)
+            parity_counts[:, parity].scatter_add_(
+                1,
+                gate_index.unsqueeze(-1).expand(-1, -1, lanes),
+                parity_lanes,
+            )
+        ppdi_delivery = parity_counts.amax(dim=1).sum(dim=(1, 2)).reshape(
+            batch_windows, heads
+        ).to(torch.long)
+        presence = class_channel_counts.ne(0)
+        row_terms = presence.sum(dim=(1, 2)).reshape(batch_windows, heads).to(torch.long)
+        max_fanout = class_channel_counts.amax(dim=(1, 2)).reshape(
+            batch_windows, heads
+        ).to(torch.long)
+        active_classes = presence.any(dim=2).sum(dim=1).reshape(
+            batch_windows, heads
+        ).to(torch.long)
+        delivery_cycles = {
+            width: torch.div(
+                class_channel_counts + width - 1, width, rounding_mode="floor"
+            ).sum(dim=(1, 2)).reshape(batch_windows, heads).to(torch.long)
+            for width in (1, 2, 4, 8, 16)
+        }
+        term_gate_histogram = presence.sum(dim=(0, 2)).to(torch.long)
+        active_lane_gate_histogram = torch.zeros(
+            257, dtype=torch.long, device=gate_code.device
+        )
+        active_lane_gate_histogram.scatter_add_(
+            0,
+            gate_index.reshape(-1),
+            k_lanes.sum(dim=-1).reshape(-1).to(torch.long),
+        )
+        presence = presence.reshape(batch_windows, heads, 257, lanes)
+        counts_by_window = class_channel_counts.reshape(batch_windows, heads, 257, lanes)
+        parity_counts_by_window = parity_counts.reshape(
+            batch_windows, heads, 2, 257, lanes
+        )
+        grouped: dict[int, dict[str, Any]] = {}
+        for group_windows in (1, 2, 4, 8, 16):
+            term_chunks = []
+            active_lane_chunks = []
+            class_chunks = []
+            fanout_chunks = []
+            window_count_chunks = []
+            ppdi_delivery_chunks = []
+            delivery_chunks: dict[int, list[torch.Tensor]] = {
+                width: [] for width in (1, 2, 4, 8, 16)
+            }
+            for sample_start in range(0, batch_windows, sample_windows):
+                sample_end = sample_start + sample_windows
+                for start in range(sample_start, sample_end, group_windows):
+                    grouped_counts = counts_by_window[
+                        start : min(start + group_windows, sample_end)
+                    ].sum(dim=0)
+                    grouped_parity_counts = parity_counts_by_window[
+                        start : min(start + group_windows, sample_end)
+                    ].sum(dim=0)
+                    valid_windows = min(start + group_windows, sample_end) - start
+                    grouped_presence = grouped_counts.ne(0)
+                    term_chunks.append(grouped_presence.sum(dim=(1, 2)))
+                    active_lane_chunks.append(grouped_counts.sum(dim=(1, 2)))
+                    class_chunks.append(grouped_presence.any(dim=2).sum(dim=1))
+                    fanout_chunks.append(grouped_counts.amax(dim=(1, 2)))
+                    window_count_chunks.append(
+                        torch.full(
+                            (heads,),
+                            valid_windows,
+                            dtype=torch.long,
+                            device=gate_code.device,
+                        )
+                    )
+                    ppdi_delivery_chunks.append(
+                        grouped_parity_counts.amax(dim=1).sum(dim=(1, 2))
+                    )
+                    for width in delivery_chunks:
+                        delivery_chunks[width].append(
+                            torch.div(
+                                grouped_counts + width - 1,
+                                width,
+                                rounding_mode="floor",
+                            ).sum(dim=(1, 2))
+                        )
+            grouped[group_windows] = {
+                "terms": torch.stack(term_chunks).to(torch.long),
+                "active_lanes": torch.stack(active_lane_chunks).to(torch.long),
+                "active_classes": torch.stack(class_chunks).to(torch.long),
+                "max_fanout": torch.stack(fanout_chunks).to(torch.long),
+                "window_count": torch.stack(window_count_chunks).to(torch.long),
+                "ppdi_delivery": torch.stack(ppdi_delivery_chunks).to(torch.long),
+                "delivery_cycles": {
+                    width: torch.stack(chunks).to(torch.long)
+                    for width, chunks in delivery_chunks.items()
+                },
+            }
+        noninteger_count = gate_code.lt(0).sum() + gate_code.gt(256).sum()
+        return {
+            "row_terms": row_terms,
+            "max_fanout": max_fanout,
+            "active_classes": active_classes,
+            "delivery_cycles": delivery_cycles,
+            "ppdi_delivery": ppdi_delivery,
+            "grouped_terms": grouped,
+            "term_gate_histogram": term_gate_histogram,
+            "active_lane_gate_histogram": active_lane_gate_histogram,
+            "out_of_range": noninteger_count.to(torch.long),
+        }
+
+    projection_baseline_active_lanes_by_row = row_k_binary.sum(dim=(2, 3)).to(
+        dtype=torch.long
+    )
+    (
+        projection_class_channel_terms_ttx_by_row,
+        projection_class_channel_max_fanout_ttx_by_row,
+        projection_multicast_delivery_ttx_by_width,
+    ) = projection_class_channel_terms(
+        row_scores_ttx, 4 * lanes + 3
+    )
+    (
+        projection_class_channel_terms_h67_by_row,
+        projection_class_channel_max_fanout_h67_by_row,
+        projection_multicast_delivery_h67_by_width,
+    ) = projection_class_channel_terms(
+        row_scores_h67, 5 * lanes + 3
+    )
+    projection_baseline_active_lanes = int(projection_baseline_active_lanes_by_row.sum().item())
+    projection_class_channel_terms_ttx = int(
+        projection_class_channel_terms_ttx_by_row.sum().item()
+    )
+    projection_class_channel_terms_h67 = int(
+        projection_class_channel_terms_h67_by_row.sum().item()
+    )
+    (
+        projection_h67_factor_class_segments_by_row,
+        projection_h67_factor_class_lane_segments_by_row,
+    ) = projection_factorized_segment_stats(
+        row_scores_h67,
+        5 * lanes + 3,
+    )
+    projection_h67_factor_class_segments = int(
+        projection_h67_factor_class_segments_by_row.sum().item()
+    )
+    projection_h67_factor_class_lane_segments = int(
+        projection_h67_factor_class_lane_segments_by_row.sum().item()
+    )
+    if projection_class_channel_terms_ttx > projection_baseline_active_lanes:
+        raise RuntimeError("TTX类通道投影项不能超过活动K lane基线")
+    if projection_class_channel_terms_h67 > projection_baseline_active_lanes:
+        raise RuntimeError("H67类通道投影项不能超过活动K lane基线")
+    if (
+        projection_h67_factor_class_lane_segments
+        < projection_class_channel_terms_h67
+    ):
+        raise RuntimeError("因子化class-lane分段数不能小于全row term数")
+    if (
+        projection_h67_factor_class_segments
+        > projection_h67_factor_class_lane_segments
+    ):
+        raise RuntimeError("因子化class分段数不能超过class-lane分段数")
+    gate_projection_stats = None
+    if gate_q17_code is not None:
+        gate_projection_stats = projection_gate_group_terms(gate_q17_code.to(torch.long))
+    score_class_one_hot_ttx = torch.nn.functional.one_hot(
+        row_scores_ttx.clamp(min=0, max=4 * lanes + 2),
+        num_classes=4 * lanes + 3,
+    ).bool()
+    score_class_one_hot_h67 = torch.nn.functional.one_hot(
+        row_scores_h67.clamp(min=0, max=4 * lanes + lanes + 2),
+        num_classes=5 * lanes + 3,
+    ).bool()
+    all_class_presence_ttx = score_class_one_hot_ttx.any(dim=2)
+    all_class_presence_h67 = score_class_one_hot_h67.any(dim=2)
+    kzero_token = k_count.eq(0)
+    row_kzero = kzero_token.permute(1, 2, 0, 3).reshape(
+        q_binary.shape[1], q_binary.shape[2], -1
+    )
+    kzero_class_presence_ttx = score_class_one_hot_ttx & row_kzero.unsqueeze(-1)
+    kzero_class_presence_h67 = score_class_one_hot_h67 & row_kzero.unsqueeze(-1)
+    active_class_presence_ttx = score_class_one_hot_ttx & (~row_kzero).unsqueeze(-1)
+    active_class_presence_h67 = score_class_one_hot_h67 & (~row_kzero).unsqueeze(-1)
+    all_occupied_classes_ttx = all_class_presence_ttx.sum(dim=-1).to(dtype=torch.long)
+    all_occupied_classes_h67 = all_class_presence_h67.sum(dim=-1).to(dtype=torch.long)
+    kzero_fold_classes_ttx = kzero_class_presence_ttx.any(dim=2).sum(dim=-1).to(dtype=torch.long)
+    kzero_fold_classes_h67 = kzero_class_presence_h67.any(dim=2).sum(dim=-1).to(dtype=torch.long)
+    active_projection_classes_ttx = active_class_presence_ttx.any(dim=2).sum(dim=-1).to(
+        dtype=torch.long
+    )
+    active_projection_classes_h67 = active_class_presence_h67.any(dim=2).sum(dim=-1).to(
+        dtype=torch.long
+    )
+    row_span_ttx = row_scores_ttx.amax(dim=-1) - row_scores_ttx.amin(dim=-1)
+    row_span_h67 = row_scores_h67.amax(dim=-1) - row_scores_h67.amin(dim=-1)
+    both_kzero = kzero_token[0] & kzero_token[1]
+    both_active = ~kzero_token[0] & ~kzero_token[1]
+
+    stats: dict[str, Any] = {
+        "pair_total": int(pair_empty.numel()),
+        "pair_empty": int(pair_empty.sum().item()),
+        "pair_motion_zero": int(motion.eq(0).sum().item()),
+        "pair_update_zero": int(update.eq(0).sum().item()),
+        "pair_score_equal_ttx": int(score_pair_equal_ttx.sum().item()),
+        "pair_score_equal_h67": int(score_pair_equal_h67.sum().item()),
+        **{
+            f"pair_score_equal_h67_qf{bits}": int(equal.sum().item())
+            for bits, equal in score_pair_equal_h67_by_fractional_bits.items()
+        },
+        "pair_kzero_both": int(kzero_mask.eq(3).sum().item()),
+        "pair_kzero_one": int(((kzero_mask == 1) | (kzero_mask == 2)).sum().item()),
+        "pair_both_active": int(both_active.sum().item()),
+        "k_temporal_baseline_reads": int(k_count.sum().item()),
+        "k_temporal_union_reads": int(k_temporal_union.sum().item()),
+        "k_temporal_intersection_reuse": int(k_temporal_intersection.sum().item()),
+        "projection_baseline_active_lanes": projection_baseline_active_lanes,
+        "projection_class_channel_terms_ttx": projection_class_channel_terms_ttx,
+        "projection_class_channel_terms_h67": projection_class_channel_terms_h67,
+        "projection_h67_factor_segment_tokens": 64,
+        "projection_h67_factor_class_segments": (
+            projection_h67_factor_class_segments
+        ),
+        "projection_h67_factor_class_lane_segments": (
+            projection_h67_factor_class_lane_segments
+        ),
+        "pair_kzero_same_class_ttx": int((both_kzero & score_pair_equal_ttx).sum().item()),
+        "pair_kzero_same_class_h67": int((both_kzero & score_pair_equal_h67).sum().item()),
+        "pair_kzero_dual_class_ttx": int((both_kzero & ~score_pair_equal_ttx).sum().item()),
+        "pair_kzero_dual_class_h67": int((both_kzero & ~score_pair_equal_h67).sum().item()),
+        "token_total": int(q_count.numel()),
+        "token_kzero": int(k_count.eq(0).sum().item()),
+        "row_total": int(kzero_fold_classes_h67.numel()),
+        "row_all_occupied_classes_sum_ttx": int(all_occupied_classes_ttx.sum().item()),
+        "row_all_occupied_classes_sum_h67": int(all_occupied_classes_h67.sum().item()),
+        "row_kzero_fold_classes_sum_ttx": int(kzero_fold_classes_ttx.sum().item()),
+        "row_kzero_fold_classes_sum_h67": int(kzero_fold_classes_h67.sum().item()),
+        "row_active_projection_classes_sum_ttx": int(active_projection_classes_ttx.sum().item()),
+        "row_active_projection_classes_sum_h67": int(active_projection_classes_h67.sum().item()),
+        "q_count_histogram": torch.bincount(q_count.reshape(-1), minlength=lanes + 1).cpu().tolist(),
+        "k_count_histogram": torch.bincount(k_count.reshape(-1), minlength=lanes + 1).cpu().tolist(),
+        "overlap_histogram": torch.bincount(overlap.reshape(-1), minlength=lanes + 1).cpu().tolist(),
+        "same_zero_histogram": torch.bincount(same_zero.reshape(-1), minlength=lanes + 1).cpu().tolist(),
+        "motion_histogram": torch.bincount(motion.reshape(-1), minlength=lanes + 1).cpu().tolist(),
+        "k_temporal_intersection_histogram": torch.bincount(
+            k_temporal_intersection.reshape(-1), minlength=lanes + 1
+        ).cpu().tolist(),
+        "k_temporal_union_histogram": torch.bincount(
+            k_temporal_union.reshape(-1), minlength=lanes + 1
+        ).cpu().tolist(),
+        "update_histogram": torch.bincount(update.reshape(-1), minlength=lanes + 1).cpu().tolist(),
+        "four_vector_event_histogram": torch.bincount(
+            four_vector_events.reshape(-1), minlength=4 * lanes + 1
+        ).cpu().tolist(),
+        "four_vector_union_histogram": torch.bincount(
+            four_vector_union.reshape(-1), minlength=lanes + 1
+        ).cpu().tolist(),
+        "ttx_score_q7_histogram": torch.bincount(
+            ttx_score_q7.reshape(-1), minlength=4 * lanes + 3
+        ).cpu().tolist(),
+        "h67_score_q7_histogram": torch.bincount(
+            h67_score_q7.reshape(-1), minlength=5 * lanes + 3
+        ).cpu().tolist(),
+        "row_all_occupied_classes_ttx_histogram": torch.bincount(
+            all_occupied_classes_ttx.reshape(-1), minlength=4 * lanes + 4
+        ).cpu().tolist(),
+        "row_all_occupied_classes_h67_histogram": torch.bincount(
+            all_occupied_classes_h67.reshape(-1), minlength=5 * lanes + 4
+        ).cpu().tolist(),
+        "row_kzero_fold_classes_ttx_histogram": torch.bincount(
+            kzero_fold_classes_ttx.reshape(-1), minlength=4 * lanes + 4
+        ).cpu().tolist(),
+        "row_kzero_fold_classes_h67_histogram": torch.bincount(
+            kzero_fold_classes_h67.reshape(-1), minlength=5 * lanes + 4
+        ).cpu().tolist(),
+        "row_active_projection_classes_ttx_histogram": torch.bincount(
+            active_projection_classes_ttx.reshape(-1), minlength=4 * lanes + 4
+        ).cpu().tolist(),
+        "row_active_projection_classes_h67_histogram": torch.bincount(
+            active_projection_classes_h67.reshape(-1), minlength=5 * lanes + 4
+        ).cpu().tolist(),
+        "projection_h67_factor_class_segments_histogram": torch.bincount(
+            projection_h67_factor_class_segments_by_row.reshape(-1)
+        ).cpu().tolist(),
+        "projection_h67_factor_class_lane_segments_histogram": torch.bincount(
+            projection_h67_factor_class_lane_segments_by_row.reshape(-1)
+        ).cpu().tolist(),
+        "row_score_span_ttx_histogram": torch.bincount(
+            row_span_ttx.reshape(-1), minlength=4 * lanes + 3
+        ).cpu().tolist(),
+        "row_score_span_h67_histogram": torch.bincount(
+            row_span_h67.reshape(-1), minlength=5 * lanes + 3
+        ).cpu().tolist(),
+        **_spatial_pair_locality_stats(q_binary, k_binary),
+    }
+    if gate_projection_stats is not None:
+        gate_terms_by_row = gate_projection_stats["row_terms"]
+        gate_max_fanout_by_row = gate_projection_stats["max_fanout"]
+        gate_group_terms = gate_projection_stats["grouped_terms"]
+        gate_term_histogram = gate_projection_stats["term_gate_histogram"]
+        active_lane_gate_histogram = gate_projection_stats["active_lane_gate_histogram"]
+        gate_code_out_of_range = gate_projection_stats["out_of_range"]
+        gate_terms = int(gate_terms_by_row.sum().item())
+        if gate_terms > projection_baseline_active_lanes:
+            raise RuntimeError("最终gate类通道投影项不能超过活动K lane基线")
+        stats.update({
+            "projection_gate_class_channel_terms_deploy": gate_terms,
+            "projection_gate_class_channel_max_fanout_deploy": int(
+                gate_max_fanout_by_row.amax().item()
+            ),
+            "row_active_projection_gate_classes_sum_deploy": int(
+                gate_projection_stats["active_classes"].sum().item()
+            ),
+            "projection_gate_q17_out_of_range": int(gate_code_out_of_range.item()),
+            "projection_gate_ppdi_delivery_exact": int(
+                gate_projection_stats["ppdi_delivery"].sum().item()
+            ),
+            "projection_gate_class_channel_term_histogram": gate_term_histogram.cpu().tolist(),
+            "projection_active_lane_gate_q17_histogram": active_lane_gate_histogram.cpu().tolist(),
+        })
+        for group_windows, values in gate_group_terms.items():
+            stats[f"projection_gate_group_terms_g{group_windows}"] = int(
+                values["terms"].sum().item()
+            )
+            stats[f"projection_gate_group_active_lanes_g{group_windows}"] = int(
+                values["active_lanes"].sum().item()
+            )
+            stats[f"projection_gate_group_active_classes_g{group_windows}"] = int(
+                values["active_classes"].sum().item()
+            )
+            stats[f"projection_gate_group_max_fanout_g{group_windows}"] = int(
+                values["max_fanout"].amax().item()
+            )
+            stats[f"projection_gate_group_window_count_g{group_windows}"] = int(
+                values["window_count"].sum().item()
+            )
+            stats[f"projection_gate_group_ppdi_delivery_g{group_windows}"] = int(
+                values["ppdi_delivery"].sum().item()
+            )
+            for width, delivery in values["delivery_cycles"].items():
+                stats[
+                    f"projection_gate_group_delivery_g{group_windows}_m{width}"
+                ] = int(delivery.sum().item())
+        for width, values in gate_projection_stats["delivery_cycles"].items():
+            stats[f"projection_gate_multicast_delivery_m{width}"] = int(values.sum().item())
+    if include_ordered_trace:
+        stats.update({
+            "pair_q_count_ordered_trace": _encode_ordered_count_trace(q_count),
+            "pair_k_count_ordered_trace": _encode_ordered_count_trace(k_count),
+            "pair_overlap_ordered_trace": _encode_ordered_count_trace(overlap),
+            "pair_motion_ordered_trace": _encode_ordered_count_trace(motion),
+            "pair_k_temporal_intersection_ordered_trace": _encode_ordered_count_trace(
+                k_temporal_intersection
+            ),
+            "pair_k_temporal_union_ordered_trace": _encode_ordered_count_trace(k_temporal_union),
+            "pair_update_ordered_trace": _encode_ordered_count_trace(update),
+            "pair_four_vector_union_ordered_trace": _encode_ordered_count_trace(four_vector_union),
+            "projection_baseline_active_lanes_ordered_trace": _encode_ordered_count_trace(
+                projection_baseline_active_lanes_by_row
+            ),
+            "projection_class_channel_terms_ttx_ordered_trace": _encode_ordered_count_trace(
+                projection_class_channel_terms_ttx_by_row
+            ),
+            "projection_class_channel_terms_h67_ordered_trace": _encode_ordered_count_trace(
+                projection_class_channel_terms_h67_by_row
+            ),
+            "projection_class_channel_max_fanout_ttx_ordered_trace": _encode_ordered_count_trace(
+                projection_class_channel_max_fanout_ttx_by_row
+            ),
+            "projection_class_channel_max_fanout_h67_ordered_trace": _encode_ordered_count_trace(
+                projection_class_channel_max_fanout_h67_by_row
+            ),
+            "projection_active_classes_ttx_ordered_trace": _encode_ordered_count_trace(
+                active_projection_classes_ttx
+            ),
+            "projection_active_classes_h67_ordered_trace": _encode_ordered_count_trace(
+                active_projection_classes_h67
+            ),
+            "projection_h67_factor_class_segments_ordered_trace": (
+                _encode_ordered_count_trace(
+                    projection_h67_factor_class_segments_by_row
+                )
+            ),
+            "projection_h67_factor_class_lane_segments_ordered_trace": (
+                _encode_ordered_count_trace(
+                    projection_h67_factor_class_lane_segments_by_row
+                )
+            ),
+        })
+        for width in (1, 2, 4, 8, 16):
+            stats[f"projection_multicast_delivery_ttx_m{width}_ordered_trace"] = (
+                _encode_ordered_count_trace(projection_multicast_delivery_ttx_by_width[width])
+            )
+            stats[f"projection_multicast_delivery_h67_m{width}_ordered_trace"] = (
+                _encode_ordered_count_trace(projection_multicast_delivery_h67_by_width[width])
+            )
+        if gate_projection_stats is not None:
+            stats["projection_gate_class_channel_terms_deploy_ordered_trace"] = (
+                _encode_ordered_count_trace(gate_projection_stats["row_terms"])
+            )
+            stats["projection_gate_class_channel_max_fanout_deploy_ordered_trace"] = (
+                _encode_ordered_count_trace(gate_projection_stats["max_fanout"])
+            )
+            stats["projection_active_gate_classes_deploy_ordered_trace"] = (
+                _encode_ordered_count_trace(gate_projection_stats["active_classes"])
+            )
+            stats["projection_gate_ppdi_delivery_exact_ordered_trace"] = (
+                _encode_ordered_count_trace(gate_projection_stats["ppdi_delivery"])
+            )
+            for width, values in gate_projection_stats["delivery_cycles"].items():
+                stats[f"projection_gate_multicast_delivery_m{width}_ordered_trace"] = (
+                    _encode_ordered_count_trace(values)
+                )
+            for group_windows, values in gate_projection_stats["grouped_terms"].items():
+                stats[f"projection_gate_group_terms_g{group_windows}_ordered_trace"] = (
+                    _encode_ordered_count_trace(values["terms"])
+                )
+                stats[
+                    f"projection_gate_group_active_lanes_g{group_windows}_ordered_trace"
+                ] = _encode_ordered_count_trace(values["active_lanes"])
+                stats[
+                    f"projection_gate_group_active_classes_g{group_windows}_ordered_trace"
+                ] = _encode_ordered_count_trace(values["active_classes"])
+                stats[
+                    f"projection_gate_group_max_fanout_g{group_windows}_ordered_trace"
+                ] = _encode_ordered_count_trace(values["max_fanout"])
+                stats[
+                    f"projection_gate_group_window_count_g{group_windows}_ordered_trace"
+                ] = _encode_ordered_count_trace(values["window_count"])
+                stats[
+                    f"projection_gate_group_ppdi_delivery_g{group_windows}_ordered_trace"
+                ] = _encode_ordered_count_trace(values["ppdi_delivery"])
+                for width, delivery in values["delivery_cycles"].items():
+                    stats[
+                        f"projection_gate_group_delivery_g{group_windows}_m{width}_ordered_trace"
+                    ] = _encode_ordered_count_trace(delivery)
+    return stats
+
+
 def _maybe_emit_h60_profile(
     module: nn.Module,
     *,
@@ -205,11 +1201,13 @@ def _maybe_emit_h60_profile(
     tx_scores: torch.Tensor,
     sc_scores: torch.Tensor,
     fused_scores: torch.Tensor,
+    pre_quant_scores: torch.Tensor | None,
     gate: torch.Tensor,
     cfg: ShiftmaxAttentionConfig,
 ) -> None:
     collector = getattr(module, "_h9_profile_collector", None)
-    if collector is None:
+    bit_trace_collector = getattr(module, "_h9_bit_trace_collector", None)
+    if collector is None and bit_trace_collector is None:
         return
     with torch.no_grad():
         gate_data = gate.detach().float()
@@ -229,6 +1227,70 @@ def _maybe_emit_h60_profile(
         q_token_active = q_active.any(dim=-1).float()
         k_token_active = k_active.any(dim=-1).float()
 
+        head_dim = int(k_orig.shape[-1])
+        q_tokenized_active = _qkformer_token_q(q_orig.detach()).ne(0)
+        k_tokenized_active = k_orig.detach().ne(0)
+        q_active_count = q_tokenized_active.sum(dim=-1).to(dtype=torch.long)
+        k_zero_token = ~k_tokenized_active.any(dim=-1)
+        zaf_class_presence = torch.nn.functional.one_hot(
+            q_active_count.clamp(min=0, max=head_dim),
+            num_classes=head_dim + 1,
+        ).bool() & k_zero_token.unsqueeze(-1)
+        zaf_fold_classes = zaf_class_presence.any(dim=2).sum(dim=-1).float()
+        zaf_active_entries = (~k_zero_token).sum(dim=2).float()
+
+        temporal_stats: dict[str, Any] = {}
+        if q_orig.ndim == 5 and q_orig.shape[0] == 2:
+            q_binary = q_orig.detach().gt(0)
+            batch, heads, total_tokens, head_dim = k_orig.shape
+            spatial_tokens = q_orig.shape[3]
+            if total_tokens == 2 * spatial_tokens:
+                k_binary = k_orig.detach().gt(0).reshape(batch, heads, 2, spatial_tokens, head_dim)
+                q_toggle = q_binary[0] ^ q_binary[1]
+                k_toggle = k_binary[:, :, 0] ^ k_binary[:, :, 1]
+                lane_elements = int(q_toggle.numel())
+                q_toggle_elements = int(q_toggle.sum().item())
+                k_toggle_elements = int(k_toggle.sum().item())
+                update_elements = int((q_toggle | k_toggle).sum().item())
+                include_ordered_trace = bool(
+                    getattr(module, "_h9_profile_ordered_trace", False)
+                )
+                temporal_stats = {
+                    "temporal_lane_elements": lane_elements,
+                    "q_temporal_toggle_elements": q_toggle_elements,
+                    "k_temporal_toggle_elements": k_toggle_elements,
+                    "qk_temporal_update_elements": update_elements,
+                    "q_temporal_toggle_density": q_toggle_elements / lane_elements,
+                    "k_temporal_toggle_density": k_toggle_elements / lane_elements,
+                    "qk_temporal_update_density": update_elements / lane_elements,
+                    **_delta_locality_stats(
+                        q_toggle,
+                        k_toggle,
+                        include_ordered_trace=include_ordered_trace,
+                    ),
+                    **_token_time_bundle_stats(
+                        q_binary,
+                        k_binary.permute(2, 0, 1, 3, 4),
+                        include_ordered_trace=include_ordered_trace,
+                    ),
+                    **_binary_temporal_pair_stats(
+                        q_binary,
+                        k_binary.permute(2, 0, 1, 3, 4),
+                        gate_q17_code=(
+                            torch.round(gate_data.squeeze(-1) * 128.0).to(torch.long)
+                            if gate_data.ndim == 4
+                            and gate_data.shape[-1] == 1
+                            and tuple(gate_data.shape[:-1])
+                            == (batch, heads, total_tokens)
+                            else None
+                        ),
+                        windows_per_sample=getattr(
+                            module, "_h9_windows_per_sample", None
+                        ),
+                        include_ordered_trace=include_ordered_trace,
+                    ),
+                }
+
         bundle_stats: dict[str, float] = {}
         if q_token_active.ndim >= 4:
             t_len = q_token_active.shape[0]
@@ -247,6 +1309,10 @@ def _maybe_emit_h60_profile(
             "stage": int(getattr(module, "_h9_stage", -1)),
             "block": int(getattr(module, "_h9_block", -1)),
             "num_heads": int(getattr(module, "num_heads", 0)),
+            "batch_windows": int(k_orig.shape[0]) if k_orig.ndim >= 1 else 0,
+            "windows_per_sample": int(
+                getattr(module, "_h9_windows_per_sample", k_orig.shape[0])
+            ),
             "tokens": int(k_orig.shape[2]) if k_orig.ndim >= 3 else 0,
             "head_dim": int(k_orig.shape[-1]) if k_orig.ndim >= 1 else 0,
             "tx_mean": _safe_float_stat(tx_scores, "mean"),
@@ -261,6 +1327,7 @@ def _maybe_emit_h60_profile(
             "fused_std": _safe_float_stat(fused_scores, "std"),
             "fused_min": _safe_float_stat(fused_scores, "min"),
             "fused_max": _safe_float_stat(fused_scores, "max"),
+            **_hardware_score_clip_stats(pre_quant_scores, cfg),
             "gate_mean": _safe_float_stat(gate_data, "mean"),
             "gate_std": _safe_float_stat(gate_data, "std"),
             "gate_min": _safe_float_stat(gate_data, "min"),
@@ -273,9 +1340,21 @@ def _maybe_emit_h60_profile(
             "k_active_density": _safe_float_stat(k_active, "mean"),
             "q_token_active_density": _safe_float_stat(q_token_active, "mean"),
             "k_token_active_density": _safe_float_stat(k_token_active, "mean"),
+            "zaf_kzero_token_ratio": _safe_float_stat(k_zero_token.float(), "mean"),
+            "zaf_active_entries_mean": _safe_float_stat(zaf_active_entries, "mean"),
+            "zaf_fold_classes_mean": _safe_float_stat(zaf_fold_classes, "mean"),
+            **temporal_stats,
             **bundle_stats,
         }
-    collector(module, stats)
+    if collector is not None:
+        collector(module, stats)
+    if bit_trace_collector is not None:
+        bit_trace_collector(
+            module,
+            q_orig=q_orig.detach(),
+            k_orig=k_orig.detach(),
+            gate=gate.detach(),
+        )
 
 
 def shiftmax_raw(scores: torch.Tensor, dim: int = -1, eps: float = 1.0e-6) -> torch.Tensor:
@@ -653,6 +1732,10 @@ def _ternary_alpha_xnor_token_scores(
         - _mismatch * opposite.to(dtype=q_orig.dtype)
         - float(cfg.single_active_penalty) * single_active.to(dtype=q_orig.dtype)
     ).sum(dim=-1, keepdim=True)
+    if cfg.binary_motion_xor_alpha:
+        score = score + float(cfg.binary_motion_xor_alpha) * _binary_temporal_k_xor_popcount(
+            q_orig, k_orig
+        )
     # ── NTX-11: K magnitude correction (additive, off by default) ──
     if cfg.k_magnitude_alpha:
         k_mag = torch.relu(k_orig - k_event.detach())  # |K| before sign binarization
@@ -663,6 +1746,241 @@ def _ternary_alpha_xnor_token_scores(
     if cfg.consensus_score_norm == "active":
         active = (q_active | k_active).sum(dim=-1, keepdim=True).clamp_min(1)
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
+
+
+def _binary_temporal_k_xor_popcount(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+) -> torch.Tensor:
+    """Per-token binary motion evidence from paired temporal K events.
+
+    The Swin attention input uses ``q_orig=[T,B,H,N,D]`` and
+    ``k_orig=[B,H,T*N,D]``. Each token receives the XOR popcount against the
+    same spatial position in the other time slice. The arithmetic form keeps
+    the binary forward value while preserving surrogate gradients.
+    """
+
+    if q_orig.ndim != 5 or k_orig.ndim != 4:
+        raise ValueError("motion XOR requires q_orig=[T,B,H,N,D] and k_orig=[B,H,T*N,D]")
+    t_steps, batch, heads, spatial_tokens, head_dim = q_orig.shape
+    if t_steps != 2:
+        raise ValueError("motion XOR currently requires a two-slice temporal window")
+    if tuple(k_orig.shape) != (batch, heads, t_steps * spatial_tokens, head_dim):
+        raise ValueError("k_orig shape is inconsistent with q_orig temporal/spatial layout")
+
+    k_event = _binary_event_ste(k_orig).reshape(batch, heads, t_steps, spatial_tokens, head_dim)
+    paired = k_event.flip(dims=(2,))
+    return (k_event - paired).abs().sum(dim=-1, keepdim=True).reshape(
+        batch, heads, t_steps * spatial_tokens, 1
+    )
+
+
+def _castling_aux_weight(module: nn.Module, cfg: ShiftmaxAttentionConfig) -> float:
+    """Linearly remove the full-matrix auxiliary before deployment."""
+
+    initial = float(cfg.castling_matrix_aux_weight)
+    if not module.training or initial <= 0.0:
+        return 0.0
+    end_step = int(cfg.castling_matrix_aux_end_step)
+    if end_step <= 0:
+        return initial
+    step = max(0, int(getattr(module, "_h9_global_step", 0)))
+    return initial * max(0.0, 1.0 - float(step) / float(end_step))
+
+
+def _castling_binary_matrix_output(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Training-only H66a output used to guide the deployed H60 path."""
+
+    scores = _binary_alpha_xnor_matrix_scores(q_orig, k_orig, cfg)
+    if cfg.center_scores:
+        scores = scores - scores.mean(dim=-1, keepdim=True)
+    gate = shiftmax(scores, dim=-1, eps=cfg.eps)
+    value = _ternary_sign_ste(k_orig) if cfg.value_mode in {"sign", "event", "ternary"} else k_orig
+    return torch.matmul(gate, value)
+
+
+def _binary_event_ste(x: torch.Tensor) -> torch.Tensor:
+    hard = x.gt(0).to(dtype=x.dtype)
+    return (hard - x).detach() + x
+
+
+def _event_selective_temperature(
+    scores: torch.Tensor,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Apply a per-token power-of-two inverse-temperature from Q/K activity.
+
+    For union activity count ``a``, the scale is
+    ``2**min(ceil(log2(a + 1)), max_shift)``. The default-disabled branch is
+    exactly identity. Deployment needs an OR-popcount, leading-one detector,
+    and a bounded left shift; it introduces no learned parameter or second
+    attention path.
+    """
+
+    if not cfg.event_temperature_enabled:
+        return scores
+    max_shift = int(cfg.event_temperature_max_shift)
+    if max_shift < 0:
+        raise ValueError("bsa_attention.event_temperature_max_shift must be nonnegative")
+    q_event = _binary_event_ste(_qkformer_token_q(q_orig))
+    k_event = _binary_event_ste(k_orig)
+    active = ((q_event + k_event) > 0).sum(dim=-1, keepdim=True).to(dtype=scores.dtype)
+    shift = torch.ceil(torch.log2(active + 1.0)).clamp_(min=0.0, max=float(max_shift))
+    scale = torch.pow(torch.full_like(shift, 2.0), shift).detach()
+    return scores * scale
+
+
+def _window_context_broadcast(
+    tokens: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Broadcast the per-window mean token with the parameter-free CB rule."""
+
+    if not cfg.context_broadcast_enabled:
+        return tokens
+    if tokens.ndim != 4:
+        raise ValueError("window context broadcast expects [B, heads, tokens, channels]")
+    return 0.5 * (tokens + tokens.mean(dim=2, keepdim=True))
+
+
+def _dualrail_binary_tx_token_scores(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+    beta: float | None = None,
+) -> torch.Tensor:
+    """TX-style score for binary dual-rail events.
+
+    The first half of each head dimension is interpreted as positive rails and
+    the second half as negative rails. This restores same/opposite polarity
+    evidence for all-binary ATLIF, whose scalar output is otherwise {0,+1}.
+    """
+
+    q_event = _binary_event_ste(_qkformer_token_q(q_orig))
+    k_event = _binary_event_ste(k_orig)
+    d = q_event.shape[-1]
+    if d % 2 != 0:
+        raise ValueError("dual-rail binary TX requires an even head_dim")
+    half = d // 2
+    q_pos, q_neg = q_event[..., :half], q_event[..., half:]
+    k_pos, k_neg = k_event[..., :half], k_event[..., half:]
+
+    same_nonzero = (q_pos * k_pos + q_neg * k_neg).sum(dim=-1, keepdim=True)
+    opposite = (q_pos * k_neg + q_neg * k_pos).sum(dim=-1, keepdim=True)
+    q_active = (q_pos + q_neg).gt(0).to(dtype=q_orig.dtype)
+    k_active = (k_pos + k_neg).gt(0).to(dtype=q_orig.dtype)
+    same_zero = ((1.0 - q_active) * (1.0 - k_active)).sum(dim=-1, keepdim=True)
+    single_active = (q_active * (1.0 - k_active) + (1.0 - q_active) * k_active).sum(dim=-1, keepdim=True)
+
+    _mismatch = beta if beta is not None else float(cfg.mismatch_penalty)
+    score = (
+        same_nonzero
+        + float(cfg.alpha0) * same_zero
+        - _mismatch * opposite
+        - float(cfg.single_active_penalty) * single_active
+    )
+
+    active = None
+    if cfg.consensus_score_norm == "active":
+        active = (q_active + k_active).sum(dim=-1, keepdim=True).clamp_min(1)
+    return _normalize_consensus_score(score, half, cfg, active=active)
+
+
+def _binary_tx_group_scores(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Per-group binary TX scores without producing a K/value carrier."""
+
+    evidence = _direct_tx_channel_evidence(q_orig, k_orig, cfg)
+    q_event = _qkformer_token_q(q_orig)
+    head_dim = q_event.shape[-1]
+    groups = int(cfg.direct_shiftmax_groups)
+    if groups <= 0 or head_dim % groups != 0:
+        raise ValueError(
+            f"direct_shiftmax_groups={groups} must be a positive divisor of head_dim={head_dim}"
+        )
+    group_dim = head_dim // groups
+    grouped = evidence.reshape(*evidence.shape[:-1], groups, group_dim)
+    return grouped.mean(dim=-1)
+
+
+def _direct_tx_channel_evidence(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    q_token = _qkformer_token_q(q_orig)
+    if cfg.direct_shiftmax_signed_events:
+        q_event = _ternary_sign_ste(q_token)
+        k_event = _ternary_sign_ste(k_orig)
+        same_active = torch.relu(q_event * k_event)
+        q_silent = 1.0 - q_event.abs()
+        k_silent = 1.0 - k_event.abs()
+    else:
+        q_event = _binary_event_ste(q_token)
+        k_event = _binary_event_ste(k_orig)
+        same_active = q_event * k_event
+        q_silent = 1.0 - q_event
+        k_silent = 1.0 - k_event
+    return same_active + float(cfg.alpha0) * q_silent * k_silent
+
+
+def _direct_group_shiftmax_output(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    scores = _binary_tx_group_scores(q_orig, k_orig, cfg)
+    if cfg.center_scores:
+        scores = scores - scores.mean(dim=2, keepdim=True)
+    scores = _apply_hardware_score_quant(scores, cfg)
+    gate = shiftmax(scores, dim=2, eps=cfg.eps)
+    row_sum = gate.sum(dim=2)
+    if cfg.preserve_mean:
+        gate = gate * float(k_orig.shape[2])
+    gate = _apply_hardware_gate_quant(gate, cfg)
+    repeat = k_orig.shape[-1] // int(cfg.direct_shiftmax_groups)
+    direct_gate = gate - 1.0 if cfg.direct_shiftmax_center_output else gate
+    attn = direct_gate.repeat_interleave(repeat, dim=-1)
+    return attn, row_sum, gate, scores
+
+
+def _direct_token_channel_shiftmax_output(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Factorized token/channel TX whose normalized scores are the output."""
+
+    evidence = _direct_tx_channel_evidence(q_orig, k_orig, cfg)
+    token_scores = evidence.mean(dim=-1, keepdim=True)
+    channel_scores = evidence.mean(dim=2, keepdim=True)
+    if cfg.center_scores:
+        token_scores = token_scores - token_scores.mean(dim=2, keepdim=True)
+        channel_scores = channel_scores - channel_scores.mean(dim=3, keepdim=True)
+    token_scores = _apply_hardware_score_quant(token_scores, cfg)
+    channel_scores = _apply_hardware_score_quant(channel_scores, cfg)
+    token_gate = shiftmax(token_scores, dim=2, eps=cfg.eps)
+    channel_gate = shiftmax(channel_scores, dim=3, eps=cfg.eps)
+    row_sum = token_gate.sum(dim=2)
+    if cfg.preserve_mean:
+        token_gate = token_gate * float(k_orig.shape[2])
+        channel_gate = channel_gate * float(k_orig.shape[3])
+    token_gate = _apply_hardware_gate_quant(token_gate, cfg)
+    channel_gate = _apply_hardware_gate_quant(channel_gate, cfg)
+    if cfg.direct_shiftmax_center_output:
+        token_gate = token_gate - 1.0
+        channel_gate = channel_gate - 1.0
+    attn = (token_gate + channel_gate) * 0.5
+    return attn, row_sum, token_gate, token_scores
 
 
 def _dual_channel_token_scores(
@@ -777,7 +2095,7 @@ def _faps_dyadic_channel_score(
 ) -> torch.Tensor:
     """Unified dyadic popcount for one x or y channel group.
 
-    Compile-time weights absorb TX(alpha0/mismatch/single) + SC(mu=1/8):
+    Defaults absorb TX(alpha0/mismatch/single) + SC(mu=1/8):
     +4 same-sign, +1 silence, -1 softened opposite, -4 single-active.
     """
 
@@ -793,10 +2111,10 @@ def _faps_dyadic_channel_score(
     else:
         single_active = (q_active ^ k_active).to(dtype=q_event.dtype)
     score = (
-        4.0 * same_nonzero.to(dtype=q_event.dtype)
-        + 1.0 * same_zero.to(dtype=q_event.dtype)
-        - 1.0 * opposite.to(dtype=q_event.dtype)
-        - 4.0 * single_active
+        float(cfg.faps_same_nonzero_weight) * same_nonzero.to(dtype=q_event.dtype)
+        + float(cfg.faps_same_zero_weight) * same_zero.to(dtype=q_event.dtype)
+        - float(cfg.faps_opposite_weight) * opposite.to(dtype=q_event.dtype)
+        - float(cfg.faps_single_active_weight) * single_active
     ).sum(dim=-1, keepdim=True)
     return score
 
@@ -1151,6 +2469,630 @@ def _binary_alpha_xnor_matrix_scores(
     return _normalize_consensus_score(score, q_event.shape[-1], cfg, active=active)
 
 
+def _binary_alpha_xnor_stencil_attention(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+    *,
+    temporal_pair: bool,
+    spatial_cross: bool,
+    motion_xor_alpha: float = 0.0,
+    profile_module: nn.Module | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Local binary alpha-XNOR attention over a square spatial Swin window.
+
+    Unlike the historical H59 score smoothing, every candidate computes the
+    actual similarity between q_i and a selected k_j. Invalid spatial-border
+    candidates are masked rather than wrapped to the opposite window edge.
+
+    Optional ``motion_xor_alpha`` adds H67-style temporal K XOR-popcount only to
+    the self lane. Adding a constant to every candidate would leave Shiftmax
+    invariant, so motion must not be broadcast across all stencil lanes.
+    """
+
+    q_event = (_qkformer_token_q(q_orig) > 0).to(dtype=q_orig.dtype)
+    k_event = (k_orig > 0).to(dtype=q_orig.dtype)
+    batch, heads, n_tokens, head_dim = q_event.shape
+    t_steps = int(q_orig.shape[0])
+    spatial_tokens = n_tokens // t_steps
+    spatial_side = math.isqrt(spatial_tokens)
+    height, width = spatial_side, spatial_side
+    if t_steps * height * width != n_tokens:
+        raise ValueError(
+            "binary alpha-XNOR stencil expects a T x H x H square window, "
+            f"got T={t_steps}, tokens={n_tokens}"
+        )
+
+    grid = torch.arange(n_tokens, device=q_orig.device).reshape(t_steps, height, width)
+    neighbor_indices = [grid]
+    valid_masks = [torch.ones_like(grid, dtype=torch.bool)]
+
+    if temporal_pair:
+        if t_steps != 2:
+            raise ValueError("temporal-pair alpha-XNOR currently requires T=2")
+        neighbor_indices.append(grid.flip(0))
+        valid_masks.append(torch.ones_like(grid, dtype=torch.bool))
+
+    if spatial_cross:
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            yy = torch.arange(height, device=q_orig.device).view(1, height, 1) + dy
+            xx = torch.arange(width, device=q_orig.device).view(1, 1, width) + dx
+            valid = (yy >= 0) & (yy < height) & (xx >= 0) & (xx < width)
+            yy = yy.clamp(0, height - 1).expand(t_steps, height, width)
+            xx = xx.clamp(0, width - 1).expand(t_steps, height, width)
+            tt = torch.arange(t_steps, device=q_orig.device).view(t_steps, 1, 1).expand_as(yy)
+            neighbor_indices.append(grid[tt, yy, xx])
+            valid_masks.append(valid.expand(t_steps, height, width))
+
+    index = torch.stack(neighbor_indices, dim=-1).reshape(n_tokens, -1)
+    valid = torch.stack(valid_masks, dim=-1).reshape(n_tokens, -1)
+    k_candidates = k_event[:, :, index, :]
+    q_candidates = q_event.unsqueeze(-2)
+    same_spike = (q_candidates * k_candidates).sum(dim=-1)
+    same_silent = ((1.0 - q_candidates) * (1.0 - k_candidates)).sum(dim=-1)
+    scores = same_spike + float(cfg.alpha0) * same_silent
+    scores = _normalize_consensus_score(scores, head_dim, cfg, active=None)
+    if float(cfg.matrix_diag_bias) != 0.0:
+        scores[..., 0] = scores[..., 0] + float(cfg.matrix_diag_bias)
+    if float(motion_xor_alpha) != 0.0:
+        # Self lane only: same arithmetic as H67 token score bias.
+        motion = _binary_temporal_k_xor_popcount(q_orig, k_orig)
+        scores = scores.clone()
+        scores[..., 0:1] = scores[..., 0:1] + float(motion_xor_alpha) * motion
+    # Deploy path: Q7 score grid, then mask invalid candidates to the min code.
+    # Mask-after-quant keeps the invalid lane at the lowest representable score
+    # under the frozen INT8 grid (same discipline as Match-Code deploy).
+    scores = _apply_hardware_score_quant(scores, cfg)
+    invalid_fill = (
+        float(cfg.hardware_score_min)
+        if cfg.hardware_quant_enabled and cfg.hardware_score_min is not None
+        else -1.0e4
+    )
+    scores = scores.masked_fill(~valid.view(1, 1, n_tokens, -1), invalid_fill)
+    valid_for_gate = valid.view(1, 1, n_tokens, -1)
+
+    if cfg.hardware_rtl_shiftmax_enabled:
+        gate = _rtl_shiftmax_gate_q17(
+            scores,
+            dim=-1,
+            preserve_mean=bool(cfg.preserve_mean),
+            valid_mask=(
+                valid_for_gate
+                if cfg.hardware_mask_invalid_candidates
+                else None
+            ),
+        )
+    else:
+        gate_scores = (
+            scores.masked_fill(~valid_for_gate, -float("inf"))
+            if cfg.hardware_mask_invalid_candidates
+            else scores
+        )
+        gate = shiftmax(gate_scores, dim=-1, eps=cfg.eps)
+        if cfg.preserve_mean:
+            gate = gate * float(index.shape[-1])
+        if cfg.hardware_mask_invalid_candidates:
+            gate = gate.masked_fill(~valid_for_gate, 0.0)
+    gate = _apply_hardware_gate_quant(gate, cfg)
+    value_candidates = k_orig[:, :, index, :]
+    attn = (gate.unsqueeze(-1) * value_candidates).sum(dim=-2)
+    row_sum = gate.sum(dim=-1)
+    trace_collector = (
+        getattr(profile_module, "_h9_local5_trace_collector", None)
+        if profile_module is not None
+        else None
+    )
+    if trace_collector is not None:
+        trace_collector(
+            module=profile_module,
+            q_event=q_event.detach(),
+            k_event=k_event.detach(),
+            k_orig=k_orig.detach(),
+            neighbor_index=index.detach(),
+            valid=valid.detach(),
+            score_q7=scores.detach(),
+            gate=gate.detach(),
+        )
+    return attn, row_sum, gate
+
+
+_EEMFLOW_MC49_CHANNELS = (
+    1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 22, 23, 25, 27, 29, 30,
+    31, 32, 33, 35, 37, 38, 39, 40, 41, 42, 43, 45, 47, 48, 49, 50, 51,
+    53, 55, 57, 58, 59, 61, 63, 65, 67, 69, 71, 73, 75, 77, 79,
+)
+MC49_OFFSETS = tuple((index // 9 - 4, index % 9 - 4) for index in _EEMFLOW_MC49_CHANNELS)
+DE9_OFFSETS = tuple((dy, dx) for dy in (-1, 0, 1) for dx in (-1, 0, 1))
+AX17_OFFSETS = tuple((0, dx) for dx in range(-4, 5)) + tuple(
+    (dy, 0) for dy in range(-4, 5) if dy != 0
+)
+PC9_PATCH_WEIGHTS = tuple(
+    4 if (dy, dx) == (0, 0) else 2 if dy == 0 or dx == 0 else 1
+    for dy, dx in DE9_OFFSETS
+)
+G4_MATCH_GROUPS = 4
+G4_MATCH_GROUP_DIM = 8
+BASE_MATCH_CODE_MODES = {
+    "binary_de9_match_code", "de9_match_code",
+    "binary_mc49_match_code", "mc49_match_code",
+    "binary_ax17_match_code", "ax17_match_code",
+}
+PC9_MATCH_CODE_MODES = {
+    "binary_pc9_patch_match_code", "pc9_patch_match_code", "h76_pc9",
+}
+LC4_MATCH_CODE_MODES = {
+    "binary_lc4_match_code", "lc4_match_code", "h77_lc4",
+}
+G4_MATCH_CODE_MODES = {
+    "binary_g4_match_code", "g4_match_code", "h78_g4",
+}
+CF10_MATCH_CODE_MODES = {
+    "binary_cf10_match_code", "cf10_match_code", "h79_cf10",
+}
+DN9_MATCH_CODE_MODES = {
+    "binary_dn9_match_code", "dn9_match_code", "h80_dn9",
+}
+MATCH_CODE_MODES = (
+    BASE_MATCH_CODE_MODES
+    | PC9_MATCH_CODE_MODES
+    | LC4_MATCH_CODE_MODES
+    | G4_MATCH_CODE_MODES
+    | CF10_MATCH_CODE_MODES
+    | DN9_MATCH_CODE_MODES
+)
+
+
+def _binary_event_ste(value: torch.Tensor) -> torch.Tensor:
+    """Binary forward with a bounded identity surrogate for Match-Code Q/K."""
+
+    hard = value.gt(0).to(dtype=value.dtype)
+    proxy = value.clamp(min=0.0, max=1.0)
+    return hard + proxy - proxy.detach()
+
+
+def _cross_time_match_events(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    offsets: tuple[tuple[int, int], ...],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Gather binary Q and opposite-time K events for fixed offsets."""
+
+    q_event = _binary_event_ste(_qkformer_token_q(q_orig))
+    k_event = _binary_event_ste(k_orig)
+    batch, heads, n_tokens, _ = q_event.shape
+    t_steps, height, width = int(q_orig.shape[0]), 9, 9
+    if t_steps != 2 or t_steps * height * width != n_tokens:
+        raise ValueError(
+            "cross-time Match-Code expects a 2x9x9 window, "
+            f"got T={t_steps}, tokens={n_tokens}"
+        )
+
+    grid = torch.arange(n_tokens, device=q_orig.device).reshape(t_steps, height, width)
+    indices = []
+    masks = []
+    tt = (1 - torch.arange(t_steps, device=q_orig.device)).view(t_steps, 1, 1)
+    for dy, dx in offsets:
+        yy = torch.arange(height, device=q_orig.device).view(1, height, 1) + int(dy)
+        xx = torch.arange(width, device=q_orig.device).view(1, 1, width) + int(dx)
+        valid = (yy >= 0) & (yy < height) & (xx >= 0) & (xx < width)
+        yy = yy.clamp(0, height - 1).expand(t_steps, height, width)
+        xx = xx.clamp(0, width - 1).expand(t_steps, height, width)
+        indices.append(grid[tt.expand_as(yy), yy, xx])
+        masks.append(valid.expand(t_steps, height, width))
+
+    index = torch.stack(indices, dim=-1).reshape(n_tokens, len(offsets))
+    valid = torch.stack(masks, dim=-1).reshape(n_tokens, len(offsets))
+    k_candidates = k_event[:, :, index, :]
+    q_candidates = q_event.unsqueeze(-2)
+    valid = valid.view(1, 1, n_tokens, len(offsets)).expand(batch, heads, -1, -1)
+    return q_candidates, k_candidates, valid
+
+
+def _cross_time_match_counts(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    offsets: tuple[tuple[int, int], ...],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return n11, n00 and validity for fixed opposite-time offsets."""
+
+    q_candidates, k_candidates, valid = _cross_time_match_events(q_orig, k_orig, offsets)
+    n11 = (q_candidates * k_candidates).sum(dim=-1)
+    n00 = ((1.0 - q_candidates) * (1.0 - k_candidates)).sum(dim=-1)
+    return n11, n00, valid
+
+
+def _quantized_match_code_weight(module: nn.Module, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    weight = module._h9_match_code_weight
+    if not cfg.match_code_weight_quant_enabled:
+        return weight
+    clipped = weight.clamp(min=cfg.match_code_weight_min, max=cfg.match_code_weight_max)
+    return _quantize_ste(clipped, cfg.match_code_weight_step)
+
+
+def _quantized_lc4_coefficients(module: nn.Module, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    coefficients = module._h9_lc4_coefficients
+    if not cfg.lc4_coefficient_quant_enabled:
+        return coefficients
+    clipped = coefficients.clamp(
+        min=cfg.lc4_coefficient_min,
+        max=cfg.lc4_coefficient_max,
+    )
+    return _quantize_ste(clipped, cfg.lc4_coefficient_step)
+
+
+def _quantized_cf10_beta(module: nn.Module, cfg: ShiftmaxAttentionConfig) -> torch.Tensor:
+    """Return the per-head CF10 margin/activity coefficients on a dyadic grid."""
+
+    beta = module._h9_cf10_beta.clamp(min=cfg.cf10_beta_min, max=cfg.cf10_beta_max)
+    return _quantize_ste(beta, cfg.cf10_beta_step)
+
+
+def _effective_cf10_match_code_weight(
+    module: nn.Module,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Append the hard-wired zero null row to CF10's nine stored codewords."""
+
+    weight = _quantized_match_code_weight(module, cfg)
+    zero = weight.new_zeros(weight.shape[0], 1, weight.shape[2])
+    return torch.cat((weight, zero), dim=1)
+
+
+def _project_match_descriptor(
+    module: nn.Module,
+    descriptor: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Project a fixed descriptor through the static per-head codebook."""
+
+    weight = _quantized_match_code_weight(module, cfg).to(dtype=descriptor.dtype)
+    return torch.einsum("bhnr,hrd->bhnd", descriptor, weight)
+
+
+def _match_code_attention(
+    module: nn.Module,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+    *,
+    dual_evidence: bool,
+    offsets: tuple[tuple[int, int], ...] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Cross-time displacement descriptor projected without a K/V carrier."""
+
+    offsets = offsets or (DE9_OFFSETS if dual_evidence else MC49_OFFSETS)
+    n11, n00, valid = _cross_time_match_counts(q_orig, k_orig, offsets)
+    head_dim = int(q_orig.shape[-1])
+    mask_value = torch.finfo(n11.dtype).min
+    if dual_evidence:
+        active_scores = _apply_hardware_score_quant(n11 / float(head_dim), cfg)
+        silent_scores = _apply_hardware_score_quant(n00 / float(head_dim), cfg)
+        active_scores = active_scores.masked_fill(~valid, mask_value)
+        silent_scores = silent_scores.masked_fill(~valid, mask_value)
+        active_gate = _apply_hardware_gate_quant(shiftmax(active_scores, dim=-1, eps=cfg.eps), cfg)
+        silent_gate = _apply_hardware_gate_quant(shiftmax(silent_scores, dim=-1, eps=cfg.eps), cfg)
+        descriptor = torch.cat((active_gate, silent_gate), dim=-1)
+        scores = torch.cat((active_scores, silent_scores), dim=-1)
+        row_sum = active_gate.sum(dim=-1) + silent_gate.sum(dim=-1)
+    else:
+        scores = _apply_hardware_score_quant(
+            (n11 + float(cfg.alpha0) * n00) / float(head_dim), cfg
+        ).masked_fill(~valid, mask_value)
+        descriptor = _apply_hardware_gate_quant(shiftmax(scores, dim=-1, eps=cfg.eps), cfg)
+        row_sum = descriptor.sum(dim=-1)
+
+    attn = _project_match_descriptor(module, descriptor, cfg)
+    return attn, row_sum, descriptor, scores
+
+
+def _same_time_patch_index(device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return fixed 3x3 same-time indices and exact in-window validity."""
+
+    t_steps, height, width = 2, 9, 9
+    n_tokens = t_steps * height * width
+    grid = torch.arange(n_tokens, device=device).reshape(t_steps, height, width)
+    indices = []
+    masks = []
+    for dy, dx in DE9_OFFSETS:
+        yy = torch.arange(height, device=device).view(1, height, 1) + int(dy)
+        xx = torch.arange(width, device=device).view(1, 1, width) + int(dx)
+        valid = (yy >= 0) & (yy < height) & (xx >= 0) & (xx < width)
+        yy = yy.clamp(0, height - 1).expand(t_steps, height, width)
+        xx = xx.clamp(0, width - 1).expand(t_steps, height, width)
+        tt = torch.arange(t_steps, device=device).view(t_steps, 1, 1).expand_as(yy)
+        indices.append(grid[tt, yy, xx])
+        masks.append(valid.expand(t_steps, height, width))
+    return (
+        torch.stack(indices, dim=-1).reshape(n_tokens, len(DE9_OFFSETS)),
+        torch.stack(masks, dim=-1).reshape(n_tokens, len(DE9_OFFSETS)),
+    )
+
+
+def _pc9_patch_match_code_attention(
+    module: nn.Module,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """H76: fixed dyadic patch consistency over nine Match-Code planes."""
+
+    n11, n00, valid = _cross_time_match_counts(q_orig, k_orig, DE9_OFFSETS)
+    head_dim = int(q_orig.shape[-1])
+    base_scores = (n11 + float(cfg.alpha0) * n00) / float(head_dim)
+    patch_index, patch_valid = _same_time_patch_index(q_orig.device)
+    gathered_scores = base_scores[:, :, patch_index, :]
+    gathered_valid = valid[:, :, patch_index, :]
+    support = gathered_valid & patch_valid.view(1, 1, 162, 9, 1)
+    weights = base_scores.new_tensor(PC9_PATCH_WEIGHTS).view(1, 1, 1, 9, 1)
+    weighted_support = weights * support.to(dtype=base_scores.dtype)
+    normalization = weighted_support.sum(dim=-2).clamp_min(1.0)
+    scores = (gathered_scores * weighted_support).sum(dim=-2) / normalization
+    scores = _apply_hardware_score_quant(scores, cfg)
+    scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
+    descriptor = _apply_hardware_gate_quant(shiftmax(scores, dim=-1, eps=cfg.eps), cfg)
+    row_sum = descriptor.sum(dim=-1)
+    attn = _project_match_descriptor(module, descriptor, cfg)
+    return attn, row_sum, descriptor, scores
+
+
+def _lc4_match_code_attention(
+    module: nn.Module,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """H77: dyadic learned cost over all four binary contingencies."""
+
+    q_candidates, k_candidates, valid = _cross_time_match_events(q_orig, k_orig, DE9_OFFSETS)
+    n11 = (q_candidates * k_candidates).sum(dim=-1)
+    n10 = (q_candidates * (1.0 - k_candidates)).sum(dim=-1)
+    n01 = ((1.0 - q_candidates) * k_candidates).sum(dim=-1)
+    n00 = ((1.0 - q_candidates) * (1.0 - k_candidates)).sum(dim=-1)
+    contingencies = torch.stack((n11, n10, n01, n00), dim=-1)
+    coefficients = _quantized_lc4_coefficients(module, cfg).to(dtype=contingencies.dtype)
+    scores = torch.einsum("bhnrc,hc->bhnr", contingencies, coefficients)
+    scores = _apply_hardware_score_quant(scores / float(q_orig.shape[-1]), cfg)
+    scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
+    descriptor = _apply_hardware_gate_quant(shiftmax(scores, dim=-1, eps=cfg.eps), cfg)
+    row_sum = descriptor.sum(dim=-1)
+    attn = _project_match_descriptor(module, descriptor, cfg)
+    return attn, row_sum, descriptor, scores
+
+
+def _g4_match_code_attention(
+    module: nn.Module,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """H78: four fixed 8-lane displacement distributions and a static codebook."""
+
+    q_candidates, k_candidates, valid = _cross_time_match_events(q_orig, k_orig, DE9_OFFSETS)
+    head_dim = int(q_orig.shape[-1])
+    expected_dim = G4_MATCH_GROUPS * G4_MATCH_GROUP_DIM
+    if head_dim != expected_dim:
+        raise ValueError(f"G4 Match-Code expects head_dim={expected_dim}, got {head_dim}")
+    q_groups = q_candidates.reshape(*q_candidates.shape[:-1], G4_MATCH_GROUPS, G4_MATCH_GROUP_DIM)
+    k_groups = k_candidates.reshape(*k_candidates.shape[:-1], G4_MATCH_GROUPS, G4_MATCH_GROUP_DIM)
+    n11 = (q_groups * k_groups).sum(dim=-1)
+    n00 = ((1.0 - q_groups) * (1.0 - k_groups)).sum(dim=-1)
+    scores = (n11 + float(cfg.alpha0) * n00) / float(G4_MATCH_GROUP_DIM)
+    scores = _apply_hardware_score_quant(scores.permute(0, 1, 2, 4, 3), cfg)
+    group_valid = valid.unsqueeze(-2).expand(-1, -1, -1, G4_MATCH_GROUPS, -1)
+    scores = scores.masked_fill(~group_valid, torch.finfo(scores.dtype).min)
+    gates = _apply_hardware_gate_quant(shiftmax(scores, dim=-1, eps=cfg.eps), cfg)
+    row_sum = gates.sum(dim=-1).sum(dim=-1)
+    descriptor = gates.flatten(start_dim=-2)
+    flat_scores = scores.flatten(start_dim=-2)
+    attn = _project_match_descriptor(module, descriptor, cfg)
+    return attn, row_sum, descriptor, flat_scores
+
+
+def _cf10_null_score(
+    scores: torch.Tensor,
+    q_activity: torch.Tensor,
+    module: nn.Module,
+    cfg: ShiftmaxAttentionConfig,
+) -> torch.Tensor:
+    """Compute CF10's fixed-bias null evidence from valid, masked local scores."""
+
+    top2 = scores.topk(k=2, dim=-1).values
+    beta = _quantized_cf10_beta(module, cfg).to(dtype=scores.dtype)
+    beta_m = beta[:, 0].view(1, -1, 1)
+    beta_q = beta[:, 1].view(1, -1, 1)
+    null_score = (
+        top2[..., 0]
+        - 1.0
+        + beta_m * (top2[..., 0] - top2[..., 1])
+        + beta_q * (q_activity - 0.5)
+    )
+    return _apply_hardware_score_quant(null_score, cfg)
+
+
+def _cf10_match_code_attention(
+    module: nn.Module,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """H79: row-only local assignment with a fixed-zero null codeword."""
+
+    n11, n00, valid = _cross_time_match_counts(q_orig, k_orig, DE9_OFFSETS)
+    head_dim = int(q_orig.shape[-1])
+    scores = _apply_hardware_score_quant(
+        (n11 + float(cfg.alpha0) * n00) / float(head_dim), cfg
+    )
+    scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
+    q_activity = _binary_event_ste(_qkformer_token_q(q_orig)).mean(dim=-1)
+    null_score = _cf10_null_score(scores, q_activity, module, cfg)
+    scores10 = torch.cat((scores, null_score.unsqueeze(-1)), dim=-1)
+    descriptor = _apply_hardware_gate_quant(shiftmax(scores10, dim=-1, eps=cfg.eps), cfg)
+    row_sum = descriptor.sum(dim=-1)
+    weight = _effective_cf10_match_code_weight(module, cfg).to(dtype=descriptor.dtype)
+    attn = torch.einsum("bhnr,hrd->bhnd", descriptor, weight)
+    return attn, row_sum, descriptor, scores10
+
+
+def _dn9_edge_indices(
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Map fixed local source edges to exact opposite-time destination sets."""
+
+    t_steps, height, width = 2, 9, 9
+    n_tokens = t_steps * height * width
+    grid = torch.arange(n_tokens, device=device).reshape(t_steps, height, width)
+    incoming_indices = []
+    incoming_masks = []
+    destination_slots = []
+    source_masks = []
+    for offset_index, (dy, dx) in enumerate(DE9_OFFSETS):
+        destination_y = torch.arange(height, device=device).view(1, height, 1)
+        destination_x = torch.arange(width, device=device).view(1, 1, width)
+        source_y = destination_y - int(dy)
+        source_x = destination_x - int(dx)
+        incoming_valid = (
+            (source_y >= 0) & (source_y < height) & (source_x >= 0) & (source_x < width)
+        )
+        source_y = source_y.clamp(0, height - 1).expand(t_steps, height, width)
+        source_x = source_x.clamp(0, width - 1).expand(t_steps, height, width)
+        source_t = (1 - torch.arange(t_steps, device=device)).view(t_steps, 1, 1)
+        source_index = grid[source_t.expand_as(source_y), source_y, source_x]
+        incoming_indices.append(source_index * len(DE9_OFFSETS) + offset_index)
+        incoming_masks.append(incoming_valid.expand(t_steps, height, width))
+
+        source_y = torch.arange(height, device=device).view(1, height, 1)
+        source_x = torch.arange(width, device=device).view(1, 1, width)
+        target_y = source_y + int(dy)
+        target_x = source_x + int(dx)
+        source_valid = (
+            (target_y >= 0) & (target_y < height) & (target_x >= 0) & (target_x < width)
+        )
+        target_y = target_y.clamp(0, height - 1).expand(t_steps, height, width)
+        target_x = target_x.clamp(0, width - 1).expand(t_steps, height, width)
+        target_t = (1 - torch.arange(t_steps, device=device)).view(t_steps, 1, 1)
+        target_index = grid[target_t.expand_as(target_y), target_y, target_x]
+        destination_slots.append(target_index * len(DE9_OFFSETS) + offset_index)
+        source_masks.append(source_valid.expand(t_steps, height, width))
+
+    return (
+        torch.stack(incoming_indices, dim=-1).reshape(n_tokens, len(DE9_OFFSETS)),
+        torch.stack(incoming_masks, dim=-1).reshape(n_tokens, len(DE9_OFFSETS)),
+        torch.stack(destination_slots, dim=-1).reshape(n_tokens, len(DE9_OFFSETS)),
+        torch.stack(source_masks, dim=-1).reshape(n_tokens, len(DE9_OFFSETS)),
+    )
+
+
+def _q17_gate_product(value: torch.Tensor) -> torch.Tensor:
+    """Unsigned Q1.7 product with an STE for training."""
+
+    clipped = value.clamp(min=0.0, max=255.0 / 128.0)
+    return _quantize_ste(clipped, 1.0 / 128.0)
+
+
+def _dn9_destination_gate(
+    scores: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Normalize each edge against all valid local edges entering its destination."""
+
+    incoming_index, incoming_valid, destination_slot, source_valid = _dn9_edge_indices(scores.device)
+    flat_scores = scores.reshape(*scores.shape[:-2], -1)
+    incoming_scores = flat_scores[:, :, incoming_index]
+    incoming_valid = incoming_valid.view(1, 1, *incoming_valid.shape)
+    incoming_scores = incoming_scores.masked_fill(
+        ~incoming_valid, torch.finfo(incoming_scores.dtype).min
+    )
+    incoming_gate = shiftmax(incoming_scores, dim=-1, eps=cfg.eps)
+    incoming_gate = incoming_gate.masked_fill(~incoming_valid, 0.0)
+    incoming_gate = _apply_hardware_gate_quant(incoming_gate, cfg)
+    destination_gate = incoming_gate.reshape(*incoming_gate.shape[:-2], -1)[:, :, destination_slot]
+    source_valid = source_valid.view(1, 1, *source_valid.shape)
+    return destination_gate.masked_fill(~source_valid, 0.0), source_valid
+
+
+def _dn9_match_code_attention(
+    module: nn.Module,
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """H80: product of source-row and local destination Shiftmax assignments."""
+
+    n11, n00, valid = _cross_time_match_counts(q_orig, k_orig, DE9_OFFSETS)
+    head_dim = int(q_orig.shape[-1])
+    scores = _apply_hardware_score_quant(
+        (n11 + float(cfg.alpha0) * n00) / float(head_dim), cfg
+    )
+    scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
+    row_gate = shiftmax(scores, dim=-1, eps=cfg.eps).masked_fill(~valid, 0.0)
+    row_gate = _apply_hardware_gate_quant(row_gate, cfg)
+    destination_gate, destination_valid = _dn9_destination_gate(scores, cfg)
+    descriptor = _q17_gate_product(row_gate * destination_gate)
+    descriptor = descriptor.masked_fill(~(valid & destination_valid), 0.0)
+    row_sum = descriptor.sum(dim=-1)
+    attn = _project_match_descriptor(module, descriptor, cfg)
+    return attn, row_sum, descriptor, scores
+
+
+def _ensure_match_code(module: nn.Module, cfg: ShiftmaxAttentionConfig, module_name: str) -> None:
+    if cfg.mode not in MATCH_CODE_MODES:
+        return
+    if cfg.mode in {"binary_de9_match_code", "de9_match_code"}:
+        descriptor_dim = 18
+    elif cfg.mode in {"binary_mc49_match_code", "mc49_match_code"}:
+        descriptor_dim = 49
+    elif cfg.mode in {"binary_ax17_match_code", "ax17_match_code"}:
+        descriptor_dim = 17
+    elif cfg.mode in (
+        PC9_MATCH_CODE_MODES | LC4_MATCH_CODE_MODES | CF10_MATCH_CODE_MODES | DN9_MATCH_CODE_MODES
+    ):
+        descriptor_dim = 9
+    else:
+        descriptor_dim = G4_MATCH_GROUPS * len(DE9_OFFSETS)
+    head_dim = int(module.linear_q.out_features // module.num_heads)
+    shape = (int(module.num_heads), descriptor_dim, head_dim)
+    existing = getattr(module, "_h9_match_code_weight", None)
+    if existing is not None:
+        if tuple(existing.shape) != shape:
+            raise ValueError(f"Match-Code weight shape mismatch: {tuple(existing.shape)} != {shape}")
+    else:
+        reference = module.linear_q.weight
+        weight = torch.empty(shape, device=reference.device, dtype=reference.dtype)
+        seed = int(cfg.match_code_seed) + sum((index + 1) * ord(char) for index, char in enumerate(module_name))
+        generator = torch.Generator(device=reference.device)
+        generator.manual_seed(seed)
+        nn.init.xavier_uniform_(weight, generator=generator)
+        module.register_parameter("_h9_match_code_weight", nn.Parameter(weight))
+    if cfg.mode in LC4_MATCH_CODE_MODES:
+        coefficient_shape = (int(module.num_heads), 4)
+        existing_coefficients = getattr(module, "_h9_lc4_coefficients", None)
+        if existing_coefficients is not None:
+            if tuple(existing_coefficients.shape) != coefficient_shape:
+                raise ValueError(
+                    "LC4 coefficient shape mismatch: "
+                    f"{tuple(existing_coefficients.shape)} != {coefficient_shape}"
+                )
+        else:
+            reference = module.linear_q.weight
+            initial = reference.new_tensor((1.0, 0.0, 0.0, float(cfg.alpha0)))
+            coefficients = initial.view(1, 4).expand(coefficient_shape[0], -1).clone()
+            module.register_parameter("_h9_lc4_coefficients", nn.Parameter(coefficients))
+    if cfg.mode in CF10_MATCH_CODE_MODES:
+        beta_shape = (int(module.num_heads), 2)
+        existing_beta = getattr(module, "_h9_cf10_beta", None)
+        if existing_beta is not None:
+            if tuple(existing_beta.shape) != beta_shape:
+                raise ValueError(
+                    f"CF10 beta shape mismatch: {tuple(existing_beta.shape)} != {beta_shape}"
+                )
+        else:
+            reference = module.linear_q.weight
+            module.register_parameter(
+                "_h9_cf10_beta",
+                nn.Parameter(reference.new_zeros(beta_shape)),
+            )
+
+
 def _a2os2a_matrix_scores(
     q_orig: torch.Tensor,
     k_orig: torch.Tensor,
@@ -1257,7 +3199,99 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
     k_orig = k.reshape(B_, self.num_heads, -1, head_dim)
     n_tokens = k_orig.shape[2]
 
-    if cfg.mode in {"strict_bsa_qkv_shiftmax", "bsa_qkv_shiftmax", "bsa_true_qkv_shiftmax"}:
+    if cfg.mode in {"binary_de9_match_code", "de9_match_code"}:
+        attn, row_sum, gate, scores = _match_code_attention(
+            self, q_orig, k_orig, cfg, dual_evidence=True
+        )
+    elif cfg.mode in {"binary_mc49_match_code", "mc49_match_code"}:
+        attn, row_sum, gate, scores = _match_code_attention(
+            self, q_orig, k_orig, cfg, dual_evidence=False
+        )
+    elif cfg.mode in {"binary_ax17_match_code", "ax17_match_code"}:
+        attn, row_sum, gate, scores = _match_code_attention(
+            self, q_orig, k_orig, cfg, dual_evidence=False, offsets=AX17_OFFSETS
+        )
+    elif cfg.mode in PC9_MATCH_CODE_MODES:
+        attn, row_sum, gate, scores = _pc9_patch_match_code_attention(
+            self, q_orig, k_orig, cfg
+        )
+    elif cfg.mode in LC4_MATCH_CODE_MODES:
+        attn, row_sum, gate, scores = _lc4_match_code_attention(
+            self, q_orig, k_orig, cfg
+        )
+    elif cfg.mode in G4_MATCH_CODE_MODES:
+        attn, row_sum, gate, scores = _g4_match_code_attention(
+            self, q_orig, k_orig, cfg
+        )
+    elif cfg.mode in CF10_MATCH_CODE_MODES:
+        attn, row_sum, gate, scores = _cf10_match_code_attention(
+            self, q_orig, k_orig, cfg
+        )
+    elif cfg.mode in DN9_MATCH_CODE_MODES:
+        attn, row_sum, gate, scores = _dn9_match_code_attention(
+            self, q_orig, k_orig, cfg
+        )
+    elif cfg.mode in {"binary_axnor_temporal_pair_shiftmax", "tp_ttx", "h66_tp"}:
+        attn, row_sum, gate = _binary_alpha_xnor_stencil_attention(
+            q_orig,
+            k_orig,
+            cfg,
+            temporal_pair=True,
+            spatial_cross=False,
+            motion_xor_alpha=float(cfg.binary_motion_xor_alpha or 0.0),
+        )
+        scores = torch.zeros((), device=q_orig.device, dtype=q_orig.dtype)
+    elif cfg.mode in {"binary_axnor_local5_shiftmax", "lr_ttx", "h66_lr"}:
+        # Pure Local-5: ignore motion alpha so H66d configs stay bit-stable even
+        # if a parent template left binary_motion_xor_alpha set.
+        attn, row_sum, gate = _binary_alpha_xnor_stencil_attention(
+            q_orig,
+            k_orig,
+            cfg,
+            temporal_pair=False,
+            spatial_cross=True,
+            motion_xor_alpha=0.0,
+            profile_module=self,
+        )
+        scores = torch.zeros((), device=q_orig.device, dtype=q_orig.dtype)
+    elif cfg.mode in {
+        "binary_axnor_local5_tp_shiftmax",
+        "local5_tp",
+        "h66f_local5_tp",
+        "h66f",
+    }:
+        # Scheme A: self + temporal peer + 4-axial spatial neighbors (6 lanes).
+        attn, row_sum, gate = _binary_alpha_xnor_stencil_attention(
+            q_orig,
+            k_orig,
+            cfg,
+            temporal_pair=True,
+            spatial_cross=True,
+            motion_xor_alpha=0.0,
+            profile_module=self,
+        )
+        scores = torch.zeros((), device=q_orig.device, dtype=q_orig.dtype)
+    elif cfg.mode in {
+        "binary_axnor_local5_motion_shiftmax",
+        "local5_motion",
+        "h66g_local5_motion",
+        "h66g",
+    }:
+        # Local-5 + H67 motion bias on the self lane only.
+        motion_alpha = float(cfg.binary_motion_xor_alpha or 0.0)
+        if motion_alpha == 0.0:
+            motion_alpha = 0.25
+        attn, row_sum, gate = _binary_alpha_xnor_stencil_attention(
+            q_orig,
+            k_orig,
+            cfg,
+            temporal_pair=False,
+            spatial_cross=True,
+            motion_xor_alpha=motion_alpha,
+            profile_module=self,
+        )
+        scores = torch.zeros((), device=q_orig.device, dtype=q_orig.dtype)
+    elif cfg.mode in {"strict_bsa_qkv_shiftmax", "bsa_qkv_shiftmax", "bsa_true_qkv_shiftmax"}:
         # Reviewed strict-BSA candidate: BSA-style ternary matrix product over
         # QK^T with a separate trainable V branch. SDFormerFlow ships this
         # branch commented out, so the overlay attaches it after checkpoint load
@@ -1577,6 +3611,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         # ── end stage-β ──
         if cfg.center_scores:
             scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _apply_hardware_score_quant(scores, cfg)
         gate = shiftmax(scores, dim=2, eps=cfg.eps)
         # ── NTX-11 gate smooth: EMA across timesteps (optional, additive) ──
         _alpha = getattr(cfg, "gate_smooth_alpha", 0.0)
@@ -1589,6 +3624,21 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         row_sum = gate.sum(dim=2)
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
+        attn = k_orig.mul(gate)
+    elif cfg.mode in {"dualrail_binary_tx_qkselector_shiftmax", "binary_dualrail_tx_shiftmax", "date11_drtx"}:
+        # DATE11 dual-rail TX: all-binary ATLIF produces {0,+1} events, so
+        # signed evidence is recovered by interpreting each head as positive
+        # and negative binary rails before the TX-style score.
+        scores = _dualrail_binary_tx_token_scores(q_orig, k_orig, cfg)
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _apply_hardware_score_quant(scores, cfg)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
         attn = k_orig.mul(gate)
     elif cfg.mode in {"ternary_alpha_xnor_local_shiftmax", "tx_local_shiftmax", "h59_local"}:
         # H59_local / NTX-10: H49 selector + local spatial neighbor interaction.
@@ -1863,6 +3913,18 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
         attn = k_orig.mul(gate)
+    elif cfg.mode in {
+        "tx_direct_group_shiftmax",
+        "direct_group_shiftmax",
+        "h63",
+    }:
+        attn, row_sum, gate, scores = _direct_group_shiftmax_output(q_orig, k_orig, cfg)
+    elif cfg.mode in {
+        "tx_direct_token_channel_shiftmax",
+        "direct_token_channel_shiftmax",
+        "h63_stc",
+    }:
+        attn, row_sum, gate, scores = _direct_token_channel_shiftmax_output(q_orig, k_orig, cfg)
     elif cfg.mode in {"h60", "tx_sc_k_mag_no_carrier_shiftmax"}:
         # h60: H49 no-carrier + SC score residual + K magnitude.
         #   tx_scores = TX(q,k) [+ K_mag if cfg.k_magnitude_alpha]
@@ -1873,14 +3935,34 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         mu = _apply_hardware_mu_quant(_scheduled_bipolar_mu(self, cfg), cfg)
         tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
         scores = tx_scores + mu * sc_scores
-        if cfg.center_scores:
-            scores = scores - scores.mean(dim=2, keepdim=True)
-        scores = _apply_hardware_score_quant(scores, cfg)
-        gate = shiftmax(scores, dim=2, eps=cfg.eps)
-        row_sum = gate.sum(dim=2)
-        if cfg.preserve_mean:
-            gate = gate * float(n_tokens)
-        gate = _apply_hardware_gate_quant(gate, cfg)
+        pre_quant_scores = scores
+        if cfg.hardware_rtl_shiftmax_enabled:
+            if self.training:
+                raise RuntimeError("hardware_rtl_shiftmax_enabled 仅用于部署验证，不能用于训练")
+            if not cfg.hardware_quant_enabled:
+                raise ValueError("RTL Shiftmax 验证要求 hardware_quant_enabled=true")
+            scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+            pre_quant_scores = scores
+            scores = _apply_hardware_score_quant(scores, cfg)
+            gate = _rtl_shiftmax_gate_q17(
+                scores,
+                dim=2,
+                preserve_mean=cfg.preserve_mean,
+            )
+            row_sum = gate.sum(dim=2)
+            if cfg.preserve_mean:
+                row_sum = row_sum / float(n_tokens)
+        else:
+            if cfg.center_scores:
+                scores = scores - scores.mean(dim=2, keepdim=True)
+            scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+            pre_quant_scores = scores
+            scores = _apply_hardware_score_quant(scores, cfg)
+            gate = shiftmax(scores, dim=2, eps=cfg.eps)
+            row_sum = gate.sum(dim=2)
+            if cfg.preserve_mean:
+                gate = gate * float(n_tokens)
+            gate = _apply_hardware_gate_quant(gate, cfg)
         _maybe_emit_h60_profile(
             self,
             q_orig=q_orig,
@@ -1888,10 +3970,17 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             tx_scores=tx_scores,
             sc_scores=sc_scores,
             fused_scores=scores,
+            pre_quant_scores=pre_quant_scores,
             gate=gate,
             cfg=cfg,
         )
         attn = k_orig.mul(gate)
+        castling_weight = _castling_aux_weight(self, cfg)
+        if castling_weight > 0.0:
+            matrix_aux = _castling_binary_matrix_output(q_orig, k_orig, cfg).to(dtype=attn.dtype)
+            attn = torch.lerp(attn, matrix_aux, castling_weight)
+        attn = _window_context_broadcast(attn, cfg)
+        self.h9_castling_aux_weight = float(castling_weight)
     elif cfg.mode in {
         "sc_ad_confidence_carrier_blend_shiftmax",
         "sc_agree_disagree_confidence_carrier_blend_shiftmax",
@@ -1985,10 +4074,12 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         scores = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
         if cfg.center_scores:
             scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _apply_hardware_score_quant(scores, cfg)
         gate = shiftmax(scores, dim=2, eps=cfg.eps)
         row_sum = gate.sum(dim=2)
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
         attn = attn * gate
     elif cfg.mode in {"ternary_alpha_xnor_shiftmax_residual", "h48"}:
         # H48: residual TX gate preserves the original QKFormer carrier and adds
@@ -2002,10 +4093,12 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
         scores = _ternary_alpha_xnor_token_scores(q_orig, k_orig, cfg)
         if cfg.center_scores:
             scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _apply_hardware_score_quant(scores, cfg)
         gate = shiftmax(scores, dim=2, eps=cfg.eps)
         row_sum = gate.sum(dim=2)
         if cfg.preserve_mean:
             gate = gate * float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
         alpha = float(cfg.residual_alpha)
         attn = attn_carrier * (1.0 + alpha * (gate - 1.0))
     elif cfg.mode in {"ternary_alpha_xnor_l1", "alpha_xnor_l1", "h18a_l1"}:
@@ -2066,6 +4159,7 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "signed_consensus_shiftnorm/h13c, "
             "signed_consensus_popcount_l1/h13t, "
             "ternary_alpha_xnor_qkselector_shiftmax/h49, "
+            "dualrail_binary_tx_qkselector_shiftmax/date11_drtx, "
             "bipolar_qkselector_shiftmax/h54a, tx_bipolar_qkselector_shiftmax/h54b, "
             "dual_channel_qkselector_shiftmax/h51, a2os2a_kasv_shiftmax/h52, "
             "sc_agree_disagree_shiftmax/h56a, sc_ad_deadzone_shiftmax/h56b, "
@@ -2076,6 +4170,8 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "tx_sc_score_residual_shiftmax/h59, "
             "faps/h61/flow_aligned_popcount_selector, "
             "h62/nts_conf_residual_shiftmax, "
+            "tx_direct_group_shiftmax/h63, "
+            "tx_direct_token_channel_shiftmax/h63_stc, "
             "h60/tx_sc_k_mag_no_carrier_shiftmax, "
             "ternary_alpha_xnor_local_shiftmax/h59_local, "
             "sc_ad_confidence_carrier_blend_shiftmax/h56mc, "
@@ -2083,7 +4179,13 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "ternary_alpha_xnor_l1/h18a_l1, "
             "ternary_alpha_xnor_ssa_linear/h42b, ternary_alpha_xnor_ssa_qkv_linear/h42c, "
             "ternary_alpha_xnor_ssa_qkv_shiftmax/h42d, ternary_alpha_xnor_ssa_kreuse_shiftmax/h45, "
-            "binary_alpha_xnor_matrix_shiftmax/l1, "
+            "binary_alpha_xnor_matrix_shiftmax/l1, binary_axnor_temporal_pair_shiftmax/h66_tp, "
+            "binary_axnor_local5_shiftmax/h66_lr, "
+            "binary_axnor_local5_tp_shiftmax/h66f, binary_axnor_local5_motion_shiftmax/h66g, "
+            "binary_de9_match_code/de9_match_code, binary_mc49_match_code/mc49_match_code, "
+            "binary_ax17_match_code/ax17_match_code, "
+            "binary_pc9_patch_match_code/h76_pc9, binary_lc4_match_code/h77_lc4, "
+            "binary_g4_match_code/h78_g4, "
             "a2os2a_gate/h18b, alpha_xnor_matrix_shiftmax/h18c, "
             "alpha_xnor_matrix_l1/h18d, a2os2a_direct/h18e, a2os2a_qkv_l1, "
             "hamming_binary_direct/h21a, hamming_ternary_active_direct/h21b, "
@@ -2133,6 +4235,7 @@ def install_shiftmax_attention(model: nn.Module, raw_config: dict | None) -> lis
             "h42d",
         }:
             _ensure_independent_value_branch(module, cfg)
+        _ensure_match_code(module, cfg, name)
         if not hasattr(module, "_h9_original_forward"):
             module._h9_original_forward = module.forward
         module._h9_shiftmax_cfg = cfg
@@ -2166,11 +4269,42 @@ def shiftmax_attention_summary(model: nn.Module) -> dict[str, float | int]:
     row_means = [float(getattr(module, "h9_shiftmax_row_sum_mean", 0.0)) for module in modules]
     gate_means = [float(getattr(module, "h9_shiftmax_gate_mean", 0.0)) for module in modules]
     score_means = [float(getattr(module, "h13_consensus_score_mean", 0.0)) for module in modules]
+    direct_modules = [
+        module
+        for module in modules
+        if getattr(module._h9_shiftmax_cfg, "mode", "")
+        in {
+            "tx_direct_group_shiftmax",
+            "direct_group_shiftmax",
+            "h63",
+            "tx_direct_token_channel_shiftmax",
+            "direct_token_channel_shiftmax",
+            "h63_stc",
+        }
+    ]
+    match_code_modules = [
+        module for module in modules
+        if getattr(module._h9_shiftmax_cfg, "mode", "") in MATCH_CODE_MODES
+    ]
     return {
         "num_modules": len(modules),
         "row_sum_mean": sum(row_means) / len(row_means),
         "gate_mean": sum(gate_means) / len(gate_means),
         "score_mean": sum(score_means) / len(score_means),
+        "direct_shiftmax_modules": len(direct_modules),
+        "direct_shiftmax_groups_mean": (
+            sum(float(module._h9_shiftmax_cfg.direct_shiftmax_groups) for module in direct_modules)
+            / len(direct_modules)
+            if direct_modules
+            else 0.0
+        ),
+        "match_code_modules": len(match_code_modules),
+        "match_code_parameters": sum(
+            int(module._h9_match_code_weight.numel())
+            + int(getattr(module, "_h9_lc4_coefficients", torch.empty(0)).numel())
+            + int(getattr(module, "_h9_cf10_beta", torch.empty(0)).numel())
+            for module in match_code_modules
+        ),
     }
 
 

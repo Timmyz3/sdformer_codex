@@ -1,0 +1,8 @@
+rtl_ttx/ttx_exp2_lut_q8.sv
+rtl_ttx/ttx_ceil_log2_u32.sv
+rtl_ttx/ttx_gate_quant_q17.sv
+rtl_ttx/ttx_descriptor_scheduler.sv
+rtl_h67/h67_temporal_pair_adapter.sv
+rtl_h67/h67_motionxor_score_q7.sv
+rtl_h67/h67_score_class_row_engine.sv
+rtl_h67/h67_attention_top.sv

@@ -1,7 +1,11 @@
 import torch
 import numpy as np
-from scipy import interpolate
 def remap_pretrained_keys_swin(model, checkpoint_model):
+    # SciPy is only needed by the legacy geometric (v2) remap. The paper's v1
+    # full-resolution path uses torch bicubic interpolation and must not require
+    # an unrelated optional dependency at module import time.
+    from scipy import interpolate
+
     state_dict = model.state_dict()
 
     # Geometric interpolation when pre-trained patch size mismatch with fine-tuned patch size
@@ -138,7 +142,7 @@ def load_pretrained_interpolate(model, state_dict):
         absolute_pos_embed_current = model.state_dict()[k]
         _, L1, C1 = absolute_pos_embed_pretrained.size()
         _, L2, C2 = absolute_pos_embed_current.size()
-        if C1 != C1:
+        if C1 != C2:
             print(f"Error in loading {k}, passing......")
         else:
             if L1 != L2:
@@ -174,5 +178,3 @@ def load_pretrained_interpolate(model, state_dict):
                     relative_position_bias_table_pretrained.permute(0,1,3,2).view( nH1, C1, 2, S1, S1), size=(2, S2, S2),
                     mode='trilinear')
                 state_dict[k] = relative_position_bias_table_pretrained_resized.view((B, nH1, C1, L2)).permute(0, 1, 3, 2)
-
-

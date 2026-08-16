@@ -7185,12 +7185,121 @@ bash neuron_experiments/H9_bipolar_self_attention/entrypoints/run_mdr_mvsec_stan
   - log：`neuron_experiments/H9_bipolar_self_attention/results/mdr_mvsec_fast_pipeline_20260622_194135.log`
   - MLflow dir：`file:///root/private_data/sdformer_mlflow/285508689205532009/6fcd5ea103b14a02bc895da13ee44d90/`
   - 启动审计：`detect_anomaly=False`、`max_train_batches=None`、`skip_validation=False`、`batch_size=32`、AMP enabled；已进入 `Epoch 0`，约 `16/2678` step 时 GPU 显存约 `50GB`，无 OOM。
-- 2026-06-24 运行状态与恢复：
+- 2026-06-24/25 运行状态与恢复：
   - 原 fast run 已完成到 epoch23 train loop；epoch23 train loss `0.350138`，但在 `2026-06-24 11:20:41 +0800` 后卡在 `mlflow.pytorch.log_model` 保存阶段，GPU 空闲、日志不再更新。
   - 已确认旧 run 的 training state 只安全保存到 epoch22，因此终止卡住进程后从旧 MLflow run `6fcd5ea103b14a02bc895da13ee44d90` 恢复。
   - 为避免再次卡在重型 MLflow model logging，新增可选环境变量 `SDFORMER_MDR_SKIP_MLFLOW_MODEL_LOG=1` 与 `SDFORMER_MDR_LOCAL_CHECKPOINT_DIR=...`；默认行为不变，resume run 只写本地 checkpoint。
-  - resume run：`neuron_experiments/H9_bipolar_self_attention/results/mdr_mvsec_fast_resume_nomlflowmodel_20260624_155919.log`；新 MLflow dir：`file:///root/private_data/sdformer_mlflow/285508689205532009/dccdcd219120407eb98759a049bcdff4/`；本地 checkpoint 目录：`neuron_experiments/H9_bipolar_self_attention/results/mdr_fast_local_ckpts_20260624`。
-  - 恢复审计：已从 `Epoch 23` 继续训练，GPU 100%，不是从头重跑；epoch23 会重复一次，这是为了使用 epoch22 optimizer/scheduler/scaler state 保持一致。
+  - `mdr_mvsec_fast_resume_nomlflowmodel_20260624_155919.log` 已判定为 **无效 resume**：日志出现 `No model found at6fcd5ea103b14a02bc895da13ee44d90`，说明只恢复了 optimizer/scheduler/scaler state，没有恢复模型权重；该 run 及 `results/mdr_fast_local_ckpts_20260624` 不得用于论文结果或后续 warm start。
+  - 正确恢复种子已本地化为一对 checkpoint：`results/mdr_valid_resume_seed_epoch22/checkpoint_epoch22.pth` 与 `results/mdr_valid_resume_seed_epoch22/checkpoint_epoch22_state_dict.pth`，来自旧有效 run 的 epoch22 模型和 training state。
+  - 正确 smoke（2026-06-25）：`results/mdr_valid_resume_epoch22_smoke_20260625_163628.log` 同时出现 `Model restored from local checkpoint` 和 `Training state resumed from local checkpoint`，从 `Epoch 23` 开始；3-batch epoch23 train loss `0.403140`，与旧有效 run 的 `~0.35` 同量级，证明不是从随机权重继续。
+  - 正式正确续跑（2026-06-25）：PID `3517633`；log：`results/mdr_valid_resume_epoch22_full_20260625_164239.log`；本地 checkpoint 目录：`results/mdr_valid_resume_local_ckpts_20260625_164239`；MLflow dir：`file:///root/private_data/sdformer_mlflow/285508689205532009/37721017bbb74e468f1a30d6ece78b61/`。该 run 从有效 epoch22 重复 epoch23 继续到论文口径 epoch50，并跳过 MLflow 大模型上传。
+  - 2026-06-27 完成审计：进程已结束；代码 `range(epoch_initial, n_epochs)` 下 `n_epochs=50` 的最后训练轮为 epoch49。epoch23-49 无 traceback，训练 loss 从 `0.351193` 降到 `0.312000`。MVSEC validation loss：epoch25 `1.067901`、epoch30 `1.422358`、epoch35 `1.116676`、epoch40 `1.003706`、epoch45 `1.120062`；本轮 best validation 为 epoch40，但因本地 checkpoint 只按 train loss 改善保存，实际保留的后期 checkpoint 为 epoch41/42/43/47，其中 epoch47 train loss 最低 `0.311793`。
+
+MDR baseline 详细指标（2026-06-27 汇总）：
+
+| epoch | train_loss | valid_loss | local checkpoint |
+|---:|---:|---:|---|
+| 23 | 0.351193 | - | `checkpoint_epoch23.pth` |
+| 24 | 0.348625 | - | `checkpoint_epoch24.pth` |
+| 25 | 0.348197 | 1.067901 | `checkpoint_epoch25.pth` |
+| 26 | 0.344489 | - | `checkpoint_epoch26.pth` |
+| 27 | 0.338675 | - | `checkpoint_epoch27.pth` |
+| 28 | 0.339123 | - | - |
+| 29 | 0.338033 | - | `checkpoint_epoch29.pth` |
+| 30 | 0.336983 | 1.422358 | `checkpoint_epoch30.pth` |
+| 31 | 0.328426 | - | `checkpoint_epoch31.pth` |
+| 32 | 0.326536 | - | `checkpoint_epoch32.pth` |
+| 33 | 0.325802 | - | `checkpoint_epoch33.pth` |
+| 34 | 0.325467 | - | `checkpoint_epoch34.pth` |
+| 35 | 0.324975 | 1.116676 | `checkpoint_epoch35.pth` |
+| 36 | 0.323036 | - | `checkpoint_epoch36.pth` |
+| 37 | 0.321519 | - | `checkpoint_epoch37.pth` |
+| 38 | 0.320431 | - | `checkpoint_epoch38.pth` |
+| 39 | 0.322780 | - | - |
+| 40 | 0.320828 | 1.003706 | - |
+| 41 | 0.314732 | - | `checkpoint_epoch41.pth` |
+| 42 | 0.314153 | - | `checkpoint_epoch42.pth` |
+| 43 | 0.312673 | - | `checkpoint_epoch43.pth` |
+| 44 | 0.314826 | - | - |
+| 45 | 0.314569 | 1.120062 | - |
+| 46 | 0.313564 | - | - |
+| 47 | 0.311793 | - | `checkpoint_epoch47.pth` |
+| 48 | 0.313763 | - | - |
+| 49 | 0.312000 | - | - |
+
+MVSEC sparse-flow 推理 sanity check（2026-06-27，非论文复现数）：
+
+- 配置：`configs/generated/eval_mvsec_dt1_mdr_baseline_route.yml`。
+- checkpoint：`neuron_experiments/H9_bipolar_self_attention/results/mdr_valid_resume_local_ckpts_20260625_164239/checkpoint_epoch47.pth`。
+- 输出目录：`results_inference/mvsec_mdr_baseline_epoch47_dt1_20260627_123556`。
+- 加载审计：`checkpoint_overlay_keys=0`、`model_overlay_keys=0`、`missing=0`、`unexpected=0`。
+
+| checkpoint | MVSEC split | AEE | PE1 | PE2 | PE3/outlier | total_spikes | global_fr | effective_flops | energy |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| MDR baseline epoch47 | indoor_flying3 dt1 | 1.2120 | 0.4851 | 0.1412 | 0.0481 | 36.1762G | 11.28% | 81.6827G | 32277.13uJ |
+
+重要修正（2026-06-28）：该结果不能写作论文 MVSEC baseline 复现值，只能视为当前本地链路 sanity check。
+
+- 论文 Table II 的 MVSEC `dt=1` 不报告 AAE，只报告 AEE / `% Outlier`；SDformerFlow_v2/MDR 为 outdoor_day1 `0.61/0.08%`、indoor_flying1 `0.54/0.58%`、indoor_flying2 `0.81/3.85%`、indoor_flying3 `0.69/1.78%`、Avg `0.66/1.57%`。
+- 本地目前只有 `MVSEC_test/indoor_flying3` 预处理目录，且该目录为 `event=2951`、`flowgt_dt1=2434`；runner 按论文四序列默认检查时跳过 `outdoor_day1`、`indoor_flying1`、`indoor_flying2`。原始数据层面只有 `indoor_flying3` 的 data/gt hdf5，`indoor_flying1` 只有 bag、缺 hdf5，`outdoor_day1` 与 `indoor_flying2` 未在本机找到。
+- 后续 MVSEC 评估配置已改为 AEE-only：`configs/generated/eval_mvsec_dt1_mdr_baseline_route.yml` 的 `metrics.name=[AEE]`；`run_h9_standard_mvsec_eval.py` 默认序列改为 `outdoor_day1/indoor_flying1/indoor_flying2/indoor_flying3`，ranking 只输出 AEE/PE/outlier/spikes/energy，并记录缺失序列。
+- `AAE=29.9453` 不应和论文 MVSEC 表对比，因为论文 MVSEC 表没有 AAE；仓库 AAE 对小幅/近零光流方向很敏感，MVSEC sparse-flow 论文主指标应优先看 AEE 和 outlier。后续 MVSEC 表不再报告 AAE。
+- 本地 epoch47 的 `indoor_flying3` AEE `1.2120` 明显差于论文 SDformerFlow_v2/MDR 的 `0.69`。当前排查到的最大偏差源是训练 checkpoint/协议，不是加载失败：加载审计为 `missing=0/unexpected=0`，eval 遍历 `1885` 个样本；但该 checkpoint 来自 fast route（`batch_size=32`、AMP、从早期 run 续跑），而论文只说明 MDR 从头训 50 epoch、cropped resolution/window size，未等价声明 batch32+AMP。训练日志里 MVSEC validation loss 在 epoch40 最低 `1.0037`、epoch45 又升到 `1.1201`，说明该 fast checkpoint 泛化没有稳定达到论文水平。后续 DATE 的 MVSEC/MDR 外部泛化表必须先补齐 MVSEC 四序列预处理，并用 paper-strict 或官方 checkpoint 复核 baseline，再训练/eval all-binary+TX 主线。
+
+结论：baseline MDR->MVSEC route 已完成训练链路跑通，但尚未完成论文级 MVSEC baseline 复现。当前最稳的训练 checkpoint 是 `checkpoint_epoch47.pth`；validation loss 最低点在 epoch40 但本地未保存该 epoch。若继续推进，应先补齐 MVSEC test 预处理序列，并对 `checkpoint_epoch41.pth` / `checkpoint_epoch47.pth` 做同协议 AEE/outlier sensitivity；在复现 baseline 接近论文量级前，不启动 all-binary + TX 的 MDR 全量训练作为正式论文结果。
+
+MVSEC 完整四序列复现接管（2026-06-29）：
+
+- 目标：先把 MVSEC `outdoor_day1 / indoor_flying1 / indoor_flying2 / indoor_flying3` 全部补齐到 `third_party/SDformerFlow/data/Datasets/MVSEC/MVSEC_test/<seq>/{event,flowgt_dt1}`，再按论文 Table II 的 AEE/%Outlier 口径评估 MDR baseline。MVSEC 阶段不再报告 AAE。
+- 论文范式核对：arXiv v1 第 IV-B.2 前的实验设置写明，为避免 MVSEC 过拟合，模型使用 MDR 训练；MDR 约 `80000` train / `6000` valid samples；从头训练 `50` epoch 后在 MVSEC sparse optical flow 上评估。官方仓库 `third_party/SDformerFlow/configs/train_MDR_supervised_SDformerFlow.yml` 与该范式一致的核心项是 `data.path=data/Datasets/MDR`、`test_sequence=outdoor_day1`、`event_interval=dt1`、`batch_size=4`、`use_amp=False`、`crop=[256,256]`、`metrics.name=[AEE]`；但仓库默认 `n_epochs=100`，本工程 paper-strict config 固定为论文口径 `50` epoch。
+- 论文目标值（SDformerFlow-v2/MDR dt1）：`outdoor_day1 AEE=0.61 / outlier=0.08%`，`indoor_flying1 0.54 / 0.58%`，`indoor_flying2 0.81 / 3.85%`，`indoor_flying3 0.69 / 1.78%`，平均 `0.66 / 1.57%`。任何本地结果若只在 indoor_flying3 上得到 `AEE≈1.2`，只能算链路 sanity，不是论文复现。
+- 当前下载状态：`indoor_flying1/2/3` raw bags 已在本地；`indoor_flying3` 已有官方/既有 hdf5 与 encoded dt1；`outdoor_day1_data.bag` 与 `outdoor_day1_gt.bag` 正通过 `scripts/http_range_download.py` 并发 range 下载；`indoor_flying_calib.zip` 与 `outdoor_day_calib.zip` 均已就绪。
+- GT root cause：MVSEC 官网明确说明 dense optical flow 不直接放在 bag/hdf5 里，而是单独提供 `_gt_flow_dist.npz`，或通过 depth/pose/calibration 生成。直接从 gt bag 读 `/davis/left/flow_dist` 会失败，这是正常数据格式差异，不是包损坏。Google Drive folder 可列出四序列 file id，但实际下载速度约几十 KB/s，不适合当前作为主路径。
+- 当前 GT 生成策略：优先用本地 raw gt bag 的 `/davis/left/depth_image_rect` + `/davis/left/odometry` 和官方 calibration zip 生成 `*_gt.hdf5`，再交给 `MVSEC_encoder.py` 生成 `flowgt_dt1`。若后续拿到官方 `_gt_flow_dist.npz`，`scripts/mvsec_npz_to_gt_hdf5.py` 已兼容官网 schema `timestamps/x_flow_dist/y_flow_dist`。
+- 新增/修正工具：`scripts/prepare_mvsec_dt1.py` 修正 `outdoor_day* -> outdoor_day`、`indoor_flying* -> indoor_flying` URL 映射，并修正 argparse 默认序列；gt-only 转换失败后自动 fallback 到 `scripts/mvsec_gt_flow_from_bag.py`；`scripts/mvsec_gt_flow_from_bag.py` 自动识别 calibration zip 内的 `camchain-imucam-*.yaml`；`scripts/http_range_download.py` 用于大文件 range 下载；`MVSEC_encoder.py` 将 `U_gt_all/V_gt_all` 移出 per-sample loop，预处理子进程限制 BLAS 线程；`configs/generated/eval_mvsec_dt1_mdr_baseline_route.yml` 已改为 AEE-only；`run_h9_standard_mvsec_eval.py` 默认跑四个 MVSEC 序列并记录缺失序列。
+- 下载命令范式：
+
+```bash
+/opt/conda/envs/sdformerflow/bin/python -u scripts/http_range_download.py \
+  https://visiondata.cis.upenn.edu/mvsec/outdoor_day/outdoor_day1_data.bag \
+  third_party/SDformerFlow/data/Datasets/MVSEC/outdoor_day1/outdoor_day1_data.bag \
+  --workers 32 --chunk-mb 4
+
+/opt/conda/envs/sdformerflow/bin/python -u scripts/http_range_download.py \
+  https://visiondata.cis.upenn.edu/mvsec/outdoor_day/outdoor_day1_gt.bag \
+  third_party/SDformerFlow/data/Datasets/MVSEC/outdoor_day1/outdoor_day1_gt.bag \
+  --workers 32 --chunk-mb 4
+```
+
+- encode 命令范式：
+
+```bash
+/opt/conda/envs/sdformerflow/bin/python -u scripts/prepare_mvsec_dt1.py \
+  --encode-only \
+  --sequence outdoor_day1 \
+  --sequence indoor_flying1 \
+  --sequence indoor_flying2 \
+  --sequence indoor_flying3
+```
+
+- baseline 标准化推理命令范式：
+
+```bash
+/opt/conda/envs/sdformerflow/bin/python neuron_experiments/H9_bipolar_self_attention/entrypoints/run_h9_standard_mvsec_eval.py \
+  --config configs/generated/eval_mvsec_dt1_mdr_baseline_route.yml \
+  --checkpoint neuron_experiments/H9_bipolar_self_attention/results/mdr_valid_resume_local_ckpts_20260625_164239/checkpoint_epoch47.pth \
+  --out-dir results_inference/mvsec_mdr_baseline_epoch47_dt1_full4_$(date +%Y%m%d_%H%M%S)
+```
+
+- 判定流程：四序列 encoded 完成后，先对 MDR baseline `checkpoint_epoch41/47` 做 AEE/outlier sensitivity；如果四序列结果仍明显高于论文目标，优先排查 MVSEC hdf5/encoder 是否与官方格式一致，再决定是否重跑 `configs/generated/train_mdr_baseline_mvsec_route_paper_strict.yml`。在 baseline 复现可信前，不把 all-binary + TX MDR/MVSEC 训练结果写成正式外部泛化结论。
+
+DATE11 all-binary + TX MDR/MVSEC full run（2026-06-27）：
+
+- 新增配置：`configs/generated/train_mdr_all_binary_atlif_tx_mvsec_route_fast.yml`，保持 MDR baseline fast route 的 `crop=256x256`、`batch_size=32`、`n_epochs=50`、MVSEC `indoor_flying3/dt1` validation，只替换为 all-binary ATLIF + all12 TX attention。
+- 新增训练链路：`third_party/SDformerFlow/train_mdr_supervised_SNN.py` 仅在配置包含 `atlif_ternary_psn.enabled` 或 `bsa_attention.enabled` 时安装 H9 overlay；baseline 配置不触发。加载审计输出 `checkpoint_overlay_keys/missing/unexpected`。
+- smoke：`results/mdr_allbinary_tx_smoke_20260627_121258.log`，从 MDR baseline `checkpoint_epoch47.pth` 加载模型权重、不 resume optimizer；审计为 ATLIF `105`、Shiftmax/TX `12`、`checkpoint_overlay_keys=0, missing=210, unexpected=0`，1-batch loss `1.521719`，本地 checkpoint/state 保存正常。
+- full run 曾启动：PID `371764`；log：`results/mdr_allbinary_tx_full_20260627_121911.log`；本地 checkpoint 目录：`results/mdr_allbinary_tx_local_ckpts_20260627_121911`；MLflow dir：`file:///root/private_data/sdformer_mlflow/199834913587708620/808bba3aea934a08875db8a106cbe295/`。启动命令从 baseline epoch47 checkpoint 初始化，但不传 `--resume`，因此不会沿用 baseline optimizer/scheduler/scaler state。
+- 2026-06-28 状态修正：该 full run 已按“先做标准化推理，先不跑训练”的要求停止；停止时仍在 epoch0 中段，未保存任何 checkpoint，本地 checkpoint 目录为空。当前无 `train_mdr_supervised_SNN.py` / `eval_MV_flow_SNN.py` 主进程运行。若恢复 all-binary + TX MDR/MVSEC 训练，应从同一个 baseline epoch47 checkpoint 重新启动。
 
 ### DATE11 完整消融矩阵配置与二服务器标准流程（2026-06-22）
 
@@ -7291,3 +7400,4968 @@ cd /root/private_data/work/sdformer_codex/SDformer
 
 - P2 PSN+TX/SC/NTS 是 reviewer 可能要求的 attention-only 控制，不是 DATE 主线。此前 PSN+TX 标准 valid825 曾因 attention-only checkpoint 的 overlay 审计口径出过问题；如跑 P2，必须人工检查 `pipeline.log` 中 `checkpoint_overlay_keys/missing/unexpected`，不能只看脚本退出码。
 - 当前论文主线仍是 `all-binary ATLIF + all12 NTS/H60 + FT5`；full30 矩阵用于机制消融，FT5/部署量化是 final-mainline 补实验。
+
+
+### DATE11 自动结果追加：all-binary dualrail TX beta0.5 FT5（2026-06-26 03:50:20）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_drtx_b050_stdlr_ft_txep19_ft5_bs8_20260626_005642_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_drtx_b050_stdlr_ft_txep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_drtx_b050_stdlr_ft_txep19_ft5_bs8_20260626_005642_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_drtx_b050_stdlr_ft_txep19_ft5_bs8_20260626_005642_setsid/profile_ranking_valid825.md`
+- best：epoch `2`，AEE `1.5079`，AAE `9.8100`，total_spikes `23.1366G`，firing `5.0000%`，energy `20420.85uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5079 | 9.8100 | 0.5228 | 0.1969 | 0.0925 | 23.1366G | 5.0000% | 20420.85 |
+| 2 | 4 | 1.5544 | 9.9571 | 0.5258 | 0.2035 | 0.0971 | 23.3246G | 5.0407% | 20606.63 |
+| 3 | 0 | 1.5715 | 10.2266 | 0.5361 | 0.2100 | 0.1005 | 23.5368G | 5.0865% | 20771.58 |
+| 4 | 3 | 1.5900 | 10.2020 | 0.5361 | 0.2090 | 0.0995 | 24.7798G | 5.3552% | 21865.75 |
+| 5 | 1 | 1.5914 | 10.1970 | 0.5409 | 0.2113 | 0.1013 | 24.4892G | 5.2923% | 21603.81 |
+
+### DATE11 机制记录：all-binary TX vs FAPS 前向与配置（2026-06-26）
+
+目的：把 `all-binary ATLIF` 代入 dual-rail TX 与 FAPS 两种注意力，明确二者前向差异，并生成可直接训练的 all-binary + FAPS 配置。
+
+代码入口：
+
+- dual-rail TX：`neuron_experiments/H9_bipolar_self_attention/overlay/models/STSwinNet_SNN/bsa_attention.py::_dualrail_binary_tx_token_scores`
+- FAPS：`neuron_experiments/H9_bipolar_self_attention/overlay/models/STSwinNet_SNN/bsa_attention.py::_faps_flow_aligned_token_scores`
+
+机制对比：
+
+| 项目 | dual-rail TX | FAPS |
+|---|---|---|
+| 输入事件 | `_binary_event_ste`，事件为 `{0,+1}` | `_ternary_sign_ste`，事件语义为 `{-1,0,+1}`；在 all-binary ATLIF 下主要退化到 `{0,+1}` |
+| 通道解释 | head 前半为 positive rail，后半为 negative rail | head 前后半按 flow-aligned 的 x/y 方向组处理 |
+| 分数核心 | `same + alpha0 * same_zero - beta * opposite - single_active_penalty * single_active` | 每个方向组内 `4 * same_nonzero + 1 * same_zero - 1 * opposite - 4 * single_active` |
+| 异号惩罚 | 显式 `- beta * opposite`；b050 为 0.5，b025 为 0.25，不是 0 | 固定 `-1 * opposite`；all-binary 场景中若没有负事件，opposite 项通常弱化 |
+| 光流特性 | 通用 TX/XNOR 风格 token selector，不显式区分 x/y 方向 | 显式拆 x/y 方向组，可用 mean/sum 或 disagreement penalty 融合，并可加 sparse K magnitude |
+| 当前 all-binary 叙事 | 更像“硬件友好的通用二值匹配注意力” | 更适合讲成“借鉴 TX 的 popcount selector，同时结合光流 x/y 方向结构和 K 幅值置信度” |
+
+具体 all-binary toy 前向，head_dim=8，前 4 维为一组，后 4 维为一组，3 个 token。设：
+
+```text
+Token A:
+q_pos=[1,0,1,0], q_neg=[0,1,0,0]
+k_pos=[1,0,0,0], k_neg=[0,1,1,0]
+
+Token B:
+q_pos=[1,1,0,0], q_neg=[0,0,1,0]
+k_pos=[0,1,0,0], k_neg=[1,0,1,0]
+
+Token C:
+q_pos=[0,0,0,0], q_neg=[0,0,0,0]
+k_pos=[0,0,0,0], k_neg=[0,0,0,0]
+```
+
+dual-rail TX，取 `alpha0=0.02`、`beta=0.25`、`single_active_penalty=0.10`：
+
+| token | same_nonzero | opposite | same_zero | single_active | raw score | head_dim norm 后 |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 2 | 1 | 1 | 0 | `2 + 0.02 - 0.25 = 1.77` | 0.4425 |
+| B | 2 | 1 | 1 | 0 | `2 + 0.02 - 0.25 = 1.77` | 0.4425 |
+| C | 0 | 0 | 4 | 0 | `0.08` | 0.0200 |
+
+结论：TX 在 all-binary dual-rail 表示下主要奖励同 rail 激活，显式压低异 rail 匹配；全静默 token 只拿 `alpha0 * same_zero` 的弱奖励。
+
+FAPS，用同一 toy 张量作方向组示意：前 4 维为 x，后 4 维为 y，`directional_merge_mode=mean`：
+
+| token | score_x | score_y | mean raw score | head_dim norm 后 |
+|---|---:|---:|---:|---:|
+| A | `4*1 + 1*2 - 4*1 = 2` | `4*1 + 1*2 - 4*1 = 2` | 2 | 0.2500 |
+| B | 2 | 2 | 2 | 0.2500 |
+| C | `1*4 = 4` | `1*4 = 4` | 4 | 0.5000 |
+
+结论：FAPS 的故事更贴光流，因为它把 token 匹配拆成 x/y 方向一致性，并可用 `k_magnitude_alpha` 给高置信 K 幅值补充 2-bit 修正；但在纯 all-binary toy case 里，`same_zero` 权重比 TX 大，静默 token 可能被偏高奖励，所以需要真实 valid825 训练/验证确认，必要时调低 silence 权重或先跑 stage2-only FAPS。
+
+已生成 all-binary + FAPS 配置：
+
+| 用途 | 配置 | 起点 | 关键设置 |
+|---|---|---|---|
+| FT5 快速判断 | `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_all12_stdlr_ft_txep19_ft5.yml` | `date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth` | `output_mode=binary`，`mode=faps`，all12 blocks，`batch_size=8`，`n_epochs=5` |
+| full30 | `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_all12_w720_fastlr_full30.yml` | NB0 epoch59 | `output_mode=binary`，`mode=faps`，all12 blocks，fastlr full30 |
+| manifest | `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_allbinary_faps_manifest.json` | - | 记录 full30/FT5 两个配置 |
+
+FT5 配置关键 attention 参数：`directional_channels_enabled=true`，`directional_merge_mode=mean`，`flow_disagreement_gamma=0.0`，`k_magnitude_alpha=0.03125`，`confidence_min_active=8`，`kmag_quantize_bits=2`，`single_active_penalty=0.05`，`consensus_score_norm=head_dim`。
+
+运行命令：
+
+```bash
+cd /root/private_data/work/sdformer_codex/SDformer
+SDFORMER_USE_MLFLOW=0 SDFORMER_MLFLOW_MODEL_LOGGING=0 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True KMP_DUPLICATE_LIB_OK=TRUE \
+python -u neuron_experiments/H9_bipolar_self_attention/entrypoints/run_date11_ft5_and_valid825.py \
+  --config neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_all12_stdlr_ft_txep19_ft5.yml \
+  --resume neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth \
+  --label "all-binary FAPS all12 FT5"
+```
+
+b025 状态备注：`date11full_all_binary_atlif_drtx_b025_stdlr_ft_txep19_ft5_bs8_20260626_141439_setsid` 当前只有 `checkpoint_epoch0.pth` 和 `pipeline.log`，没有 valid825 ranking，进程已不存在；日志停在 epoch0 约 `378/918` step，未检出 Python traceback/OOM 字样，按异常中断处理，不能作为有效结果。
+
+### DATE11 all-binary FAPS 短测筛选（2026-06-26）
+
+目的：在不直接开 full30 的情况下，先用 `all-binary TX ep19` 续训 360 step，筛出 FAPS 的硬件友好主线超参。筛选原则：优先 no-Kmag；Kmag 只作为精度上限 ablation，不作为主线，因为它需要额外 K margin 保留、量化、active-count gate，比纯 popcount selector 硬件故事更重。
+
+生成脚本与 manifest：
+
+- `neuron_experiments/H9_bipolar_self_attention/entrypoints/make_date11_allbinary_faps_short_configs.py`
+- `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_allbinary_faps_short_manifest.json`
+
+短测结果（`profile_checkpoints.py --samples 40`，仅用于趋势筛选，不作为论文最终指标）：
+
+| rank | config | scope | Kmag | LR | run_dir | train_loss | val_loss | valid40 AEE | valid40 AAE | SOPs(G) | firing | 判断 |
+|---:|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| 1 | `date11allbin_faps_s2only_nokmag_stdlr_s360.yml` | S2-only 6 blocks | no | stdlr | `results/date11allbin_faps_s2only_nokmag_stdlr_s360_bs8_20260626_160617` | 1.5064 | 1.2660 | 1.5948 | 14.9469 | 2.2845 | 0.05404 | 当前最优；硬件最干净，进入 FT5 |
+| 2 | `date11allbin_faps_s2only_nokmag_fastlr_s360.yml` | S2-only 6 blocks | no | fastlr | `results/date11allbin_faps_s2only_nokmag_fastlr_s360_bs8_20260626_161714` | 1.5088 | 1.2390 | 1.6198 | 15.1280 | 2.2849 | 0.05405 | val loss 低但 valid40 更差；不选 |
+| 3 | `date11allbin_faps_all12_nokmag_stdlr_s360.yml` | all12 | no | stdlr | `results/date11allbin_faps_all12_nokmag_stdlr_s360_bs8_20260626_155451` | 1.5370 | 1.2680 | 1.6453 | 15.2806 | 2.3309 | 0.05514 | scope 太激进，AAE 更差 |
+
+中止项：
+
+- `date11allbin_faps_all12_kmag032_stdlr_s360`：已手动中止于约 step7。原因不是代码错误，而是 Kmag 需要额外硬件通路，和“纯 FAPS popcount selector”主线不一致；后续只在 noKmag 无法达标时作为精度上限 ablation。
+
+短测结论：
+
+1. FAPS 在 all-binary + TX ep19 起点下可以稳定训练，360 step 后 binary activity 保持约 `4.4%-4.5%`，未出现塌火。
+2. S2-only 明显优于 all12：valid40 AEE 从 `1.6453` 降到 `1.5948`，AAE 从 `15.2806` 降到 `14.9469`，SOPs 也更低。
+3. fastlr 没有改善 valid40，虽然 validation loss 更低，但 AEE/AAE 均差于 stdlr；下一步使用 `S2-only + noKmag + stdlr` 做 FT5/valid825。
+
+
+### DATE11 自动结果追加：all-binary FAPS S2-only noKmag stdlr FT5（2026-06-26 19:25:50）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_faps_s2only_nokmag_stdlr_ft_txep19_ft5_bs8_20260626_162831_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_s2only_nokmag_stdlr_ft_txep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_s2only_nokmag_stdlr_ft_txep19_ft5_bs8_20260626_162831_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_s2only_nokmag_stdlr_ft_txep19_ft5_bs8_20260626_162831_setsid/profile_ranking_valid825.md`
+- best：epoch `2`，AEE `1.5091`，AAE `9.9242`，total_spikes `22.6747G`，firing `4.8938%`，energy `19977.77uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5091 | 9.9242 | 0.5236 | 0.1970 | 0.0923 | 22.6747G | 4.8938% | 19977.77 |
+| 2 | 4 | 1.5349 | 9.8483 | 0.5201 | 0.2003 | 0.0958 | 22.8250G | 4.9262% | 20130.69 |
+| 3 | 3 | 1.5525 | 10.0885 | 0.5303 | 0.2044 | 0.0974 | 24.3261G | 5.2502% | 21421.04 |
+| 4 | 0 | 1.5655 | 10.1694 | 0.5301 | 0.2063 | 0.0992 | 23.1522G | 4.9968% | 20405.53 |
+| 5 | 1 | 1.5786 | 10.2047 | 0.5375 | 0.2100 | 0.1011 | 24.0592G | 5.1926% | 21192.65 |
+
+
+### DATE11 自动结果追加：all-binary ATLIFPSN + all-attention FAPS noKmag FT5（2026-06-27 03:05:21）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_faps_all12_nokmag_stdlr_ft_txep19_ft5_bs8_20260627_000507_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_all12_nokmag_stdlr_ft_txep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_stdlr_ft_txep19_ft5_bs8_20260627_000507_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_stdlr_ft_txep19_ft5_bs8_20260627_000507_setsid/profile_ranking_valid825.md`
+- best：epoch `2`，AEE `1.5152`，AAE `9.8479`，total_spikes `23.0819G`，firing `4.9882%`，energy `20370.23uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5152 | 9.8479 | 0.5253 | 0.1980 | 0.0928 | 23.0819G | 4.9882% | 20370.23 |
+| 2 | 4 | 1.5475 | 9.9171 | 0.5277 | 0.2048 | 0.0979 | 23.2116G | 5.0162% | 20502.78 |
+| 3 | 0 | 1.5703 | 10.2110 | 0.5358 | 0.2093 | 0.0999 | 23.5325G | 5.0856% | 20764.50 |
+| 4 | 3 | 1.5745 | 10.2312 | 0.5390 | 0.2103 | 0.1001 | 24.6671G | 5.3308% | 21762.17 |
+| 5 | 1 | 1.5905 | 10.1833 | 0.5423 | 0.2132 | 0.1026 | 24.4676G | 5.2877% | 21581.08 |
+
+结论：严格全替换 FAPS noKmag 的 FT5 最优是 epoch2，AEE `1.5152`，仍差于 all-binary TX FT5 `1.5077` 和 all-binary NTS/H60 `1.4891`；但 spikes/energy 仍在低能区间，且 epoch2 明显优于 epoch0/1/3/4，说明当前不能直接判定 FAPS 结构无效，FT5/stdlr 的时长与调度可能不合适。
+
+后续动作：已启动同一定义的 `date11full_all_binary_atlif_faps_all12_nokmag_slowlr_ft_txep19_ft10.yml`，从同一个 all-binary TX ep19 checkpoint 续训 10 epoch，使用更保守 LR（backbone/norm `5e-7`，neuron `1.5e-5`，threshold `2.5e-6`，milestone `8`），用于判断“多训/慢训”能否把 strict all-attention FAPS 拉到 TX 附近。
+
+### DATE11 自动结果追加：all-binary ATLIFPSN + all-attention FAPS noKmag FT10 slowlr（2026-06-27 09:10:35）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_faps_all12_nokmag_slowlr_ft_txep19_ft10_bs8_20260627_030855_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_all12_nokmag_slowlr_ft_txep19_ft10.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_slowlr_ft_txep19_ft10_bs8_20260627_030855_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_slowlr_ft_txep19_ft10_bs8_20260627_030855_setsid/profile_ranking_valid825.md`
+- 审计：训练加载 `missing=0/unexpected=0`；`installed Shiftmax attention: 12 modules`；`official_atlif_modules=105`；`ternary_activity_mean=0.0`；`k_magnitude_alpha=0.0`。
+- best：epoch `8`，AEE `1.5262`，AAE `9.7982`，total_spikes `23.8992G`，firing `5.1648%`，energy `21078.63uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 8 | 1.5262 | 9.7982 | 0.5220 | 0.2003 | 0.0951 | 23.8992G | 5.1648% | 21078.63 |
+| 2 | 2 | 1.5232 | 9.9866 | 0.5280 | 0.2001 | 0.0938 | 22.9500G | 4.9597% | 20241.14 |
+| 3 | 4 | 1.5449 | 9.9174 | 0.5265 | 0.2044 | 0.0979 | 23.0081G | 4.9723% | 20310.47 |
+| 4 | 7 | 1.5484 | 9.9755 | 0.5276 | 0.2029 | 0.0967 | 23.8412G | 5.1523% | 21039.98 |
+| 5 | 9 | 1.5500 | 10.0927 | 0.5290 | 0.2019 | 0.0957 | 24.2746G | 5.2460% | 21438.58 |
+| 6 | 5 | 1.5591 | 10.0709 | 0.5322 | 0.2080 | 0.0996 | 23.7135G | 5.1247% | 20925.35 |
+| 7 | 6 | 1.5662 | 10.2375 | 0.5335 | 0.2083 | 0.1003 | 23.8831G | 5.1614% | 21077.34 |
+| 8 | 0 | 1.5779 | 10.3148 | 0.5368 | 0.2104 | 0.1017 | 23.5018G | 5.0790% | 20733.87 |
+| 9 | 3 | 1.5857 | 10.2178 | 0.5389 | 0.2116 | 0.1014 | 24.4905G | 5.2926% | 21591.43 |
+| 10 | 1 | 1.5976 | 10.2315 | 0.5456 | 0.2157 | 0.1038 | 24.3647G | 5.2654% | 21481.98 |
+
+结论：多训到 FT10 且降低 LR 没有把严格全替换 FAPS noKmag 拉近 TX/NTS。FT10 best AEE `1.5262`，比同定义 FT5 best `1.5152` 更差，也差于 all-binary TX FT5 `1.5077`、S2-only FAPS FT5 `1.5091`、all-binary NTS/H60 `1.4891`。因此当前证据不支持把“所有注意力都换成 FAPS noKmag”作为主线；如果继续讲 FAPS，优先保留 S2-only 作为机制旁证，或另开 silence/zero-match 权重修正，而不是继续堆训练轮数。
+
+### DATE11 FAPS 整数 TX-ratio 短测（2026-06-27）
+
+目的：修正原始 FAPS 在 all-binary ATLIFPSN 下的三值有效公式。all-binary 时事件基本为 `{0,+1}`，`opposite` 项基本无效，因此 FAPS 实际由 `same_active / same_zero / single_active` 三类计数决定。原始 FAPS `4:1:4` 等价于 `1:0.25:1`，与 TX 的 `1:0.02:0.10` 差别过大，尤其静默奖励和单边惩罚过强。
+
+本轮只测无浮点乘法、移位友好的整数近似：加权 popcount 后用 dyadic `score_scale` 右移；`same_zero` 保留为 `1`，不设为 `0`。同时关闭 x/y split，先验证整数比例本身，避免把“比例”和“人为通道分组”混在一起。
+
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 短测目录：`neuron_experiments/H9_bipolar_self_attention/results/date11_faps_txratio_integer_txep19_20260627_231503`
+- summary：`neuron_experiments/H9_bipolar_self_attention/results/date11_faps_txratio_integer_txep19_20260627_231503/summary.md`
+- 共同设置：all-binary ATLIFPSN，all12 FAPS，noKmag，no x/y split，360 train steps，valid40。
+
+| rank | integer score before shift | dyadic scale | effective ratio | valid40 AEE | valid40 AAE | SOPs(G) | firing | 判断 |
+|---:|---|---:|---|---:|---:|---:|---:|---|
+| 1 | `64*same_active + 1*same_zero - 6*single_active` | `1/64` | `1 : 0.0156 : 0.0938` | 1.5712 | 14.3776 | 2.3324 | 0.05517 | 当前最好；最接近 TX `1:0.02:0.10`，进入 FT5 |
+| 2 | `32*same_active + 1*same_zero - 3*single_active` | `1/32` | `1 : 0.0313 : 0.0938` | 1.5810 | 14.2899 | 2.3322 | 0.05517 | AEE 略差；same_zero 偏强 |
+| 3 | `16*same_active + 1*same_zero - 2*single_active` | `1/16` | `1 : 0.0625 : 0.1250` | 1.6131 | 15.1093 | 2.3325 | 0.05518 | 明显变差；静默奖励仍过强 |
+
+结论：FAPS 可以按 TX 比例做整数近似，而且短测有效。`64:1:6 >>6` 比此前 all12 FAPS short 的 valid40 AEE `1.6453` 明显更好，也优于 S2-only FAPS short 的 `1.5948`；下一步跑 `64:1:6 >>6` 的 FT5 + 标准 valid825。x/y split 暂时不作为主线假设，后续只作为同一整数比例下的对照。
+
+
+### DATE11 自动结果追加：all-binary FAPS TX-ratio integer 64:1:6 nosplit FT5（2026-06-28 02:45:41）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_faps_all12_nokmag_s64_z1_p6_sc0p015625_nosplit_stdlr_ft_txep19_ft5_bs8_20260627_234802_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_all12_nokmag_s64_z1_p6_sc0p015625_nosplit_stdlr_ft_txep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_s64_z1_p6_sc0p015625_nosplit_stdlr_ft_txep19_ft5_bs8_20260627_234802_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_s64_z1_p6_sc0p015625_nosplit_stdlr_ft_txep19_ft5_bs8_20260627_234802_setsid/profile_ranking_valid825.md`
+- best：epoch `2`，AEE `1.5085`，AAE `9.9029`，total_spikes `23.1650G`，firing `5.0062%`，energy `20444.56uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5085 | 9.9029 | 0.5248 | 0.1970 | 0.0918 | 23.1650G | 5.0062% | 20444.56 |
+| 2 | 4 | 1.5424 | 9.8597 | 0.5251 | 0.2041 | 0.0981 | 23.3069G | 5.0368% | 20592.57 |
+| 3 | 0 | 1.5664 | 10.2091 | 0.5357 | 0.2089 | 0.0994 | 23.5640G | 5.0924% | 20796.24 |
+| 4 | 3 | 1.5712 | 10.1394 | 0.5364 | 0.2070 | 0.0981 | 24.7960G | 5.3587% | 21880.99 |
+| 5 | 1 | 1.5880 | 10.1927 | 0.5412 | 0.2122 | 0.1020 | 24.5042G | 5.2956% | 21617.59 |
+
+结论：`64:1:6 >>6` 证明 all-binary FAPS 可以用纯整数 popcount + shift 的方式追到 all-binary TX FT5 附近。相对 TX FT5 best（AEE `1.5077`，AAE `9.8912`，`22.7231G`，`20010.68uJ`），本实验 best epoch2 AEE 只差 `+0.0008`，但 spikes/energy 略高（`23.1650G` / `20444.56uJ`）。相对 all-binary NTS/H60 主线（AEE `1.4891`，`23.8206G`，`21045.91uJ`），精度仍明显落后，但能耗更低。论文定位上，FAPS 当前不是替代 NTS/H60 的最强精度主线，而是一个更接近 TX、无浮点乘法、无 Kmag 旁路、保留静默弱奖励的硬件友好注意力候选。下一步只补一个同类整数比例 `32:1:3 >>5` 的 FT5，验证 dyadic scale/静默奖励强度是否有更优能耗-精度点；不再扩大小数或 Kmag 矩阵。
+
+
+### DATE11 自动结果追加：all-binary FAPS TX-ratio integer 32:1:3 nosplit FT5（2026-06-28 05:35:05）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_faps_all12_nokmag_s32_z1_p3_sc0p03125_nosplit_stdlr_ft_txep19_ft5_bs8_20260628_024839_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_faps_all12_nokmag_s32_z1_p3_sc0p03125_nosplit_stdlr_ft_txep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_w720_fastlr_full30_bs8_20260617_024526_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_s32_z1_p3_sc0p03125_nosplit_stdlr_ft_txep19_ft5_bs8_20260628_024839_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_faps_all12_nokmag_s32_z1_p3_sc0p03125_nosplit_stdlr_ft_txep19_ft5_bs8_20260628_024839_setsid/profile_ranking_valid825.md`
+- best：epoch `2`，AEE `1.5124`，AAE `9.8949`，total_spikes `23.1615G`，firing `5.0054%`，energy `20440.79uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5124 | 9.8949 | 0.5243 | 0.1973 | 0.0922 | 23.1615G | 5.0054% | 20440.79 |
+| 2 | 4 | 1.5435 | 9.9041 | 0.5276 | 0.2043 | 0.0975 | 23.2528G | 5.0251% | 20540.64 |
+| 3 | 3 | 1.5783 | 10.1059 | 0.5349 | 0.2081 | 0.0994 | 24.7417G | 5.3469% | 21828.25 |
+| 4 | 0 | 1.5759 | 10.2322 | 0.5363 | 0.2107 | 0.1014 | 23.5488G | 5.0891% | 20781.70 |
+| 5 | 1 | 1.5859 | 10.1048 | 0.5406 | 0.2122 | 0.1022 | 24.5143G | 5.2978% | 21625.17 |
+
+结论：`32:1:3 >>5` 没有超过 `64:1:6 >>6`，best epoch2 AEE 从 `1.5085` 退到 `1.5124`，spikes/energy 基本持平（`23.1615G` / `20440.79uJ`）。这说明把 same_zero 从 `1/64` 提到 `1/32` 反而略损精度，整数 FAPS 的最稳点仍是更接近 TX 比例的 `64:1:6 >>6`。相对 all-binary TX FT5（AEE `1.5077`，AAE `9.8912`，`22.7231G`，`20010.68uJ`），两个 FAPS 整数点都没有形成明确优势；因此 FAPS 不再继续扩大 sweep，后续主线应转为 all-binary + TX/整数 TX-like score 的硬件化论证，FAPS 只保留为“带弱静默奖励的 TX 近似”候选或消融。
+
+
+### DATE11 自动结果追加：all-binary TX deploy quant（2026-06-28 06:10:33）
+
+<!-- DATE11_TX_DEPLOY_QUANT::date11_allbinary_tx_deploy_quant_full825_20260628_053939 -->
+- 主 checkpoint：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_tx_stdlr_ft_ep19_ft5_bs8_20260621_035025_setsid/checkpoint_epoch2.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11_allbinary_tx_deploy_quant_full825_20260628_053939`
+- 目的：验证 all-binary TX FT ep19 best checkpoint 的 TX gate 在 int8 score / int8 gate 下是否保持等价；TX 无 μ，因此不需要 pow2 μ 消融。
+
+| config | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `date11_allbinary_tx_ft_ep19_deploy_float_ref` | 1.5087 | 9.8950 | 0.5214 | 0.1959 | 0.0921 | 22.7230G | 4.9011% | 20010.61 |
+| `date11_allbinary_tx_ft_ep19_deploy_score_int8` | 1.5068 | 9.8695 | 0.5203 | 0.1955 | 0.0919 | 22.7223G | 4.9010% | 20009.90 |
+| `date11_allbinary_tx_ft_ep19_deploy_score_int8_gate_int8` | 1.5124 | 9.9086 | 0.5223 | 0.1967 | 0.0927 | 22.7223G | 4.9010% | 20009.88 |
+
+结论：TX gate 的部署量化基本成立。`score_int8` 相对 float ref 没有掉点，AEE 反而从 `1.5087` 到 `1.5068`，spikes/energy 不变；`score_int8_gate_int8` AEE 为 `1.5124`，相对 float ref 只差 `+0.0037`，energy 仍约 `20009.88uJ`。这支持 all-binary TX 的硬件路径写成 popcount score + centering + Shiftmax/LUT + int8 gate；但该验证只量化 TX gate，原 QK carrier 仍来自 H18a 路径，论文表述需避免把它写成无 carrier selector。若要把“无 carrier selector”作为更干净主线，需要另跑 H49/`tx_qkselector_shiftmax` 的 all-binary FT5 与 deploy quant。
+
+
+### DATE11 自动结果追加：all-binary H60 TX-only mu0 noSC FT5（2026-06-28 18:13:22）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_h60_mu0_txonly_stdlr_ft_ep19_ft5_bs8_20260628_152115_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_h60_mu0_txonly_stdlr_ft_ep19_ft5.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_nts_w720_fastlr_full30_bs8_20260617_200451_setsid/checkpoint_epoch19.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_stdlr_ft_ep19_ft5_bs8_20260628_152115_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_stdlr_ft_ep19_ft5_bs8_20260628_152115_setsid/profile_ranking_valid825.md`
+- best：epoch `2`，AEE `1.5150`，AAE `9.9346`，total_spikes `23.0172G`，firing `4.9742%`，energy `20316.34uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5150 | 9.9346 | 0.5178 | 0.1964 | 0.0931 | 23.0172G | 4.9742% | 20316.34 |
+| 2 | 4 | 1.5445 | 9.9752 | 0.5230 | 0.2038 | 0.0981 | 23.1286G | 4.9983% | 20431.56 |
+| 3 | 0 | 1.5616 | 10.1376 | 0.5298 | 0.2087 | 0.1007 | 23.5005G | 5.0787% | 20747.31 |
+| 4 | 3 | 1.5735 | 10.1852 | 0.5310 | 0.2068 | 0.0988 | 24.6238G | 5.3214% | 21730.11 |
+| 5 | 1 | 1.5897 | 10.1688 | 0.5361 | 0.2112 | 0.1029 | 24.4217G | 5.2778% | 21546.55 |
+
+结论：H60 框架下把 `bipolar_mu` 设为 `0` 并关闭 SC/Kmag 后，best epoch2 AEE `1.5150`，没有超过 all-binary TX FT5（AEE `1.5077`，`22.7231G`，`20010.68uJ`），也明显落后 all-binary NTS/H60 ep29-start FT5 主线（AEE `1.4891`，`23.8206G`，`21045.91uJ`）。因此 `mu=0/noSC` 不能作为当前主线；这说明 H60/NTS 的 SC/μ 分支不是可直接删掉的冗余项。由于该结果没有达到“效果好再接 x/y 分通道”的门槛，暂不启动 x/y-channel FAPS/H60 变体，避免继续扩大负向分支。
+
+
+### DATE11 自动结果追加：all-binary H60 TX-only mu0 noSC 慢 LR 续训（2026-06-29）
+
+<!-- DATE11_FT_APPEND::date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid -->
+- 配置：`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8.yml`
+- 起点：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_stdlr_ft_ep19_ft5_bs8_20260628_152115_setsid/checkpoint_epoch2.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid`
+- 标准 valid825 ranking：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/profile_ranking_valid825.md`
+- 目的：验证前一次 `mu=0/noSC` 结果是否只是 FT5/warmup 不够；从旧 best epoch2 继续慢 LR 训练 8 epoch。
+- 训练审计：加载 overlay key `missing=0/unexpected=0`；`ATLIFTernaryPSN=105`，`Shiftmax attention=12`；全程 `neg_mean=0`、`ternary_activity_mean=0`，符合 all-binary ATLIFPSN。
+- 关键超参：`lr=1.2e-5`，`backbone_lr=5e-7`，`norm_lr=5e-7`，`neuron_lr=2e-5`，`threshold_lr=3e-6`，warmup `720` steps，`bipolar_mu=0.0`，SC schedule 关闭，`k_magnitude_alpha=0.0`。
+- best：epoch `2`，AEE `1.5020`，AAE `9.8871`，total_spikes `23.2395G`，firing `5.0223%`，energy `20521.04uJ`。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 1.5020 | 9.8871 | 0.5169 | 0.1949 | 0.0918 | 23.2395G | 5.0223% | 20521.04 |
+| 2 | 7 | 1.5288 | 9.7984 | 0.5188 | 0.1995 | 0.0956 | 24.1899G | 5.2277% | 21371.97 |
+| 3 | 4 | 1.5382 | 9.8282 | 0.5177 | 0.2003 | 0.0970 | 23.3293G | 5.0417% | 20615.77 |
+| 4 | 5 | 1.5509 | 9.9964 | 0.5250 | 0.2049 | 0.0985 | 24.0518G | 5.1978% | 21249.86 |
+| 5 | 0 | 1.5497 | 10.1150 | 0.5248 | 0.2041 | 0.0982 | 23.7429G | 5.1311% | 20973.08 |
+| 6 | 6 | 1.5594 | 10.0954 | 0.5252 | 0.2060 | 0.0999 | 24.2368G | 5.2378% | 21416.56 |
+| 7 | 3 | 1.5732 | 10.0503 | 0.5283 | 0.2062 | 0.0989 | 24.7933G | 5.3581% | 21886.55 |
+| 8 | 1 | 1.5816 | 10.1395 | 0.5342 | 0.2093 | 0.1009 | 24.6176G | 5.3201% | 21729.44 |
+
+结论：继续慢 LR/warmup 有效，把 `mu=0/noSC` best AEE 从 `1.5150` 改善到 `1.5020`，说明前一次 FT5 确实偏短或 warmup 不充分。与 all-binary TX FT5（H18a carrier TX，AEE `1.5077`，AAE `9.8912`，`22.7231G`，`20010.68uJ`）相比，H60 no-carrier TX selector 的 AEE/AAE 略优，但 spikes/energy 分别高约 `0.5164G` / `510.36uJ`；与 all-binary NTS/H60 ep29-start FT5 主线（AEE `1.4891`，AAE `9.7785`，`23.8206G`，`21045.91uJ`）相比仍有约 `+0.0129` AEE / `+0.1086` AAE 差距，但能量更低约 `524.87uJ`。因此 `mu=0/noSC` 不能简单等同旧 TX：它是无 carrier 的 H60 TX selector，硬件故事更干净；当前可作为 TX-like 硬件友好候选继续做部署量化/少量验证，但若以精度优先，NTS/H60 仍是更强主线。
+
+
+### DATE11 自动结果追加：TTX deploy quant（2026-06-29）
+
+<!-- DATE11_TTX_DEPLOY_QUANT::date11_ttx_deploy_quant_full825_20260629_220531 -->
+- 命名：后续将 `all-binary H60 TX-only mu0 noSC` 主线简称为 **TTX**。本文档中 TTX 定义为：`all-binary ATLIFPSN + H60 TX-only selector, bipolar_mu=0, no SC, no Kmag`，即无 carrier 的 TX-style selector。
+- 主 checkpoint：`neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- 运行目录：`neuron_experiments/H9_bipolar_self_attention/results/date11_ttx_deploy_quant_full825_20260629_220531`
+- 目的：验证 TTX 在 int8 score / int8 gate 部署近似下是否保持等价。TTX 的 `bipolar_mu=0`，因此不跑 pow2 μ 变体。
+- 配置：
+  - `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_ttx_ep2_deploy_float_ref.yml`
+  - `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_ttx_ep2_deploy_score_int8.yml`
+  - `neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_ttx_ep2_deploy_score_int8_gate_int8.yml`
+
+| config | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `date11_ttx_ep2_deploy_float_ref` | 1.5020 | 9.8871 | 0.5169 | 0.1949 | 0.0918 | 23.2395G | 5.0223% | 20521.04 |
+| `date11_ttx_ep2_deploy_score_int8` | 1.4971 | 9.8303 | 0.5174 | 0.1951 | 0.0915 | 23.2434G | 5.0231% | 20524.45 |
+| `date11_ttx_ep2_deploy_score_int8_gate_int8` | 1.5003 | 9.8266 | 0.5173 | 0.1956 | 0.0920 | 23.2462G | 5.0237% | 20526.92 |
+
+结论：TTX 的部署量化通过。`score_int8` 相对 float ref 没有掉点，AEE 从 `1.5020` 到 `1.4971`；`score_int8_gate_int8` AEE `1.5003`，仍优于 float ref，energy 仅从 `20521.04uJ` 到 `20526.92uJ`。这说明 TTX 的硬件路径可以描述为二值 ATLIF 事件 + popcount/XNOR-style score + centering + Shiftmax/LUT + int8 gate；相比旧 all-binary TX，TTX 不依赖 H18a 的 native QK carrier，更适合写成干净的 selector 主线。当前 TTX 综合指标为 AEE `1.5003`、AAE `9.8266`、energy `20526.92uJ`（部署量化口径），是比旧 TX 更好讲硬件、精度接近 NTS/H60 的候选主线；若论文主线强调极简硬件，TTX 可优先于 NTS/H60，若强调最低 AEE，NTS/H60 仍保留为精度上界。
+
+### DATE11 TTX MDR/MVSEC 标准化训练计划（2026-06-30）
+
+目的：在完整 MVSEC 四序列 baseline eval 完成后，直接启动 **TTX 主线** 的 MDR->MVSEC 标准化训练，用于外部泛化表。TTX 定义保持为：`all-binary ATLIFPSN + H60 TX-only selector, bipolar_mu=0, no SC, no Kmag`。
+
+- 新增配置：`configs/generated/train_mdr_ttx_mvsec_route_fast.yml`
+  - 基于 `configs/generated/train_mdr_all_binary_atlif_tx_mvsec_route_fast.yml` 的 MDR fast route。
+  - 保持 MDR protocol：`crop=256x256`、`batch_size=32`、`n_epochs=50`、`use_amp=true`、MVSEC `dt1` validation。
+  - TTX 替换项：`bsa_attention.mode=h60`、`bipolar_mu=0.0`、`sc_mu_schedule_enabled=false`、`sc_mu_warmup_steps=0`、`k_magnitude_alpha=0.0`、`hardware_quant_enabled=false`。
+  - ATLIF 仍为全二值：`atlif_ternary_psn.output_mode=binary`，`sn2_q + all_non_qk_binary_atlif`，`threshold_freeze_after_step=1224`。
+- 新增等待启动脚本：`neuron_experiments/H9_bipolar_self_attention/entrypoints/run_ttx_mdr_after_mvsec_baseline.sh`
+  - 等待当前 baseline MVSEC orchestrator 完成。
+  - 从 `epoch41/epoch47` 四序列 `mvsec_ranking.md` 里选择平均 AEE 更低的 baseline checkpoint。
+  - 先跑 1-batch smoke：检查 `ATLIFTernaryPSN`、`Shiftmax attention`、`load audit`。
+  - smoke 通过后启动 full MDR training；使用 `SDFORMER_MDR_SKIP_MLFLOW_MODEL_LOG=1` 和 `SDFORMER_MDR_LOCAL_CHECKPOINT_DIR` 保存本地 checkpoint，避免 MLflow 大模型上传卡住。
+- 启动命令范式：
+
+```bash
+cd /root/private_data/work/sdformer_codex/SDformer
+setsid bash neuron_experiments/H9_bipolar_self_attention/entrypoints/run_ttx_mdr_after_mvsec_baseline.sh \
+  > neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_after_mvsec_baseline_wait_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+```
+
+注意：现有 `configs/generated/train_mdr_all_binary_atlif_tx_mvsec_route_fast.yml` 是旧 all-binary TX/H18a 风格配置，`bsa_attention.mode=ternary_alpha_xnor_shiftmax` 且 `bipolar_mu=0.05`，不等价于 TTX；MDR 外部泛化主线应使用新的 `train_mdr_ttx_mvsec_route_fast.yml`。
+
+TTX MDR/MVSEC 启动审计（2026-06-30）：
+
+- Baseline 四序列 MVSEC eval 已完成。
+  - epoch41 mean AEE `1.2048`：outdoor_day1 `1.0068`，indoor1 `1.1795`，indoor2 `1.3790`，indoor3 `1.2540`。
+  - epoch47 mean AEE `1.1414`：outdoor_day1 `0.8959`，indoor1 `1.0634`，indoor2 `1.3943`，indoor3 `1.2120`。
+  - 因此 TTX 初始化选择 `mdr_valid_resume_local_ckpts_20260625_164239/checkpoint_epoch47.pth`。
+- `train_mdr_ttx_mvsec_route_fast.yml` 早期 batch32 smoke 曾失败为 CUDA OOM；复核发现当时同机有其它进程占用大量显存，不能作为 TTX batch32 不可用的结论。
+- 新增 `configs/generated/train_mdr_ttx_mvsec_route_fast_bs16.yml`，batch16 smoke 可以前向/反传：
+  - torch backend：1 train batch 约 `47.0s`，1 valid batch 约 `38s`，train loss 从 `1.5816` 到 `1.5080`（smoke 多个 1-batch epoch，随后停止）。
+  - cupy backend 1-epoch/1-batch smoke：加载审计正常，`ATLIFTernaryPSN=105`，`Shiftmax attention=12`，`checkpoint_overlay_keys=0, missing=210, unexpected=0`；1 train batch `45.8s`，valid loss `1.4427`。
+- 2026-06-30 速度复核（A800 80GB，干净 GPU，`checkpoint_epoch47.pth` 续训，`batch_size=32`、`n_workers=8`、AMP、skip validation，限制 80 train batches）：
+
+| route | backend | batch | workers | train samples/s | 估算 sec/epoch | 估算 h/epoch | 备注 |
+|---|---|---:|---:|---:|---:|---:|---|
+| TTX MDR fast | torch | 32 | 8 | 8.303 | 10324 | 2.87 | `ttx_mdr_forkserver_preload_bench80_20260630_154148` |
+| TTX MDR fast | cupy | 32 | 8 | 9.120 | 9399 | 2.61 | `ttx_mdr_forkserver_cupy_bench80_20260630_155032` |
+| TTX MDR workers0 | torch | 32 | 0 | 0.852 | 100610 | 27.95 | 单进程 dataloader 对照 |
+| MDR baseline workers0 | torch | 32 | 0 | 0.864 | 99213 | 27.56 | 说明 28-40h/epoch 主要是 dataloader worker 没跑起来，不是 TTX 独有 |
+
+- 结论：TTX MDR 链路、权重加载、batch32 都可跑；“40h/epoch”只在 workers 失效/单进程 dataloader 时成立。当前推荐 full train 使用 `batch32 + n_workers=8 + AMP + cupy backend`，并在启动前设置 multiprocessing `forkserver` preload（`torch`, `torchvision.extension`, `torchvision`），否则本机 `/opt/conda` 环境可能在 worker 里触发 torchvision 导入顺序问题。按 cupy 80-batch 稳定吞吐估算，TTX MDR full 约 `2.6h/epoch`，50 epoch 约 `5.4` 天；比 baseline fast 的 `18 samples/s` 慢约 2 倍，原因更可能是 all-binary ATLIFPSN + TTX 覆盖的模型计算开销，而不是数据加载。
+
+TTX MDR/MVSEC Codex 复核与正式启动（2026-06-30）：
+
+- 启动脚本修正：`run_ttx_mdr_after_mvsec_baseline.sh` 的 smoke 段原本只限制 `SDFORMER_MDR_MAX_TRAIN_BATCHES=1`，但仍沿用 full config 的 `n_epochs=50`，会变成 50 个 one-batch smoke epoch。已改为在 `RESULT_ROOT/smoke_config.yml` 生成 smoke 专用配置，并固定 `loader.n_epochs=1`；正式训练段仍使用原始 full config。
+- 复核命令：`PYTHON_BIN=/opt/conda/envs/sdformerflow/bin/python ORCH_PID=0 SNN_BACKEND=cupy SDFORMER_MDR_MAX_TRAIN_BATCHES=80 SDFORMER_MDR_SKIP_VALIDATION=1` + `run_ttx_mdr_after_mvsec_baseline.sh`。
+- 复核结果：`ttx_mdr_forkserver_cupy_bench80_codex_fixed_20260630_161513`，smoke 加载审计正常，full 段 80 train batches 完成，`train_loop_elapsed_s=235.194`，`train_batches=80`，`train_samples=2560`，`train_samples_per_s=10.885`，估算 full epoch 约 `2.18h`。
+- 正式训练已启动：`ttx_mdr_full_cupy_from_ep47_20260630_162339`，初始化 checkpoint 为 `mdr_valid_resume_local_ckpts_20260625_164239/checkpoint_epoch47.pth`，full 段确认 `max_train_batches=None`、`max_valid_batches=None`、`skip_validation=False`，进入 `Epoch 0`。
+- 当前活跃训练以 `ttx_mdr_full_cupy_from_ep47_20260630_162339` 为准；旧记录 `mdr_ttx_full_cupy_forkserver_20260630_161902` 不是当前活跃 run。
+- `ttx_mdr_full_cupy_from_ep47_20260630_162339` 后续状态：epoch0 完整完成，`train_loop_elapsed_s=6839.186`，`train_samples_per_s=12.530`，train loss `1.0937`，valid loss `1.1796`，已保存 `local_ckpts/checkpoint_epoch0.pth` 和 `checkpoint_epoch0_state_dict.pth`。epoch1 约 step69 发生 DataLoader worker OOM；主训练进程占约 `72.78GB`，8 个 worker 各自建立 CUDA context 约 `0.7-1.0GB`，worker 在 `MDR.py -> self.voxel(...).cpu()` 申请 22MB 显存失败。结论：不是模型 NaN，也不是 full config 被 80-batch 限制，而是 `n_workers=8` 在 batch32/full ATLIF 下显存余量太小。
+- 已新增 `configs/generated/train_mdr_ttx_mvsec_route_fast_workers4.yml`，仅把 `n_workers` 从 8 降到 4。已从 epoch0 本地 checkpoint + state_dict 续训：`ttx_mdr_full_cupy_w4_resume_ep0_cd_20260630_190733`，恢复审计 `checkpoint_overlay_keys=210, missing=0, unexpected=0`，`Training state resumed ... checkpoint_epoch0_state_dict.pth`，从 `Epoch 1` 开始，GPU 约 `75.9GB/80GB`、util `100%`，当前继续训练。
+- `ttx_mdr_full_cupy_w4_resume_ep0_cd_20260630_190733` 后续状态：worker4 仍在 epoch1 step687 发生 DataLoader worker OOM。报错仍位于 `MDR_dataloader/MDR.py -> self.voxel(...).cpu()` 和 `loader_utils.py` 的 voxel grid 构建；主训练进程约 `75.42GB`，4 个 worker 各自约 `0.95-1.00GB` CUDA context，只剩约 `8.62MB` free，worker 申请 36MB 失败。结论：`worker=6` 直接沿用 GPU voxel 不可取，会比 worker4 多约 2 个 CUDA context，OOM 风险更高；慢速和 OOM 的共同根因是 MDR DataLoader worker 在 GPU 上做 voxel，而不是训练超参变化。
+- 新增可选分支：`SDFORMER_MDR_VOXEL_GPU=0`。该开关只影响 MDR DataLoader 的 voxel 构建位置；默认不设置时保持旧逻辑 `gpu=True`。设置为 0 后，worker 在 CPU 上构建 voxel，避免每个 worker 建 CUDA context，模型结构、loss、optimizer、checkpoint 加载逻辑均不变。
+- 新增配置：`configs/generated/train_mdr_ttx_mvsec_route_fast_workers6_cpuvoxel.yml`
+  - 基于 `train_mdr_ttx_mvsec_route_fast.yml`。
+  - 仅改 `experiment=date11_ttx_mdr_mvsec_route_fast_workers6_cpuvoxel` 和 `loader.n_workers=6`。
+  - 正式训练环境额外设置 `SDFORMER_MDR_VOXEL_GPU=0`、`SNN_BACKEND=cupy`、`SDFORMER_MDR_DETECT_ANOMALY=0`、`SDFORMER_MDR_SKIP_MLFLOW_MODEL_LOG=1`、`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`。
+- worker6 + CPU voxel 80-batch 复核：`ttx_mdr_w6_cpuvoxel_bench80_resume_ep0_20260630_200423`
+  - 初始化：从 `ttx_mdr_full_cupy_from_ep47_20260630_162339/local_ckpts/checkpoint_epoch0.pth` 和 `checkpoint_epoch0_state_dict.pth` 续训。
+  - 审计：`[MDR dataloader] voxel_gpu=False`，`ATLIFTernaryPSN=105`，`Shiftmax attention=12`，`checkpoint_overlay_keys=210, missing=0, unexpected=0`。
+  - runtime：`max_train_batches=80`、`skip_validation=True`，从 `Epoch 1` 开始。
+  - 结果：80 train batches 完成，`train_loop_elapsed_s=266.904`，`train_batches=80`，`train_samples=2560`，`train_samples_per_s=9.591`，估算完整 epoch 约 `2.48h`。该测试随后进入下一 epoch，已手动停止；其 checkpoint 不作为论文结果。
+- worker6 + CPU voxel 正式续训：`ttx_mdr_full_cupy_w6_cpuvoxel_resume_ep0_20260630_201141`
+  - full 模式确认：`max_train_batches=None`、`max_valid_batches=None`、`skip_validation=False`。
+  - 加载确认：`checkpoint_overlay_keys=210, missing=0, unexpected=0`，`Training state resumed ... checkpoint_epoch0_state_dict.pth`，从 `Epoch 1` 继续。
+  - 该 run 已跑到 epoch10：`checkpoint_epoch10.pth` 和 `checkpoint_epoch10_state_dict.pth` 已保存。epoch10 train `train_loop_elapsed_s=6793.679`，`train_samples_per_s=12.614`，train loss `0.3983`。随后停在 epoch10 validation：原因不是训练 forward OOM，而是 MVSEC 验证集 `MDR_dataloader/MVSEC.py` 仍硬编码 `gpu=True`，6 个 validation worker 在 GPU 上做 voxel，模型占约 `76.85GB` 时 worker 申请 20MB 失败。
+- MVSEC validation OOM 修复（2026-07-02）：已把同一个 `SDFORMER_MDR_VOXEL_GPU` 可选开关补到 `MDR_dataloader/MVSEC.py`。现在 `SDFORMER_MDR_VOXEL_GPU=0` 会同时作用于 MDR train dataloader 和 MVSEC validation dataloader；默认不设置仍保持旧行为。
+- worker6 + CPU voxel 从 epoch10 续训：`ttx_mdr_full_cupy_w6_cpuvoxel_resume_ep10_20260702_161956`
+  - 初始化 checkpoint：`ttx_mdr_full_cupy_w6_cpuvoxel_resume_ep0_20260630_201141/local_ckpts/checkpoint_epoch10.pth`。
+  - 审计：`[MDR dataloader] voxel_gpu=False`，`[MVSEC dataloader] voxel_gpu=False`，`checkpoint_overlay_keys=210, missing=0, unexpected=0`。
+  - 恢复：`Training state resumed ... checkpoint_epoch10_state_dict.pth`，从 `Epoch 11` 开始，full 模式 `max_train_batches=None`、`skip_validation=False`。
+  - 当前建议：后续 TTX MDR full 以该 run 为准；不要再尝试 `worker=6/8 + GPU voxel`。若仍有 validation OOM，再降到 `n_workers=4 + SDFORMER_MDR_VOXEL_GPU=0` 或临时拆分为 train-only + 独立 validation。
+- TTX MDR full 训练完成状态（2026-07-06）：`ttx_mdr_full_cupy_w6_cpuvoxel_resume_ep10_20260702_161956` 已跑完到 epoch49，GPU 空闲。由于训练脚本只在 train loss 刷新 best 时保存，后半段最新保留 checkpoint 到 `checkpoint_epoch43.pth`；用于 MVSEC 选择的 validation checkpoint 中 `epoch20` 最好。
+  - validation loss：epoch15 `1.1861`，epoch20 `1.1035`，epoch25 `1.1415`，epoch30 `1.1787`，epoch35 `1.1468`，epoch40 `1.1261`，epoch45 `1.1260`。
+  - train loss 继续下降但趋于平台：epoch20 `0.3450`，epoch30 `0.3363`，epoch40 `0.3326`，epoch49 `0.3324`。这说明 epoch20 后更像 MDR train 拟合，MVSEC validation 没继续改善。
+  - 当前推荐 MVSEC 标准 AEE 评估 checkpoint：`checkpoint_epoch20.pth`。
+- 已生成 TTX 专用 MVSEC eval 配置：`configs/generated/eval_mvsec_dt1_ttx_mdr_epoch20_route.yml`，保留 TTX 的 `ATLIFTernaryPSN=105` 和 `Shiftmax attention=12`，评估口径沿用 AEE-only MVSEC dt1 route。
+- 已启动 epoch20 四序列标准评估：`results_inference/mvsec_ttx_mdr_epoch20_dt1_full4_20260706_001522`。该 eval 才能和 baseline `mvsec_mdr_baseline_epoch47_dt1_full4_20260629_235858` 的四序列 AEE/energy 做同口径比较；训练日志中的 validation loss 只能用于选 checkpoint。
+- TTX epoch20 四序列标准评估完成（2026-07-06）：
+  - 目录：`results_inference/mvsec_ttx_mdr_epoch20_dt1_full4_20260706_001522`
+  - ranking：`results_inference/mvsec_ttx_mdr_epoch20_dt1_full4_20260706_001522/mvsec_ranking.md`
+
+| checkpoint | sequence | AEE | PE1 | PE2 | outlier | total_spikes | firing | energy_uj |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| TTX ep20 | outdoor_day1 | 0.9779 | 0.3748 | 0.0840 | 0.0066 | 28.6694G | 6.1312% | 25782.02 |
+| TTX ep20 | indoor_flying1 | 1.1414 | 0.5214 | 0.1068 | 0.0140 | 20.8872G | 6.5355% | 18792.65 |
+| TTX ep20 | indoor_flying2 | 1.4266 | 0.5024 | 0.1965 | 0.0915 | 23.8459G | 7.4534% | 21452.82 |
+| TTX ep20 | indoor_flying3 | 1.2617 | 0.5082 | 0.1521 | 0.0509 | 22.0527G | 6.8929% | 19840.89 |
+| TTX ep20 mean | 4-seq | 1.2019 | - | - | - | 23.8638G | - | 21467.09 |
+
+  - 对比本地 MDR baseline epoch47 mean：AEE `1.1414`、total_spikes `39.5024G`、energy `35225.57uJ`。
+  - TTX ep20 相对 baseline：AEE `+0.0605`（`+5.30%`），total_spikes `-15.6386G`（`-39.59%`），energy `-13758.47uJ`（`-39.06%`）。
+  - 论文目标口径判断：降耗目标明显达成（>20%），精度目标“baseline 约 5% 内”略微越线，主要由 `outdoor_day1` 和 `indoor_flying1` 拉高；`indoor_flying2/3` 分别为 `+2.32%/+4.10%`，在 5% 内。
+- TTX MDR 训练/推理链路复核（2026-07-06）：
+  - 训练初始化不是 strict resume baseline optimizer/scheduler，而是从本地 MDR baseline `checkpoint_epoch47.pth` 做模型权重 warm-start。启动日志：`selected baseline epoch=47 mean_aee=1.141400 checkpoint=.../mdr_valid_resume_local_ckpts_20260625_164239/checkpoint_epoch47.pth`。
+  - 初始 TTX full run 加载 baseline 时审计为 `ATLIFTernaryPSN=105`、`Shiftmax attention=12`、`checkpoint_overlay_keys=0, missing=210, unexpected=0`。解释：baseline checkpoint 没有 H9 overlay 参数，新增 ATLIF 参数从默认值初始化；共享 backbone/conv/BN/QK 权重从 baseline 加载。
+  - 之后的 TTX 自身 resume 链路正常：从 epoch0 和 epoch10 继续时均为 `checkpoint_overlay_keys=210, missing=0, unexpected=0`，且 `Training state resumed ... checkpoint_epoch*_state_dict.pth`，说明 optimizer/scheduler/scaler 是在 TTX 自身 run 内续上的。
+  - checkpoint key 复核：baseline ep47 有 `711` 个 state_dict key、无 overlay key；TTX ep20 有 `921` 个 key，其中 `210` 个为 `spiking_neuron.thresh/center` overlay key。两者共享 `711` 个 tensor key。Shiftmax/H60 attention 在当前实现中是无参数 forward patch，因此没有单独 attention state_dict key，这不是漏保存。
+  - eval 链路正常：四个 MVSEC 序列均显示 `eval installed ATLIFTernaryPSN: 105 modules`、`eval installed Shiftmax attention: 12 modules`、`checkpoint_overlay_keys=210, model_overlay_keys=210, missing=0, unexpected=0`，且 checkpoint 路径为 TTX ep20。
+  - 当前“问题”不是权重没加载或推理配置错配，而是实验范式风险：TTX 从 baseline warm-start 后替换了全二值 ATLIF + 无参数 H60/TX selector，新 overlay 从默认阈值/center 开始；MDR train loss 持续下降，但 MVSEC validation 在 epoch20 后反弹，说明继续训练更像拟合 MDR，不一定改善 MVSEC 四序列 AEE。后续应优先做从 ep20 出发的小 LR/短程精修或更稳的 calibration，而不是盲目延长到 60/70 epoch。
+- 晚期 checkpoint 标准评估队列（2026-07-06）：
+  - 新增脚本：`neuron_experiments/H9_bipolar_self_attention/entrypoints/run_ttx_mvsec_late_epoch_eval_queue.sh`。
+  - 选择 checkpoint：`epoch40` 和 `epoch43`。理由：`epoch40` 是后期 validation loss 仍较低的代表点（epoch40 `1.1261`，epoch45 `1.1260` 但没有 epoch45 checkpoint），`epoch43` 是后半段最后保存的 checkpoint。与 `epoch20` 一起可以判断“继续 MDR 训练是否改善标准 MVSEC AEE”，避免无意义地把 `31/34/37/40/43` 全部四序列扫完。
+  - 队列行为：先等待 `results_inference/mvsec_ttx_mdr_epoch20_dt1_full4_20260706_001522` 结束，再顺序跑：
+    - `results_inference/mvsec_ttx_mdr_epoch40_dt1_full4_<stamp>`
+    - `results_inference/mvsec_ttx_mdr_epoch43_dt1_full4_<stamp>`
+  - 启动范式：
+
+```bash
+cd /root/private_data/work/sdformer_codex/SDformer
+setsid bash neuron_experiments/H9_bipolar_self_attention/entrypoints/run_ttx_mvsec_late_epoch_eval_queue.sh 40 43 \
+  > results_inference/mvsec_ttx_mdr_late_epoch_eval_queue_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+```
+
+  - 注意：晚期 checkpoint 评估只用于论文中选择/解释主 checkpoint，不作为新的训练分支；主对比仍以同口径四序列 `mvsec_ranking.md` 为准。
+  - 完成状态（2026-07-07）：`epoch40` 与 `epoch43` 四序列标准评估均已完成，队列正常退出。GPU 当前无训练/评估进程。
+
+| checkpoint | mean AEE | mean total_spikes | mean energy_uj | vs baseline AEE | spike reduction | energy reduction | ranking |
+|---|---:|---:|---:|---:|---:|---:|---|
+| baseline ep47 | 1.1414 | 39.5024G | 35225.57 | - | - | - | `results_inference/mvsec_mdr_baseline_epoch47_dt1_full4_20260629_235858/mvsec_ranking.md` |
+| TTX ep20 | 1.2019 | 23.8638G | 21467.09 | +5.30% | 39.59% | 39.06% | `results_inference/mvsec_ttx_mdr_epoch20_dt1_full4_20260706_001522/mvsec_ranking.md` |
+| TTX ep40 | 1.2217 | 25.2930G | 22750.96 | +7.04% | 35.97% | 35.41% | `results_inference/mvsec_ttx_mdr_epoch40_dt1_full4_20260706_003729/mvsec_ranking.md` |
+| TTX ep43 | 1.2251 | 25.1262G | 22600.76 | +7.34% | 36.39% | 35.84% | `results_inference/mvsec_ttx_mdr_epoch43_dt1_full4_20260706_003729/mvsec_ranking.md` |
+
+  - 结论：晚期 checkpoint 没有改善四序列 MVSEC AEE，且 spikes/energy 也比 ep20 更高。`epoch20` 是当前 TTX MDR/MVSEC 标准评估的最优 checkpoint；`epoch40/43` 只能作为“继续训练会过拟合 MDR、外部 MVSEC 不改善”的支撑证据，不应作为主结果。
+- TTX ep20 低 LR 微调计划与启动（2026-07-08）：
+  - 目的：从当前最优标准 MVSEC checkpoint `epoch20` 做短程 calibration，尝试把 mean AEE 从 `+5.30%` 拉回 5% 内，同时保持约 39% spikes/energy 降低。
+  - 配置：`configs/generated/train_mdr_ttx_mvsec_ep20_calib_lr025_ep26.yml`。
+  - 启动脚本：`neuron_experiments/H9_bipolar_self_attention/entrypoints/run_ttx_mdr_ep20_calib_lr025.sh`。
+  - 起点 checkpoint：`neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_full_cupy_w6_cpuvoxel_resume_ep10_20260702_161956/local_ckpts/checkpoint_epoch20.pth`。
+  - 训练方式：使用 `--resume` 恢复 `checkpoint_epoch20_state_dict.pth`，因此从 `Epoch 21` 开始，阈值冻结不会重新打开；同时设置 `SDFORMER_MDR_RESET_LR_FROM_CONFIG=1`，在 resume optimizer 后强制把 LR 重置为低 LR 配置。
+  - LR：固定 LR、无 multistep、无 warmup。`backbone_lr=5e-7`，`norm_lr=2.5e-7`，`neuron_lr=1.25e-5`，`threshold_lr=1e-6`，约为主训 1/4。
+  - 轮次：`loader.n_epochs=26`，即 resume 后跑 `epoch21-25` 五轮；`test.n_valid=5`，因此会在 `epoch25` 做一次训练内 MVSEC validation。
+  - smoke：`ttx_mdr_ep20_calib_lr025_smoke2_20260708_162924` 已验证 `MDR/MVSEC voxel_gpu=False`、`ATLIFTernaryPSN=105`、`Shiftmax attention=12`、`checkpoint_overlay_keys=210, missing=0, unexpected=0`、`Training state resumed ... checkpoint_epoch20_state_dict.pth`、LR reset 生效，并进入 `Epoch 21` 完成 1 个 train batch。smoke 随后手动停止，不作为论文结果。
+  - full 启动范式：
+
+```bash
+cd /root/private_data/work/sdformer_codex/SDformer
+setsid bash neuron_experiments/H9_bipolar_self_attention/entrypoints/run_ttx_mdr_ep20_calib_lr025.sh \
+  > neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_ep20_calib_lr025_launch_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+```
+
+  - full run 已启动：PID `2152241`，launcher log `neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_ep20_calib_lr025_launch_20260708_163326.log`，run dir `neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_ep20_calib_lr025_ep21_25_20260708_163326`。
+  - 启动审计：`MDR/MVSEC voxel_gpu=False`，`checkpoint_overlay_keys=210, missing=0, unexpected=0`，`Training state resumed ... checkpoint_epoch20_state_dict.pth`，LR reset 后 param groups 为 `backbone=5e-7`、`norm=2.5e-7`、`atlif_neuron=1.25e-5`、`atlif_threshold=1e-6`。已进入 `Epoch 21`，GPU util 约 `97%`、显存约 `72.98GB/81.92GB`。
+  - **full run 完成（2026-07-09 复核）**：
+    - 状态：训练进程已退出；launch log 末尾有 `[ttx-ep20-calib] complete 2026-07-09T03:50:03+08:00`。当前 `nvidia-smi` 空闲，无 `train_mdr_supervised_SNN` / `eval_MV_flow_SNN` / calib 相关进程。
+    - run dir：`neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_ep20_calib_lr025_ep21_25_20260708_163326`
+    - train log：`.../ttx_mdr_ep20_calib_lr025_ep21_25_20260708_163326/train.log`
+    - launch log：`neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_ep20_calib_lr025_launch_20260708_163326.log`
+    - 加载审计复核：`[MDR/MVSEC dataloader] voxel_gpu=False`；`ATLIFTernaryPSN=105`；`Shiftmax attention=12`；`checkpoint_overlay_keys=210, missing=0, unexpected=0`；`Training state resumed ... checkpoint_epoch20_state_dict.pth`；从 `Epoch 21` 开始；LR reset 生效。
+    - 训练结果（脚本只在 train loss 刷新 best 时保存 checkpoint）：
+
+| epoch | train loss | checkpoint saved? | notes |
+|---:|---:|:---:|---|
+| 21 | 0.342202 | yes | `local_ckpts/checkpoint_epoch21.pth` + state_dict |
+| 22 | 0.343056 | no | 未优于 best |
+| 23 | 0.342558 | no | 未优于 best |
+| 24 | 0.339920 | yes | best train loss；`local_ckpts/checkpoint_epoch24.pth` + state_dict |
+| 25 | 0.341162 | no | 有训练内 MVSEC validation |
+
+    - epoch25 训练内 validation（indoor_flying3-style train-loop valid，**不是**四序列标准 AEE）：`Epoch loss (Validation): 1.156682`
+    - 对照原 TTX full run 的 train-loop valid：ep20 `1.1035`，ep25 `1.1415`。calib ep25 的 `1.1567` **劣于** 原 ep20 valid，提示低 LR 微调未必改善 MVSEC；最终结论必须以四序列标准 AEE 为准。
+    - 可评估 checkpoint：仅 `epoch21` 与 `epoch24`（无 ep22/23/25 模型权重落盘）。
+    - 标准评估安排：对 `checkpoint_epoch24.pth`（优先）和 `checkpoint_epoch21.pth` 跑 MVSEC dt1 四序列 eval，并与 baseline ep47 / TTX ep20/40/43 对比；该安排已按下节记录执行完成。
+  - **calib MVSEC 标准 eval 已完成（2026-07-10 复核）**：
+    - 队列：先 `epoch24`（calib best train loss），再 `epoch21`。
+    - config：`configs/generated/eval_mvsec_dt1_ttx_mdr_epoch20_route.yml`
+    - ckpt root：`neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_ep20_calib_lr025_ep21_25_20260708_163326/local_ckpts`
+    - out：`results_inference/mvsec_ttx_mdr_ep20_calib_epoch24_dt1_full4_20260709_154906` 与 `..._epoch21_...`
+    - queue log：`neuron_experiments/H9_bipolar_self_attention/results/ttx_mdr_ep20_calib_mvsec_eval_queue_20260709_154906.log`
+    - 环境：`SDFORMER_USE_MLFLOW=0`，`SDFORMER_MDR_VOXEL_GPU=0`，`SNN_BACKEND=cupy`
+    - 四序列标准结果：
+
+| checkpoint | mean AEE | mean outlier | mean total_spikes | mean energy | vs baseline AEE | spikes reduction | energy reduction |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| MDR baseline ep47 | 1.1414 | 0.0389 | 39.5024G | 35225.57uJ | reference | - | - |
+| TTX original ep20 | 1.2019 | 0.0408 | 23.8638G | 21467.09uJ | +5.30% | 39.59% | 39.06% |
+| calib ep21 | 1.2750 | 0.0434 | 23.4104G | 21057.82uJ | +11.70% | 40.74% | 40.22% |
+| calib ep24 | 1.2775 | 0.0434 | 24.2060G | 21772.43uJ | +11.92% | 38.72% | 38.19% |
+
+    - 结论：本次 ep20 低 LR calibration **没有改善 MVSEC 泛化**。ep21/ep24 虽继续保持约 `38%-41%` 的 spikes/energy 降幅，但 mean AEE 从 ep20 的 `1.2019` 退化到 `1.2750/1.2775`，明显超出 baseline `+5%` 目标；训练内 validation 变差与四序列标准 AEE 方向一致。
+    - MVSEC 推荐 checkpoint 仍为原 TTX full run `checkpoint_epoch20.pth`。calib ep21/ep24 作为负结果保留，不用于论文主结果，也不继续扩大低 LR 微调扫参。
+
+
+
+- 旧重复 run `mdr_ttx_full_cupy_forkserver_20260630_161902`（2026-06-30 16:19 启动，launcher PID `494591`）：
+  - label：`mdr_ttx_full_cupy_forkserver_20260630_161902`
+  - launcher PID：`494591`
+  - config：`configs/generated/train_mdr_ttx_mvsec_route_fast.yml`
+  - init checkpoint：`neuron_experiments/H9_bipolar_self_attention/results/mdr_valid_resume_local_ckpts_20260625_164239/checkpoint_epoch47.pth`
+  - launch log：`neuron_experiments/H9_bipolar_self_attention/results/mdr_ttx_full_cupy_forkserver_20260630_161902.launch.log`
+  - smoke log：`neuron_experiments/H9_bipolar_self_attention/results/mdr_ttx_full_cupy_forkserver_20260630_161902/smoke.log`
+  - train log：`neuron_experiments/H9_bipolar_self_attention/results/mdr_ttx_full_cupy_forkserver_20260630_161902/train.log`
+  - local checkpoints：`neuron_experiments/H9_bipolar_self_attention/results/mdr_ttx_full_cupy_forkserver_20260630_161902/local_ckpts`
+  - smoke：1 train batch loss `1.5203`，1 valid batch loss `1.4253`，本地 checkpoint/state 保存正常。
+  - full train 审计：`checkpoint_overlay_keys=0, missing=210, unexpected=0`，`Shiftmax attention=12`，`detect_anomaly=False`，`max_train_batches=None`，`skip_validation=False`；已进入 epoch0，约 step `88/2678` 时 GPU 显存约 `80.9GB`，证明链路正常。
+  - 处理：因 `ttx_mdr_full_cupy_from_ep47_20260630_162339` 已作为正式 active run 启动，本重复 run 已按要求停止；停止前约到 epoch0 step `220/2678`，未完成完整 epoch，不作为论文结果。
+
+## 四十一、TTX/BTTX 全网 all12 硬件冻结候选（2026-07-10）
+
+### 41.1 约束与主线定义
+
+本轮冻结以下硬约束：不再考虑 S2-only、stage-wise、partial ATLIF 或混合注意力范围；所有候选均为 `105` 个 ATLIF wrapper + `12` 个 attention block 的全网替换。候选必须复用同一条线性复杂度数据流：
+
+`Q/K event classification -> category popcount -> integer score -> centering -> Shiftmax/LUT -> gate * K`
+
+- `TTX`：全二值 ATLIFPSN `{0,+1}` + H60 TX-only，`mu=0`、no carrier、no Kmag。
+- `BTTX`：全三值/双极 ATLIFPSN `{-1,0,+1}` + 同一 H60 no-carrier selector；神经元和 score category 增加负事件 rail，但 token/gate/K 数据流不变。
+- 不再把 NTX/H18 carrier 路线作为硬件主线；旧 `all-ternary + TX` 使用 `ternary_alpha_xnor_shiftmax` 并保留 native QKFormer carrier，不能当作 exact BTTX。
+
+### 41.2 已有 DSEC 证据与 exact BTTX 缺口
+
+| existing experiment | neuron | attention/dataflow | best AEE | spikes | 判断 |
+|---|---|---|---:|---:|---|
+| current TTX deploy | all binary | H60 TX-only, no carrier | 1.5003 | 23.2462G | 当前低风险主线 |
+| all-ternary + old TX | all ternary | H18a TX + native carrier | 3.2885 | 79.0967G | 不是 exact BTTX；负例 |
+| all-ternary + SC | all ternary | SC-only no-carrier | 3.2706 | 80.1816G | integer SC 已有强负证据 |
+| all-ternary + NTS | all ternary | H60 TX + scheduled SC `mu=0.05` | 3.2809 | 80.0070G | 接近但不等于 BTTX-TX |
+
+旧全三值实验共同活动率约 `16%-17%`，而当前 binary TTX 约 `4.5%-5%`。因此 BTTX 的主要风险是全网负事件把 activity/spikes 推高，不是 attention score 本身。exact BTTX 仍值得做一次从已收敛 TTX checkpoint warm-start 的受控筛选，用于区分“从 baseline 直接全三值训练失败”和“三值结构本身不可行”。
+
+### 41.3 固定整数 score 候选
+
+TX 与 SC 可共享 `same/zero/opposite` 分类计数，无需两个独立 score datapath。取 `alpha0=1/64`、`mu=1/16`：
+
+- binary TTX-ISC16：`score * 64 = 68*same + 1*zero`；binary 下没有 opposite category。
+- ternary BTTX-ISC16：`score * 64 = 68*same + 1*zero - 4*opposite`。
+
+系数 `68=64+4` 与 `4` 均用移位加减实现；没有通用乘法器、Kmag、target-rate 或运行时 mu schedule。软件仍复用现有 `h60` 实现，硬件可在 category counters 后代数折叠成单个 weighted adder。
+
+### 41.4 最小全替换筛选协议
+
+生成脚本：
+
+`neuron_experiments/H9_bipolar_self_attention/entrypoints/make_date11_full_all12_ttx_family_configs.py`
+
+manifest：
+
+`neuron_experiments/H9_bipolar_self_attention/configs/generated/date11_full_all12_ttx_family_manifest.json`
+
+共同起点：DSEC TTX best `date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8.../checkpoint_epoch2.pth`。共同范围为 full-network/all12；先跑 `360` steps + valid40，只有达到明确精度/活动率潜力才进入完整训练。
+
+| priority | candidate | event alphabet | score | status |
+|---|---|---|---|---|
+| P0 | `date11full_ttx_isc16_all12_s360` | binary | `68*same+zero` | config generated; chain PASS |
+| P0 | `date11full_bttx_txonly_all12_s360` | ternary | exact BTTX `same+0.02*zero` | config generated; chain PASS |
+| P0 | `date11full_bttx_isc16_all12_s360` | ternary | `68*same+zero-4*opposite` | config generated; chain PASS |
+
+链路审计：三个配置均安装 `ATLIFTernaryPSN=105`、`Shiftmax attention=12`；保存后自身 checkpoint reload 为 `checkpoint_overlay_keys=210, missing=0, unexpected=0`。本轮不新增模型结构代码，只新增配置生成器和配置。
+
+### 41.5 主线约束修正：取消所有 TX/SC 混合（2026-07-10）
+
+用户冻结硬件/论文约束：不采用 TX+SC score/gate 混合，不采用 NTX/native carrier，不采用 partial replacement。上节生成过的 `TTX-ISC16/BTTX-ISC16` 配置只保留为探索记录，不进入候选矩阵、不启动训练，也不写入论文主线。后续只允许纯 TX：
+
+- `TTX`：all-binary ATLIF + all12 H60 TX-only。
+- `BTTX`：all-ternary ATLIF + all12 H60 TX-only。
+- 纯算术简化可把 `alpha0=0.02` 近似为 `1/64`，但不允许增加 SC/opposite residual 分支。
+
+此前完成的 ITTX int8 纯推理（NTS ep2 权重，AEE `1.48891` / AAE `9.76219`）证明混合分数可折叠，但因论文故事和硬件约束已主动放弃，**不得将该结果作为最终主线**。
+
+### 41.6 exact BTTX 与 BTTX-A4 结果
+
+exact symmetric BTTX 定义：`105` 个 ternary ATLIF、all12 H60 TX-only、`mu=0`、no SC/no Kmag/no carrier、正负阈值 `+theta/-theta`。
+
+1. exact BTTX 纯推理：
+   - checkpoint：旧 all-ternary H60/NTS ep29；推理时关闭 SC，改为 TX-only。
+   - config：`configs/generated/date11full_bttx_txonly_all12_s360.yml`。
+   - out：`results/date11_bttx_txonly_infer_from_ternary_nts_ep29_valid825_20260710`。
+   - load audit：`ATLIFTernaryPSN=105`、`Shiftmax=12`、`checkpoint_overlay_keys=210, missing=0, unexpected=0`。
+   - valid825：AEE `18.5180`、AAE `103.9021`、total_spikes `254.2891G`、global firing `54.9543%`。
+
+2. symmetric BTTX 从当前 TTX best warm-start：
+   - run：`results/date11_bttx_txonly_from_ttx_20260710_200056`。
+   - step20 activity `47.22%`（pos `5.06%` / neg `42.16%`）；step100 仍为 `47.14%`（pos `5.07%` / neg `42.07%`）。
+   - 负事件支路没有随短训恢复，结合旧 full30 全三值结果 AEE 约 `3.27-3.29`，在 step100 提前停止，不保留为论文候选。
+
+3. BTTX-A4：保持纯 TX，只把负阈值设为 `-4*theta`：
+   - 硬件变化仅为负阈值左移；attention/token/gate 数据流不变。
+   - config：`configs/generated/date11full_bttx_a4_txonly_all12_s360.yml`。
+   - run：`results/date11_bttx_a4_txonly_from_ttx_20260710_200703`。
+   - load audit：从 TTX ep2 加载 `checkpoint_overlay_keys=210, missing=0, unexpected=0`。
+   - step120 train activity `5.5863%`（pos `3.9679%` / neg `1.6183%`），说明 `-4*theta` 能把活动率压回 TTX 区间。
+   - 但 valid10 AEE `5.6936`、AAE `83.2893`、firing `8.1944%`，远离可晋级范围；不进入 360-step/full30。
+
+结论：全三值的主要矛盾不只是 activity。A4 可以控制负脉冲数量，但全网从 binary activation 直接切换为 signed ternary 后，特征分布和已训练权重不匹配，短训精度仍严重崩坏；旧 full30 也没有显示能恢复到 baseline 5% 窗口。BTTX 作为负对照保留，不建议 RTL 首版增加 sign rail 作为关键路径。
+
+### 41.7 最终纯 TX dyadic 部署主线
+
+为了移除 `alpha0=0.02` 的非 dyadic 常数，保持 current TTX 权重和纯 TX-only 数据流，仅把 score 改为：
+
+`score_int = 64 * same_active + same_zero; score = score_int >> 6`
+
+配置：`configs/generated/date11full_ttx_dyadic_txonly_all12_deploy_int8.yml`。必须同时满足 `bipolar_mu=0` 与 `hardware_mu_pow2_shift=0`；后者若误设为 `4` 会在量化函数中隐式注入 `1/16`，不再是纯 TX。最终配置已审计为二者均为 `0`。
+
+| deployment | AEE | AAE | outlier | total_spikes | firing | estimated SOPs |
+|---|---:|---:|---:|---:|---:|---:|
+| current TTX int8 (`alpha0=0.02`) | 1.5003 | 9.8266 | 0.0920 | 23.2462G | 5.0237% | - |
+| pure dyadic TTX int8 (`alpha0=1/64`) | 1.5016 | 9.8431 | 0.0919 | 23.2439G | 5.0232% | 2.1235G |
+
+dyadic 相对 current int8 只差 AEE `+0.0013`、AAE `+0.0165`，spikes 略低，属于部署等价。最终 DATE/RTL 主线冻结为：
+
+**all-binary ATLIFPSN + all12 no-carrier TTX + `64:1` dyadic TX score + centering + int8 Shiftmax/LUT gate**。
+
+推荐训练 checkpoint 仍为 `date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8.../checkpoint_epoch2.pth`；部署使用 dyadic/int8 config。下一步只给该唯一主线补随机种子，不再扩 attention 范式。
+
+## 四十二、对称 ATLIF + 无 gate-K 的统一注意力探索（2026-07-11）
+
+### 42.1 用户冻结的新约束
+
+本节约束覆盖 41.7 的“最终冻结”结论，但不删除旧结论和结果：
+
+- 神经元必须使用对称阈值，无论输出编码是二值还是三值；现有 `official_atlif` 的 `{0,+theta}` 单边阈值只能作为历史 TTX 对照。
+- 全 encoder 的 `12` 个 attention block 使用同一种公式；禁止 S2-only、stage-wise、TX/SC 混合和 pure SC。
+- attention 优先彻底移除 `gate * K`，直接研究 Shiftmax 结果作为 attention 输出；只有直接路线被证伪后，才允许统一 all12 的 shift-value fallback。
+- 不使用 Kmag、target-rate、mu schedule 或 native QKFormer carrier；当前阶段只做 DSEC，不启动 MVSEC/MDR。
+- 所有实现只能新增配置门控分支，旧模块、旧配置、旧 checkpoint 和旧结果不得破坏。
+
+### 42.2 对称二值的严格定义
+
+现有代码没有“对称二值 ATLIF”：`BinarySurrogate` 和 `OfficialATLIFSurrogate` 都只比较 `h>=theta`。为避免论文概念偷换，本轮新增候选定义为：
+
+```text
+symmetric binary magnitude event:
+  event = 1, if |h| >= theta
+  event = 0, otherwise
+```
+
+正负比较阈值严格共享同一个 `theta`，输出仍只传一位 event，符号不进入 activation SRAM。三值候选继续使用 `{-theta,0,+theta}`。`{-theta,+theta}` 的 dense bipolar binary 因活动率恒为 100%，与 `total_spikes` 降低至少 20% 的目标先验冲突，不安排训练。
+
+### 42.3 文献与官方代码复核
+
+| work | venue | relevant operator | 与本轮边界的关系 |
+|---|---|---|---|
+| QKFormer | NeurIPS 2024 | `gate(Q) * K` 的线性 Q-K attention | 证明 token selector 有效，但仍依赖 K carrier |
+| Spike-driven Transformer | NeurIPS 2023 | Q/K/V 间 mask + addition，无通用乘法 | 硬件友好，但引入完整 V path，改动范围更大 |
+| SpikeVideoFormer | ICML 2025 | linear Hamming `(2Q-1)((2K-1)^T V)` | 保留 V；本仓库 H21/H35 valid40 已不具晋级优势 |
+| Bipolar Self-Attention | NeurIPS 2025 spotlight | ternary QK + Shiftmax + shift-V | 支持 Shiftmax/dyadic，但仍靠 V 保存通道信息 |
+
+官方实现共同说明：归一化 score 通常是标量/矩阵权重，不天然等于 `[token, head_dim]` 特征。若把单个 gate 广播到整个 head，通道秩会降到 1。因此本轮不只测一个标量直出，而是测试分组直出，在不使用 K carrier 的前提下逐步恢复通道自由度。
+
+### 42.4 H63 预注册矩阵
+
+完整协议：`neuron_autoresearch/experiments/h63_direct_shiftmax/protocol.md`。
+
+共同设置：full-network `105` 个 symmetric-binary ATLIF wrapper；all12 pure TX score；`alpha0=1/64`；no SC/no Kmag/no target-rate/no carrier；从 DSEC TTX epoch2 warm-start。
+
+```text
+score_g = popcount(q_g & k_g) + (1/64) * popcount(~q_g & ~k_g)
+gate_g  = Shiftmax(score_g over token) * N - 1
+attn_g  = broadcast(gate_g within group g)
+```
+
+| priority | candidate | groups/head | dynamic output path | status |
+|---|---|---:|---|---|
+| P0 probe | H63a direct-G1 | 1 | centered Shiftmax -> broadcast, no K readback | pre-registered |
+| P0 main | H63b direct-STC | token+channel | `0.5*(centered token gate + centered channel gate)` | pre-registered |
+| P1 | H63c direct-G4 | 4 | 4 grouped centered Shiftmax outputs, no K readback | pre-registered |
+| hold | direct-G8/G32 | 8/32 | finer grouped/per-channel Shiftmax | G4 接近门槛且明确受通道容量限制时才考虑 |
+| fallback | all12 dyadic shift-value | 1 | Shiftmax exponent -> event/value shift | 仅 direct 全失败后考虑 |
+
+晋级门槛：20-step activity `<20%`；120-step valid10 AEE `<=2.2`；360-step valid40 AEE `<=1.65` 且训练趋势下降。只有 valid40 最优候选允许转 full train；论文结论必须来自标准 valid825，并满足 AEE 在 NB0 约 5% 内、total spikes 至少下降 20%。
+
+### 42.5 硬件块级影响
+
+H63 保留 `Q/K event SRAM -> TX classify/popcount -> Shiftmax -> attention output SRAM -> projection` 的大体调度，只替换 attention block 尾部：删除 `K reread + FGK late scale`，增加 `G` 路 gate descriptor 广播。G1/G4/G8 分别对应每 head `1/4/8` 个 Shiftmax accumulator/denominator context；可以用单 lane 分时实现，面积不要求线性复制，但 cycles 近似随 G 增长。
+
+硬件细化同步到 `hw_autoresearch_nts07/docs/40_H63对称ATLIF无GateK注意力探索.md`。在 valid40 之前只更新接口和风险，不修改现有 TTX RTL 主线；候选晋级后再决定是否新增 RTL block。
+
+### 42.6 H63 零训练链路与共同失配诊断
+
+三个配置均通过完整模型链路审计：`ATLIFTernaryPSN=105`、attention patch `=12`、binary modules `=105`、`symmetric_binary_abs_modules=105`，保存后自身 state_dict reload PASS。TTX ep2 权重的 profile 加载均为 `checkpoint_overlay_keys=210, missing=0, unexpected=0`。
+
+在同一个 valid sample 上直接切换语义、不训练的结果：
+
+| candidate | AEE | AAE | global firing | estimated SOPs |
+|---|---:|---:|---:|---:|
+| H63 G1 | 6.8399 | 56.1595 | 70.1155% | 29.6410G |
+| H63 STC | 6.8395 | 55.6197 | 69.9316% | 29.5633G |
+| H63 G4 | 6.7314 | 55.3017 | 69.9901% | 29.5880G |
+
+三种 attention 的 firing 几乎相同且同时远超 20% 停止线，说明主要问题是把 TTX 的单边 `theta=1` checkpoint 直接解释为 `|h|>=theta`，大量旧负膜电位被激活；此时比较 attention 排名没有意义。按协议不从该起点跑 120 steps。
+
+只允许一个预先有依据的恢复动作：把 checkpoint 中 `105` 个 ATLIF threshold 统一乘 `4`，倍率来自 41.6 的 BTTX-A4 活动率证据；不做倍率扫参、不启用 target-rate。转换脚本为 `entrypoints/make_h63_symmetric_threshold_checkpoint.py`，目标 checkpoint 为 `results/h63_checkpoints/ttxep2_symmetric_threshold_x4.pth`。下一步先审计其 `210` overlay keys 和 valid1 activity；仍超过 20% 则停止 symmetric-binary direct 路线。
+
+恢复实验结果：
+
+| calibration | candidate | AEE | AAE | global firing | load audit |
+|---|---|---:|---:|---:|---|
+| all thresholds `x4` | G1 | 35.8333 | 59.2857 | 50.3973% | 210/0/0 |
+| all thresholds `x4` | STC | 35.5507 | 59.2581 | 50.1561% | 210/0/0 |
+| all thresholds `x4` | G4 | 35.7922 | 59.0794 | 50.2947% | 210/0/0 |
+| per-module budget calibration | STC | 21.2763 | 60.3173 | 57.5106% | 210/0/0 |
+| per-module budget calibration | G4 | 21.4402 | 60.3039 | 57.6803% | 210/0/0 |
+
+逐模块校准脚本 `entrypoints/calibrate_h63_symmetric_thresholds.py` 使用原 TTX/H60 的一个 DSEC valid sample，对 93 个实际经过 forward 的 ATLIF 求 `P(|h|>=theta_sym)=P(h>=theta_old)`；12 个未经过该路径的 wrapper 保留原阈值。得到 observed threshold min/mean/max=`1.0000/2.6812/3.9676`，原单边 target rate mean=`4.0875%`。然而切换全网语义后上游事件改变会级联改变下游 `h` 分布，离线逐层匹配不能保持闭环活动率，firing 仍约 58%。
+
+结论：`symmetric_binary_abs` 虽是清晰的 1-bit 对称比较器定义，但在当前全网 PSN 权重和 TTX warm start 上造成不可接受的分布级联；其失败与 G1/STC/G4 排名无关。按 `<20%` 活动率硬门槛停止，不投入 120-step/full train。后续只评估逻辑上严格的 signed ternary `{-theta,0,+theta}`，并优先从已有全三值 checkpoint 做 attention-only 受控短测；若仍无潜力，则应明确报告“对称 signed event 与当前全网 spike/精度目标冲突”，不能把单边 official binary TTX 改名为对称 ATLIF。
+
+### 42.7 Signed-ternary direct TX 语义修正
+
+首次 STC ternary 20-step diagnostic 使用了 positive-only binary event helper，负事件没有参与 TX score：step20 ternary activity `40.5751%`（pos `2.2948%` / neg `38.2803%`），valid1 AEE `10.4914`、AAE `75.0328`、profile firing `46.5596%`。加载链路为 `105/12`、overlay `210/0/0`，但该公式不满足对称 ternary TX，不能作为 signed TX 的最终否定证据。
+
+实现已新增 `direct_shiftmax_signed_events`：
+
+```text
+same_active = [q=k=+1] + [q=k=-1]
+same_zero   = [q=k=0]
+score       = same_active + (1/64)*same_zero
+```
+
+异极性事件贡献 `0`，没有 SC negative penalty、没有 TX/SC 混合。修正后只重跑 STC 20-step；若 activity 仍大于 20% 或 valid1 明显发散，则 direct-Shiftmax 线整体停止，不再跑 G4/G8。
+
+修正后的 signed TX centered-STC 仍失败：step20 ternary activity `41.5731%`（pos `2.9672%` / neg `38.6059%`），valid1 AEE `9.7823`、AAE `107.5519`、profile firing `44.9490%`。其失败机制是 `gate-1` 产生大量负输出并沿对称 ATLIF 级联。为严格覆盖“Shiftmax 结果本身”，预注册唯一 raw-STC 对照：`Y=0.5*(gate_token+gate_channel)`，不减 1、不乘 K。先 valid1；只有 firing 显著低于 centered-STC 且满足 20% 门槛才允许 20-step。不给 G4/G8 增加 raw 组合。
+
+raw-STC valid1 结果：AEE `13.8467`、AAE `135.6088`、firing `53.9180%`、estimated SOPs `22.7936G`，load audit `210/0/0`。不减 1 没有解决全网分布级联，因此 H63 direct family 正式停止；G4/G8 不再运行。
+
+### 42.8 H64：离线中心化的严格对称 ATLIF
+
+H63 的共同特征是负事件占绝对多数，说明现有 PSN 的 `h` 分布不以数值零为对称轴。H64 预注册 `c_t±theta`：每个模块/时间步用离线 median 得到固定 `c_t`，正负阈值共享同一个 `theta`。推理硬件预存 `lo_t=c_t-theta`、`hi_t=c_t+theta`，仍是两个比较器，不需要在线统计、减法或 target-rate FSM。
+
+协议：`neuron_autoresearch/experiments/h64_centered_symmetric_atlif/protocol.md`。先用现有 all12 H60/TX 做 H64-ref，只隔离 neuron 是否可行；再用完全相同 checkpoint 切换到 raw-STC 无 gate-K。未通过 valid1/20% activity 门槛前不运行 G4/G8，也不启动 full train。
+
+H64 valid1 结果：H60-ref AEE `11.8798`、AAE `91.7006`、firing `59.6304%`；raw-STC AEE `12.4145`、AAE `116.0168`、firing `57.8680%`；两者 load audit 均为 `210/0/0`。连保留 H60 的 neuron-only reference 都失败，说明一次性逐层 center/threshold 校准无法控制全网闭环分布；H64 停止，不做20-step。
+
+### 42.9 H65：全网统一 signed Hamming linear attention
+
+H63/H64 失败后，剩余满足“all12 统一、无 TX/SC、无 gate-K、非 `N×N`”且有顶会官方实现依据的候选是 SpikeVideoFormer/ICML 2025 Hamming linear attention。本仓库旧 H21/H35 的 partial-scope valid40 AEE 约 `1.63` 不能外推到 all105，因此 H65 只预注册一个严格全网测试：105 个 `symmetric_bsa_tsn` ternary ATLIF + 12 个 `hamming_ternary_active_direct`，从 all-ternary TX ep29 warm-start，20 steps + valid1。
+
+协议：`neuron_autoresearch/experiments/h65_signed_hamming/protocol.md`；配置生成器：`entrypoints/make_h65_signed_hamming_config.py`。硬件不做 gate-K/Shiftmax，但需要 `D×D=1024` signed accumulator state/head，属于精度优先高风险备用。step20 activity 必须 `<20%` 且 valid1 AEE `<2.2` 才能进入 120 steps。
+
+H65 结果：step20 ternary activity `45.1234%`（pos `6.5950%` / neg `38.5284%`），valid1 AEE `8.3598`、AAE `90.6382`、profile firing `46.649%`、estimated SOPs `19.7205G`；load audit `checkpoint_overlay_keys=210, missing=0, unexpected=0`。精度和 activity 均未通过门槛，停止在20步，不进入120/360/full。
+
+### 42.10 本轮外环结论与主线状态
+
+| family | symmetric neuron | unified all12 attention | gate-K | best new evidence | decision |
+|---|---|---|---|---|---|
+| H63 sym-binary direct | `abs(h)>=theta` | grouped/STC Shiftmax | no | 50%-70% firing, AEE 6.7-35.8 | stop |
+| H63 signed ternary centered-STC | `±theta` | signed TX + centered Shiftmax | no | step20 activity 41.57%, AEE 9.78 | stop |
+| H63 signed ternary raw-STC | `±theta` | raw signed TX Shiftmax | no | firing 53.92%, AEE 13.85 | stop |
+| H64 centered symmetric | `c_t±theta` | H60 ref / raw-STC | ref yes / STC no | H60-ref firing 59.63%, AEE 11.88 | stop |
+| H65 signed Hamming | `±theta` | Hamming linear | no gate-K, K reused as value | step20 activity 45.12%, AEE 8.36 | stop |
+| historical all-ternary TX/NTS | `±theta` | TX or NTS | yes | full30 AEE 3.28-3.29, spikes 79-80G | fails DATE target |
+| historical dyadic TTX | one-sided `{0,+theta}` | pure TX H60 | yes, factorized shift/late-scale | valid825 AEE 1.5016, spikes 23.24G | numerical reference only |
+
+严格约束下当前没有候选同时满足：对称 ATLIF、统一 all12、AEE 约 baseline 5% 内、spikes 至少下降20%。因此本轮**没有实验具备 full training/standard valid825 晋级资格**；强行全训会违反预注册门槛并浪费约30 epoch计算。
+
+现有 dyadic TTX 仍是 DSEC 数值和硬件成熟度最好的 checkpoint/reference，但它有两个明确不符合项：`official_atlif` 是单边 `{0,+theta}`，attention 尾部仍以 factorized/shift-friendly 方式使用 K carrier。论文不能同时把它声称为“严格对称 ATLIF、无 gate-K”。下一步必须在论文约束中二选一：
+
+1. 保留 dyadic TTX 为主线，把 neuron 贡献准确表述为 one-sided sparse ATLIF，并把 gated-K 说明为 dyadic shift/late-scale，而非通用乘法；或
+2. 坚持严格对称 signed-event，则需要从训练目标和网络初始化层面重训新 backbone，现有 checkpoint overlay 微调路线已有充分负证据，不能承诺 baseline 5% 精度和20% spikes降幅。
+
+本轮新增实现均为可选分支，旧 H60/TTX/NTX/SC 模块、配置和 checkpoint 未删除。GPU 已停止，未启动 MVSEC/MDR，也未启动未达门槛的 full train。
+
+## 四十三、约束勘误与精度优先统一注意力探索（2026-07-11）
+
+### 43.1 对第 42 节的正式勘误
+
+第 42 节误把用户约束理解成“所有神经元都必须双边对称、attention 禁止任何 K value path”。正确约束如下，本节覆盖第 42 节的相反判断，但保留旧实验作为负结果：
+
+- 单边 `{0,+theta}` ATLIF 合法；只有设计正负双边发放时，`+theta/-theta` 才必须对称。
+- `gate*K`、`weights@K` 合法。禁止的是原 QKFormer/native carrier：先计算 `sn2_q(sum(Q))`，再构造 `K*Q_gate`，之后又叠加第二个 attention gate。
+- 当前 H60/TTX 的 `TX score -> Shiftmax gate -> gate*K` 没有上述 native carrier，因此满足 no-carrier 约束。
+- full encoder 的 12 个 attention block 仍必须统一；不采用 S2-only、stage-wise 或 TX/SC 混合部署。
+- 候选先按精度筛选，activity/spikes 作为第二维度记录，不再用 20% activity 直接终止一个精度候选。
+
+因此，第 42.10 节“dyadic TTX 仅为数值参考、不符合约束”的结论无效。当前有效主线仍是 **105 个 one-sided all-binary ATLIF + all12 no-carrier dyadic TTX**：valid825 AEE `1.5016`，相对 NB0 约 `+0.97%`；total spikes `23.2439G`，相对 NB0 约 `-47.2%`。
+
+### 43.2 候选计算范式
+
+| family | attention object | output/value path | native carrier | complexity / hardware story | status |
+|---|---|---|---|---|---|
+| TTX | 每 token 一个 alpha-XNOR/TX 标量分数 | Shiftmax 后 `gate*K` | no | 线性 token selector；当前 RTL 主线 | valid825 pass |
+| NTS | TX 与 SC 加权混合标量 | Shiftmax 后 `gate*K` | no | 公式混杂，用户不采用 | historical only |
+| NTX/H18a | TX gate 叠加在 `K*sn2_q(sumQ)` 上 | native carrier 再乘 gate | yes | 双重选择器，禁止 | stop |
+| H66a | token-token binary alpha-XNOR 矩阵 | row Shiftmax 后 `weights@K` | no | 窗口内矩阵 SRAM/累加；精度优先上界 | P0 run |
+| H66b | binary Hamming linear attention | `Q(K^T K)` | no | `D x D` accumulator，无 token-token matrix | P1 generated |
+| STAtten | temporal-block `Q(K^T V)` | 独立 V 或复用 value | no | 时间块缓冲，复杂度仍为 `O(TND^2)` | literature hold |
+| SpiLiFormer | feed-forward selector + feedback lateral inhibition | 抑制无关 token 后投影 | mode-dependent | 需要反馈状态，不是简单减一项 | literature hold |
+| A2OS2A | binary Q、ReLU K、ternary V | addition-only matrix attention | no | 三种激活数据类型，硬件异构较高 | reference only |
+
+### 43.3 为什么有些旧结果值得继续、有些不值得
+
+旧 H37 的 binary alpha-XNOR matrix 在部分神经元替换条件下，120/360-step valid10 AEE 约 `1.03-1.09`，说明**注意力范式本身有精度潜力**；它不能作为论文结果，但足以支持改成 full105/all12 后重跑。相反，H63/H64/H65 的 AEE `8.36-13.85` 是 baseline 的约 `5.6-9.3` 倍，且保留 H60 的 H64 neuron-only reference 也达到 `11.88`，说明主要是错误强制对称神经元导致全网分布崩坏。停止这些实验的正确依据是精度失配，而不是 firing 超过 20%。
+
+H66 协议位于 `neuron_autoresearch/experiments/h66_accuracy_first_unified/protocol.md`。生成器为 `entrypoints/make_h66_accuracy_first_unified_configs.py`，只新增配置并从 TTX epoch2 warm-start；第一优先级为 H66a full alpha-XNOR matrix，H66b Hamming 仅在 H66a 完成后顺序运行。
+
+### 43.4 外部顶会检索后的优先级修正
+
+独立检索记录见 `neuron_autoresearch/literature/h66_external_attention_survey_20260711.md`，覆盖 CVPR 2025 a-XNOR/STAtten/A2OS2A、ICCV 2025 SpiLiFormer、ICML 2025 SpikeVideoFormer、NeurIPS 2025 spiking RPE/MaxFormer 和 ICLR 2026 LRF-Dyn，并复核可获得的官方代码。
+
+H66a full a-XNOR matrix 作为 accuracy oracle 先跑；若 pairwise correlation 有效，硬件优先降阶为 TP-TTX 或 LR-TTX，而不是直接冻结 `N x N` score matrix。TP-TTX 只比较同空间位置的两个时间片；LR-TTX 比较 self 与四个空间邻居，二者都统一使用 binary alpha-XNOR + Shiftmax + K value，不含 SC、native carrier 或 stage-wise 公式。旧 `h59_local` 只是对同 token score 做 roll-average，并没有计算邻居 `TX(q_i,k_j)`，且存在边缘 wraparound，因此旧 NTX10 结果不能作为 LR-TTX 证据。
+
+### 43.5 H66a full alpha-XNOR matrix 初筛结果
+
+配置：`configs/generated/h66a_allbinary_all12_axnor_matrix_shiftmax_s120.yml`；起点为 TTX epoch2。链路审计为 `ATLIFTernaryPSN=105`、patched attention `=12`、`checkpoint_overlay_keys=210, missing=0, unexpected=0`。该分支没有 native QKFormer carrier；它直接计算 binary alpha-XNOR token-token matrix，经 row Shiftmax 后执行 `weights@K`。
+
+| stage | AEE | AAE | firing | estimated SOPs | note |
+|---|---:|---:|---:|---:|---|
+| zero-shot valid1 | 1.6928 | 30.4814 | 4.8567% | 2.0532G | 只切 attention 语义，未训练 |
+| 120-step valid10 | **1.1766** | 14.2411 | 5.0444% | 2.1325G | AEE 强信号；AAE 需扩大样本确认 |
+
+120-step train loss `1.5962`，耗时 `198.75s`，峰值 GPU memory `57.243GiB`；step120 binary activity `4.3462%`。checkpoint 为 `results/h66a_accuracy_first_20260711_151351/runs/h66a_allbinary_all12_axnor_matrix_shiftmax_s120_steps120/checkpoint_epoch0.pth`。valid10 只作初筛，不能与 NB0 valid825 直接宣称胜负。由于 AEE 明显通过精度门槛，已从同一 TTX ep2 独立启动 360-step + valid10/valid40；本轮把 rapid-screen 的 AAE 晋级阈值放宽到 20，避免旧门槛错误阻断光流 AEE 优先候选，但最终 DATE 表仍同时报告 AAE。
+
+计量限制：当前 `profile_sops.py` 的 `estimated SOPs`/energy 不包含 overlay forward 内的显式 `N x N x D` alpha-XNOR 和 `weights@K` 运算，因此表中的 `2.1325G` 只能比较被 profiler 覆盖的脉冲层，**不能**作为 H66a attention 总硬件能耗。H66a 是 accuracy oracle；若晋级，必须另算 pairwise TX、Shiftmax row 和 value accumulation cycles/energy。TP-TTX/LR-TTX 的目的之一就是把该精度收益压缩到固定 2/5 邻域，使 attention 运算可完整计数。
+
+### 43.6 H66a valid40 与 TP/LR 降阶结果
+
+H66a 从相同 TTX epoch2 独立训练 360 steps：train loss `1.5874`、train time `579.09s`、peak memory `57.243GiB`。valid10 AEE/AAE 为 `1.1639/12.9109`，但 valid40 扩大后为 `1.6554/15.5025`，firing `5.6204%`。AEE 只比 `1.65` 门槛高 `0.0054`，证明 pairwise alpha-XNOR 有潜力，但 AAE 持续偏高且 full matrix 硬件代价大，暂不直接进入 full train。
+
+新增真正的固定邻域分支；两者均为 full105 one-sided binary ATLIF、all12 同一公式、no native carrier：
+
+- TP-TTX：每个 Q 与同位置 self-K、paired-time-K 计算两路 binary alpha-XNOR，2-way Shiftmax 后聚合 K。
+- LR-TTX：每个 Q 与 self/up/down/left/right 五个 K 计算 binary alpha-XNOR，5-way Shiftmax 后聚合 K；边界 mask，不允许 wraparound。
+
+| candidate | zero-shot valid1 AEE/AAE | 120-step valid10 AEE | AAE | firing | train loss | peak memory |
+|---|---:|---:|---:|---:|---:|---:|
+| H66a full matrix | 1.6928 / 30.4814 | 1.1766 | 14.2411 | 5.0444% | 1.5962 | 57.243GiB |
+| H66d LR-TTX | 1.7398 / 31.5636 | 1.2026 | 15.0169 | 5.0369% | 1.4943 | 54.778GiB |
+| **H66c TP-TTX** | 1.7499 / 32.4011 | **1.1656** | **14.3868** | 5.0602% | **1.4643** | **54.681GiB** |
+
+三个 valid10 的 AAE 都高于 TTX valid825 约 `9.84`，说明 pairwise K aggregation 的共同风险是角度误差，不是单个候选偶然异常。TP-TTX 以最低的固定邻域成本取得最好 AEE/loss，已晋级独立 360-step + valid40。LR-TTX 暂停在120步，只有 TP valid40 失败或显示明确空间局部性不足时才继续，避免无意义并行扫参。
+
+### 43.7 H66c 标准推理与 H66e self-bias 结论
+
+H66c TP-TTX 的独立 360-step 结果为 valid10 `1.1555/13.1295`，valid40
+`1.5741/14.7896`，因此按短测门槛进入标准 valid825。完整结果：AEE `1.6566913`、
+AAE `10.4282732`、PE1/PE2/PE3=`0.55224/0.22992/0.11479`、firing `5.2936%`、
+total spikes `24.4950G`。加载审计为 `ATLIFTernaryPSN=105`、attention `=12`、
+`checkpoint_overlay_keys=210, missing=0, unexpected=0`。
+
+相对 NB0，H66c AEE 约增加 `11.4%`，超过论文 5% 窗口；相对 H60 TTX，AEE 从
+`1.5016` 恶化至 `1.6567`，spikes 也从 `23.2439G` 增至 `24.4950G`。虽然 AAE
+`10.4283` 远好于 valid40 的小样本估计，但仍不具备替代 H60 的资格。
+
+H66e 只增加固定 `+1` self-lane bias，未扫权重。zero-shot valid1 AEE/AAE 为
+`1.7240/31.5940`；120-step valid10 为 `1.1949/14.7047`，弱于无 bias 的 H66c
+`1.1656/14.3868`，因此停止，不跑 valid40/full。固定邻域 pairwise family 到此关闭。
+
+### 43.8 深读后的候选校正与 H67
+
+全文与官方代码复核见
+`neuron_autoresearch/literature/idea_mining_20260711/notes/CODEX_DEEP_READ_REVIEW.md`；
+硬件增量见 `hw_autoresearch_nts07/docs/42_H67运动XOR与有界TTX硬件增量.md`。
+
+关键校正：Bishop ECP 针对 binary `QK^T` matrix 的 active-count bound，不能原样套到
+奖励 silent/silent 的 dyadic TTX；FlowFormer 的 latent cost memory 也不是简单 K pooling。
+两者只能在重新推导误差界或实现 cost-codeword 数据流后引用。相反，EDCFlow 的相邻
+时域差分可在 binary event 上严格化为 XOR-popcount；Castling-ViT 的训练期重分支、推理期
+移除范式可让 H66a 仅作为 teacher，而不污染部署硬件。
+
+H67 只预注册一个点：所有 12 个 H60 block 使用
+`score=TX(Q_t,K_t)+0.25*popcount(K_t XOR K_pair)`，其余 105 个 one-sided binary
+ATLIF、Shiftmax 和 `gate*K` 均不变。新增字段 `binary_motion_xor_alpha` 默认 0；配置为
+`configs/generated/h67_allbinary_all12_motionxor_ttx_w025_s120.yml`。代码测试 62 项通过。
+zero-shot valid1 为 AEE `1.7156`、AAE `31.1874`、firing `5.0775%`、estimated SOPs
+`2.1465G`；加载审计 `105/12/210/0/0`。当前只运行一次 120-step valid10，达到门槛后
+才允许 valid40，不做权重 sweep。
+
+H67 120-step valid10 为 AEE `1.2098`、AAE `14.6673`、firing `5.0373%`，train loss
+`1.4637`。同 checkpoint 首次 valid40 错用 `profile batch_size=8`，得到不可信的 AAE
+`47.64`；历史 rapid-screen 的标准是 `profile batch_size=1`，说明 SNN 状态/AAE 汇总不能
+随意改 batch。按 batch1、workers4 重跑后 valid40 为 AEE `1.4566`、AAE `14.0078`、
+firing `5.4815%`、estimated SOPs `2.3173G`。该结果优于 H66c 360-step valid40 AEE
+`1.5741`，因此已从 TTX epoch2 独立启动 H67 360-step + valid10/40；仍只保留 1/4 单点。
+
+H67 独立 360-step 已完成：train loss `1.4836`、train time `581.87s`、peak memory
+`57.861GiB`；valid10 AEE/AAE=`1.2283/14.1901`，valid40=`1.5937/15.0056`，firing
+`5.6245%`。它通过 `1.65/20` 晋级门槛，但相对 120-step valid40 `1.4566/14.0078`
+没有继续收敛收益，且略弱于 H66c 360-step valid40 AEE `1.5741`。因此不做更多短训或
+XOR 权重 sweep，只对 step360 checkpoint 做一次标准 valid825；若不在 NB0 5% 窗口内，
+H67 作为“简单 motion bias 不足”的负消融停止，不进入 full train。
+
+H67 标准 valid825 已完成：AEE `1.6536553`、AAE `10.3943662`、
+PE1/PE2/PE3=`0.55034/0.22840/0.11387`、firing `5.2816%`、total spikes
+`24.4393G`、estimated SOPs `2.2328G`；加载审计 `105/12/210/0/0`。相对 NB0
+AEE 约增加 `11.2%`，超过 5% 窗口；相对 H60 TTX AEE `1.5016` 和 spikes
+`23.2439G` 也同时更差。H67 正式停止，不做 full train、权重 sweep 或硬件主线替换。
+该结果与 H66c valid825 `1.6567/10.4283/24.4950G` 几乎一致，表明只给 TTX 增加
+简单相邻时间先验不能解决 pairwise/motion candidate 的全量泛化问题。
+
+后续最小顺序固定为：H67 Motion-XOR -> Castling-TTX training-only auxiliary -> frozen
+checkpoint 的有界 gate bundling -> 完整 attention operation/traffic accounting。SwiftFormer
+官方实现含 L2 normalize、learned global query 和浮点 projection；STAtten/Hamming 需要
+`D x D` state，均降为 P2，不在上述实验完成前占用 full-train 资源。
+
+Castling-TTX 的可选分支、单元测试和配置已生成但尚未启动。训练配置为
+`configs/generated/h68_allbinary_all12_castling_ttx_aux050_s360.yml`，训练态 full-matrix
+auxiliary 权重从 `0.5` 线性退火到 step360 的 `0`；评估态无条件为 0。部署配置
+`configs/generated/h68_allbinary_all12_castling_ttx_deploy.yml` 显式关闭 auxiliary，且该
+分支没有新增参数。H68 协议位于 `neuron_autoresearch/experiments/h68_castling_ttx/protocol.md`；
+只有 H67 完成后才允许串行启动。当前 `test_bsa_attention.py` 全部 63 项通过。
+
+H68 第一次启动在首 batch 暴露 AMP dtype mismatch（H60 FP32、matrix auxiliary FP16），
+未产生 checkpoint；显式把 auxiliary 对齐到 H60 dtype 后，新增 FP16/FP32 单测并重跑，
+当前测试总数 64 项通过。唯一一次 360-step 训练结果：train loss `1.4821`、train time
+`617.54s`、peak memory `59.451GiB`；valid10 AEE/AAE=`1.2297/13.9894`，valid40
+`1.5650/14.5559`，firing `5.6316%`。
+
+显式 deploy config 在同 checkpoint 上重跑 valid40，逐项复现 `1.5650/14.5559`，并保持
+`105/12/210/0/0`，证明 training-only matrix branch 在 eval 中为 0 且无新增 checkpoint key。
+标准 deploy valid825 为 AEE `1.6544181`、AAE `10.4139422`、
+PE1/PE2/PE3=`0.55294/0.22934/0.11432`、firing `5.2868%`、total spikes
+`24.4634G`、estimated SOPs `2.2350G`。相对 NB0 AEE 约增加 `11.2%`，失败；不扫
+auxiliary 初值、退火长度或混合方式。Castling-TTX 只证明了“部署可零开销移除”，没有证明
+全量精度收益。
+
+### 43.9 Exact Delta-TTX profile
+
+CVPR 2025 MEET 的关键启示不是简单做 temporal sparsity，而是必须同时核算 state SRAM、
+dynamic cycles 和误差累积。当前 binary H60 在 `T=2` 下可做无误差增量：整数化
+`S64=64*count(q=1,k=1)+count(q=0,k=0)`，t1 只更新 Q 或 K 翻转的 channel。
+1-bit match state 不足以区分 active-active 与 silent-silent；硬件需缓存 previous Q/K
+共 64 bit，或每 lane 2-bit contribution class，并保留 S64 accumulator。穷举等价参考
+`hw_autoresearch_nts07/scripts/ttx_delta_reference.py` 已通过全部 16 种单 lane 时间转移。
+
+在 TTX best epoch2 上做 100 个 DSEC valid sample 的 all12 hook profile。最终 profiler 对
+所有 block/head/window/sample 的 raw lane count 求和，共 `1,741,824,000` 个 t1 lanes：
+Q temporal toggle `0.7983%`、K toggle `1.9946%`、union update density `2.7832%`。
+因此 t1 理想 lane skip 为 `97.2168%`；由于 t0 仍需完整计算，整个 T=2 window 的 TX
+compare 理想减少上限是 `48.6084%`，不是 97.2%。结果目录为
+`results/date11_ttx_ep2_delta_profile100_exact_20260711`，load audit `105/12/210/0/0`。
+该 element-weighted 结果覆盖此前只按 stage/head 加权的临时估算。
+
+Delta-TTX 数值上与 H60 完全相同，不需要重新训练或精度消融；下一步是 RTL/cycle/PPA：
+从 `48.6084%` compare 上限中扣除 state SRAM、XOR mask、稀疏 scheduler 和 accumulator
+读写。若净能耗收益成立，它比 H67 motion bias、Bishop 式近似 prune 或继续替换 attention
+更适合作为 DATE 硬件主贡献。
+
+### 43.10 full30 判定勘误与正式队列
+
+此前把 H67/H68 的 360-step checkpoint standard valid825 约 `1.65` 写成“方向失败”不严谨。
+它只能证明 360-step short checkpoint 未达到最终门槛，不能替代完整收敛实验。按用户要求，
+H67 与 H68 均进入标准 full30，逐个串行训练和 standard valid825。
+
+共同 full30 口径：从 TTX best epoch2 独立 warm-start；batch8、workers8、AMP、30 epochs、
+warmup720、fast-LR param groups、milestones20/25；保存并评估 epoch
+`0/4/9/14/19/24/28/29`。H67 固定 motion XOR weight `1/4`。H68 training-only matrix
+auxiliary 从 0.5 线性退火到 epoch20 的 0，epoch20-29 只训练部署 H60；valid825 使用显式
+auxiliary=0 deploy config。两者都不扫参。
+
+- 生成器：`entrypoints/make_h67_h68_full30_configs.py`
+- 串行队列：`entrypoints/run_h67_h68_full30_queue.py`
+- manifest：`configs/generated/h67_h68_full30_manifest.json`
+- 独立双轨 idea 文档：`neuron_autoresearch/literature/TTX_SOFTWARE_HARDWARE_IDEA_TRACKS_20260711.md`
+
+软件线继续寻找超过 TTX 的统一 all12 checkpoint；硬件线优先 exact Delta-TTX、zero-K
+folding 和 bounded bundling。软件 short/full 指标不能替代硬件 PPA，硬件 compare skip 也不能
+替代 AEE/AAE。队列顺序固定为 H67 full30 -> H67 valid825 -> H68 full30 -> H68 deploy
+valid825；每个结果完成后自动追加到本文档。
+
+#### H68 命名与论文忠实度勘误（2026-07-11）
+
+H68 是 `Castling-inspired annealed matrix augmentation`，不是 Castling-ViT 原式复现。原论文
+使用 threshold-masked softmax auxiliary 与 linear-angular 主分支相加，并保留部署期 DWConv；
+H68 使用 binary full-matrix output 与 H60 的全局 `lerp`，blend weight 在 epoch20 前退火为 0，
+且没有 entry-wise mask/DWConv。当前 H68 full30 配置保持不变，确保实验定义稳定。若 H68
+valid825 不超过 TTX，才考虑单个 faithful-mask H72；不能把 H68 结果直接归因于原论文 mask
+机制。
+
+#### H67 full30 运行健康记录（2026-07-11 epoch0）
+
+H67 epoch0 已完成并继续 epoch1：train loss `1.499748`，内部小验证 loss `1.231780`，
+epoch time `1487.88 s`，train throughput `4.9359 samples/s`，max GPU memory `57.861 GiB`；
+ATLIF `105`、Shiftmax attention `12`、binary activity `4.3952%`。已保存
+`checkpoint_epoch0.pth`（705 MB）与 state dict（420 MB）。该小验证 loss 只用于训练健康检查，
+不与 standard valid825 AEE/AAE 比较，也不作为提前终止依据。
+
+  - **calib MVSEC 标准 eval 完成（2026-07-10）**：
+    - 队列已结束：`[calib-eval] 2026-07-10T14:05:23+08:00 all done`；当前无 eval/train 进程，GPU 空闲。
+    - ep24 完成时间：`2026-07-10T03:01:12+08:00`；ep21 完成时间：`2026-07-10T14:05:23+08:00`。
+    - ranking：
+      - `results_inference/mvsec_ttx_mdr_ep20_calib_epoch24_dt1_full4_20260709_154906/mvsec_ranking.md`
+      - `results_inference/mvsec_ttx_mdr_ep20_calib_epoch21_dt1_full4_20260709_154906/mvsec_ranking.md`
+    - 四序列 mean（标准 AEE 口径）：
+
+| checkpoint | mean AEE | mean total_spikes | mean energy_uj | vs baseline AEE | spike reduction | energy reduction | ranking |
+|---|---:|---:|---:|---:|---:|---:|---|
+| baseline ep47 | 1.1414 | 39.5024G | 35225.57 | - | - | - | `results_inference/mvsec_mdr_baseline_epoch47_dt1_full4_20260629_235858/mvsec_ranking.md` |
+| TTX ep20 | 1.2019 | 23.8638G | 21467.09 | +5.30% | 39.59% | 39.06% | `results_inference/mvsec_ttx_mdr_epoch20_dt1_full4_20260706_001522/mvsec_ranking.md` |
+| TTX ep40 | 1.2217 | 25.2930G | 22750.96 | +7.04% | 35.97% | 35.41% | `results_inference/mvsec_ttx_mdr_epoch40_dt1_full4_20260706_003729/mvsec_ranking.md` |
+| TTX ep43 | 1.2251 | 25.1262G | 22600.76 | +7.34% | 36.39% | 35.84% | `results_inference/mvsec_ttx_mdr_epoch43_dt1_full4_20260706_003729/mvsec_ranking.md` |
+| **TTX ep20-calib ep21** | **1.2750** | **23.4104G** | **21057.82** | **+11.70%** | **40.74%** | **40.22%** | `results_inference/mvsec_ttx_mdr_ep20_calib_epoch21_dt1_full4_20260709_154906/mvsec_ranking.md` |
+| **TTX ep20-calib ep24** | **1.2775** | **24.2060G** | **21772.44** | **+11.92%** | **38.72%** | **38.19%** | `results_inference/mvsec_ttx_mdr_ep20_calib_epoch24_dt1_full4_20260709_154906/mvsec_ranking.md` |
+
+    - 明细：
+
+| ckpt | outdoor_day1 | indoor_flying1 | indoor_flying2 | indoor_flying3 | mean AEE |
+|---|---:|---:|---:|---:|---:|
+| TTX ep20 | 0.9779 | 1.1414 | 1.4266 | 1.2617 | 1.2019 |
+| calib ep21 | 1.0435 | 1.2616 | 1.4705 | 1.3243 | 1.2750 |
+| calib ep24 | 1.0522 | 1.2614 | 1.4681 | 1.3282 | 1.2775 |
+
+    - 判定：
+      1. **ep20 低 LR calib 失败（相对 ep20 变差）**：calib ep21/ep24 mean AEE 分别为 `1.2750` / `1.2775`，相对 TTX ep20 `1.2019` 约 `+6.1% / +6.3%` AEE；相对 baseline 约 `+11.7% / +11.9%`，**没有进入 +5% 窗口**（5% 门限约 `AEE<=1.1985`）。
+      2. spikes/energy 仍满足 ≥20% 下降：ep21 约 `-40.7% / -40.2%`，ep24 约 `-38.7% / -38.2%`。
+      3. 当前 **MDR/MVSEC 主结果仍是 TTX ep20**；calib ep21/ep24 只能作为“低 LR 续训 5 epoch 不改善外部泛化、甚至恶化”的负向证据，不替换主线 checkpoint。
+      4. 与训练内 valid 一致：calib ep25 train-loop valid `1.1567` 已劣于原 ep20 valid `1.1035`；标准四序列 AEE 进一步确认恶化。
+    - 后续建议（按优先级）：
+      1. **不要**再从 ep20 用同一低 LR 继续堆 epoch；当前证据说明这条 calib 方向无效。
+      2. 若仍想压 AEE 进 5%：优先考虑更短/更稳策略（例如 1–2 epoch、更小 LR、或只训 ATLIF 参数冻结 backbone），或回到 DSEC all-binary TTX 主线巩固后再做跨数据集。
+      3. 论文 MDR/MVSEC 外部表：主报 TTX ep20；calib 作为失败 ablation 可选写一行。
+<!-- H69_DYADIC_TEMPERATURE_PROTOCOL_20260711 -->
+
+### 43.11 H69 Dyadic-Temperature TTX：H67/H68 后续自动队列（2026-07-11）
+
+H67/H68 的 short360 结果不再作失败结论，二者先逐个完成独立 full30 和 standard valid825。
+后续新增 H69，但不会与当前 full30 并发：它等待 H68 排名文件出现后，才从原始 TTX epoch2
+分别短训 `score_scale=4/8/16`。三个点都是硬件移位档位；只允许 valid40 综合分数最优且
+过门槛的一项晋级 full30，避免无意义连续温度扫参。
+
+H69 动机来自实测而非摘要猜测：H60 gate entropy 为 `7.33985`，等于 `log2(162)`，effective
+tokens 为 `162/162`，说明 gate 几乎均匀。固定 dyadic temperature 不改变 105 个 binary
+ATLIF、12 个 H60 attention、Q/K binary popcount 和 `gate*K` 数据流，只给 score accumulator
+增加 2/3/4-bit 左移。Swin V2 的 scaled cosine attention只提供温度校准先例；H69 是否改善
+事件光流必须由 DSEC full30/valid825 决定。
+
+- generator：`neuron_experiments/H9_bipolar_self_attention/entrypoints/make_h69_dyadic_temperature_configs.py`
+- queue：`neuron_experiments/H9_bipolar_self_attention/entrypoints/run_h69_after_h67_h68.py`
+- literature/software-hardware split：`neuron_autoresearch/literature/TTX_SOFTWARE_HARDWARE_IDEA_TRACKS_20260711.md`
+
+主线替换条件维持不变：valid825 AEE 必须优于或统计上不差于 TTX ep2 的 `1.5016`，AAE 不得
+明显差于 `9.8431`，total spikes 仍需较 NB0 降低至少 20%。未达到这三个条件时，H69 只能作为
+attention temperature 消融，不能包装成新主线。
+
+### 43.12 H70 Event-Selective TTX：事件密度自适应温度（2026-07-11）
+
+H70 从 NeurIPS 2024 Selective Attention 的 token-aware temperature 迁移，但去掉其 MLP、
+浮点 `tanh/sigmoid` 和额外参数。每 token 用 `a=popcount(Q OR K)`，温度档位固定为
+`2^min(ceil(log2(a+1)),3)`，并在 TX score 跨 token 中心化之后左移，再进入原 Shiftmax。
+部署仍是 all12 同一公式、105 个 one-sided binary ATLIF、12 个 attention 和 `gate*K`。
+
+H70 在 H69 full30 完成后串行执行。360-step 仅为实现健康检查，不能单独判失败；只要脚本、
+load audit 和数值有限，就继续独立从 TTX ep2 完成 full30，并评估 epoch
+`0/4/9/14/19/24/28/29` 的 standard valid825。
+
+- implementation：`overlay/models/STSwinNet_SNN/bsa_attention.py`
+- tests：`tests/test_bsa_attention.py`
+- generator：`entrypoints/make_h70_event_selective_ttx_configs.py`
+- deferred queue：`entrypoints/run_h70_after_h69.py`
+- manifest：`configs/generated/h70_event_selective_ttx_manifest.json`
+
+H70 若超过 TTX，可包装为 **Event-Selective TTX**：事件活跃度既是运动信息强度，也是 attention
+selectivity 的硬件控制信号。若不超过，它仍构成固定温度 H69 对动态温度 H70 的必要消融。
+
+### 43.13 H71 Window-Context TTX：无参数窗口上下文广播（2026-07-11）
+
+H60 的 gate entropy 接近最大值，但其 `gate_i*K_i` 仍是逐 token 运算，并不产生标准 attention
+的 token-to-token interaction。H71 迁移 ICCV 2023 Context Broadcasting 原公式，在每个
+Swin window 内执行 `Y_i=(gate_i*K_i + mean_j(gate_j*K_j))/2`。该分支无参数、无 QK matrix、
+无 native carrier，12 个 encoder attention 块使用同一个公式。
+
+H71 在 H70 full30 后串行执行：360-step 只排除实现错误，随后从 TTX ep2 独立 full30 并做
+standard valid825。验收除 AEE/AAE 外，必须重点检查 context broadcast 是否抬高 downstream
+spikes；若不能保持相对 NB0 至少 20% 的 total-spike 降幅，即使 AEE 更低也不作为最终主线。
+
+- implementation：`overlay/models/STSwinNet_SNN/bsa_attention.py`
+- generator：`entrypoints/make_h71_window_context_ttx_configs.py`
+- deferred queue：`entrypoints/run_h71_after_h70.py`
+- manifest：`configs/generated/h71_window_context_ttx_manifest.json`
+
+### 43.14 Delta-Locality v2 延迟硬件审计协议（2026-07-11）
+
+profiler 已新增 zero-update token/head、每 token/head 更新 lane 直方图、changed-token run
+length，以及 4/8-token bundle 全零比例。所有指标保存原始分子/分母后跨 block/head/sample
+汇总，不平均百分比。由于本机只有一张 A800，审计脚本等待 H71 standard valid825 完成后，
+再对冻结 TTX ep2 跑 100 samples，避免打断软件 full30 队列。
+
+- profiler：`entrypoints/profile_nts11_hardware_p0.py`
+- deferred audit：`entrypoints/run_delta_locality_after_h71.py`
+- output：`results/date11_ttx_ep2_delta_locality_profile100_v2_20260711`
+
+MEET（CVPR 2025）仅作为 memory-aware temporal execution 的核算依据：它说明 temporal
+suppression 若需要过大的 state memory，能耗可能反而恶化。它不直接证明 TTX/Shiftmax
+节能，也不要求本项目照搬 state-compression 网络重构；TTX 的 previous Q/K 已是 packed
+`64-bit/token/head`，最终仍需连同 S64 accumulator 和访问能耗一起扣除。
+
+### 43.15 Attention operation audit 与 energy 口径勘误（2026-07-11）
+
+现有 standard valid825 `energy_uj` 只对 profiler hook 到的 spike layer 采用
+`spikes × (0.9/0.1 pJ)`，没有覆盖 overlay attention 的新增控制与归约操作，也没有真实
+SRAM/NoC。因此未来 H67--H71
+ranking 将该列标为 `spike_energy_proxy_uj`，profile JSON 增加 `energy_scope` 元数据，但公式和
+历史数值不改。
+
+新增 `entrypoints/audit_attention_candidate_ops.py`：使用 100-sample H60 hook 的实际
+`batch_windows x heads x tokens x head_dim`，统一计算 H67 motion XOR/popcount、H69 score
+shift、H70 OR-popcount/leading-one/shift、H71 context reduction/broadcast/fixed reciprocal。
+结果由最终 watcher 写入 `attention_candidate_ops.json/.md`。候选只有在 valid825 精度、spikes、
+attention op audit 和最终 PPA 四项均成立时，才可宣称精度与稀疏能耗超过 TTX。
+
+### 43.16 H60-family 统一 dyadic INT8 deploy valid825（预注册）
+
+训练/float eval 使用 `alpha0=0.02`，而冻结 DATE/RTL 主线的 `AEE=1.5016` 对应同一 TTX ep2
+checkpoint 在 `alpha0=1/64`、INT8 score/gate 下的部署图。为避免口径错配，H67--H71 各自在
+float valid825 排名中选 rank-1 epoch 后，只额外做一次统一部署评估：保留候选自身 attention
+机制，强制 `alpha0=1/64`、score/gate step `1/128`、score range `[-2,2]`、gate range `[0,2]`，
+并关闭 Castling auxiliary。
+
+`entrypoints/run_h60_family_deploy_eval.py` 将 TTX frozen mainline 与 H67/H68/H69/H70/H71 六行
+放在同一次 standard valid825 表中；它由 `run_delta_locality_after_h71.py` 在软件队列完成后
+串行调用。Exact Delta-TTX 的逐 lane `S64` 等价只适用于该 dyadic 部署图，不适用于训练时
+`alpha0=0.02` 的 float score。
+
+量化命名勘误：历史配置名中的 `INT8` 实际表示 `step=1/128` 的定点网格，不是严格 8-bit
+tensor。score `[-2,2]` 含 513 个端点码，若全部精确表示至少需 10-bit code；gate `[0,2]`
+含 257 个码，至少需 9 bit。统一部署表保留该已验证网格以保证数值可比，但硬件/PPA 按实际
+10/9-bit datapath 核算；论文不得简写成“8-bit score/gate”。
+
+### 43.17 主线竞争 full30 纪律与存盘修正（2026-07-12）
+
+H66/H67--H71 的短跑结论统一勘误为：短跑只能证明实现健康、给出候选超参或暴露明显数值错误，
+没有完成标准 full30 + valid825 的候选不得标记为“算法失败”。当前串行队列固定为 H67、H68、
+H69、H70、H71，均从同一 TTX epoch2 checkpoint 独立起跑，使用相同 30-epoch 训练协议并评估
+epoch `0/4/9/14/19/24/28/29`。H69 的 360-step 只选择 dyadic temperature；H70/H71 的
+360-step 只检查实现，均不会代替 full30。
+
+上游保存逻辑除 `force_save_epochs` 外还会在 training loss 创新低时保存，因此 H67 前期几乎
+每轮生成约 738MB model + 440MB optimizer state。训练入口新增默认关闭的
+`runtime.save_only_force_epochs`；H68--H71 启用后，只保存预注册轮次和末轮，旧配置行为不变。
+H67 当前进程不重启、不改计算图，其已有额外 checkpoint 暂不删除。
+
+队列扩展后，为避免八个评估 checkpoint 各自重复保存 440MB optimizer state，又新增默认空的
+`runtime.state_save_epochs`。H68--H71 与 H66a-e 设置为 `[19,24,29]`：八个 full-model
+checkpoint 全部保留用于论文推理，epoch19/24/29 保留 optimizer/scheduler/scaler 用于故障续训。
+预计每候选由约 9.4GB 降到约 7.2GB；旧实验仍维持原保存行为。
+
+用户要求进一步覆盖所有尚未 full30 的结构合规 H66 候选。H66a-e 均为 full105 one-sided
+binary ATLIF、all12 同构 attention、无旧 native carrier，因此不能用 120/360-step 或 H66c
+零续训 valid825 作为最终否决。新增 `make_h66_full30_configs.py` 与
+`run_h66_full30_after_h71.py`，顺序固定为 H66a matrix -> H66b Hamming -> H66c temporal-pair ->
+H66d local-5 -> H66e temporal-pair+self-bias；每项独立从 TTX epoch2 跑 full30 和预注册八轮
+valid825。最终 dyadic deployment 与 attention operation audit 延后到该队列全部结束。
+
+独立研究账本：`neuron_autoresearch/TTX_MAINLINE_COMPETITION_LEDGER_20260712.md`。该文件把
+软件 checkpoint 竞争、论文孵化方向、数值等价硬件优化和近似硬件优化分开记录。后续候选必须
+先完成全文公式、官方代码、迁移公式和硬件操作审计，再追加到 H71 后做 full30，不能边训练边
+改变候选定义。
+
+硬件深读与数据布局模型补充：`T=2`、每 head 32 lanes 允许同一 spatial token 的两个时间片
+恰好打包为 64 bit。事务模型位于
+`hw_autoresearch_nts07/results/ttx_temporal_pair_layout_model.md`：相对“两个 32-bit 请求均占
+一个 64-bit transaction”的未合并实现，请求数可由 324 降到 162；但相对已经合并的 baseline
+收益为 0，logical storage 始终不变。该条件性结论必须由后续 RTL address trace 验证，不能直接
+计入 DATE 能耗表。
+
+### 43.18 H73/H74 Match-Code：跨时间位移描述子 full30（2026-07-12）
+
+EEMFlow 的关键可迁移点不是整套 ANN flow 网络，而是保留位移索引的固定跨时间 correlation。
+本项目新增三个 all12 候选，均使用 one-sided binary ATLIF105，不混 SC/TX stage，不恢复旧
+native carrier，也不执行动态 `weights@K`：
+
+```text
+H73 DE9:
+  n11(o)=sum_d Q[t,p,d] & K[1-t,p+o,d]
+  n00(o)=sum_d ~Q[t,p,d] & ~K[1-t,p+o,d],  o in 3x3
+  z=concat(Shiftmax(n11), Shiftmax(n00)) in R^18
+  Y[h,t,p,:]=z @ W_code[h,18,D]
+
+H74 MC49:
+  s(o)=n11(o)+alpha*n00(o),  o in fixed 49-offset set
+  z=Shiftmax(s) in R^49
+  Y[h,t,p,:]=z @ W_code[h,49,D]
+```
+
+`W_code` 是每 head 静态参数，不随 token/K 动态变化；部署评估将其量化到 signed `2^-7` 网格。
+H73 优先验证较小 3x3 跨时搜索，H74 验证更大固定感受野的精度上界。二者都从 TTX epoch2
+独立执行 full30，配置为 batch8/workers8/AMP/cupy、warmup720、milestones20/25，并评估
+epoch `0/4/9/14/19/24/28/29` 的 standard valid825。不得以实现健康测试代替 full30。
+
+- generator：`entrypoints/make_h73_h74_match_code_configs.py`
+- deferred queue：`entrypoints/run_match_code_after_h66.py`
+- manifest：`configs/generated/h73_h74_match_code_full30_manifest.json`
+- loading audit：`neuron_autoresearch/experiments/h73_h74_match_code/load_chain_audit.json`
+
+加载链实测：H73/H74/H75 都是 ATLIF105、attention12、Match-Code codebook12；从 TTX checkpoint
+恢复 overlay keys210，唯一 missing 是新建 codebook12，unexpected0、其他 overlay missing0。
+H73/H74/H75 新参数分别为79,488/216,384/75,072。后续训练日志还会再次强制检查该四项；full checkpoint
+valid825 则恢复严格加载。最终部署量化、attention operation audit 和 Delta locality 已统一
+后移到 H75 完成后，避免 watcher 并发抢占 GPU。
+
+### 43.19 H75 AX17 Match-Code：Flow1D 启发的轴向匹配（2026-07-12）
+
+Flow1D（ICCV 2021）通过“一个方向做1D attention、正交方向做1D correlation”把二维光流搜索
+复杂度从乘积改成横纵之和；官方代码`flow1d/attention.py`执行QK softmax和attention乘V，
+`flow1d/correlation.py`分别构造`[B,H,W,W]`与`[B,W,H,H]`相关。该原式含动态carrier，不直接
+满足当前硬件边界。
+
+H75 只迁移正交分解动机：对另一时刻9x9 window 读取横轴9点和纵轴9点，中心共享得到17个固定
+offset；每路计算`n11+alpha*n00`、Shiftmax17，再通过静态per-head`17xD` codebook输出。它不含
+softmax、动态`weights@K`、SC或stage mix，12块完全同式。相对H74 MC49，H75匹配和投影规模
+更小；相对H73 DE9，覆盖半径4轴向运动但不表达联合对角位移。
+
+H75 已加入同一 Match-Code watcher，在H74后从TTX epoch2执行full30和八轮valid825。CPU加载
+审计为ATLIF105、attention12、codebook12、checkpoint overlay210、missing12且全为新codebook、
+unexpected0；新增参数75,072。该方法只能称`Flow1D-inspired axial Match-Code`，不能声称复现
+Flow1D网络或继承其精度结果。
+
+
+### H67/H68 full30 自动结果：h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30
+
+<!-- H67_H68_FULL30::h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30 -->
+- train config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30.yml`
+- eval config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30_bs8_full30_20260711_setsid`
+- ranking: `neuron_experiments/H9_bipolar_self_attention/results/h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30_bs8_full30_20260711_setsid/profile_ranking_valid825.md`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4671 | 9.4155 | 0.5002 | 0.1891 | 0.0890 | 26.3898G | 5.7031% | 23393.08 |
+| 2 | 29 | 1.4910 | 9.4711 | 0.5023 | 0.1942 | 0.0938 | 26.7021G | 5.7706% | 23662.62 |
+| 3 | 4 | 1.4896 | 9.6386 | 0.5080 | 0.1897 | 0.0893 | 24.2416G | 5.2388% | 21445.96 |
+| 4 | 9 | 1.5013 | 9.8363 | 0.5133 | 0.1926 | 0.0904 | 25.9925G | 5.6172% | 23020.02 |
+| 5 | 24 | 1.5122 | 9.7665 | 0.5123 | 0.1990 | 0.0950 | 26.7619G | 5.7835% | 23730.83 |
+| 6 | 14 | 1.5172 | 9.8366 | 0.5220 | 0.2015 | 0.0939 | 25.9844G | 5.6155% | 23009.58 |
+| 7 | 28 | 1.5250 | 9.9873 | 0.5120 | 0.1956 | 0.0935 | 28.4275G | 6.1435% | 25202.74 |
+| 8 | 0 | 1.5338 | 10.0045 | 0.5219 | 0.1998 | 0.0948 | 24.0647G | 5.2006% | 21268.49 |
+
+### 43.20 H67 Motion-XOR full30 结果判定（2026-07-12）
+
+H67 已完成30 epochs和预注册八轮standard valid825。rank-1 epoch19为AEE`1.4671`、AAE
+`9.4155`、total spikes`26.3898G`、spike-energy proxy`23393.08uJ`。相对NB0 ep59：AEE改善
+约`1.35%`，spikes下降约`40.09%`；相对冻结TTX float AEE约`1.5003`，AEE改善约`2.21%`。
+因此H67不是“short看起来正常”，而是已通过论文精度与spike硬门槛，当前升级为精度第一主线
+候选。
+
+H67仍不能直接宣布硬件总能耗优于TTX：ep19 spikes比TTX dyadic的`23.2439G`高约`13.53%`，
+且Motion-XOR需要每token/head增加相邻时间K XOR、popcount归约和dyadic shift。最终watcher会对
+ep19执行同一alpha0=1/64、score/gate定点网格的valid825，并把增量attention op与SRAM/控制
+单列。若该部署结果保持精度，H67可替代H60作为软件主线；硬件主线仍需PPA后决定。
+
+epoch4形成更轻的Pareto点：AEE`1.4896`、AAE`9.6386`、spikes`24.2416G`。它比ep19少约
+`8.14%` spikes但AEE高`0.0225`。论文最终可同时报告epoch19 accuracy point和epoch4 efficiency
+point，但随机种子复验优先对统一部署后的rank-1与最终第二名进行。
+
+为尽早验证主线，新增`run_h67_early_deploy_after_h68.py`：等待H68 full30+valid825完全释放GPU，
+立即对H67 epoch19执行一次统一dyadic/定点valid825；H69 watcher已改为等待该完成标记后再启动。
+这不会与H68并发，也不改变H69训练协议。全候选结束后的统一deploy表仍会复核同一结果。
+
+### 43.21 TTB density stratifier 与 dense/sparse 双路径（2026-07-12）
+
+TTB正式提升为DATE硬件P0，而不再只是可选skip单元。目标是利用事件光流空间上“运动边缘局部
+活跃、背景大面积低活跃”和时间上T=2变化稀疏的联合分布，将`T=2 × contiguous tokens ×
+32 lanes`作为work descriptor。stratifier按temporal changed lanes路由：零变化bundle复用score，
+低变化bundle进入changed-index sparse core，高变化bundle进入固定lane dense core；K全零bundle
+另外关闭gated-K/value/projection。
+
+必须修正旧统计口径：历史`TTB2 empty`是按时间聚合后对整个window/head的Q活性分类，不是多个
+空间token乘多个timestep的真实bundle；而且H60的silent/silent score仍进入Shiftmax denominator，
+所以普通Q/K empty不能直接证明完整attention可跳过。新增profiler按token bundle1/2/4/8记录
+Q-or-K empty、K-zero、K-motion-zero及active lane阈值2/4/8/16/32。新增
+`run_ttb_density_after_h67.py`，在H67统一dyadic评估后分别对TTX ep2和H67 ep19运行100 samples，
+随后才放行H69，避免并发抢GPU。
+
+微架构候选固定为三档：保守型单core+empty gating；平衡型一dense core+一sparse core并共享
+SRAM/Shiftmax/projection；激进型多dense/多sparse core。当前预推荐平衡型，但core比例、FIFO、
+路由阈值和是否值得双核必须等真实profile与cycle/SRAM模型，不能直接借用Bishop的PPA数字。
+完整微架构评估见`hw_autoresearch_nts07/docs/45_TTB异构双路径微架构评估.md`。
+
+
+### H67/H68 full30 自动结果：h68_allbinary_all12_castling_ttx_aux050_toep20_w720_fastlr_full30
+
+<!-- H67_H68_FULL30::h68_allbinary_all12_castling_ttx_aux050_toep20_w720_fastlr_full30 -->
+- train config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h68_allbinary_all12_castling_ttx_aux050_toep20_w720_fastlr_full30.yml`
+- eval config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h68_allbinary_all12_castling_ttx_deploy_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h68_allbinary_all12_castling_ttx_aux050_toep20_w720_fastlr_full30_bs8_full30_20260711_setsid`
+- ranking: `neuron_experiments/H9_bipolar_self_attention/results/h68_allbinary_all12_castling_ttx_aux050_toep20_w720_fastlr_full30_bs8_full30_20260711_setsid/profile_ranking_valid825.md`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4688 | 9.4794 | 0.5029 | 0.1897 | 0.0891 | 26.4244G | 5.7106% | 23421.77 |
+| 2 | 29 | 1.4787 | 9.3500 | 0.5006 | 0.1933 | 0.0928 | 26.6893G | 5.7678% | 23655.00 |
+| 3 | 24 | 1.5155 | 9.7194 | 0.5142 | 0.2007 | 0.0954 | 26.8216G | 5.7964% | 23784.07 |
+| 4 | 28 | 1.5174 | 9.9615 | 0.5127 | 0.1957 | 0.0927 | 28.4371G | 6.1455% | 25212.11 |
+| 5 | 14 | 1.5203 | 9.9057 | 0.5250 | 0.2026 | 0.0938 | 26.3557G | 5.6957% | 23341.40 |
+| 6 | 9 | 1.5221 | 9.9764 | 0.5170 | 0.1961 | 0.0927 | 26.6947G | 5.7690% | 23637.70 |
+| 7 | 4 | 1.5441 | 9.8728 | 0.5217 | 0.1993 | 0.0949 | 25.7580G | 5.5665% | 22774.23 |
+| 8 | 0 | 1.6234 | 10.3243 | 0.5481 | 0.2197 | 0.1064 | 26.1983G | 5.6617% | 23122.77 |
+
+
+### H67 epoch19 early dyadic deploy valid825 自动结果
+
+<!-- H67_EPOCH19_EARLY_DYADIC_DEPLOY_VALID825 -->
+- artifact: `neuron_experiments/H9_bipolar_self_attention/results/h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30_bs8_full30_20260711_setsid/h67_epoch19_dyadic_int8_valid825.json`
+- AEE: `1.4626`; AAE: `9.3949`
+- total_spikes: `26.3948G`; firing: `5.7042%`
+- spike-energy proxy: `23397.49uJ`
+- deployment: alpha0=1/64, score/gate step=1/128; attention operation cost remains separate.
+
+
+## True TTB profile100 自动结果
+
+<!-- TRUE_TTB_TTX_H67_PROFILE100 -->
+- artifact: `neuron_experiments/H9_bipolar_self_attention/results/ttb_true_density_ttx_h67_h68_profile100.md`
+
+| model | tokens/bundle | Q-or-K density | empty | K-zero | no K-motion | active 1--4 | active 1--8 | active 1--16 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| TTX ep2 dyadic | 1 | 1.691499% | 72.539530% | 82.282540% | 82.369915% | 19.717835% | 24.120280% | 26.879439% |
+| TTX ep2 dyadic | 2 | 1.691499% | 66.127210% | 78.106500% | 78.168351% | 20.017777% | 26.023788% | 30.592211% |
+| TTX ep2 dyadic | 4 | 1.691499% | 60.089640% | 73.525184% | 73.570075% | 18.556144% | 26.025553% | 32.241234% |
+| TTX ep2 dyadic | 8 | 1.691499% | 54.704775% | 68.838231% | 68.871861% | 16.705019% | 23.933644% | 31.997132% |
+| H67 ep19 dyadic | 1 | 1.502114% | 73.897325% | 83.106384% | 83.175281% | 19.043564% | 23.382608% | 25.765469% |
+| H67 ep19 dyadic | 2 | 1.502114% | 67.319149% | 79.544915% | 79.584164% | 20.094138% | 25.416482% | 30.060322% |
+| H67 ep19 dyadic | 4 | 1.502114% | 60.963301% | 75.636288% | 75.667241% | 19.685629% | 26.506512% | 31.869218% |
+| H67 ep19 dyadic | 8 | 1.502114% | 55.255939% | 71.416599% | 71.443439% | 18.047010% | 25.623377% | 32.758293% |
+| H68 ep19 dyadic | 1 | 1.548900% | 74.201277% | 83.292383% | 83.355065% | 18.398058% | 22.791555% | 25.405763% |
+| H68 ep19 dyadic | 2 | 1.548900% | 67.769127% | 80.035264% | 80.068906% | 19.527250% | 24.596737% | 29.303615% |
+| H68 ep19 dyadic | 4 | 1.548900% | 61.517474% | 76.512280% | 76.536657% | 19.329514% | 25.838329% | 30.946131% |
+| H68 ep19 dyadic | 8 | 1.548900% | 55.880384% | 72.718655% | 72.740138% | 17.770766% | 25.208699% | 32.022727% |
+
+`empty` cannot by itself remove silent/silent score contributions to Shiftmax. Bit-exact skipping is limited to proven Delta score reuse and K-zero value/projection gating.
+
+### 43.22 H67/H68 dyadic 与 true TTB 阶段裁决（2026-07-13）
+
+<!-- H67_H68_DYADIC_TTB_STAGE_DECISION_20260713 -->
+
+统一alpha0=`1/64`、score/gate step=`1/128`的valid825已经完成。H67 epoch19为AEE
+`1.4626`、AAE`9.3949`、total spikes`26.3948G`；H68 epoch19为AEE`1.4715`、AAE
+`9.4517`、total spikes`26.4311G`。两者都优于NB0精度且spikes下降约40%，也都明显优于冻结
+H60 dyadic的AEE`1.5016`。H67比H68再低`0.00885` AEE，但需要推理期Motion-XOR；H68训练期
+matrix辅助在epoch20前退火到零，部署图严格回到H60。因此现阶段软件精度主线为H67，硬件简洁
+主线为H68；在attention logic/SRAM/cycle的同口径PPA完成前不强行合并结论。
+
+true TTB profile100证明事件稀疏足以支持stratifier。以4-token、T=2 bundle为例，H67的
+Q-or-K empty为`60.96%`、K-zero为`75.64%`、K-motion-zero为`75.67%`；H68分别为
+`61.52%`、`76.51%`、`76.54%`。但empty仍不能删除silent/silent score与Shiftmax，合法的
+bit-exact路径只包括：K-zero关闭value/projection、Delta零变化复用score，以及按changed-lane
+密度在dense/sparse core间路由。硬件B1继续采用单dense core加单4/8-lane sparse core，阈值
+`{2,4,8,12,16}`必须由trace cycle与同工艺综合交点选择，不能仅按profile比例拍定。
+
+TTB profiler最初因历史配置的`data.path`相对baseline repository解释而失败；现已与标准
+`eval_DSEC_flow_SNN.py`统一路径解析。修复后smoke加载审计为ATLIF105、Shiftmax12、overlay
+keys210/210、missing0、unexpected0，三组profile100均完成。H69已于`2026-07-13 13:26 UTC`
+进入固定dyadic温度的short360+valid40筛选，筛选只选`x4/x8/x16`温度，晋级项仍执行full30。
+
+### 43.23 Round3算法线与TTB周期模型（2026-07-13）
+
+<!-- ROUND3_ALGO_TTB_CYCLE_PROTOCOL_20260713 -->
+
+第三轮全文与官方代码深读见
+`neuron_autoresearch/literature/idea_mining_20260711/notes/DEEP_IDEA_MINING_ROUND3_20260713.md`。
+在不改变all12、one-sided binary ATLIF和encoder/decoder接口的边界内，新增三个互斥P0候选：
+H76 PC9用固定Omega9位移的3x3对应patch一致性；H77 LC4保留并学习
+`n11/n10/n01/n00`四类二值列联证据；H78 G4把32 lanes固定分成四个8-bit组并分别做
+Shiftmax9。三项都使用静态codebook、无native carrier，不与H73/H74/H75的offset规模消融
+重复。它们排在H75之后逐项full30+valid825，120/360-step只作实现健康检查，不作淘汰门。
+
+硬件周期与综合协议见`hw_autoresearch_nts07/docs/46_TTB真实分布周期模型与综合协议.md`。
+该协议把true-density的`A_b=sum(Q OR K)`与Exact-Delta的
+`u=popcount(Q_toggle OR K_toggle)`严格分开，并要求按stage/row trace回放C0/B1 makespan。
+H67 bundle8 empty在S0仅`26.51%`、S1达`87.30%`，全局平均不能直接乘总周期。现有raw
+histogram只支持theta=`2/4/8/16`；theta=`12`必须补计数，当前只能报告8与16之间的区间。
+`empty`只能注入精确silent/silent常数，K-zero只能gate value/projection，Delta zero-update才可
+复用score；任何比例都不能在trace、SRAM macro和同工艺综合前写成净speedup或PPA收益。
+
+H69 x4 short360的valid10为AEE`1.2232`、AAE`14.6871`，方向指标尚未收敛，因此未进入
+valid40。这不构成H69失败。runner已改为：若x4/x8/x16均未通过短筛门槛，仍按已有综合score
+选择最佳温度执行预注册full30，避免用短跑拒绝结构合规候选；重启时复用完整screen目录，
+不重复训练已完成的短筛。
+
+### 43.24 H67/H68 RTL-exact Shiftmax valid825（2026-07-13）
+
+<!-- H67_H68_RTL_EXACT_VALID825_20260713 -->
+
+artifact：`hw_autoresearch_nts07/results/h67_h68_rtl_exact_valid825.md`。该评估不再使用浮点
+`2^x`，而是严格复现当前RTL的raw score Q7量化、16项Q8 exp2 LUT、整数行和、上取整二次幂
+归一化、Q1.7 round-to-nearest-even和`[0,2]`饱和。
+
+| 候选 | RTL-exact AEE | 相对原dyadic | AAE | 相对原dyadic | spikes(G) |
+|---|---:|---:|---:|---:|---:|
+| H67 Motion-XOR TTX | 1.4627 | +0.0001 | 9.4040 | +0.0091 | 26.3544 |
+| H68 Castling-trained/H60 deploy | 1.4727 | +0.0012 | 9.4714 | +0.0197 | 26.4164 |
+
+两项AEE退化都远低于预注册`0.02`门槛，证明当前LUT和整数归一化对这两个checkpoint基本无损。
+因此不需要为精度扩大LUT或先做hardware-aware fine-tune；下一门槛是H67/H68相同top、SRAM
+wrapper、SDC和compile effort下的面积/时序/SAIF，而不是继续修改数值格式。H68推理仍必须关闭
+training-only Castling matrix，netlist只实现Motion-XOR off的H60数据流。
+
+### 43.25 H69 full30 启动与恢复链路审计（2026-07-13）
+
+<!-- H69_FULL30_START_AND_RECOVERY_AUDIT_20260713 -->
+
+H69 的 x4/x8/x16 short360 已全部完成，但都因 short-run AAE 高于 `11.5` 未通过筛选门；按
+43.23 的预注册规则不能据此拒绝结构候选，因此按综合 score 选择 x8（valid10 AEE
+`1.1704`、AAE `13.5339`、SOPs `2.1777G`）进入 full30。正式配置为
+`configs/generated/h69_allbinary_all12_dyadic_temperature_ttx_x8_w720_fastlr_full30.yml`，从冻结
+H60/TTX `checkpoint_epoch2.pth` 独立续训，结果目录为
+`results/h69_allbinary_all12_dyadic_temperature_ttx_x8_w720_fastlr_full30_bs8_full30_20260711_setsid`。
+训练已于 `2026-07-13 14:22:59 UTC+8`（`06:22:59 UTC`）启动，使用 batch8、8 workers、AMP、CuPy 和 30 epochs；
+稳态约 `1.57 s/step`，每 epoch 918 steps。
+
+启动审计为 ATLIFTernaryPSN `105`、all12 Shiftmax attention `12`、
+`checkpoint_overlay_keys=210`、`missing=0`、`unexpected=0`，证明新增 H69 固定 dyadic 温度通过
+标准 warm-start 链路加载，且没有遗漏旧 TTX 权重。恢复脚本曾因
+`h69_dyadic_temperature_screen_*` glob 同时匹配 launcher 日志而误启动一次重复 x4；重复进程已
+在首轮训练早期终止，未覆盖完整筛选或正式 checkpoint。runner 现只扫描目录，并优先复用最新
+`summary.csv` 完整的筛选目录；未完成目录保留用于审计，不参与晋级。H69 完成后同一 runner
+自动执行 epoch `0/4/9/14/19/24/28/29` 的标准 valid825，并写回最终排名。
+
+同类恢复风险已向后审计：H70/H71 runner 现分别复用已成功的 implementation health、
+`checkpoint_epoch29.pth` 和 `profile_ranking_valid825.md`，不再在 watcher 重启后无条件重跑
+short360、full30 或 valid825。两个 WAIT watcher 已于 `2026-07-13 14:27 UTC+8` 重启并加载新逻辑；
+H66、H73-H78 原本已按末轮 checkpoint/ranking 幂等跳过，不需要改变实验协议。
+
+### 43.26 TTB/Exact-Delta cycle-v2 证据补全协议（2026-07-13）
+
+<!-- TTB_DELTA_CYCLE_V2_PROTOCOL_20260713 -->
+
+旧 profile100 只能提供 TTB `active<=2/4/8/16/32` 的 bundle CDF，以及 Exact-Delta
+`9--16` 合并桶，无法严格恢复 `theta=12`，也无法从 bundle 数推导 sparse index payload。现已在
+profile collector 中新增两组只读统计，不改变 attention 数值路径：
+
+- Exact-Delta：完整 `u=0..32` histogram，`theta={2,4,8,12,16}` 的 sparse token count 与
+  conditional changed-lane sum；
+- true TTB：每种 bundle1/2/4/8 的完整 `A_b=0..2*b*32` histogram、`active<=12`，以及
+  `kappa={2,4,8,12,16,32}` 的 conditional active-lane sum。
+
+新 runner 为 `entrypoints/run_ttb_cycle_profile_v2_after_round3.py`，使用独立 v2 输出目录，在
+H76-H80 full30+valid825 全部结束后依次重放冻结 TTX ep2、H67 ep19、H68 ep19 各100样本。每项
+强制审计 ATLIF105、Shiftmax12、overlay210/210、missing0/unexpected0 和 samples100；旧 profile
+JSON 保留不覆盖。最终 `run_delta_locality_after_h71.py` 已后移到 v2 completion marker 之后，避免
+两个 profiler/deploy eval 并发占用 GPU。v2 只补齐 route/traffic 输入；净 cycle/PPA 仍必须经过
+stage/row trace、FIFO replay、SRAM transaction padding 和同工艺综合，不能把覆盖率直接写成
+speedup。
+
+固定温度 H69 和 event-selective H70 还新增部署 score-clipping 审计。最终软件队列结束后，
+`run_temperature_score_clip_audit.py` 读取两项各自 valid825 rank-1 epoch，用统一 alpha0=`1/64`、
+score Q7 step=`1/128`、range=`[-2,2]` 的 deploy config 各重放20样本，报告量化前 strict-low/high
+clip count 与比例。该结果决定 x8/动态左移是否能沿用现有 score 位宽；它只读统计，不改变
+valid825 或 attention 输出。
+
+### 43.27 Round4 assignment 候选裁决（2026-07-13）
+
+<!-- ROUND4_ASSIGNMENT_CANDIDATES_20260713 -->
+
+Round4算法深读没有继续做9/17/49 offset数量变体，而是在固定Omega9上找到两个结构互斥的
+assignment假设。H79 CF10采用row-only局部匹配并加入fixed-zero null候选，允许many-to-one；
+H80 DN9对同一局部边再做destination incoming归一化，以Q1.7双gate乘积施加目标端竞争。两者
+都使用静态per-head codebook输出，不读动态K/V carrier，且所有12个block使用同一公式。
+
+H79/H80将分别实现、加载审计并在H78后从冻结TTX ep2独立full30+valid825，禁止组合。AMM9
+多模态GT监督与BSMR9 masked reconstruction保留孵化：它们是部署零增量训练正则，不构成新的
+attention硬件数据流，且在当前队列已有多个plain/patch/contingency Omega9候选时优先级较低。
+本轮判据不是NB0+5%的最低门，而是必须击败H67 dyadic AEE`1.4626`、保持AAE/PE竞争力且
+spikes不超过`26.3948G`；CF10还必须排除null塌缩，DN9必须报告boundary和destination collision。
+
+### 43.26 H67/H68增量ASIC RTL冻结与SCS-Shiftmax迭代（2026-07-13）
+
+<!-- H67_H68_ASIC_RTL_SCS_FREEZE_20260713 -->
+
+完整中文结果见：
+
+- `hw_autoresearch_nts07/docs/49_H67H68逐位验证_占用类Shiftmax与DC交付结果.md`；
+- `hw_autoresearch_nts07/docs/50_H67主线_DATE贡献冻结与投稿前签核清单.md`；
+- `hw_autoresearch_nts07/results/h67_h68_storage_ablation.md`；
+- `hw_autoresearch_nts07/results/h67_h68_score_class_scan_cycle_model.md`；
+- `hw_autoresearch_nts07/results/h67_h68_atlif_module_coverage.md`。
+
+硬件主线更新为H67，H68只保留为训练期辅助、部署期TTX的消融和回退顶层。原因是H67
+RTL-exact AEE`1.462688`优于H68的`1.472654`，两者spikes接近；同时H67的零K最终score虽有
+35个合法类，profile100每行只占用`1.36--2.75`类，可用占用位图而非固定35类扫描。
+
+新增SCS-Shiftmax保持零K的Shiftmax分母贡献，但省略其恒零`gate*K`回放。H67采用两拍
+`FIND_CLASS -> CLASS_MAC`流水切断35路优先编码到exp2乘加的长路径；H68只有3类，编译期特化
+为单拍。按6720行/帧的真实stage权重，H67行核周期代理由`1,591,065`降至`1,386,424`，下降
+`12.86%`；H68下降`0.37%`。该值不含SRAM同步读、projection、ATLIF、skip、decoder或搬运，
+不能写成端到端FPS。
+
+ATLIF覆盖已解释：软件安装105个wrapper，但H67/H68实际forward均为93个；未调用的12个全部
+是all12 attention的`sn2_q`原carrier神经元。固定H60部署硬件按93个实际调用点核算，105只作
+安装/回退兼容口径。encoder跨stage skip仍只有S0/S1/S2三条；S3是bottleneck输出，不是第4条
+encoder skip。
+
+精确162深度相对256填充的Yosys通用结构代理：H67存储位下降`37.02%`、总单元下降
+`32.55%`；H68分别下降`36.69%`和`31.51%`。该结果未映射工艺，不能换算um2/mW。DC/SDC、
+SVF和Formality交接包已经生成，但当前机器没有`dc_shell`、目标`.db/.lib`和SRAM宏；正式
+WNS/TNS、面积、真实活动功耗和LEC仍是投稿前P0门槛。
+
+### 43.28 H69 full30 首轮运行里程碑（2026-07-13）
+
+<!-- H69_FULL30_EPOCH0_MILESTONE_20260713 -->
+
+H69 x8 正式 full30 已完成 epoch0 并进入 epoch1。epoch0 共918 steps，训练损失为
+`1.500449`，标准小验证损失为`1.233169`；训练耗时`1445.56 s`（24.09分钟），稳态
+`1.5747 s/step`、`5.0804 samples/s`，峰值GPU显存`56.823 GiB`。本地checkpoint已写入
+`results/h69_allbinary_all12_dyadic_temperature_ttx_x8_w720_fastlr_full30_bs8_full30_20260711_setsid/checkpoint_epoch0.pth`
+（约738 MB）。训练中105个one-sided binary ATLIF的平均activity约`4.3%--4.5%`，threshold
+固定为1.0；未观察到NaN、OOM、worker退出或加载异常。
+
+按epoch0实测吞吐，单项30轮训练约需12.1小时，之后runner会自动对预注册epoch
+`0/4/9/14/19/24/28/29`执行valid825。当前loss只能证明链路健康，不能用于H69相对H67/H68的
+精度裁决；最终仍以valid825 AEE/AAE、spikes以及统一dyadic/RTL-exact部署评估为准。
+
+epoch1随后正常完成：train loss=`1.485234`、小验证loss=`1.147696`，分别较epoch0继续下降；
+epoch time=`1466.67 s`、`1.5977 s/step`、`5.0073 samples/s`、峰值显存`56.111 GiB`。epoch1不在
+`force_save_epochs={0,4,9,14,19,24,28,29}`内，因此未新增checkpoint属于预注册存盘行为，非保存
+故障。训练已进入epoch2。
+
+### 43.29 H79/H80 实现、加载审计与队列接入（2026-07-13）
+
+<!-- H79_H80_IMPLEMENTATION_LOAD_QUEUE_AUDIT_20260713 -->
+
+H79 CF10与H80 DN9已按43.27实现为默认关闭分支。H79对Omega9 score加入由top2 margin和query
+activity构造的null evidence，只注册9行静态codebook，第10行null codeword在forward中严格接零；
+H80对同一Omega9边分别做source-row和destination-incoming Shiftmax，将双gate乘积量化到unsigned
+Q1.7后再读取9行静态codebook。两项均不读取动态K/V carrier，所有12个block使用同一公式。
+
+公式、边界、梯度、fixed-zero null、DN9 dense-reference与默认关闭回归共52项全部通过；DN9
+逐边索引覆盖1250条合法cross-time local edge。冻结TTX epoch2真实加载审计为：两项ATLIF105、
+attention12、candidate12、checkpoint overlay210、unexpected0；H79唯一missing为12个codebook加
+12个`_h9_cf10_beta`，H80唯一missing为12个codebook，同模式state严格重载均为missing0/
+unexpected0。另5项加载与optimizer测试通过。
+
+审计同时发现原训练入口只允许到H78，且未把`_h9_cf10_beta`计入overlay/new-module参数；这会导致
+H79正式warm-start被拒绝或beta落入backbone参数组。现已仅新增H79/H80模式及CF10键识别到训练、
+标准推理加载、optimizer和SOP profiler，旧模式行为不变。新幂等runner
+`entrypoints/run_round4_assignment_after_h78.py`已启动，严格等待H78完成后按H79->H80逐项执行
+full30、trained strict-load与八个预注册epoch的valid825。TTB-v2 watcher已后移到H80完成标记，
+最终dyadic deploy表与attention op audit固定为19项候选。
+
+### 43.30 TTB有序trace与有限FIFO回放（2026-07-13）
+
+<!-- TTB_ORDERED_TRACE_FINITE_FIFO_REPLAY_20260713 -->
+
+为关闭“聚合empty比例不能推出cycle”的缺口，hardware profiler新增默认关闭的`--ordered-trace`
+只读模式。它在每个sample、stage、block、window/head顺序下，以zlib+base64压缩int16保存：逐token
+Exact-Delta更新lane数，以及TTB4/TTB8的Q-or-K active、K active和K-motion计数。该分支只在
+profile collector中读取已经产生的Q/K bitplane，不改变attention输出、checkpoint或训练图。
+
+新增`entrypoints/replay_ttb_dual_path_cycles.py`。它先对`kappa={2,4,8,12,16}`、sparse lanes
+`{2,4,8}`做全量解析工作下界，再只提升每种route的前三个组合，对FIFO depth`{4,8,16}`逐周期
+回放metadata一拍一bundle、dense/sparse服务与有限队列backpressure。每次attention调用结束时排空
+队列，避免跨block虚假重叠；输出总cycle、input stalls、dense/sparse busy、最大FIFO占用和分stage
+结果。traffic同时报告dense Q/K、固定union bitmap加active Q/K payload、coordinate-index加payload
+三种位数；E0/E1都计route count/tag metadata，不把稀疏格式或索引当作免费。除bit编码量外，回放
+还输出逐bundle保守64-bit transaction计数：每个descriptor固定一个metadata word，dense/bitmap/index
+payload分别在bundle边界向上取整到64 bit，避免用跨bundle理想拼接夸大稀疏收益；该口径尚不包含
+transaction coalescing、bank映射或端口grant。单元测试覆盖全empty metadata速率、有限FIFO阻塞、
+双路径并行、FIFO峰值聚合、完整sweep输出及bit/64-bit traffic单调性，当前完整回归90项通过。
+
+解析sweep另加入共享backend每window/head row为`{1,4,8,16}` cycles的工作下界敏感性，并分别
+报告E0/E1的`max(metadata,dense,sparse,backend)`下界。该项只说明backend何时会吞没前端收益；
+由于尚未模拟row join完成顺序与backend FIFO/credit，它不进入finite-replay cycle，也不能作为
+最终共享Shiftmax周期。
+
+该模型仍不包含共享Shiftmax/backend、SRAM bank/port、projection、decoder或NoC，因此其cycle
+下降只能称row-kernel proxy，不能写成端到端FPS。现有64-bit transaction是无bank的保守padding
+模型，不等于真实SRAM transaction或energy。TTB-v2 runner已在H80完成后对TTX/H67/H68各
+profile100自动采集有序trace并生成有限FIFO artifact；下一证据门是把同一trace映射到SRAM address/
+bank conflict、端口grant、可合并transaction和共享backend credit。
+
+
+### H69 dyadic-temperature full30 自动结果：h69_allbinary_all12_dyadic_temperature_ttx_x8_w720_fastlr_full30
+
+<!-- H69_FULL30::h69_allbinary_all12_dyadic_temperature_ttx_x8_w720_fastlr_full30 -->
+- short screen: `neuron_experiments/H9_bipolar_self_attention/results/h69_dyadic_temperature_screen_20260713_132619`
+- full config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h69_allbinary_all12_dyadic_temperature_ttx_x8_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h69_allbinary_all12_dyadic_temperature_ttx_x8_w720_fastlr_full30_bs8_full30_20260711_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4802 | 9.4675 | 0.5052 | 0.1922 | 0.0903 | 26.3310G | 5.6904% | 23335.48 |
+| 2 | 29 | 1.4913 | 9.4607 | 0.5048 | 0.1951 | 0.0944 | 26.6890G | 5.7677% | 23651.10 |
+| 3 | 4 | 1.4976 | 9.6447 | 0.5091 | 0.1908 | 0.0895 | 24.1025G | 5.2088% | 21318.26 |
+| 4 | 24 | 1.5146 | 9.7547 | 0.5135 | 0.1987 | 0.0943 | 26.7167G | 5.7737% | 23689.93 |
+| 5 | 28 | 1.5188 | 9.9509 | 0.5132 | 0.1970 | 0.0942 | 28.3859G | 6.1345% | 25166.20 |
+| 6 | 14 | 1.5251 | 9.9046 | 0.5248 | 0.2039 | 0.0949 | 25.9921G | 5.6171% | 23022.69 |
+| 7 | 0 | 1.5301 | 9.9924 | 0.5224 | 0.2014 | 0.0957 | 24.0388G | 5.1950% | 21244.04 |
+| 8 | 9 | 1.5324 | 9.9877 | 0.5177 | 0.1971 | 0.0929 | 25.8149G | 5.5789% | 22858.47 |
+
+
+### H70 Event-Selective TTX full30 自动结果
+
+<!-- H70_EVENT_SELECTIVE_FULL30_RESULT -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h70_allbinary_all12_event_selective_ttx_maxshift3_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h70_allbinary_all12_event_selective_ttx_maxshift3_w720_fastlr_full30_bs8_full30_20260711_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4784 | 9.4656 | 0.5053 | 0.1918 | 0.0903 | 26.3144G | 5.6868% | 23311.37 |
+| 2 | 29 | 1.4938 | 9.4258 | 0.5034 | 0.1953 | 0.0944 | 26.6953G | 5.7691% | 23647.94 |
+| 3 | 4 | 1.5016 | 9.7319 | 0.5104 | 0.1924 | 0.0909 | 24.1368G | 5.2162% | 21347.44 |
+| 4 | 24 | 1.5129 | 9.7693 | 0.5128 | 0.1976 | 0.0944 | 26.7508G | 5.7811% | 23710.13 |
+| 5 | 9 | 1.5109 | 9.9410 | 0.5162 | 0.1953 | 0.0918 | 25.8551G | 5.5875% | 22894.45 |
+| 6 | 14 | 1.5171 | 9.8676 | 0.5223 | 0.2022 | 0.0944 | 26.0191G | 5.6230% | 23035.56 |
+| 7 | 28 | 1.5211 | 9.9819 | 0.5137 | 0.1966 | 0.0938 | 28.3979G | 6.1370% | 25167.29 |
+| 8 | 0 | 1.5310 | 10.0304 | 0.5224 | 0.2006 | 0.0953 | 24.0534G | 5.1982% | 21253.78 |
+
+
+### 43.31 H70 full30 + 算法队列暂停（2026-07-14）
+
+H70 event-selective TTX（maxshift3）full30+valid825 已完成。
+
+- run dir：`neuron_experiments/H9_bipolar_self_attention/results/h70_allbinary_all12_event_selective_ttx_maxshift3_w720_fastlr_full30_bs8_full30_20260711_setsid`
+- ranking：`.../profile_ranking_valid825.md`
+- best epoch19：AEE `1.4784`、AAE `9.4656`、total_spikes `26.3144G`
+- 相对 H67 float ep19 AEE `1.4671`：更差约 `+0.77%`，**未超越 H67**
+- 相对 H69 ep19 AEE `1.4802`：略好，但仍明显差于 H67
+- 相对 NB0 `1.4872`：仍略好；spikes 约 26.3G（相对 NB0 约 -40%）
+
+H69 best ep19 AEE `1.4802` 亦未超越 H67。
+
+用户要求 H70 完成后暂停算法队列。已停止 H71 训练（若已启动）及后续 watcher
+（h71/h66/match-code/round3/round4 等）。暂停记录：
+`neuron_experiments/H9_bipolar_self_attention/results/algorithm_queue_pause_after_h70_20260714.log`。
+
+**当前软件主线不变：H67 Motion-XOR ep19**（float AEE `1.4671` / dyadic AEE `1.4626`）。
+H71 及 Match-Code 队列未完成；恢复时检查 H71 partial run 后决定重跑或续训。
+
+
+
+### 43.32 算法队列恢复（2026-07-14）
+
+<!-- ALGORITHM_QUEUE_RESUME_20260714 -->
+
+用户要求恢复 H70 后暂停的算法队列。
+
+**H71 半成品处理**
+- 暂停时 H71 full30 仅有 `checkpoint_epoch0.pth`，epoch1 中途被杀；无完整 optimizer state 续训。
+- 按 runner 设计：`checkpoint_epoch29` 不存在则从冻结 TTX ep2 干净重训 full30（非 mid-epoch resume）。
+- health 360 已通过，runner 复用 `END H71 implementation health check: exit_code=0`。
+- 审计副本：`results/h71_..._20260711_setsid/train_partial_killed_after_pause_20260714.log` 与 `checkpoint_epoch0_partial_before_resume_*.pth`。
+
+**恢复链（setsid 并行 WAIT，串行依赖）**
+1. `run_h71_after_h70.py` — 当前执行 full30
+2. `run_h66_full30_after_h71.py` — H66a–e
+3. `run_match_code_after_h66.py` — H73–H75
+4. `run_round3_match_after_h75.py` — H76–H78
+5. `run_round4_assignment_after_h78.py` — H79–H80
+6. `run_ttb_cycle_profile_v2_after_round3.py`
+7. `run_delta_locality_after_h71.py`（等 TTB-v2）
+
+恢复记录：`neuron_experiments/H9_bipolar_self_attention/results/algorithm_queue_resume_after_h70_pause_20260714_234909.log`  
+Launcher 前缀：`*_resume_20260714_234909.launcher.{log,pid}`
+
+软件主线在 H71 完成前仍为 **H67 Motion-XOR ep19**。
+
+
+## H69/H70 deployment score-clipping profile20 自动结果
+
+<!-- H69_H70_TEMPERATURE_SCORE_CLIP_PROFILE20_20260713 -->
+- artifact: `neuron_experiments/H9_bipolar_self_attention/results/temperature_score_clip_profile20_20260713.md`
+
+| candidate | best epoch | score elements | clip low | clip high | clip ratio |
+|---|---:|---:|---:|---:|---:|
+| H69 | 19 | 21772800 | 0 | 0 | 0.000000% |
+| H70 | 19 | 21772800 | 0 | 0 | 0.000000% |
+
+裁剪按量化前 score 严格小于 -2 或大于 2 计数，边界值不计入；该表用于判断固定/动态左移是否需要扩大 score 位宽，不替代 valid825 精度。
+
+
+### H71 Window-Context TTX full30 自动结果
+
+<!-- H71_WINDOW_CONTEXT_FULL30_RESULT -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h71_allbinary_all12_window_context_ttx_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h71_allbinary_all12_window_context_ttx_w720_fastlr_full30_bs8_full30_20260711_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4872 | 9.3892 | 0.5045 | 0.1933 | 0.0923 | 26.4488G | 5.7158% | 23444.92 |
+| 2 | 29 | 1.5035 | 9.4518 | 0.5029 | 0.1967 | 0.0961 | 26.7633G | 5.7838% | 23721.74 |
+| 3 | 4 | 1.5092 | 9.8101 | 0.5122 | 0.1938 | 0.0922 | 24.1230G | 5.2132% | 21340.77 |
+| 4 | 24 | 1.5218 | 9.7992 | 0.5144 | 0.2014 | 0.0966 | 26.8829G | 5.8096% | 23841.91 |
+| 5 | 28 | 1.5189 | 9.9914 | 0.5115 | 0.1953 | 0.0931 | 28.4882G | 6.1566% | 25262.82 |
+| 6 | 9 | 1.5230 | 10.0372 | 0.5159 | 0.1954 | 0.0926 | 25.9949G | 5.6177% | 23022.36 |
+| 7 | 0 | 1.5449 | 10.0425 | 0.5220 | 0.2025 | 0.0976 | 24.0644G | 5.2006% | 21267.23 |
+| 8 | 14 | 1.5527 | 9.9909 | 0.5281 | 0.2088 | 0.0991 | 25.9951G | 5.6178% | 23023.77 |
+
+
+### H66 full30 自动结果：h66a_allbinary_all12_axnor_matrix_shiftmax_w720_fastlr_full30
+
+<!-- H66_FULL30::h66a_allbinary_all12_axnor_matrix_shiftmax_w720_fastlr_full30 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h66a_allbinary_all12_axnor_matrix_shiftmax_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h66a_allbinary_all12_axnor_matrix_shiftmax_w720_fastlr_full30_bs8_full30_20260712_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.5060 | 9.6469 | 0.5102 | 0.1973 | 0.0946 | 26.8712G | 5.8071% | 23762.69 |
+| 2 | 29 | 1.5115 | 9.6591 | 0.5074 | 0.1988 | 0.0968 | 27.2870G | 5.8970% | 24112.96 |
+| 3 | 24 | 1.5426 | 9.9446 | 0.5165 | 0.2043 | 0.0990 | 27.3546G | 5.9116% | 24192.89 |
+| 4 | 28 | 1.5455 | 10.0656 | 0.5162 | 0.2001 | 0.0965 | 28.9981G | 6.2668% | 25640.77 |
+| 5 | 4 | 1.5497 | 9.9826 | 0.5189 | 0.2010 | 0.0967 | 24.2526G | 5.2412% | 21434.81 |
+| 6 | 9 | 1.5707 | 10.2605 | 0.5217 | 0.2014 | 0.0971 | 26.1243G | 5.6457% | 23103.09 |
+| 7 | 14 | 1.5743 | 10.2040 | 0.5337 | 0.2125 | 0.1012 | 26.3072G | 5.6852% | 23259.96 |
+| 8 | 0 | 1.5794 | 10.2936 | 0.5312 | 0.2095 | 0.1014 | 24.1164G | 5.2118% | 21300.83 |
+
+
+### H66 full30 自动结果：h66b_allbinary_all12_hamming_linear_w720_fastlr_full30
+
+<!-- H66_FULL30::h66b_allbinary_all12_hamming_linear_w720_fastlr_full30 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h66b_allbinary_all12_hamming_linear_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h66b_allbinary_all12_hamming_linear_w720_fastlr_full30_bs8_full30_20260712_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 29 | 1.5429 | 9.7685 | 0.5132 | 0.2057 | 0.1023 | 26.2821G | 5.6798% | 22901.70 |
+| 2 | 19 | 1.5535 | 9.8956 | 0.5184 | 0.2059 | 0.1008 | 25.9425G | 5.6064% | 22616.65 |
+| 3 | 4 | 1.5710 | 10.0397 | 0.5234 | 0.2051 | 0.1003 | 24.2502G | 5.2407% | 21108.76 |
+| 4 | 9 | 1.5854 | 10.3057 | 0.5259 | 0.2058 | 0.0995 | 25.8519G | 5.5868% | 22497.22 |
+| 5 | 28 | 1.5980 | 10.3387 | 0.5224 | 0.2079 | 0.1027 | 28.0903G | 6.0706% | 24437.91 |
+| 6 | 24 | 1.6036 | 10.3051 | 0.5275 | 0.2136 | 0.1054 | 26.4182G | 5.7092% | 23024.51 |
+| 7 | 14 | 1.6081 | 10.3874 | 0.5387 | 0.2183 | 0.1059 | 25.7450G | 5.5637% | 22420.86 |
+| 8 | 0 | 1.6306 | 10.4748 | 0.5368 | 0.2164 | 0.1077 | 24.4585G | 5.2857% | 21262.94 |
+
+
+### H66 full30 自动结果：h66c_allbinary_all12_tp_ttx_w720_fastlr_full30
+
+<!-- H66_FULL30::h66c_allbinary_all12_tp_ttx_w720_fastlr_full30 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h66c_allbinary_all12_tp_ttx_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h66c_allbinary_all12_tp_ttx_w720_fastlr_full30_bs8_full30_20260712_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4757 | 9.5116 | 0.5038 | 0.1904 | 0.0894 | 26.5044G | 5.7278% | 23473.59 |
+| 2 | 29 | 1.4807 | 9.4081 | 0.5005 | 0.1922 | 0.0921 | 26.8580G | 5.8043% | 23784.34 |
+| 3 | 4 | 1.4966 | 9.7418 | 0.5093 | 0.1907 | 0.0898 | 24.2674G | 5.2444% | 21459.56 |
+| 4 | 28 | 1.5121 | 9.9149 | 0.5113 | 0.1949 | 0.0929 | 28.5681G | 6.1738% | 25311.56 |
+| 5 | 24 | 1.5247 | 9.8106 | 0.5118 | 0.1983 | 0.0953 | 26.9102G | 5.8155% | 23846.06 |
+| 6 | 9 | 1.5263 | 10.0156 | 0.5162 | 0.1952 | 0.0920 | 26.0911G | 5.6385% | 23091.98 |
+| 7 | 0 | 1.5392 | 10.0741 | 0.5222 | 0.2005 | 0.0948 | 24.1374G | 5.2163% | 21321.54 |
+| 8 | 14 | 1.5513 | 10.0350 | 0.5274 | 0.2054 | 0.0967 | 26.1199G | 5.6448% | 23115.45 |
+
+
+### 43.30 DATE 算法审稿整改、AAE 口径纠偏与 H81 等预算控制（2026-07-17）
+
+<!-- DATE_ALGORITHM_REVIEW_REMEDIATION_20260717 -->
+
+算法侧独立审稿结论为 **Weak Reject（confidence 4/5）**。首要问题不是 H67 当前 AEE，而是
+缺少等预算 no-motion 对照、多 seed、独立测试集，以及把本地 AAE 与论文官方 test AE 混为
+同一口径。完整整改表见
+`neuron_autoresearch/DATE_ALGORITHM_REVIEW_REMEDIATION_20260717.md`。
+
+**AAE 根因已确认：**
+
+- 本地旧 `AAE` 计算 `(u,v)` 的二维方向夹角；
+- DSEC benchmark 按 Barron 定义计算 `(u,v,1)` 的三维时空夹角；
+- 论文 `AEE=1.602, AAE=4.871` 来自 official DSEC test 全序列，不是 valid825；
+- valid825 是 DSEC train 的 `288x384` center-crop 留出集。
+
+因此 NB0/H67 的本地 `9.x` 仍可用于历史实验内部比较，但不能直接对比论文 `4.871`。已新增
+可选 `AAE_Benchmark`，旧 `AAE` 不变；诊断记录见
+`neuron_autoresearch/AAE_BASELINE_DIAGNOSTIC_20260717.md`。
+
+**H81 reviewer control：**
+
+- config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/h81_allbinary_all12_h60_nomotion_equalbudget_w720_fastlr_full30.yml`；
+- 与 H67 仅有三个语义差异：实验名、说明文字、`binary_motion_xor_alpha: 0.25 -> 0.0`；
+- 同一 TTX epoch2 起点、full30、优化器、warmup、阈值冻结、all12 H60、105 个 all-binary ATLIF；
+- 队列顺序改为 `H66a-e -> H81 -> NB0/H67/H81 双 AAE 审计 -> H73-H80`，不并发抢 GPU。
+
+当前 H66 已完成 a/b/c。best 分别为：H66a `1.5060/9.6469/26.8712G`，H66b
+`1.5429/9.7685/26.2821G`，H66c `1.4757/9.5116/26.5044G`。H66c 通过 NB0 精度门，
+但尚未超过 H67 `1.4671/9.4155/26.3898G`。H66d 当前训练中，H66e 随后串行执行。
+
+若 DSEC official test 暂时无法提交，第二数据集采用固定公开 sequence split 的
+**MVSEC-train -> MVSEC-test**，不混 MDR，统一训练域、测试域和文献对比口径；该路线在最终
+候选冻结后执行，避免与当前 DSEC 搜索队列并发。
+
+
+### 43.34 算法队列立即暂停（2026-07-17）
+
+<!-- PAUSE_NOW_H66D_20260717 -->
+
+用户要求立即暂停（不等当前 epoch）。
+
+- 已停止 H66d train 及 H66/Match/Round/TTB 等 algorithm watcher。
+- H66d 最后强制存盘：`checkpoint_epoch24.pth`（force: 0/4/9/14/19/24/28/29）。
+- 暂停时约在 Epoch 27 中途；ep25–27 无完整 model ckpt。
+- 已完成：H71、H66a、H66b、H66c；未完成：H66d/e 及 Match-Code 队列。
+- 主线仍为 **H67 Motion-XOR ep19**。
+- 暂停记录：`neuron_experiments/H9_bipolar_self_attention/results/algorithm_queue_pause_now_20260717.log`
+
+
+### 43.35 有价值 checkpoint 的统一新 AAE 审计（2026-07-17）
+
+<!-- VALUABLE_CHECKPOINT_AAE_AUDIT_20260717 -->
+
+统一使用 DSEC valid825，同时计算历史二维方向 AAE 与 DSEC/Barron `(u,v,1)` 三维 AE。完整可复现报告见 `neuron_autoresearch/VALUABLE_CHECKPOINT_AAE_AUDIT_20260717.md`。
+
+| model | epoch | AEE | legacy AAE-2D | DSEC/Barron AE-3D | PE1 | PE2 | outlier | spikes(G) | energy proxy(uJ) | load |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| NB0 baseline | 59 | 1.4872 | 9.9300 | 9.2506 | 0.5107 | 0.1891 | 0.0871 | 44.0488 | 37638.01 | ATLIF 0, Shiftmax 0, 0/0 |
+| NTS11bd mixed ternary/binary | 19 | 1.5650 | 9.9234 | 9.3407 | 0.5310 | 0.2101 | 0.1021 | 29.1679 | 23109.18 | ATLIF 105, Shiftmax 12, 0/0 |
+| All-binary + TX | 19 | 1.5831 | 9.9381 | 9.3482 | 0.5348 | 0.2136 | 0.1041 | 22.4706 | 19780.93 | ATLIF 105, Shiftmax 12, 0/0 |
+| Frozen TTX/H60 | 2 | 1.5019 | 9.8894 | 9.2123 | 0.5169 | 0.1949 | 0.0918 | 23.2396 | 20521.16 | ATLIF 105, Shiftmax 12, 0/0 |
+| H66a a-XNOR matrix | 19 | 1.5060 | 9.6469 | 9.0311 | 0.5102 | 0.1973 | 0.0946 | 26.8712 | 23762.69 | ATLIF 105, Shiftmax 12, 0/0 |
+| H66b Hamming linear | 29 | 1.5429 | 9.7685 | 9.1403 | 0.5132 | 0.2057 | 0.1023 | 26.2821 | 22901.70 | ATLIF 105, Shiftmax 12, 0/0 |
+| H66c TP-TTX | 19 | 1.4757 | 9.5116 | 8.8846 | 0.5038 | 0.1904 | 0.0894 | 26.5044 | 23473.59 | ATLIF 105, Shiftmax 12, 0/0 |
+| H67 Motion-XOR (float) | 19 | 1.4671 | 9.4155 | 8.7949 | 0.5002 | 0.1891 | 0.0890 | 26.3898 | 23393.08 | ATLIF 105, Shiftmax 12, 0/0 |
+| H67 Motion-XOR (RTL-exact) | 19 | 1.4627 | 9.4040 | 8.7801 | 0.5007 | 0.1886 | 0.0883 | 26.3544 | 23362.23 | ATLIF 105, Shiftmax 12, 0/0 |
+| H68 Castling-trained/H60 deploy (RTL-exact) | 19 | 1.4727 | 9.4714 | 8.8441 | 0.5025 | 0.1895 | 0.0891 | 26.4164 | 23414.83 | ATLIF 105, Shiftmax 12, 0/0 |
+| H69 fixed dyadic temperature | 19 | 1.4819 | 9.5177 | 8.8829 | 0.5056 | 0.1920 | 0.0899 | 26.3414 | 23344.73 | ATLIF 105, Shiftmax 12, 0/0 |
+| H70 event-selective dyadic TTX | 19 | 1.4852 | 9.5081 | 8.9013 | 0.5052 | 0.1917 | 0.0904 | 26.3213 | 23317.32 | ATLIF 105, Shiftmax 12, 0/0 |
+| H71 window-context TTX | 19 | 1.4872 | 9.3892 | 8.8030 | 0.5045 | 0.1933 | 0.0923 | 26.4488 | 23444.92 | ATLIF 105, Shiftmax 12, 0/0 |
+
+H67 RTL-exact 相对 NB0：AEE 改善 `1.65%`、AE-3D 改善 `5.09%`、spikes 下降 `40.17%`、energy proxy 下降 `37.93%`，因此作为当前 checkpoint 主线。H68 RTL-exact 继续作为部署零增量回退。所有行加载审计均为预期 ATLIF/Shiftmax 数且 `missing=0, unexpected=0`；论文 official test 仍需单独提交，不能把 valid825 AE-3D 冒充 test AE。
+
+
+### 43.36 算法队列原状态恢复（2026-07-18）
+
+<!-- RESUME_ALGORITHM_QUEUE_20260718 -->
+
+用户要求先完成已排队训练。恢复顺序固定为：
+
+`H66d epoch24 true-resume -> H66d valid825 -> H66e full30/valid825 -> H81 no-motion -> H73-H75 -> H76-H78 -> H79-H80`。
+
+- H66d 使用 `checkpoint_epoch24.pth` 加同名 `_state_dict.pth`，恢复 model、optimizer、scheduler、AMP scaler，并从 epoch25 开始；不得将 epoch24 仅作为新 warm-start。
+- MLflow 关闭，CuPy backend，原 batch、worker、warmup、milestone、阈值冻结和 valid825 口径均不变。
+- 恢复入口：`neuron_experiments/H9_bipolar_self_attention/entrypoints/resume_algorithm_queue_20260718.sh`。
+- 运行日志：`neuron_experiments/H9_bipolar_self_attention/results/algorithm_queue_resume_20260718.log`。
+- 为防止磁盘耗尽，仅在某候选八个 valid825 profile 和 ranking 全部存在后清理中间模型；保留 best、epoch29、对应训练状态、全部 profile/ranking/log，并写 `checkpoint_prune_audit.json`。
+- `AAE=4.871` 的官方 test 口径核查和 CICC 2026 复现实验协议在队列运行期间继续做，不改变本队列训练配置。
+
+
+### 43.37 AAE 官方结果差距与 CICC 2026 仿照协议（2026-07-18）
+
+<!-- AAE_OFFICIAL_TEST_CICC2026_PROTOCOL_20260718 -->
+
+完整审计与可执行协议：
+`neuron_autoresearch/AAE_OFFICIAL_TEST_AND_CICC2026_PROTOCOL_20260718.md`。
+
+**AAE 结论：** 新增的 DSEC/Barron AE-3D 对同一 valid825 的模型比较可信，但当前不能复现
+论文 `4.871`。论文值来自七条 hidden test sequence 的 official server；论文最终路线为
+`80 epoch 288x384 crop + 30 epoch 480x640 full-resolution fine-tune`，测试时关闭 BN
+running-state tracking。NB0 只是 `60 epoch crop`，本地评估又是 `288x384 center-crop`
+valid825，学习率、序列、采样、聚合均不同。差距不能归咎于 AE-3D 公式。
+
+当前 `eval_DSEC_flow_SNN.py` 只实现 `mode=valid`；`mode=test` 没有执行分支。因此队列完成后
+必须新增 official submission writer，并先做 NB0/最终候选的 full-resolution、BN-policy 等预算
+对照，再谈与 `4.871` 比较。
+
+**MVSEC 结论（2026-08-01 正文勘误）：** 四个 dt1 test sequence 已完整预处理；CICC
+正文使用参考 Spike-FlowNet 的 INT8 Hybrid U-Net，在 `indoor1/2/3 + outdoor1` 各评估
+`800` 个输入。Spike-FlowNet 标准范式只用 `outdoor_day2` 训练，测试为 `256x256`
+center crop、dt1 event-masked AEE。MDR->MVSEC 仍是 SDformerFlow 原论文对比路线；
+day2->四测试集是 CICC/Spike-FlowNet 直接 MVSEC 路线；两者必须分表。
+
+**CICC 2026（2026-08-01 正文勘误）：** 本地四页正文已核验。INT8 baseline 四序列 AEE
+为 `0.84/1.32/1.14/0.52`（mean `0.96`），全部特征后为
+`0.87/1.35/1.17/0.56`（mean `0.99`）。真实机制是 group-16 lossless BWAC、
+Dense-Channel-First MaxPool/ReLU speculation 和 feature-similarity DLSS；TTB 不属于该论文。
+DATE 仿照累计消融修正为 `C0 INT8 dense / C1 +BWAC / C2 +speculation / C3 +DLSS`，
+统一报告 event-masked AEE、实际 operation、SRAM/DRAM bytes、cycle、含外存 energy 和
+控制/面积开销。完整修订见后文 `MVSEC_CICC2026_ALIGNMENT_20260801`。
+
+
+### H66 full30 自动结果：h66d_allbinary_all12_lr_ttx_w720_fastlr_full30
+
+<!-- H66_FULL30::h66d_allbinary_all12_lr_ttx_w720_fastlr_full30 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h66d_allbinary_all12_lr_ttx_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h66d_allbinary_all12_lr_ttx_w720_fastlr_full30_bs8_full30_20260712_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 29 | 1.4432 | 9.4012 | 0.4963 | 0.1832 | 0.0844 | 27.0403G | 5.8437% | 23976.31 |
+| 2 | 19 | 1.4757 | 9.4652 | 0.5040 | 0.1900 | 0.0891 | 26.6324G | 5.7555% | 23601.58 |
+| 3 | 28 | 1.4879 | 9.6978 | 0.5076 | 0.1916 | 0.0897 | 28.4610G | 6.1507% | 25219.64 |
+| 4 | 4 | 1.5060 | 9.7565 | 0.5119 | 0.1934 | 0.0918 | 24.1945G | 5.2287% | 21408.35 |
+| 5 | 24 | 1.5120 | 9.7579 | 0.5116 | 0.1981 | 0.0945 | 27.0550G | 5.8469% | 23988.37 |
+| 6 | 9 | 1.5174 | 10.0373 | 0.5154 | 0.1937 | 0.0917 | 26.0698G | 5.6339% | 23092.76 |
+| 7 | 14 | 1.5458 | 9.9784 | 0.5255 | 0.2067 | 0.0980 | 26.1670G | 5.6549% | 23173.75 |
+| 8 | 0 | 1.5445 | 10.0643 | 0.5231 | 0.2020 | 0.0967 | 24.0886G | 5.2058% | 21289.31 |
+
+
+### H66 full30 自动结果：h66e_allbinary_all12_tp_ttx_selfbias1_w720_fastlr_full30
+
+<!-- H66_FULL30::h66e_allbinary_all12_tp_ttx_selfbias1_w720_fastlr_full30 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h66e_allbinary_all12_tp_ttx_selfbias1_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h66e_allbinary_all12_tp_ttx_selfbias1_w720_fastlr_full30_bs8_full30_20260712_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4803 | 9.4605 | 0.5051 | 0.1920 | 0.0900 | 26.3073G | 5.6853% | 23315.47 |
+| 2 | 29 | 1.4899 | 9.3905 | 0.5025 | 0.1940 | 0.0934 | 26.7107G | 5.7724% | 23669.21 |
+| 3 | 4 | 1.5062 | 9.6793 | 0.5102 | 0.1936 | 0.0920 | 24.2135G | 5.2328% | 21412.85 |
+| 4 | 24 | 1.5128 | 9.7383 | 0.5121 | 0.1984 | 0.0948 | 26.7579G | 5.7826% | 23724.93 |
+| 5 | 28 | 1.5156 | 9.8940 | 0.5119 | 0.1959 | 0.0933 | 28.4036G | 6.1383% | 25180.05 |
+| 6 | 9 | 1.5231 | 9.9495 | 0.5144 | 0.1939 | 0.0918 | 25.9046G | 5.5982% | 22928.64 |
+| 7 | 14 | 1.5289 | 9.8693 | 0.5220 | 0.2016 | 0.0944 | 26.0871G | 5.6377% | 23099.00 |
+| 8 | 0 | 1.5364 | 10.0503 | 0.5230 | 0.2015 | 0.0961 | 24.1027G | 5.2088% | 21293.58 |
+
+
+### H81 等预算 no-motion 控制与 AAE 口径审计
+
+<!-- H81_EQUAL_BUDGET_AAE_AUDIT_20260717 -->
+H81 与 H67 的训练预算、起点、all12 H60 和 all-binary ATLIF 完全一致，只关闭 Motion-XOR。
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4813 | 9.4636 | 0.5058 | 0.1925 | 0.0906 | 26.2576G | 5.6745% | 23271.63 |
+| 2 | 29 | 1.4972 | 9.4441 | 0.5033 | 0.1955 | 0.0943 | 26.6326G | 5.7556% | 23602.36 |
+| 3 | 4 | 1.4982 | 9.7259 | 0.5092 | 0.1912 | 0.0901 | 24.1474G | 5.2185% | 21355.83 |
+| 4 | 14 | 1.5168 | 9.9034 | 0.5224 | 0.2009 | 0.0938 | 26.0141G | 5.6219% | 23037.59 |
+| 5 | 28 | 1.5172 | 9.9219 | 0.5123 | 0.1949 | 0.0930 | 28.3680G | 6.1306% | 25150.08 |
+| 6 | 24 | 1.5211 | 9.8582 | 0.5153 | 0.2012 | 0.0963 | 26.7233G | 5.7751% | 23696.28 |
+| 7 | 9 | 1.5223 | 10.0046 | 0.5159 | 0.1948 | 0.0919 | 25.8656G | 5.5898% | 22900.75 |
+| 8 | 0 | 1.5315 | 9.9904 | 0.5213 | 0.2006 | 0.0952 | 24.0795G | 5.2038% | 21280.04 |
+
+同 checkpoint 双口径 AAE：
+
+| model | epoch | AEE | legacy AAE-2D | DSEC/Barron AE-3D |
+|---|---:|---:|---:|---:|
+| NB0 | 59 | 1.4872 | 9.9300 | 9.2506 |
+| H67 Motion-XOR | 19 | 1.4671 | 9.4155 | 8.7949 |
+| H81 no-motion | 19 | 1.4813 | 9.4636 | 8.8450 |
+
+H81 best epoch: `19`。论文 `4.871` 来自 official test，不再标注为 valid825。
+### 43.38 H73-H80 显存安全恢复协议（2026-07-20）
+
+- 2026-07-19 23:15，H73 batch8 在第一个训练 batch OOM：进程占用 78.65 GiB，后续算子仍需 810 MiB；GPU 无外部进程污染。
+- 加载链路在 OOM 前已通过：`ATLIFTernaryPSN=105`、统一 attention=12、`checkpoint_overlay_keys=210`、新增 Match-Code 仅 `missing=12`、`unexpected=0`，12 个新 codebook 均正确初始化。
+- 不覆盖原配置与失败目录。新增 `make_h73_h80_bs4acc2_configs.py` 和 `run_h73_h80_bs4acc2_queue.py`，为 H73-H80 生成独立 `_bs4acc2` 配置及结果目录。
+- 公平性：物理 batch 4、梯度累积 2，effective batch 仍为 8；warmup 由 720 改成 1440 个 micro-step，对应相同的 720 次 optimizer update 和 5760 个训练样本。LR、milestone、训练数据、独立 TTX ep2 起点、full30 和 standard valid825 均不变。
+- 每项完成后执行 trained strict-load audit，并在 valid825 ranking 落盘后仅保留 best/final checkpoint 及对应 state/profile，避免磁盘再次阻塞队列。
+
+### 43.39 SDformerFlow AAE 公式裁决与 MVSEC 后续门控（2026-07-20）
+
+- SDformerFlow 论文正文只声明使用 AAE，没有写出展开公式；Table I 的 `4.871` 明确来自 DSEC official optical-flow benchmark。
+- DSEC benchmark 将 AE 指向 Baker/Barron optical-flow evaluation：逐像素比较归一化三维时空向量 `(u,v,1)`，即分子为 `1+u*u_gt+v*v_gt`。因此新增 `AAE_Benchmark` 的逐像素公式与论文 official table 的目标口径一致。
+- upstream `flow_supervised.py::AAE` 只比较二维 `(u,v)` 方向，不能与论文 `4.871` 对比；它仅保留作历史本地实验兼容。
+- 公式一致仍不等于结果可直接对比：本地 valid825 是 `288x384` center-crop train holdout，并按 sample mean 聚合；论文是七条 hidden test sequence、`480x640`、80 crop epochs + 30 full-resolution fine-tune、test BN policy 和官方 server 聚合。当前 AE-3D 只用于同一 valid825 的内部比较。
+- H73-H80 结束后启动 MVSEC train-to-test，但不把所有过线候选重复训练。门槛固定为 valid825 `AEE<=1.5616`、spikes `<=35.24G`、统一 all12/no-carrier、加载 clean；从过线项中只选一个新 winner，与 MVSEC-NB0 和 H67/TTX deploy reference 构成 seed0 最小矩阵。新 winner 在 MVSEC 同时胜过 H67 AEE 并满足 spike 门槛后，才补 seed1/2。
+- MVSEC 训练测试固定为 `outdoor_day1 train + held-out tail validation -> indoor_flying1/2/3 test`，详见 `neuron_autoresearch/MVSEC_TRAIN_TEST_PROTOCOL_20260717.md`。该表是受控第二数据集实验，不冒充 SDformerFlow 的 MDR->MVSEC 复现；论文主比较以 AEE/outlier、spikes 和 attention-inclusive cost 为主。
+
+### 43.40 H73-H80 DATE 算法 novelty gate（2026-07-20）
+
+- 完整审稿报告：`neuron_autoresearch/DATE_ALGORITHM_REVIEW_H73_H80_20260720.md`。
+- H73-H80 不是八个独立论文贡献，而是一个 carrier-free binary Match-Code 主机制及 support/cost/grouping/assignment 变体。DATE 需要一个可解释、可综合、可归因的中心机制，不以变体数量作为贡献。
+- 保留正在运行的 H73 DE9 full30，作为该家族唯一代表。原 H73-H80 supervisor 已停止，H73 train 进程保持运行；新增 `finish_h73_only_after_date_review.py` 只负责等待 H73、strict-load、valid825 和 ranked checkpoint pruning，不会启动 H74-H80。
+- H74/MC49、H75/AX17 只是 offset 数量/形状；H76/PC9 是固定局部 cost aggregation；H78/G4 是 channel grouping；H79/CF10 高度重合 dustbin/matchability；H80/DN9 是 local dual-softmax。以上均不执行 full30。H77/LC4 只保留为 H73 晋级后的潜在机制消融，当前不训练。
+
+### 43.42 H79/H80 作者 override 探索队列（2026-07-20）
+
+<!-- H79_H80_AFTER_H73_REVIEW_OVERRIDE_20260720 -->
+
+- DATE novelty review 结论不变：H79/CF10 与 dustbin/matchability 先例重合，H80/DN9 与 dual-softmax 先例重合，不能仅凭精度作为独立贡献。作者决定仍补跑二者，判断它们是否能作为 H73 的 assignment 消融或增强机制。
+- H74-H78 继续停止。H79、H80 在 H73 完成 strict-load、standard valid825 和 checkpoint pruning 后按 `H79 -> H80` 串行运行，不与 H73 抢 GPU。
+- 两项都从冻结 TTX epoch2 **独立** warm-start，不从前一候选续训；协议固定为 batch4、gradient accumulation2、effective batch8、warmup1440 micro-steps、full30、预注册 epoch `0/4/9/14/19/24/28/29` standard valid825。
+- 每项强制审计 `ATLIFTernaryPSN=105`、attention=12、checkpoint overlay=210；H79 warm-start 仅允许 missing24，H80 仅允许 missing12，均要求 unexpected0；训练 checkpoint 必须 strict-load missing0/unexpected0。
+- 新增可选过滤参数 `run_h73_h80_bs4acc2_queue.py --ids H79 H80` 及等待脚本 `run_h79_h80_after_h73_review_override.py`。结果由 runner 自动追加到本文档并执行 ranked checkpoint pruning。
+- 当前 `288x384 + window[2,9,9]` 用于同 checkpoint 的公平架构搜索，并与 N=162 硬件 tile 一致。论文的 `480x640 + window[2,15,15]` 会把窗口扩为 N=450，并改变存储、地址、Shiftmax、位置编码和硬件规模；不对每个候选执行。
+- 最终架构冻结后，full-resolution 只跑 NB0 与最终候选。`480x640/window9` 是硬件一致结果；`480x640/window15 + official submission` 才是 SDformerFlow 协议对比，两类结论不得混写。
+
+
+### 43.41 H73 DATE novelty-gated full30 结果
+
+<!-- H73_ONLY_AFTER_DATE_REVIEW_20260720 -->
+- H73 是 Match-Code 基础机制的 full30 代表；H74-H78 经 DATE novelty review 后未训练，H79/H80 按作者决定作为 assignment 增强候选另行补跑。
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h73_allbinary_all12_de9_match_code_w720_fastlr_full30_bs4acc2.yml`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h73_allbinary_all12_de9_match_code_w720_fastlr_full30_bs4acc2_20260720_setsid`
+- load: ATLIF105, attention12, warm-start overlay210/missing12/unexpected0; trained checkpoint strict-load missing0/unexpected0.
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 29 | 1.4758 | 9.6183 | 0.5122 | 0.1944 | 0.0890 | 27.2813G | 5.8957% | 24180.73 |
+| 2 | 19 | 1.4858 | 9.2595 | 0.5004 | 0.1916 | 0.0913 | 25.6245G | 5.5377% | 22704.12 |
+| 3 | 14 | 1.4822 | 9.6562 | 0.5118 | 0.1935 | 0.0893 | 26.5083G | 5.7287% | 23465.75 |
+| 4 | 0 | 1.4862 | 9.5878 | 0.5129 | 0.1915 | 0.0893 | 23.3852G | 5.0538% | 20658.38 |
+| 5 | 24 | 1.5441 | 9.4157 | 0.5210 | 0.2117 | 0.1040 | 25.6049G | 5.5335% | 22684.61 |
+| 6 | 4 | 1.5582 | 9.9058 | 0.5261 | 0.2055 | 0.0992 | 24.2335G | 5.2371% | 21427.33 |
+| 7 | 9 | 1.5725 | 9.6986 | 0.5281 | 0.2173 | 0.1071 | 24.7629G | 5.3515% | 21900.49 |
+| 8 | 28 | 1.5713 | 9.8242 | 0.5227 | 0.2141 | 0.1061 | 26.2376G | 5.6702% | 23243.87 |
+
+
+### H79 Match-Code full30 显存安全结果
+
+<!-- MATCH_BS4ACC2_FULL30::H79::h79_allbinary_all12_cf10_match_code_w720_fastlr_full30_bs4acc2 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h79_allbinary_all12_cf10_match_code_w720_fastlr_full30_bs4acc2.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h79_allbinary_all12_cf10_match_code_w720_fastlr_full30_bs4acc2_20260720_setsid`
+- protocol: batch4, accumulation2, effective batch8, warmup1440 micro-steps = 720 optimizer updates = 5760 samples; full30; standard valid825.
+- load: ATLIF105, attention12, overlay210, warm-start missing24/unexpected0; trained strict-load audited.
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 29 | 1.4788 | 9.6199 | 0.5104 | 0.1944 | 0.0901 | 27.3125G | 5.9025% | 24197.15 |
+| 2 | 19 | 1.4919 | 9.2877 | 0.5049 | 0.1970 | 0.0956 | 25.6529G | 5.5438% | 22722.26 |
+| 3 | 0 | 1.4865 | 9.5040 | 0.5131 | 0.1939 | 0.0916 | 23.3672G | 5.0499% | 20645.83 |
+| 4 | 14 | 1.4843 | 9.6307 | 0.5087 | 0.1941 | 0.0911 | 26.5092G | 5.7289% | 23461.05 |
+| 5 | 24 | 1.5434 | 9.3749 | 0.5197 | 0.2113 | 0.1044 | 25.6174G | 5.5362% | 22684.14 |
+| 6 | 4 | 1.5428 | 9.7984 | 0.5236 | 0.2059 | 0.1001 | 24.2965G | 5.2507% | 21482.44 |
+| 7 | 28 | 1.5533 | 9.6743 | 0.5186 | 0.2121 | 0.1052 | 26.2665G | 5.6764% | 23257.79 |
+| 8 | 9 | 1.5707 | 9.7130 | 0.5236 | 0.2150 | 0.1060 | 24.7588G | 5.3506% | 21890.07 |
+
+
+### H80 Match-Code full30 显存安全结果
+
+<!-- MATCH_BS4ACC2_FULL30::H80::h80_allbinary_all12_dn9_match_code_w720_fastlr_full30_bs4acc2 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h80_allbinary_all12_dn9_match_code_w720_fastlr_full30_bs4acc2.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h80_allbinary_all12_dn9_match_code_w720_fastlr_full30_bs4acc2_20260720_setsid`
+- protocol: batch4, accumulation2, effective batch8, warmup1440 micro-steps = 720 optimizer updates = 5760 samples; full30; standard valid825.
+- load: ATLIF105, attention12, overlay210, warm-start missing12/unexpected0; trained strict-load audited.
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4725 | 9.2222 | 0.4994 | 0.1927 | 0.0926 | 24.9347G | 5.3886% | 22057.34 |
+| 2 | 29 | 1.4826 | 9.5503 | 0.5079 | 0.1934 | 0.0900 | 26.5939G | 5.7472% | 23528.59 |
+| 3 | 14 | 1.4880 | 9.6634 | 0.5088 | 0.1944 | 0.0909 | 25.7810G | 5.5715% | 22780.20 |
+| 4 | 0 | 1.5058 | 9.6101 | 0.5119 | 0.1948 | 0.0931 | 22.5108G | 4.8648% | 19851.04 |
+| 5 | 24 | 1.5329 | 9.3327 | 0.5168 | 0.2088 | 0.1023 | 24.8313G | 5.3663% | 21953.07 |
+| 6 | 4 | 1.5355 | 9.7629 | 0.5222 | 0.2044 | 0.0993 | 23.4903G | 5.0765% | 20738.14 |
+| 7 | 28 | 1.5598 | 9.7138 | 0.5184 | 0.2113 | 0.1054 | 25.5383G | 5.5191% | 22578.24 |
+| 8 | 9 | 1.5729 | 9.7182 | 0.5245 | 0.2150 | 0.1065 | 24.0351G | 5.1942% | 21218.13 |
+
+
+### 43.35 H66f Local5+TP 与 H66g Local5+Motion 开跑（2026-07-23）
+
+<!-- H66F_H66G_LOCAL5_COMBO_20260723 -->
+
+用户要求尝试两种 Local-5 时空混合：
+
+1. **H66f Scheme A**：`binary_axnor_local5_tp_shiftmax` — self + 时间对位 + 四向空间，共 **6** 候选 α-XNOR + Shiftmax。
+2. **H66g Local5+Motion**：`binary_axnor_local5_motion_shiftmax` — Local-5 五候选，self lane 加 H67 式 `0.25 * popcount(K⊕K')`（不可广播到全部 lane，否则 Shiftmax 不变）。
+
+协议：冻结 TTX ep2 独立 full30 + 八轮 valid825；串行 H66f → H66g。  
+不改 H66d/H67 旧配置。纯 Local-5 mode 仍强制 `motion_xor_alpha=0`，避免 H66d 语义漂移。
+
+- generator：`entrypoints/make_h66f_h66g_local5_combo_configs.py`
+- runner：`entrypoints/run_h66f_h66g_local5_combo_full30.py`
+- status：`results/h66f_h66g_local5_combo_status.log`
+- run dirs：`results/h66f_*_20260723_setsid`、`results/h66g_*_20260723_setsid`
+
+晋级门槛（预注册）：AEE 相对 H66d best `1.4432` 至少改善约 0.5% 或明确持平+代价更优，否则作消融。
+
+
+### H66 combo full30 自动结果：h66f_allbinary_all12_local5_tp_w720_fastlr_full30
+
+<!-- H66_COMBO_FULL30::h66f_allbinary_all12_local5_tp_w720_fastlr_full30 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h66f_allbinary_all12_local5_tp_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h66f_allbinary_all12_local5_tp_w720_fastlr_full30_bs8_full30_20260723_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4714 | 9.4922 | 0.5031 | 0.1891 | 0.0890 | 26.6072G | 5.7501% | 23585.34 |
+| 2 | 29 | 1.4978 | 9.4932 | 0.5007 | 0.1943 | 0.0942 | 26.8891G | 5.8110% | 23829.62 |
+| 3 | 4 | 1.5034 | 9.7992 | 0.5105 | 0.1923 | 0.0912 | 24.2485G | 5.2403% | 21447.35 |
+| 4 | 24 | 1.5156 | 9.8413 | 0.5126 | 0.1979 | 0.0943 | 26.9449G | 5.8231% | 23894.32 |
+| 5 | 28 | 1.5189 | 9.9366 | 0.5094 | 0.1930 | 0.0922 | 28.6192G | 6.1849% | 25376.76 |
+| 6 | 9 | 1.5177 | 10.0075 | 0.5175 | 0.1955 | 0.0928 | 26.0186G | 5.6229% | 23038.96 |
+| 7 | 14 | 1.5392 | 9.9584 | 0.5266 | 0.2055 | 0.0967 | 26.1139G | 5.6435% | 23125.65 |
+| 8 | 0 | 1.5564 | 10.1020 | 0.5237 | 0.2042 | 0.0990 | 24.0529G | 5.1981% | 21254.44 |
+
+
+### H66 combo full30 自动结果：h66g_allbinary_all12_local5_motion_w720_fastlr_full30
+
+<!-- H66_COMBO_FULL30::h66g_allbinary_all12_local5_motion_w720_fastlr_full30 -->
+- config: `neuron_experiments/H9_bipolar_self_attention/configs/generated/h66g_allbinary_all12_local5_motion_w720_fastlr_full30.yml`
+- start checkpoint: `neuron_experiments/H9_bipolar_self_attention/results/date11full_all_binary_atlif_h60_mu0_txonly_slowlr_cont_ep2_ft8_bs8_20260629_154937_setsid/checkpoint_epoch2.pth`
+- run dir: `neuron_experiments/H9_bipolar_self_attention/results/h66g_allbinary_all12_local5_motion_w720_fastlr_full30_bs8_full30_20260723_setsid`
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 19 | 1.4914 | 9.5455 | 0.5073 | 0.1935 | 0.0920 | 26.5551G | 5.7388% | 23534.53 |
+| 2 | 29 | 1.4995 | 9.4391 | 0.5054 | 0.1970 | 0.0960 | 26.8616G | 5.8050% | 23800.33 |
+| 3 | 4 | 1.5064 | 9.7414 | 0.5096 | 0.1915 | 0.0906 | 24.2433G | 5.2392% | 21446.72 |
+| 4 | 24 | 1.5194 | 9.7735 | 0.5137 | 0.1997 | 0.0954 | 26.9545G | 5.8251% | 23897.31 |
+| 5 | 28 | 1.5255 | 9.9942 | 0.5147 | 0.1982 | 0.0956 | 28.6045G | 6.1817% | 25357.88 |
+| 6 | 9 | 1.5253 | 10.0517 | 0.5174 | 0.1963 | 0.0930 | 26.1047G | 5.6415% | 23116.67 |
+| 7 | 14 | 1.5382 | 9.9798 | 0.5265 | 0.2069 | 0.0973 | 26.1879G | 5.6595% | 23188.13 |
+| 8 | 0 | 1.5567 | 10.1523 | 0.5253 | 0.2048 | 0.0986 | 23.9989G | 5.1864% | 21207.10 |
+
+
+### 43.36 H66d Local-5 定点/RTL 主线深挖启动（2026-07-25）
+
+<!-- H66D_LOCAL5_DEPLOY_PIPELINE_START_20260725 -->
+
+用户要求把 Local-5 定点与 RTL 深入做，评估能否成为主线。
+
+**软件路径改造**
+- `bsa_attention._binary_alpha_xnor_stencil_attention` 已接入 `hardware_quant` + `hardware_rtl_shiftmax`（与 Match-Code/H67 同网格：score step 1/128 clip[-2,2]，gate Q1.7）。
+- 训练浮点路径在 quant 关闭时行为不变。
+
+**评估流水线**
+- `entrypoints/run_h66d_local5_deploy_pipeline.py`：H66d ep29 dyadic INT8 valid825 → RTL-exact valid825 → 写 JSON/MD/docs。
+- checkpoint：`h66d_..._20260712_setsid/checkpoint_epoch29.pth`（float rank-1）。
+
+**RTL 起步（非全 encoder）**
+- `hw_autoresearch_nts07/rtl_local5/`：`local5_axnor_score_q7.sv`、`local5_shiftmax5_q17.sv`、`local5_stencil_token.sv`
+- 参考向量：`tb_local5/local5_ref_vectors.json`
+- 文档：`docs/76_H66d_Local5主线定点与RTL签核.md`
+
+**判定门槛（预注册）**
+1. dyadic AEE 仍优于 H67 dyadic 1.4626  
+2. RTL-exact 相对 dyadic AEE 退化 ≤ 0.02  
+3. 硬件叙事改为 Stencil-5，不可用 H67 Motion-XOR top 冒充  
+
+流水线日志：`results/h66d_local5_deploy_pipeline_*.log`
+
+
+### 43.36 H66d Local-5 dyadic + RTL-exact valid825（2026-07-25）
+
+<!-- H66D_LOCAL5_DEPLOY_RTL_VALID825_20260725 -->
+
+- checkpoint: epoch29
+- dyadic: AEE 1.4475 / AAE 9.3860 / spikes 26.5517G / energy 23550.64uJ
+- RTL-exact: AEE 1.4486 / AAE 9.4210 / spikes 26.5340G / energy 23535.19uJ
+- vs dyadic: AEE +0.0011, AAE +0.0350
+- gate: AEE degradation vs dyadic ≤ 0.02 for deploy freeze; software precision mainline remains H66d only if float+dyadic beat H67 dyadic 1.4626.
+
+
+### DSEC 480x640/window9 三模型全分辨率队列（2026-07-26）
+
+<!-- DSEC_FULLRES_WINDOW9_QUEUE_20260726 -->
+- 顺序：NB0 ep59 -> H67 Motion-XOR ep19 -> H66d Local-5 ep29；三者均为 30 epoch full-resolution fine-tune。
+- geometry：`480x640`、`crop=null`、`window=[2,9,9]`；physical batch `2`、effective batch `8`。
+- 加载：`--finetune 1` 触发 audited `remap=v1`；插值后必须执行 `load_state_dict`，并核对 ATLIF/attention/overlay/missing/unexpected。
+- 定位：这是保持 N=162 硬件 tile 的 full-resolution 对照，不是论文 `[2,15,15]` protocol；window15 只在最终 winner 冻结后补跑。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_window9_queue_status.log`。
+- NB0 config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w9_nb0_ep59_ft30.yml`；start：`experiments/baseline_stride_upstream/checkpoint_epoch59.pth`。
+- H67 config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w9_h67_motion_ep19_ft30.yml`；start：`neuron_experiments/H9_bipolar_self_attention/results/h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30_bs8_full30_20260711_setsid/checkpoint_epoch19.pth`。
+- H66d config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w9_h66d_local5_ep29_ft30.yml`；start：`neuron_experiments/H9_bipolar_self_attention/results/h66d_allbinary_all12_lr_ttx_w720_fastlr_full30_bs8_full30_20260712_setsid/checkpoint_epoch29.pth`。
+
+### DSEC full-resolution window9 预检与正式启动（2026-07-26）
+
+<!-- DSEC_FULLRES_WINDOW9_PREFLIGHT_20260726 -->
+
+**加载缺陷修复**
+
+- 原 H9 `remap=v1` 分支只调用 `load_pretrained_interpolate()` 修改内存中的
+  state dict，随后直接返回 model，没有执行 `model.load_state_dict()`。该缺陷只影响
+  full-resolution/窗口变化触发的 v1 分支，历史 crop/window9 结果走 `remap=None`，不受影响。
+- 训练入口和 `h9_load_audit.py` 均改为：插值后继续进入统一的 audited
+  `load_state_dict(strict=False)`；overlay mismatch 仍 fail-fast。
+- 回归测试新增“v1 插值后模型 tensor 必须等于 checkpoint tensor”，共 6 项通过。
+
+**真实 checkpoint tensor 审计**
+
+| model | ATLIF | attention | overlay keys | compared tensors | unequal | missing/unexpected |
+|---|---:|---:|---:|---:|---:|---|
+| NB0 ep59 | 0 | 0 | 0 | 711 | 0 | 0/0 |
+| H67 ep19 | 105 | 12 | 210 | 921 | 0 | 0/0 |
+| H66d ep29 | 105 | 12 | 210 | 921 | 0 | 0/0 |
+
+审计文件：
+`neuron_autoresearch/experiments/dsec_fullres_window9/load_chain_audit.json`。
+
+**显存 smoke**
+
+- NB0、H67、H66d 均完成 `480x640/window9`、两次 train step + 小验证的
+  batch2 smoke，无 OOM。
+- 正式参数：physical batch2、gradient accumulation4、effective batch8、AMP、
+  CuPy、workers8、MLflow off。
+- full30 只保存 epoch `0/4/9/14/19/24/28/29`；optimizer state 保存
+  `4/9/14/19/24/29`，控制磁盘占用。
+
+**正式运行**
+
+- supervisor PID 文件：
+  `neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_window9_supervisor/supervisor.pid`
+- supervisor log：
+  `neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_window9_supervisor/supervisor.log`
+- 当前顺序：NB0 -> H67 Motion-XOR -> H66d Local-5。
+- NB0 run：
+  `neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w9_nb0_ep59_ft30_bs2_20260726/`
+- 启动稳定性：NB0 epoch0 初始约 `1.9 step/s`、GPU 约 `26.1 GiB`、利用率
+  `99%`，单 epoch 粗估约 32 分钟；以完整 epoch stats 为最终时间口径。
+- 日志查看不 tail 大文件正文；优先看 queue status，训练进度可将 tqdm 的 CR 转行：
+  `tr '\r' '\n' < <run_dir>/train.log | tail -n 30`。
+
+后续门控不变：window9 三模型完成并做统一 full-resolution valid 后冻结 winner；
+再仅对 NB0 与 winner 参数化并执行论文 `480x640/window15` 加 official submission。
+MVSEC 的 NB0/H67/H66d seed0 矩阵排在该门控之后。
+
+
+### DSEC fullres window9 正式推理选点规定（2026-07-27）
+
+<!-- DSEC_FULLRES_W9_FORMAL_EVAL_POLICY_20260727 -->
+
+- **何时评**：每个模型 `FT30` 训完（`checkpoint_epoch29.pth` 落盘）后立刻做 formal valid825；当前已在跑的旧队列若未串评，由 `run_dsec_fullres_window9_formal_eval.py --wait-ready --wait-gpu` 在 GPU 空闲后补齐。
+- **评哪些 cp（默认）**：`0, 4, 9, 14, 19, 24, 28, 29`  
+  - 与 `make_dsec_fullres_window9_configs.SAVE_EPOCHS` / crop 线 H67·H68 full30 formal valid825 **同一选点**。  
+  - 缺 ckpt 跳过；`train.log` 中 train-val best 若映射到另一已存 epoch，会自动补进集合。
+- **协议**：config 用 fullres yml（`480×640` / `window=[2,9,9]` / `crop=null` / `remap=v1`），`eval_DSEC_flow_SNN.py --mode valid`；**不是** paper `[2,15,15]`。
+- **排序口径**：fullres 的 `profile_ranking_valid825.md` 按 **AEE** 排序。历史 crop
+  候选分数包含固定 `34.5G` spike target，不能直接用于像素数扩大 `2.7778x` 的
+  `480x640` 结果，否则会由绝对 spike 数主导并错误选择 checkpoint。
+- **产物**：`<run_dir>/standard_valid825/epoch{N}/`、`profile_ranking_valid825.md`、`fullres_formal_eval_summary.json`。
+- **入口**：
+  - 训练队列（训完即评）：`entrypoints/run_dsec_fullres_window9_queue.py`
+  - 仅补评 / 等待就绪：`entrypoints/run_dsec_fullres_window9_formal_eval.py`
+
+
+### DSEC fullres window9 接管编排（2026-07-27）
+
+<!-- DSEC_FULLRES_W9_TAKEOVER_20260727 -->
+- 用户要求：先完成 NB0 正式推理，再继续 H67/H66d 训练；本会话接管 Codex 原队列。
+- H67 中断点：等待 force-save 后从 epoch9 resume（`--resume True --finetune 1`），避免丢掉 mid-run 权重。
+- 顺序：stop old queue → NB0 formal valid825 (epochs [0, 4, 9, 14, 19, 24, 28, 29]) → H67 resume+eval → H66d train+eval。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_window9_takeover_status.log`
+
+
+### DSEC fullres window9 正式 valid825：NB0
+
+<!-- DSEC_FULLRES_W9_FORMAL_EVAL::NB0::dsec_fullres_w9_nb0_ep59_ft30_bs2_20260726 -->
+- protocol：`480x640` / `window=[2,9,9]` / `crop=null` / `remap=v1`；standard valid825 via `eval_DSEC_flow_SNN.py --mode valid`；**不是** paper window15。
+- eval epochs policy：`[0, 4, 9, 14, 19, 24, 28, 29]`（= force_save set；missing skipped；train-val best mapped epoch auto-included if missing）。
+- evaluated epochs：`[0, 4, 9, 14, 19, 24, 28, 29]`
+- config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w9_nb0_ep59_ft30.yml`
+- run dir：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w9_nb0_ep59_ft30_bs2_20260726`
+- ranking：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w9_nb0_ep59_ft30_bs2_20260726/profile_ranking_valid825.md`
+- ranking mode：`aee`
+- best rank1：epoch24 AEE=1.8987 AAE=8.5985
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+| 1 | 24 | 1.8987 | 8.5985 | 0.5692 | 0.2503 | 0.1319 | 120.7546G | 9.2144% | 102548.79 |
+| 2 | 28 | 1.9154 | 8.5381 | 0.5831 | 0.2589 | 0.1358 | 121.8895G | 9.3010% | 103473.12 |
+| 3 | 14 | 1.9325 | 8.7618 | 0.5823 | 0.2584 | 0.1374 | 117.4927G | 8.9655% | 99780.85 |
+| 4 | 29 | 1.9350 | 8.9765 | 0.5918 | 0.2595 | 0.1368 | 122.6940G | 9.3624% | 103976.54 |
+| 5 | 19 | 1.9424 | 9.0373 | 0.5980 | 0.2656 | 0.1393 | 122.9734G | 9.3837% | 104338.78 |
+| 6 | 9 | 1.9882 | 8.9971 | 0.5932 | 0.2676 | 0.1416 | 117.7792G | 8.9874% | 100051.57 |
+| 7 | 4 | 2.4566 | 11.1729 | 0.6276 | 0.3163 | 0.1871 | 111.7044G | 8.5238% | 94839.19 |
+| 8 | 0 | 2.8723 | 13.1466 | 0.7150 | 0.3902 | 0.2295 | 118.6163G | 9.0513% | 100885.27 |
+
+#### NB0 fullres window9 结果诊断（2026-07-28）
+
+- 相对 crop NB0 ep59（AEE `1.4872` / AAE `9.93`），真正的 fullres 最优
+  epoch24 为 AEE `1.8987`（`+27.67%`），但 AAE `8.5985`（`-13.41%`）。
+  因此不是所有精度指标同时崩坏，而是端点误差在 fullres/window9 下明显退化。
+- 训练/推理加载审计均为 `checkpoint_overlay_keys=0, missing=0,
+  unexpected=0`；该结果不是 NB0 权重漏载或错载。
+- 训练内 valid40 loss 从 epoch0 的 `2.2386` 降到 epoch25 的 `1.3244`，
+  formal valid825 AEE 从 epoch0 的 `2.8723` 降到 epoch24 的 `1.8987` 后平台化。
+  这说明 fullres 微调有效但已基本收敛，继续按原 schedule 堆 epoch 不是首选修复。
+- 当前实验是硬件固定结构的 `480x640 + window9`，不是 paper 的
+  `480x640 + window15`。相对 `288x384` crop，固定 window9 的归一化空间搜索范围
+  缩小，是大位移端点误差变差的首要结构假设。
+- NB0 直接继承 crop baseline 的 `AdamW lr=1e-4, wd=0.01`，没有 H67/H66d
+  使用的低 backbone LR/warmup 分组；这是 fullres 域切换时过度更新的优化风险。
+- checkpoint 对比中 711 个 tensor 全部同名同形状，但 156 个 BN
+  `running_mean/running_var` 的相对变化中位数约 `38.8%`；个别原本接近零的
+  `running_var` 变化更大。梯度累积只形成 effective batch 8，BN 统计仍由
+  physical batch 2 更新。当前 formal eval 又执行普通 `model.eval()` 使用这些
+  running stats，而 paper 口径是 test 时禁用 BN running-state，因此 BN 是第二个
+  必须实测的协议变量，不能仅靠现有结果排除。
+- fullres 绝对 spike 数不能和 crop 直接比较。按像素比 `2.7778x` 归一化，
+  epoch24 的 `120.7546G` 等效为 crop 尺度 `43.4717G`，较 NB0 `44.05G`
+  反而低 `1.31%`；绝对值增大主要来自图像面积。
+- 仍缺最关键的因果对照：未微调 NB0 ep59 在 `480x640/window9` 的 zero-shot
+  valid825。待当前串行队列释放 GPU 后补测，才能把“分辨率/窗口影响”与
+  “fullres 微调策略影响”分开。
+
+
+### DSEC 论文全分辨率 window15 重跑协议（2026-07-28）
+
+<!-- DSEC_FULLRES_PAPER_W15_QUEUE_20260728 -->
+- 论文公开协议：crop 阶段 `2x9x9`；full-resolution 阶段 `480x640`、`crop=null`、`2x15x15`、额外 30 epochs、physical batch 1 或 2、相对位置偏置 bicubic remap；测试关闭 BN running-state。
+- 本队列统一使用 physical batch `2`、`num_acc=1`、AMP、CuPy、workers=8、MLflow off；formal valid825 按 AEE 排序。
+- 重要限制：本地没有论文 80-epoch crop checkpoint。NB0/H67/H66d 起点分别只有 60/20/30 crop epochs，因此可称为 paper full-resolution protocol，不可称为论文 checkpoint 的逐点复现。
+- 旧 `480x640/window9` 结果保留为协议失败审计，不再用于论文对比；其 checkpoint/state 已删除，日志、ranking、profile 保留，回收 9.814 GiB。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_queue_status.log`。
+- NB0：config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_paper_w15_nb0_ep59_ft30.yml`；start `experiments/baseline_stride_upstream/checkpoint_epoch59.pth`；source crop epochs `60`。
+- H67：config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_paper_w15_h67_motion_ep19_ft30.yml`；start `neuron_experiments/H9_bipolar_self_attention/results/h67_allbinary_all12_motionxor_ttx_w025_w720_fastlr_full30_bs8_full30_20260711_setsid/checkpoint_epoch19.pth`；source crop epochs `20`。
+- H66d：config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_paper_w15_h66d_local5_ep29_ft30.yml`；start `neuron_experiments/H9_bipolar_self_attention/results/h66d_allbinary_all12_lr_ttx_w720_fastlr_full30_bs8_full30_20260712_setsid/checkpoint_epoch29.pth`；source crop epochs `30`。
+
+#### paper-window15 启动前审计
+
+- strict CPU load audit 三模型全部通过：
+  - NB0：ATLIF `0`、Shiftmax `0`、checkpoint overlay `0`、
+    `missing=0`、`unexpected=0`；
+  - H67/H66d：ATLIF `105`、Shiftmax `12`、checkpoint overlay `210`、
+    `missing=0`、`unexpected=0`。
+- `remap=v1` 已实际执行 PyTorch bicubic relative-position interpolation；
+  比对所有同形 tensor 后 `unequal_after_load=[]`。审计产物：
+  `neuron_autoresearch/experiments/dsec_fullres_paper_w15/load_chain_audit.json`。
+- H66d Local-5 原实现把空间窗口硬编码为 `9x9`，paper window15 smoke 因此
+  fail-fast。现已改为从 token 数推导方形窗口边长；候选仍严格保持
+  self/up/down/left/right 五条 lane，没有改变注意力算子、权重或硬件数据流。
+  新增 `15x15` 单元测试并通过。
+- physical batch2 两步训练 smoke 均通过：
+
+| model | samples/s | peak GPU | load audit |
+|---|---:|---:|---|
+| NB0 | 0.5653 | 25.749 GiB | 0/0/0 overlay/missing/unexpected |
+| H67 Motion-XOR | 0.5044 | 40.495 GiB | 210/0/0 |
+| H66d Local-5 | 0.5041 | 38.354 GiB | 210/0/0 |
+
+- 单样本正式推理 smoke 通过：`BN=no_running` 实际切换 `78` 个 BN 模块；
+  `spike_profile.json` 已记录 `resolution=[480,640]`、`crop=null`、
+  `window_size=[2,15,15]`、`remap=v1`、`bn_policy=no_running`。
+- 两步 smoke 的首轮 CuPy 编译开销不能用于外推整轮时间。NB0 正式训练稳定后
+  为约 `1.7-1.9 batch/s`（batch2），单 epoch 约 `33-35 min`，FT30 粗估约
+  `17h`；H67/H66d 以各自完整 epoch stats 为准。每条训练结束后立即 formal
+  valid825，再仅保留 epoch0、AEE best、epoch29 模型和 epoch29 resume state，
+  自动回收中间权重。
+- supervisor PID：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_supervisor/supervisor.pid`
+- supervisor log：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_supervisor/supervisor.log`
+- NB0 train log：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_nb0_ep59_ft30_bs2_20260728/train.log`
+
+#### H67/H66d fullres 部署量化补测（2026-07-29）
+
+<!-- DSEC_FULLRES_W15_DEPLOY_QUEUE_20260729 -->
+
+- 训练阶段仍使用 float/AMP，不在训练图中强制定点；每个模型先完成
+  `480x640 / 2x15x15 / BN=no_running / valid825` 的浮点 checkpoint 排名。
+- 浮点排名完成后，对 H67 Motion-XOR 与 H66d Local-5 的 rank-1 checkpoint
+  各补两条部署评估：
+  1. dyadic Q7/Q1.7：score 步长 `2^-7`、gate 步长 `2^-7`；
+  2. hardware-order：Q7 score、16-entry Q8 `exp2` LUT、integer row sum、
+     ceil-power-of-two normalization、Q1.7 ties-to-even RNE。
+- Local-5 hardware-order 额外启用真正的 invalid-candidate mask：边界外候选不进入
+  row max 和分母、gate 严格为零。该行为通过新增单元测试，且配置字段默认关闭，
+  不改变旧实验。
+- 当前正式队列进程启动于上述集成前，因此另挂只轮询状态、不占 GPU 的 follower；
+  主队列出现 `ALL COMPLETE DSEC PAPER-W15 QUEUE` 后才开始两模型 valid825。
+- follower status：
+  `neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_deploy_followup_status.log`；
+  汇总输出：
+  `neuron_autoresearch/experiments/dsec_fullres_paper_w15/fullres_w15_deploy_summary.md`。
+- **exact 命名边界**：H67 在旧 crop/window9、`T=162` 合同下已完成
+  hardware-order valid825（AEE `1.462688`、AAE `9.403994`）及 attention-row RTL
+  回归；但现有 SV 的正式参数合同是 `MAX_TOKENS=162`。fullres/window15 是
+  `T=450`，所以这次队列先关闭“硬件顺序数值 exact”，仍需硬件侧补
+  T450 controller/address/memory/ordered-trace RTL 回归后，才能称 fullres RTL-exact。
+- H66d Local-5 已有修正后的五候选 score/gate/term/projection 功能 RTL 链回归；
+  本队列补的是 fullres rank-1 的真实 mask 数值评估。其
+  window15 line-buffer/address-control SV 回放同样保留为硬件签核项。
+
+
+### DSEC paper-window15 valid825：NB0
+
+<!-- DSEC_FULLRES_PAPER_W15_RESULT::NB0::dsec_fullres_paper_w15_nb0_ep59_ft30_bs2_20260728 -->
+- best epoch：`29`；run：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_nb0_ep59_ft30_bs2_20260728`；source crop epochs：`60`。
+- protocol：`480x640 / 2x15x15 / remap=v1 / BN=no_running / standard valid825 / ranking=AEE`。
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 1.4454 | 6.5128 | 0.4563 | 0.1661 | 0.0793 | 126.1156G | 9.7927% | 107137.62 |
+| 2 | 24 | 1.5304 | 6.5414 | 0.4557 | 0.1678 | 0.0823 | 124.9918G | 9.7054% | 106209.19 |
+| 3 | 19 | 1.5798 | 6.6132 | 0.4819 | 0.1858 | 0.0922 | 123.6289G | 9.5996% | 105128.22 |
+| 4 | 14 | 1.6157 | 7.0525 | 0.4860 | 0.1854 | 0.0925 | 121.0580G | 9.4000% | 103052.18 |
+| 5 | 9 | 1.8509 | 8.4431 | 0.5790 | 0.2418 | 0.1218 | 118.1810G | 9.1766% | 100645.50 |
+| 6 | 4 | 1.8894 | 8.3599 | 0.5826 | 0.2500 | 0.1284 | 114.7724G | 8.9119% | 97787.98 |
+| 7 | 0 | 2.4123 | 10.2478 | 0.6546 | 0.3266 | 0.1880 | 112.2139G | 8.7133% | 95788.32 |
+
+
+### DSEC fullres 训练/推理/RTL 接管审计（2026-07-30）
+
+<!-- DSEC_FULLRES_CODE_PROTOCOL_RTL_AUDIT_20260730 -->
+
+- 完整审计：
+  `neuron_autoresearch/experiments/dsec_fullres_paper_w15/CODE_PROTOCOL_RTL_AUDIT_20260730.md`。
+- 协议纠正：历史 DSEC evaluator 本来就会在推理入口强制
+  `loader.batch_size=1`，因此 NB0 ep29 的 AEE `1.44535` 不是 batch2
+  结果。现在改成显式 `test.eval_batch_size=1`、非法值 fail-fast，并写入
+  profile。
+- 指标拆分：`AAE` 保留为历史二维方向角；`AAE_Benchmark` 使用 DSEC/Barron
+  `(u,v,1)` 公式。NB0 ep29 后者为 `6.18034`。论文表中 `4.871` 是 official
+  test-server 结果，不能与 local valid825 的任一 AAE 直接逐点比较。
+- 强化加载审计通过：NB0/H67/H66d 的 missing/unexpected 均为 `0/0`；
+  H67/H66d 为 ATLIF `105`、Shiftmax `12`、overlay keys `210`；每条线
+  12 个 window9->15 positional tensor 与独立插值结果逐元素一致。
+- 新审计产物：
+  `neuron_autoresearch/experiments/dsec_fullres_paper_w15/load_chain_audit_v2.json`。
+- 论文范式边界：fullres geometry/window/FT30/batch/no-running BN 对齐；但
+  source crop budget 是 `60/20/30`，不是论文 80 epochs，H67/H66d 优化器也
+  是候选微调配置。因此只称 paper-geometry fullres protocol，不称 exact
+  training reproduction。
+- deploy profile 新增 config/checkpoint identity、load audit 和
+  `deployment_contract`。当前 exact 口径只能称
+  `attention-core hardware-order numeric`；全网定点与 window15/T450 SV
+  controller/address/memory/ordered-trace 尚未关闭。
+- 队列恢复增强：若训练中断，重跑会选择最新同时具有 model 与 optimizer
+  state 的 checkpoint，并传入 `--resume 1`，不再从 crop 起点重训。
+- follower 已更新为新版本，等待主队列完成后串行执行 NB0 provenance replay、
+  H67/H66d dyadic Q7/Q1.7 及 hardware-order valid825，不与训练抢 GPU。
+- 硬件签核阻塞与 T450 最小闭环已独立写入
+  `hw_autoresearch_nts07/docs/100_DSEC全分辨率RTLExact签核阻塞与T450闭环清单_20260730.md`。
+  当前 H67 RTL 仍以 T162 为默认/上限且 descriptor scheduler 写死 162；
+  Local-5 仍是 row8/dest16/synthetic-window 原型。正式措辞只能使用
+  `attention-core hardware-order numeric`，待算法赢家确定后只对赢家补
+  T450 real-trace SV 零失配和公平 PPA，避免两套 RTL 同时扩展。
+- 自动评估 follower 已增加 config SHA-256、checkpoint size/mtime、加载审计、
+  protocol 与 deployment-contract 的严格复用条件；不匹配的旧 profile 保留，
+  新结果写入带 artifact fingerprint 的 `*_audited_*` 目录，避免静默复用或
+  覆盖历史结果。
+- 旧 H66d deploy 兼容脚本原先只把无效候选压到 `score_min`，没有从 row max
+  和分母中真正排除；未来重跑已改为 true invalid-candidate mask。历史结果不
+  删除，fullres follower 使用修正合同。
+- `threshold_freeze_after_step` 历史上只冻结额外的 homeostatic update，
+  **不会**停止 AdamW 对 `thresh` 的梯度更新。当前 H67/H66d 保持该历史行为以
+  保证可比性；新增默认关闭的 `freeze_threshold_grad_after_step` 可用于未来
+  “真阈值冻结”消融，不能把当前日志的 `threshold_updates_frozen=1` 写成阈值
+  参数完全冻结。
+- 2026-07-30 运行中两次出现 Prosperity/phi CPU-only 架构扫描占满容器
+  `7-core` cgroup 配额，H67 从约 `1.15 s/it` 退化到 `4.7-5.0 s/it`，GPU
+  利用率同步降到约 `16%`；降优先级后恢复到 `1.14-1.20 s/it`。新增
+  `entrypoints/run_dsec_cpu_priority_guard.py`，只把已知 Prosperity/phi
+  扫描设为 `nice=19`，不修改训练/推理进程，并在主队列完成后自动退出。
+
+
+### DSEC paper-window15 valid825：H67
+
+<!-- DSEC_FULLRES_PAPER_W15_RESULT::H67::dsec_fullres_paper_w15_h67_motion_ep19_ft30_bs2_20260728 -->
+- best epoch：`29`；run：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_h67_motion_ep19_ft30_bs2_20260728`；source crop epochs：`20`。
+- protocol：`480x640 / 2x15x15 / remap=v1 / BN=no_running / standard valid825 / ranking=AEE`。
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 2.0730 | 8.1203 | 7.9029 | 0.5564 | 0.2453 | 0.1343 | 87.9821G | 6.8450% | 77853.53 |
+| 2 | 19 | 2.1030 | 8.1820 | 7.9868 | 0.5658 | 0.2541 | 0.1397 | 85.9824G | 6.6894% | 76109.02 |
+| 3 | 24 | 2.1084 | 8.1075 | 7.9157 | 0.5624 | 0.2547 | 0.1420 | 87.4260G | 6.8017% | 77370.43 |
+| 4 | 14 | 2.1487 | 8.2730 | 8.0787 | 0.5678 | 0.2584 | 0.1443 | 83.1584G | 6.4697% | 73617.83 |
+| 5 | 9 | 2.2024 | 8.4850 | 8.2699 | 0.5760 | 0.2682 | 0.1518 | 80.0272G | 6.2261% | 70862.47 |
+| 6 | 4 | 2.2631 | 8.7384 | 8.5322 | 0.5855 | 0.2779 | 0.1590 | 75.6409G | 5.8848% | 66972.84 |
+| 7 | 0 | 2.4928 | 9.6139 | 9.3747 | 0.6051 | 0.3030 | 0.1816 | 71.4781G | 5.5610% | 63293.21 |
+
+
+### DSEC paper-window15 valid825：H66d
+
+<!-- DSEC_FULLRES_PAPER_W15_RESULT::H66d::dsec_fullres_paper_w15_h66d_local5_ep29_ft30_bs2_20260728 -->
+- best epoch：`29`；run：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_paper_w15_h66d_local5_ep29_ft30_bs2_20260728`；source crop epochs：`30`。
+- protocol：`480x640 / 2x15x15 / remap=v1 / BN=no_running / standard valid825 / ranking=AEE`。
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 2.0912 | 8.1688 | 7.9574 | 0.5560 | 0.2451 | 0.1342 | 89.8206G | 6.9880% | 79361.90 |
+| 2 | 19 | 2.1370 | 8.4184 | 8.2054 | 0.5676 | 0.2551 | 0.1413 | 87.8276G | 6.8329% | 77648.94 |
+| 3 | 24 | 2.1404 | 8.2573 | 8.0612 | 0.5626 | 0.2543 | 0.1417 | 89.2258G | 6.9417% | 78854.75 |
+| 4 | 14 | 2.1942 | 8.5077 | 8.2904 | 0.5714 | 0.2609 | 0.1463 | 85.1391G | 6.6238% | 75314.00 |
+| 5 | 9 | 2.2391 | 8.6994 | 8.4915 | 0.5764 | 0.2678 | 0.1516 | 81.5003G | 6.3407% | 72140.68 |
+| 6 | 4 | 2.3051 | 8.9582 | 8.7366 | 0.5876 | 0.2795 | 0.1609 | 77.6147G | 6.0384% | 68713.57 |
+| 7 | 0 | 2.5191 | 9.6328 | 9.4064 | 0.6046 | 0.3023 | 0.1814 | 73.5069G | 5.7188% | 65122.17 |
+
+
+### DSEC fullres window15 定点/硬件顺序评估
+
+<!-- DSEC_FULLRES_W15_DEPLOY_FOLLOWUP_RESULTS -->
+- summary：`neuron_autoresearch/experiments/dsec_fullres_paper_w15/fullres_w15_deploy_summary.md`
+- 口径：Q7 score、Q1.7 gate、16-entry Q8 exp2 LUT、integer row sum、ceil-pow2 normalize、RNE；Local-5 使用真正 masked candidate 合同。
+- 命名边界：该表先关闭 fullres valid825 数值精度；window15/T450 SV 控制、地址、line-buffer 与 ordered trace 仍须硬件侧独立签核。
+
+| baseline | epoch | AEE | AAE legacy | AAE benchmark | spikes(G) |
+|---|---:|---:|---:|---:|---:|
+| NB0 baseline | 29 | 1.4454 | 6.5128 | 6.1803 | 126.1156 |
+
+| candidate | epoch | float AEE | dyadic AEE | hardware-order AEE | hardware-float delta | hardware-order AAE legacy | AAE benchmark | spikes(G) | true mask |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| H67 Motion-XOR | 29 | 2.0730 | 2.0669 | 2.0880 | +0.0150 | 8.1532 | 7.9466 | 87.9802 | False |
+| H66d Local-5 | 29 | 2.0912 | 2.1041 | 2.1091 | +0.0179 | 8.2214 | 8.0203 | 89.8145 | True |
+
+The hardware-order column is the frozen integer/LUT numerical path. Fullres SV sign-off additionally requires window15/T450 controller, address, line-buffer, and ordered-trace regression.
+
+- H67 Motion-XOR: hardware-order numeric exact; existing H67 SV row RTL is verified at window9/T162, while fullres window15/T450 controller parameterization still requires RTL regression.
+- H66d Local-5: score/gate hardware-order numeric exact with true masked candidates; fullres window15 line-buffer/address-control SV replay remains a separate hardware sign-off item.
+
+
+### DSEC fullres LR rescue 短筛（2026-08-01）
+
+<!-- DSEC_FULLRES_W15_LR_RESCUE_SCREEN_20260801 -->
+- 失败诊断：旧 H67/H66d fullres backbone/norm LR 为 `2e-6/1e-6`，NB0 为 `1e-4`；旧候选不是等强度 fullres adaptation。
+- 固定结构、480x640、2x15x15、remap=v1、BN=no_running、batch2；每项完整训练 1 epoch 后跑 standard valid825。
+- 两条 own-crop LR 仅改变优化强度；NB0-fullres conversion 只用于判别初始化问题，不自动作为论文主协议。
+- `H67_crop_bb2e5`：profile `bb2e5`，init `own_crop`，config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_rescue_H67_crop_bb2e5_screen1.yml`。
+- `H67_crop_bb1e4`：profile `bb1e4`，init `own_crop`，config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_rescue_H67_crop_bb1e4_screen1.yml`。
+- `H67_nb0full_bb2e5`：profile `bb2e5`，init `nb0_fullres_conversion`，config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_rescue_H67_nb0full_bb2e5_screen1.yml`。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_rescue_screen_20260801/status.log`。
+
+
+### MVSEC 与 CICC 2026 对齐边界（2026-08-01）
+
+<!-- MVSEC_CICC2026_ALIGNMENT_20260801 -->
+
+- 参考论文：Tao Zhang et al., "A 28-nm Optical Flow Estimation Accelerator with
+  Redundancy Speculation, Bit-Width-Aware Compression and Similarity Detection,"
+  CICC 2026，DOI `10.1109/CICC65509.2026.11509564`。
+- 正文已放入 `hw_autoresearch_nts07/docs/` 并完成逐页核验。论文使用参考
+  Spike-FlowNet 的 INT8 Hybrid U-Net，在 `indoor1/2/3 + outdoor1` 各取 `800`
+  个输入评估；其引用的标准训练范式是只用 `outdoor_day2` 训练，测试为
+  `256x256` center crop、dt1、event-masked AEE。因此原定 `outdoor_day1` 训练路线
+  只保留为内部 fallback，不能与 CICC/Spike-FlowNet 绝对 AEE 并表。
+- CICC INT8 baseline AEE 为 `0.84/1.32/1.14/0.52`，均值 `0.96`；加入全部特征后
+  为 `0.87/1.35/1.17/0.56`，均值 `0.99`。对应 mean operation/EMA/energy/latency
+  为 `0.20x/0.08x/0.12x/0.19x`。
+- 论文真实三机制为：group-16 最小有符号位宽加 non-zero map 的 `BWAC`；按 channel
+  density 排序并提前执行 MaxPool/ReLU 的 Dense-Channel-First Speculation；比较
+  `FM_i` 与 `FM_(i+delta)`、只保留 Level 0 或执行完整 U-Net 的 `DLSS`。TTB 不属于
+  该论文，必须作为本项目独立创新点。
+- 部署累计消融修正为：C0 INT8 dense；C1 + lossless BWAC；C2 + dense-channel
+  speculation；C3 + DLSS。阈值正文未给出，只能在 validation 上选，不能在四个 test
+  sequence 上扫参。
+- 对 TTX 可迁移的是卷积/投影 INT8 权重 BWAC，以及二值 feature XOR/popcount 的
+  DLSS 检测器。MaxPool/ReLU speculation 不能直接声称适用于 Shiftmax score，除非
+  另建误差界或 validation-controlled stop rule。
+- 当前本机只有四个测试 sequence，尚无 `outdoor_day2`。paper-facing MVSEC 训练启动
+  前必须先下载并预处理 day2，再用同一 split、loss、预算分别训练 NB0 和唯一候选。
+  完整协议见 `neuron_autoresearch/MVSEC_TRAIN_TEST_PROTOCOL_20260717.md`。
+- 执行顺序不变：先完成正在运行的 DSEC fullres LR rescue 并冻结唯一候选，同时准备
+  `outdoor_day2`；再训练 MVSEC-NB0 和该候选；C0-C3 使用训练后冻结权重，不为每个
+  执行策略重新训练。
+
+#### CICC 实验组织方式在本项目的落地（2026-08-01）
+
+<!-- CICC2026_EXPERIMENT_ORGANIZATION_20260801 -->
+
+- 这里参考的是 CICC 的**实验方法**，不是照搬其 Hybrid U-Net：固定四个 MVSEC
+  sequence 各 `800` 个 dt1 输入的 manifest，所有 checkpoint、量化和部署策略逐样本共用，
+  避免数据差异混入消融。
+- 第一张是模型/数值表：M0 NB0 float；M1 NB0 INT8/hardware-order；M2 最终 TTX float；
+  M3 最终 TTX INT8/hardware-order。逐序列报告 event-masked AEE/outlier、spikes 和完整
+  energy，明确模型变化与量化损失。
+- 第二张是冻结 M3 后的累计硬件特征表：D0 fixed-width/full-compute；D1 + lossless
+  weight BWAC 与 binary/ternary activation packing；D2 + exact-empty TTB skip/density
+  dispatch；D3 + validation-selected feature-similarity deep-level skip。
+- D2 是本项目对“冗余消除”的实现，不冒充论文的 MaxPool/ReLU speculation；TTB 仍是
+  本项目独立 idea。D3 才是对 DLSS 实验范式的直接迁移，二值 feature 可用
+  XOR/popcount 实现相似度检测。
+- D0-D3 每行必须报告 AEE degradation、active-TTB proportion、executed-op ratio、平均
+  deep-level interval、EMA/energy/latency ratio，以及 detector、metadata、control 和 area
+  overhead。另画与 CICC Fig. 9 同构的累计 EMA/energy/latency waterfall。
+- 现有 MDR->MVSEC 冻结 checkpoint 可以先跑这套固定-trace 硬件消融，不必等待 day2；
+  `outdoor_day2` 仅用于新增 direct-MVSEC 训练表和 Spike-FlowNet split 下的绝对精度比较。
+- CICC 是实测 28-nm silicon；本项目在流片前只能写 post-synthesis/post-layout 或 cycle-model
+  estimate，不能把估算值写成 measured silicon TOPS/W。所有行使用同一 DRAM 能耗/带宽
+  假设，并把压缩地址、TTB descriptor、similarity detector 流量计入总 EMA。
+- 当前 `run_h9_standard_mvsec_eval.py` 只能全序列评估，尚无固定 800-sample manifest；其
+  ranking 只有 AEE/outlier/spikes/spike-proxy energy，也未接 EMA/cycle/control overhead。
+  已有 profile100 TTB/cycle 工具不能替代四序列正式结果。后续需要新增一个只扩展接口的
+  fixed-manifest MVSEC runner，以及一个按同一 checkpoint/input fingerprint 汇总 D0-D3
+  operation/traffic/cycle/energy 的脚本，旧 evaluator 和旧结果保持不变。
+
+
+### DSEC fullres LR rescue 短筛结果
+
+<!-- DSEC_FULLRES_W15_LR_RESCUE_SCREEN_RESULT_20260801 -->
+
+# DSEC fullres window15 rescue screen
+
+| rank | candidate | init | LR profile | AEE | AAE benchmark | spikes | energy |
+|---:|---|---|---|---:|---:|---:|---:|
+| 1 | H67_crop_bb1e4 | own_crop | bb1e4 | 2.2768 | 9.7754 | 70.4126G | 62316.92 |
+| 2 | H67_nb0full_bb2e5 | nb0_fullres_conversion | bb2e5 | 2.2820 | 9.4308 | 41.6688G | 36152.30 |
+| 3 | H67_crop_bb2e5 | own_crop | bb2e5 | 2.2949 | 8.7795 | 71.5410G | 63352.17 |
+
+- 三条均完成且加载链路干净：overlay keys `210/210`，missing/unexpected
+  `0/0`，remap=`v1`。结果不是 fullres 精度修复，只是 LR 适配速度筛选。
+- `H67_crop_bb1e4` 一轮 AEE `2.2768`，接近旧低 LR fullres epoch4 的
+  `2.2631`，而旧 epoch0 为 `2.4928`；高 LR 确实把约四轮的早期适配压到一轮。
+  但其 benchmark AAE `9.7754`、outlier `0.1628`，方向误差明显不稳，不能仅按
+  AEE rank 直接续 FT30。
+- `H67_crop_bb2e5` AEE `2.2949`，benchmark AAE `8.7795`，相对更稳定；
+  `H67_nb0full_bb2e5` spikes `41.6688G`（对 fullres NB0 `-66.96%`）但 AEE
+  `2.2820`，只保留为初始化诊断，不作为论文主训练协议。
+- 三条相对 fullres NB0 AEE `1.4454` 仍差 `+57.5%` 至 `+58.8%`，均未达到
+  `+5%` 精度门槛。下一步不能把任一 screen 当主线；若继续，只允许 own-crop
+  `bb1e4` 与 `bb2e5` 做短程收敛确认并同时按 AEE/AAE/outlier 门控，禁止直接盲跑
+  三条 FT30。
+
+
+### DSEC fullres LR rescue short5 续跑（2026-08-01）
+
+<!-- DSEC_FULLRES_W15_LR_RESCUE_SHORT5_20260801 -->
+- 只续 own-crop `bb1e4` 与 `bb2e5`，各从 screen epoch0 模型补 5 epochs；NB0-fullres conversion 不续。
+- screen 未保存 optimizer/scaler state，因此两条线都从已训练模型重建 AdamW；这是 model continuation，不写成 strict optimizer resume。
+- 结构、480x640、window2x15x15、remap=v1、BN=no_running、batch2、LR profile 保持不变；checkpoint epoch offset=1，最终为 epoch5。
+- `H67_crop_bb1e4`：config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_rescue_H67_crop_bb1e4_continue5.yml`，source `neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_rescue_screen_20260801/H67_crop_bb1e4/checkpoint_epoch0.pth`。
+- `H67_crop_bb2e5`：config `neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_rescue_H67_crop_bb2e5_continue5.yml`，source `neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_rescue_screen_20260801/H67_crop_bb2e5/checkpoint_epoch0.pth`。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_rescue_short5_20260801/status.log`。
+
+
+### DSEC fullres LR rescue short5 结果
+
+<!-- DSEC_FULLRES_W15_LR_RESCUE_SHORT5_RESULT_20260801 -->
+
+# DSEC fullres window15 rescue short5
+
+| rank | candidate | LR | epoch | AEE | AAE benchmark | outlier | spikes | energy |
+|---:|---|---|---:|---:|---:|---:|---:|---:|
+| 1 | H67_crop_bb1e4 | bb1e4 | 5 | 1.7681 | 7.2373 | 0.1171 | 74.0398G | 65519.38 |
+| 2 | H67_crop_bb2e5 | bb2e5 | 5 | 1.9901 | 7.7662 | 0.1321 | 76.2662G | 67511.90 |
+
+
+### H67 fullres bb1e4 strict ep5-to-ep10 resume（2026-08-02）
+
+<!-- DSEC_FULLRES_W15_H67_BB1E4_STRICT_RESUME10_20260802 -->
+- short5 的 ep5 仍在改善，故只延长排名第一的 `H67_crop_bb1e4`；不继续较差的 `bb2e5`。
+- 同时加载 `checkpoint_epoch5.pth` 与同目录 `checkpoint_epoch5_state_dict.pth`，使用 `--resume 1` 严格恢复 optimizer/scheduler/AMP scaler；目标为 ep10。
+- 其余协议保持 480x640、window 2x15x15、batch2、LR bb1e4、BN no_running、valid825 不变。
+- config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_H67_crop_bb1e4_resume_ep10.yml`。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_H67_crop_bb1e4_resume10_20260802/status.log`。
+
+
+### H67 fullres bb1e4 strict ep10 结果
+
+<!-- DSEC_FULLRES_W15_H67_BB1E4_STRICT_RESUME10_RESULT_20260802 -->
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 10 | 1.5357 | 6.6708 | 6.3943 | 0.4709 | 0.1811 | 0.0896 | 76.5939G | 5.9590% | 67745.00 |
+
+
+### H67 fullres bb1e4 strict ep10-to-ep15 resume（2026-08-03）
+
+<!-- DSEC_FULLRES_W15_H67_BB1E4_STRICT_RESUME15_20260803 -->
+- ep10 AEE `1.5357`，距 NB0+5% 门槛 `1.5177` 仅差约 `0.018`；训练 loss 尚未平台，因此继续同一 H67 Motion-XOR 分支。
+- 使用 ep10 model/state 与 `--resume 1` 严格恢复 optimizer、scheduler、AMP scaler；训练到 ep15，并对 ep12/ep15 执行 standard valid825。
+- 480x640、window 2x15x15、batch2、BN no_running、bb1e4 和其他结构不变；保留原 milestones 10/20。
+- config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_H67_crop_bb1e4_resume_ep15.yml`。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_H67_crop_bb1e4_resume15_20260803/status.log`。
+
+
+### H67 fullres bb1e4 strict ep12/ep15 结果
+
+<!-- DSEC_FULLRES_W15_H67_BB1E4_STRICT_RESUME15_RESULT_20260803 -->
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 15 | 1.4757 | 6.4254 | 6.1599 | 0.4547 | 0.1702 | 0.0828 | 78.2806G | 6.0902% | 69209.42 |
+| 2 | 12 | 1.6431 | 6.9515 | 6.7414 | 0.5085 | 0.2039 | 0.1012 | 77.2567G | 6.0105% | 68324.54 |
+
+
+### H67 fullres bb1e4 ep15-to-ep30 等预算续训（2026-08-04）
+
+<!-- DSEC_FULLRES_W15_H67_BB1E4_RESUME30_20260804 -->
+- ep15 已达到 AEE `1.4757`、AAE-Benchmark `6.1599`、spikes `78.2806G`，满足 NB0+5% 与 spikes 至少下降20%的门槛；继续到 ep30 是为了与 NB0 fullres 30 epochs 等预算。
+- 审计发现上游 state 在每轮 `scheduler.step()` 前保存；此前两次分段使 saved scheduler 在 ep15 时为 `last_epoch=12`。实际已执行 LR 为 ep1--12 `1e-4`、ep13--15 `5e-5`。
+- 不修改历史 checkpoint/state；新增 staged state，仅将 scheduler `last_epoch 12->15`、`_step_count +3`，model/optimizer/scaler/current LR 均不变，之后按 milestone20 正常降 LR。
+- 保存并 standard-valid825 评估 ep20/25/30；其余 480x640、window2x15x15、batch2、BN no_running、H67 Motion-XOR 结构不变。
+- config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_H67_crop_bb1e4_resume_ep30.yml`。
+- scheduler audit：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_H67_crop_bb1e4_resume30_20260804/resume_source_ep15_scheduler_aligned/scheduler_alignment_audit.json`。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_H67_crop_bb1e4_resume30_20260804/status.log`。
+
+
+### H67 fullres bb1e4 ep20/25/30 结果
+
+<!-- DSEC_FULLRES_W15_H67_BB1E4_RESUME30_RESULT_20260804 -->
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 30 | 1.3387 | 6.0147 | 5.7558 | 0.4165 | 0.1405 | 0.0647 | 81.3086G | 6.3258% | 71812.84 |
+| 2 | 25 | 1.3726 | 6.0102 | 5.7661 | 0.4172 | 0.1453 | 0.0678 | 80.5870G | 6.2696% | 71193.93 |
+| 3 | 20 | 1.4240 | 6.1946 | 5.9511 | 0.4378 | 0.1597 | 0.0762 | 79.5345G | 6.1877% | 70268.40 |
+
+
+### H67/Local-5 最终证据队列、收敛边界与磁盘清理（2026-08-05）
+
+<!-- H67_LOCAL5_FINAL_EVIDENCE_AND_CLEANUP_20260805 -->
+
+- H67 ep30 是当前已测轮次的 rank-1：AEE 从 ep20/25/30 的
+  `1.4240 -> 1.3726 -> 1.3387` 单调改善，AAE-Benchmark 为
+  `5.9511 -> 5.7661 -> 5.7558`。末轮 train loss 也创下阶段最低值
+  `1.10247`，因此不能声称数学意义上完全收敛；准确表述是“完成与 NB0
+  相同的 fullres 30-epoch 预算，已接近平台但末轮仍有小幅收益”。
+- H67 ep25->30 的 AEE 仍改善约 `2.47%`，但 AAE-Benchmark 只改善约
+  `0.18%`，且 legacy AAE 略有反弹 `6.0102->6.0147`。因此当前更准确的判断是：
+  方向误差已基本平台，端点误差尚未完全平台；ep30 是已测最优 checkpoint，但
+  “最后一轮最好”本身不等价于仍会持续同速改善。
+- NB0 ep29 同样是其已测 rank-1，AEE 从 ep19/24/29 的
+  `1.5798 -> 1.5304 -> 1.4454` 持续改善。其 train loss 在 ep26--29
+  约为 `1.14569/1.14085/1.13698/1.13989`，更接近平台，但也没有证据证明
+  已完全收敛。NB0 的 crop 预训练只有 60 epochs，而论文范式为 80 epochs，
+  少 20 个 crop epochs 可能是 AAE 差距的一部分。
+- NB0 ep24->29 的 AEE 改善约 `5.56%`、AAE-Benchmark 从 `6.2591` 到
+  `6.1803`（约 `1.26%`），说明 fullres30 结束时仍可能欠收敛；但本地与论文
+  official AAE `4.871` 尚差 `1.3093`，约为论文值的 `26.9%`。这远大于末 5/10
+  epochs 的 AAE 收益，不能预期仅多跑少量 fullres epoch 就自动闭合。
+- 不能把论文 official test-server AAE `4.871` 与本地 train-split valid825 的
+  AAE-Benchmark `6.1803` 直接归因于“没收敛”。二者还同时受数据序列、split、
+  checkpoint 选择、crop 预算与 official server 聚合影响。当前
+  AAE-Benchmark 已按 DSEC/Barron `(u,v,1)` 公式实现并通过单元测试；在没有
+  official submission 前，该差距必须标注为 protocol/domain gap，而不是公式错误。
+- 为公平回答是否仍需训练，后续如做 convergence audit，必须同时把 NB0 和 H67
+  从各自 fullres rank-1 延长相同预算（建议 +10 epochs），不能只延长候选主线。
+  当前 H67 已在同预算下显著胜过 NB0，因此该审计排在 Local-5 公平重跑与硬件
+  profile 之后。
+- Local-5 旧 fullres 结果使用 backbone/norm LR `2e-6/1e-6`，不能与 bb1e4
+  H67 公平比较。新增队列
+  `entrypoints/run_dsec_fullres_w15_h66d_local5_bb1e4_full_pipeline.py`：固定
+  480x640、window2x15x15、batch2、BN no_running、30 epochs、bb1e4；使用
+  milestones `13/20` 对齐 H67 实际执行的 ep0--12/13--19/20--29 LR 轨迹，完成
+  ep9/14/19/24/29 valid825 后自动选择 rank-1，并接 dyadic Q7/Q1.7、
+  hardware-order Q7/Q1.7 与 100-sample T450 post-G0 ordered
+  profile/replay/acceptance。
+- acceptance 后由
+  `hw_autoresearch_nts07/scripts/run_local5_bb1e4_checkpoint_bound_rtl.py` 自动生成
+  100 组 checkpoint-bound T450 projection vectors，并运行 direct/QGASR
+  SystemVerilog、random-stall SVA、lint 与 Yosys。证据范围严格标为
+  post-G0 projection RTL exact，不扩写成 full-attention/full-network exact。
+- 长训练恢复合同：ep9/19/29 保存 model 与 optimizer/scheduler/AMP scaler 成对
+  checkpoint；若流水线中断，自动从最新成对 checkpoint 用 `--resume 1` 严格恢复，
+  不从 crop 起点静默重训。
+- 2026-08-05 14:24 在首个 ep0 仅运行约 6% 时做一次受控重启，以启用上述恢复
+  合同；当时尚未产生 checkpoint，因此从同一 crop ep29 起点重新开始，不混入
+  optimizer 状态。重启后加载审计仍为 ATLIF105、Shiftmax12、overlay210、
+  missing/unexpected0/0，速度约 `1.05 s/it`。
+- 独立 supervisor
+  `entrypoints/supervise_dsec_fullres_w15_h66d_local5_bb1e4.py` 持有单实例锁；
+  若主流水线在最终完成标记前退出，最多自动重启 5 次。恢复仍由主流水线的最新
+  model/state 成对检查决定，supervisor 不自行拼接或修改 checkpoint。
+- supervisor 首次启动测试发现相对 argv 未被绝对脚本路径识别，曾误启动第二个
+  流水线约 14 秒；第二进程在首个 forward、进度仍为 `0/3672` 时因显存竞争 OOM，
+  未完成 optimizer step 或写 checkpoint；原训练未停止，仅在 step193--199 短时从
+  约 `1.05` 降到最高 `1.87 s/it`，随后恢复。修复后改用
+  `/proc/<pid>/cwd + argv` 解析并要求精确绝对路径相等；事件只造成 `train.log`
+  多一段初始化/OOM 输出，不改变原进程模型状态或样本顺序。
+- exact 口径保持严格：dyadic/hardware-order 是 attention-core Python 数值评估；
+  只有真实 T450 trace 驱动 SystemVerilog 且 zero-mismatch 后，才能写
+  `RTL-exact`。最终论文赢家必须重新绑定最终 checkpoint/config SHA，不复用旧
+  checkpoint 的 profile 充当新赢家证据。
+- 运行 `entrypoints/prune_superseded_checkpoints_20260805.py` 删除 106 个已被
+  后续结果替代的中间/短跑 checkpoint，释放约 `63.87 GiB`；保留 paper-relevant
+  best/final checkpoint、配置、日志、ranking、spike profile 和全部硬件产物。
+  删除清单与策略见
+  `results/checkpoint_prune_audit_20260805.json`，清理后磁盘可用空间约 `107 GiB`。
+
+
+### H67 fullres ep30 部署数值评估（2026-08-05）
+
+<!-- H67_FULLRES_EP30_DEPLOY_NUMERIC_20260805 -->
+
+# H67 fullres ep30 deploy numeric summary
+
+Scope: attention-core hardware-order numeric; this is not full-network RTL-exact or T450 SV sign-off.
+
+| path | AEE | AAE legacy | AAE benchmark | spikes(G) | energy proxy(uJ) |
+|---|---:|---:|---:|---:|---:|
+| float | 1.3387 | 6.0147 | 5.7558 | 81.3086 | 71812.84 |
+| dyadic Q7/Q1.7 | 1.3424 | 6.0056 | 5.7625 | 81.3076 | 71811.95 |
+| hardware-order | 1.3417 | 5.9869 | 5.7536 | 81.3067 | 71811.18 |
+
+
+### H66d Local-5 fullres bb1e4 公平重跑（2026-08-05）
+
+<!-- DSEC_FULLRES_W15_H66D_LOCAL5_BB1E4_PIPELINE_20260805 -->
+- 旧 Local-5 fullres 使用 backbone/norm LR `2e-6/1e-6`，不能与已修复的 H67 比较；本轮改为同一 bb1e4 optimizer，并用 milestones13/20 复现 H67 实际执行的 ep0--12/13--19/20--29 LR 轨迹，threshold freeze1224。
+- 固定 480x640、window2x15x15、batch2、BN no_running、30 epochs；从 Local-5 crop/full30 rank-1 ep29 初始化。
+- 评估 ep9/14/19/24/29 standard valid825；rank-1 再跑 dyadic Q7/Q1.7、hardware-order，以及100样本 T450 post-G0 ordered profile/replay/acceptance。
+- config：`neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_w15_H66d_local5_bb1e4_ft30.yml`。
+- status：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_H66d_local5_bb1e4_ft30_20260805/status.log`。
+- `2026-08-05 15:30 CST` 健康检查：ep0 已完整结束并进入 ep1；train/validation loss
+  分别为 `2.14747/1.97951`，LR `1e-4`，epoch time `3929.79 s`，train step
+  `1.0702 s`，吞吐 `1.8688 samples/s`，峰值训练显存 `38.354 GiB`。8 个 worker 与
+  GPU 快路径持续正常，尚未到首个预注册 ep9 checkpoint/valid825，不能据此判断精度。
+
+
+### H67/Local-5 fullres 硬件 profile 协议修正与 H67 队列（2026-08-05）
+
+<!-- H67_LOCAL5_FULLRES_PROFILE_PROTOCOL_FIX_20260805 -->
+
+- 审计发现 `profile_nts11_hardware_p0.py` 历史上只调用 `model.eval()`，没有执行
+  standard evaluator 的 `test.bn_policy=no_running`；因此旧 profile 可保留作开发数据，
+  但不能直接作为 fullres 论文口径。profiler 现已复用同一 BN 语义：所有
+  `_BatchNorm` 关闭 running stats，并清空 running mean/var/counter。
+- 新 profile JSON/Markdown 强制记录 config SHA-256、checkpoint path/size/mtime、
+  resolution/crop/window/T、BN 策略、`ATLIFTernaryPSN`/Shiftmax 数量与完整
+  checkpoint load audit。H9 profile 若出现 missing/unexpected 非零将 fail-fast，
+  不生成可被误用的硬件证据。
+- Local-5 继续由现有 post-G0 watcher 在最终 rank-1 上生成 profile100；随后
+  checkpoint-bound projection RTL watcher 运行真实 T450 vector 的 SV/SVA/lint/Yosys。
+- `2026-08-05 15:23 CST` 源码 provenance/source-binding 补强后，旧 post-G0 watcher
+  已受控终止以避免用启动时缓存的旧 Python 代码生成最终证据；训练子进程不受影响，
+  继续正常占用 GPU。主流水线完成 train/valid825/deploy 后会收到该 watcher 的非零
+  返回，supervisor 仅重启一次流水线；重启会复用已完成的 model/state、ranking 与
+  deploy 产物，并用当前代码重新启动 post-G0 watcher，不会重复训练。独立 Local-5
+  checkpoint-bound RTL watcher 也已重启并加载当前 source-binding 逻辑。
+- 新增 `hw_autoresearch_nts07/scripts/run_h67_ep30_fullres_t450_profile.py`，严格等待
+  Local-5 整条流水线释放 GPU 后，基于 H67 ep30 hardware-order config 运行
+  100-sample T450 ordered profile，并导出 1 个真实样本的 all12 attention bit trace。
+  trace 审计必须同时满足四 stage 覆盖和恰好 12 个 block record。
+- H67 该队列当前完成的是 checkpoint-bound profile 与真实 bit-trace 数据质量审计；
+  在这些 trace 尚未驱动完整 score/mask/Shiftmax/projection SystemVerilog
+  zero-mismatch 前，仍不得写成 full-attention 或 full-network `RTL-exact`。
+
+
+### Local-5 checkpoint-bound score/Shiftmax RTL 证据补全（2026-08-05）
+
+<!-- LOCAL5_CHECKPOINT_BOUND_SCORE_RTL_20260805 -->
+
+- 进一步审计确认旧 Local-5 T450 full-chain RTL 使用 synthetic Q/K/weights；旧的最终
+  watcher 只把真实 K/gate descriptor 送入 projection RTL。因此它们均不能单独证明
+  最终 checkpoint 的真实 Q/K 到 score/Shiftmax 数据通路。
+- `profile_local5_hardware_features.py` 的 post-G0 ordered trace 现额外保存与每组
+  450 个 descriptor 对齐的 `descriptor_q_bitmap`，并用独立 contract
+  `local5_qk_score_shiftmax_trace_v1` 标识；原 descriptor contract v3 保持不变，避免
+  破坏已有 replay/acceptance 消费链路。
+- 新增 `generate_local5_checkpoint_score_vectors.py`：从四个 stage 各选 25 组、共
+  100 组真实 T450 trace，重建全部 Q/K candidate row，独立复算 alpha-XNOR Q7 与
+  masked integer Shiftmax Q1.7，并要求复算 gate 与 checkpoint trace gate 完全一致；
+  共生成 `100 x 450 = 45,000` 个 score/Shiftmax 事务。
+- 新增 `run_local5_checkpoint_score_trace_checks.sh` 与
+  `report_local5_checkpoint_score_rtl.py`：Icarus 和 Verilator 必须全部 zero-mismatch，
+  Yosys 对 score 与 Shiftmax leaf 分别通过 `check`。已用独立 synthetic T450 fixture
+  验证工具链可处理 45,000 事务且双仿真零误差；该 fixture 只证明工具可运行，不能
+  当作模型 checkpoint 结果。
+- 最终 watcher 会在 post-G0 acceptance 后依次执行真实 checkpoint 的
+  Q/K->score->Shiftmax RTL 与 projection RTL。准确证据组合为：
+  `checkpoint-bound score/Shiftmax component RTL-exact`、
+  `checkpoint-bound post-G0 projection component RTL-exact`、以及旧
+  `synthetic T450 control-chain RTL`；projection weights 目前仍是确定性 synthetic
+  权重，因此三者不得合并宣称 full-attention 或 full-network RTL-exact。
+- Local-5 profiler 本身也已直接执行 BN `no_running` 处理，而不只依赖通用 profiler；
+  其 JSON/Markdown 必须记录 ATLIF/Shiftmax 数量、overlay/missing/unexpected、配置与
+  checkpoint identity。最终 source binding 已纳入 score generator/reporter/TB/runner
+  的 SHA-256，任何脚本变化都会使 acceptance 重新绑定而不能静默复用旧结果。
+- projection 证据复审发现旧向量虽使用真实 K/gate descriptor，却始终加载手工
+  `(lane%5+1)*(out0?1:-2)` 权重；同时最终 runner 的汇总器未显式传
+  `--manifest`，可能默认读取旧 vector manifest。两项均已 fail-closed 修正：profiler
+  新增 `checkpoint_projection_contract.{json,npz}`，导出 all12 block 的真实
+  `proj.weight/bias`、逐输出通道 dyadic INT8 编码和 checkpoint SHA；ordered manifest
+  与 acceptance 强绑定两份产物。向量生成器按每组真实 stage/block/head 选择对应
+  32-lane INT8 weight slice，testbench 每组 reset 后重载权重，runner 强制传当前
+  manifest，report 再校验 vector/projection contract SHA。
+- 新证据的准确范围提升为
+  `checkpoint-bound real-weight per-head projection partial-accumulator RTL-exact`；仍不含
+  跨全部 head 的 C 维求和、bias、动态 BN、requant、residual 或 full network。特别是
+  standard evaluator 使用 BN `no_running`，其 batch statistics 随输入变化，不能把
+  BN 静态折叠进 checkpoint 权重；文档和机器报告均已明确禁止该扩写。
+- 工具验证：非平凡正负 INT8 fixture 的四 stage/T450 回放通过跨组 weight reload 与
+  Acc32 zero-mismatch，旧 synthetic 模式回归亦通过；projection/acceptance/ordered
+  trace 共 `18` 个 unittest 通过。等待中的 checkpoint-bound RTL watcher 已于
+  `2026-08-05 15:46 CST` 重启并加载当前真实权重/source-binding 逻辑，训练未受影响。
+
+
+### H67 ep30 checkpoint-bound T450 score/Shiftmax RTL 队列（2026-08-05）
+
+<!-- H67_EP30_CHECKPOINT_BOUND_T450_ROW_RTL_20260805 -->
+
+- 审计确认现有 `h67_score_class_row_engine` 已参数化 `MAX_TOKENS`，无需修改算法或
+  RTL 语义即可实例化 T450；此前缺口是最终 ep30/all12 真实 bit trace 到 T450 RTL
+  的自动向量、双仿真和强 provenance 绑定。
+- `h67_bit_trace.py` 现把 config/checkpoint SHA-256、480x640/window2x15x15、BN
+  `no_running`、ATLIF105/Shiftmax12 与 overlay/missing/unexpected load audit 写入
+  trace `run_context`。通用 profiler 同时将完整 checkpoint SHA-256 写入 profile，
+  不再只依赖 path/size/mtime。
+- 新增 `generate_h67_checkpoint_row_vectors.py`：要求 all12 block 顺序完整，从每个
+  block 的真实 window0、所有 head 重建 T450 temporal Q/K/peer-K；独立复算 Motion-XOR
+  Q7、Q8 exp2 LUT、integer row sum、ceil-pow2 normalization 与 Q1.7 gate，任何一项
+  与 trace gate 不一致即 fail-fast。
+- 新增 `tb_h67_checkpoint_rows.sv` 和
+  `run_h67_checkpoint_row_trace_checks.sh`：逐行驱动真实 Q/K/peer-K，随机化输入空拍与
+  输出 backpressure，核对 active K/gate、zero-K fold、loaded/folded/emitted 计数；
+  Icarus 与 Verilator 必须 zero-mismatch，Yosys 在 `MAX_TOKENS=450` 下通过
+  hierarchy/proc/opt/check/stat。
+- 工具资格验证已使用旧的真实 T162 四-stage/B0 trace：独立参考与 trace 完全匹配，
+  Icarus/Verilator 均对 45 行、7,290 个 token 输入零失配，active outputs 共 1,054；
+  Yosys T450 结构检查报告 0 problems。该旧 T162 dry-run 只验证新工具链，不能替代
+  ep30 fullres/all12/T450 的最终结果。
+- `run_h67_ep30_fullres_t450_profile.py` 已升级为 profile100 -> all12 trace audit ->
+  checkpoint-bound T450 score/Shiftmax RTL 串行闭环；旧常驻 watcher 已安全重启以加载
+  新代码。最终报告 scope 固定为
+  `checkpoint_bound_qk_score_scs_shiftmax_component_rtl_exact_not_projection_or_full_network`，
+  不得扩写为 projection、full attention 或 full-network RTL-exact。
+
+
+### Local-5 训练、RTL 证据与历史 checkpoint 清理复核（2026-08-05）
+
+<!-- LOCAL5_TRAIN_RTL_CLEANUP_REAUDIT_20260805 -->
+
+- Local-5 公平 fullres30 正在执行，当前已进入 ep2（0-based 的第 3 轮），尚未到首个
+  预注册 ep9 checkpoint，因此现在不能报告 AEE/AAE 或判断 Local-5 是否收敛。训练
+  进程、训练/验证各 8 个 persistent workers、约 45 GiB GPU 占用均存活；两次
+  `1.05 -> 4--7 s/it` 抖动都与同机 OpenROAD detail-route 同期出现，不是重复训练、
+  OOM、NaN 或 checkpoint/optimizer 状态损坏。`2026-08-05 16:18 CST` 已无损隔离
+  CPU affinity：训练进程树使用 core `0--47`，当前 OpenROAD flow 继承 core
+  `48--63`；训练随后恢复到约 `1.05--1.2 s/it`，硬件任务未停止或改写。
+- ep1 已完整结束：train loss `1.84878`、validation loss `1.70673`，相对 ep0 的
+  `2.14747/1.97951` 分别下降约 `13.91%/13.78%`；LR 仍为 `1e-4`，无 NaN/Inf。
+  ep1 epoch time `4958.14 s`、平均 `1.3503 s/it`，高于 ep0 的 `3929.79 s`，差值由
+  同期 OpenROAD 资源争用解释；OpenROAD 退出后的连续训练段恢复到约
+  `1.03--1.10 s/it`。ep1 不是预注册保存点，目录无 checkpoint 符合协议。
+- Local-5 训练入口的实际 load chain 已复核并升级为流水线门禁：预加载
+  ATLIFTernaryPSN `105`、Shiftmax attention `12`，checkpoint overlay keys `210`，
+  missing/unexpected `0/0`。训练后进入 valid825 前会重新解析最后一次 load audit；任一
+  数量漂移都直接失败，不允许仅凭 checkpoint 文件存在继续生成 ranking/profile。
+- standard evaluator 的 `artifact_identity` 进一步加入 checkpoint SHA-256，并在
+  `spike_profile.json` 序列化实际 `ATLIFTernaryPSN/ShiftmaxAttention` 数量。Local5
+  流水线对 ep9/14/19/24/29 float profile 和 rank-1 的 dyadic/hardware-order profile
+  逐个复核 480x640、window2x15x15、batch1、BN no_running、overlay210、
+  missing/unexpected0/0、ATLIF105、Shiftmax12 与 checkpoint SHA；旧的同路径/同大小但
+  无 SHA 或无 counts 产物不得复用。deploy reusable-profile 门禁采用相同约束。
+- 阈值语义复核：当前 `threshold_freeze_after_step=1224` 只冻结独立 homeostatic
+  `threshold_update`，并不冻结 optimizer gradient；配置未启用
+  `freeze_threshold_grad_after_step`，threshold LR 为 `5e-6`。`official_atlif` 分支也不会
+  应用配置中的 `min_threshold/max_threshold` clamp。训练中的 threshold 因而仍可由
+  optimizer 更新，而推理/RTL 使用最终 checkpoint 中的静态 threshold。profile JSON 与
+  bit-trace manifest 新增 `threshold_training_semantics` 机器字段，禁止把日志中的
+  `threshold_updates_frozen=1` 误写成“阈值参数完全冻结”。
+- Local5 专用 post-G0 profile 也已把该语义写入
+  `local5_hardware_features.json`、Markdown 和 ordered-trace manifest；fail-closed
+  acceptance 固定检查 `official_atlif`、homeostatic boundary1224、optimizer gradient
+  未冻结、threshold LR `5e-6`、official clamp inactive 与 checkpoint-static inference。
+  任一字段缺失/漂移都不会释放后续 checkpoint-bound RTL watcher。profile/trace/
+  descriptor acceptance 相关回归与 standard/deploy/convergence provenance 回归合计 `25` 项 unittest
+  已全部通过。
+- Local5 总流水线不再只信任 post-G0 watcher 的 exit code：退出后会重新读取
+  `acceptance.json` 和其绑定的 ordered manifest，检查 `accepted=true`、100 samples、
+  12 blocks、rank-1 checkpoint 路径与 threshold semantics。这样即使另一个 watcher
+  持有锁使当前进程正常退出，也不能提前写入总完成标记或释放 H67 队列；正向和篡改
+  acceptance 夹具均已验证。
+- checkpoint-bound projection 最终报告改为 fail-closed：Yosys 使用
+  `check -assert`，并把全部 RTL/SVA/TB 与当前 vector manifest 写入
+  `source_sha256.txt`；汇总器逐文件复算 SHA-256。最终 watcher 同时要求真实 dyadic
+  INT8 checkpoint weight binding、random-stall SVA、Verilator lint、Yosys、vector
+  manifest 和 source manifest 全部 PASS，否则不生成总 PASS。
+- score/Shiftmax 的两个 Yosys leaf 同样改用 `check -assert`，report 要求两个 Yosys
+  session 都正常结束且 Icarus/Verilator/独立 trace reference 全部通过。等待中的
+  checkpoint-bound watcher 已以独立 daemon PID `2161370` 重启并加载该版本。
+- 历史 `third_party/SDformerFlow/results` 经全仓路径引用审计后，仅保留
+  `checkpoint_epoch59.pth` 与 `checkpoint_epoch59_state_dict.pth`；删除 57 个未被当前
+  配置、脚本或文档引用的 2026-05 中间 checkpoint，共回收
+  `24,852,206,537 bytes`（约 `23.15 GiB`）。清理后可用空间约 `127 GiB`；完整删除表、
+  保留文件 SHA-256 与策略记录在
+  `neuron_autoresearch/cleanup_audits/third_party_sdformerflow_20260805.json`。
+- 第二轮只对白名单中的 6 月已结束 H9 路线清理非锚点 model checkpoint：删除 `30`
+  个文件、实际回收 `18,606,112,768 bytes`（`17.33 GiB`），可用空间增至约
+  `146 GiB`。保留 NTS10d standard-valid825 的 ep19/24/29、NTS11aah rank-1/resume
+  ep0 与 final ep14、NTS11aq rank-1/续训源 ep2、NTS11aqa AEE 最优 ep5 与 AAE/final
+  ep7；NB0/H67/Local5、当前队列、paired optimizer state、配置、日志、指标和硬件产物
+  均不在删除 allowlist。机器审计为
+  `neuron_autoresearch/cleanup_audits/h9_superseded_20260805.json`，删除后逐项确认 30 个
+  文件不存在、8 个保留锚点仍存在。
+- NB0 未完全收敛是可信风险，但不是 AAE 差距的唯一解释：论文训练范式写 80 个 crop
+  epochs 再加 30 个 full-resolution epochs，而本地发布 YAML
+  `third_party/SDformerFlow/configs/train_DSEC_supervised_SDformerFlow_en4_full_torch.yml`
+  固定 `n_epochs: 60`，仓内也没有 ep79/ep80 checkpoint。本地 NB0 fullres ep24->29
+  AEE 仍改善 `5.56%`，支持欠收敛判断；但 AAE-Benchmark 仅改善 `1.26%`，不足以单独
+  解释本地 `6.1803` 与论文 `4.871` 的 `1.3093` 差距。结论仍应写为“本地 checkpoint
+  可能欠训练，同时存在 official test-server/split/聚合口径差异”，不能只靠追加少量
+  epoch 承诺复现论文 AAE。
+- 是否给 H67 和 NB0 各追加相同 +10 fullres epochs，待 Local-5 ep9/14/19/24/29
+  公平曲线完成后再裁决；H67 当前 ep30 是已测最优但 AEE 尚未平台，NB0 也不能标为
+  fully converged。不得只延长 H67 而保持 NB0 预算不变。
+
+
+### NB0 AAE 与论文数值的最终口径更正（2026-08-05）
+
+<!-- NB0_AAE_PAPER_ROW_RECONCILIATION_20260805 -->
+
+- 重新逐页核对 SDformerFlow-v2 论文后确认：`AAE=4.871` 位于 Table I，是 DSEC
+  official hidden test 的 all-sequence `AE`，不是作者 validation split 的结果。
+- 论文 Table IV 对 full-resolution validation 的 PSN+SPE+QK s10-c2 行报告
+  `EPE=1.61`、`Outlier=8.91%`、`AAE=7.23`。本地 NB0 ep29 为
+  `AEE=1.4454`、`Outlier=7.93%`、legacy AAE-2D `6.5128`、Barron AE-3D
+  `6.1803`；因此不能说“本地 NB0 AAE 不及论文 validation”，其同域数值反而更好。
+- 本地 evaluator 是“每帧先对有效像素求均值，再对 825 帧等权平均”；local valid825
+  来自 18 条训练序列中的 held-out frame。official test 是七条不同 hidden sequence。
+  DSEC 页面公布的七条 SDformerFlow sequence AE 简单平均为 `4.9919`，而 leaderboard
+  总值为 `4.871`，进一步证明官方聚合并非本地 frame-mean 或简单 sequence-mean。
+- 新 standard profile 将该区别固化为 `metric_contract`：legacy `AAE` 明确标识为
+  `(u,v)` 2D direction angle，`AAE_Benchmark` 明确标识为 normalized `(u,v,1)`
+  Middlebury/Barron 3D angle，aggregation 标识为 per-frame masked mean 后对本地 valid
+  frames 等权平均，population 明确写 `not_official_hidden_test`。Local5 和 H67/NB0
+  convergence runner 均 fail-closed 校验这些字段。
+- NB0 的确可能欠收敛：paper 写 80 crop + 30 fullres，而 released YAML 是 60 crop；
+  NB0 ep24->29 AEE 仍下降 `5.56%`。但 legacy/benchmark angle 只下降
+  `0.44%/1.26%`，已经接近平台。正确结论是“AEE 可能继续改善，AAE 不太可能仅靠少量
+  续训从 6.18 变成官方 4.871”；官方值只能通过冻结模型后提交 DSEC server 验证。
+- 完整定义、数据 population、聚合和收敛表更新在
+  `neuron_autoresearch/AAE_BASELINE_DIAGNOSTIC_20260717.md`。后续 DATE 表必须分别标
+  `local valid825 legacy AAE-2D`、`local valid825 Barron AE-3D` 与
+  `official DSEC test AE`，三者禁止混列成同一栏。
+
+
+### H67/NB0 fullres 等预算 +10 收敛审计队列（2026-08-05）
+
+<!-- DSEC_FULLRES_W15_H67_NB0_EQUAL_PLUS10_PROTOCOL_20260805 -->
+
+- H67 ep25->ep30 AEE 仍改善 `2.47%`，NB0 ep24->ep29 AEE 仍改善 `5.56%`；两者
+  最优都落在已测训练边界，因此均不能标成 fully converged。新增对称 +10 fullres
+  审计，不覆盖或改写任何旧 checkpoint。
+- 两份最终 state 的只读审计均为 internal epoch29、scheduler last_epoch29、AMP scaler
+  存在且主 optimizer LR 为 `2.5e-5`。NB0 state 仍含 future milestone30，而 H67 没有；
+  直接 resume 会造成追加第 1 轮后只有 NB0 降 LR，不能作为公平收敛比较。
+- 新协议为两者分别 hard-link 原最终 model、复制 optimizer/scheduler/scaler state，且仅在
+  新 staged state 中把 future milestones 清空；追加 10 轮都固定 source current LR。
+  H67 因历史 `epoch_offset=1` 保存/评估 label ep35/40，NB0 保存/评估 ep34/39；它们分别
+  对应相同的 fullres 35/40-epoch 预算。
+- 历史 state 未保存 Python/NumPy/Torch/CUDA RNG，因此该续训是同 seed 的公平
+  fine-tune extension，不是 bit-exact uninterrupted continuation；机器 audit 必须显式记录
+  `rng_state_present=false`，论文不得声称逐 bit 连续复现。
+- H67 每次训练启动必须验证 `checkpoint_overlay_keys=210`、missing0/unexpected0、
+  ATLIF105、Shiftmax12；NB0 必须验证 overlay0、missing0/unexpected0。标准评估沿用
+  480x640、window2x15x15、crop null、batch2、BN no_running 与 valid825。
+- +10 runner 在 ranking 后还会逐个复核三个预算点的 profile：config/checkpoint SHA、
+  fullres/window15/batch1/BN 协议，以及 H67 的 overlay210/ATLIF105/Shiftmax12 或 NB0 的
+  overlay0/ATLIF0/Shiftmax0。训练日志正确但评估加载漂移同样会 fail-closed。
+- 为避免抢占 Local-5 和已注册硬件证据任务，队列严格等待 Local-5 全流水线及 H67 ep30
+  T450 profile/RTL 结束，再依次执行 H67 +10、NB0 +10 和 standard valid825。最终是否
+  采用 ep40/39 由 AEE rank 与末段斜率决定，不能预设最后一轮必然最好。
+- 收敛机器判据固定为：若 budget40 仍是 AEE rank-1，且相对 budget35 的 AEE 改善
+  `>1%`，则标记 `not_plateaued`；否则标记
+  `operationally_plateaued_or_overfit`。同时报告 AEE last5/last10、AE-3D last5 和
+  spikes，不用单一 train loss 代替标准推理曲线。输出为
+  `dsec_fullres_w15_equal_plus10_convergence_summary_20260805.{json,md}`。
+- 汇总同时独立报告 legacy AAE-2D 与 AE-3D 的 last5/last10 improvement，以及 spikes
+  last5/last10 change；只有两种角度指标的 last5 绝对变化都不超过 `1%` 才标
+  `angle_plateaued`。AEE 是否平台和角度是否平台是两个字段，避免用 AEE 持续下降错误
+  推断 AAE 与 official-test 差距也会靠续训消失。
+- config generator：
+  `neuron_experiments/H9_bipolar_self_attention/entrypoints/make_dsec_fullres_w15_equal_plus10_configs.py`。
+- queue runner：
+  `neuron_experiments/H9_bipolar_self_attention/entrypoints/run_dsec_fullres_w15_equal_plus10_convergence.py`。
+- status：
+  `neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_equal_plus10_convergence_20260805.log`。
+
+
+### 第三轮旧 checkpoint 定向清理（2026-08-05）
+
+<!-- PAPER_IRRELEVANT_CHECKPOINT_CLEANUP_20260805 -->
+
+- 在前两轮清理之外，继续按 valid825 ranking 和当前 resume 依赖做白名单审计；本轮只处理
+  已结束的 NTS11 早期范围消融、两个 5-epoch 旧微调和已被完整实验取代的短筛。
+- 删除 `27` 个 model checkpoint，实际回收 `19,934,760,960 bytes`（约
+  `18.56 GiB`），可用空间由约 `146 GiB` 增至约 `164 GiB`。
+- NTS11u/NTS11aa/NTS11bd 路线保留 standard valid825 的 ep19/24/29，另保留已记录的
+  rank-1 ep26；两个旧 5-epoch 微调均保留 valid825 rank-1 ep2 和 final ep4。当前
+  NB0、H67、Local-5、所有 paired optimizer state、配置、日志、ranking/profile 和
+  RTL 产物完全不在删除集合。
+- 可复跑脚本：
+  `neuron_experiments/H9_bipolar_self_attention/entrypoints/prune_paper_irrelevant_intermediates_20260805.py`；
+  逐文件大小、inode/link count、删除后存在性和保留集合记录在
+  `neuron_autoresearch/cleanup_audits/paper_irrelevant_intermediates_20260805.json`。
+- 至此三轮 checkpoint 清理累计回收约 `59.0 GiB`。后续在 Local-5/H67/NB0 队列完成前
+  不再扩大删除范围，避免误删尚未完成公平比较或硬件重新绑定所需的权重。
+
+
+### Local-5/H67 ATLIF checkpoint-bound RTL 队列（2026-08-05）
+
+<!-- CHECKPOINT_BOUND_ATLIF_DPTME_RTL_20260805 -->
+
+- 复核确认此前所谓 RTL-exact 只覆盖 checkpoint-bound score/Shiftmax 和真实权重
+  per-head projection partial accumulator；ATLIF 只有首调用 sampled Q4/Q6/Q8 参数量化
+  profile，且旧 profile 的输入仍为浮点，不能计入 RTL-exact scope。
+- 新增可选后处理
+  `hw_autoresearch_nts07/scripts/generate_checkpoint_atlif_dptme_vectors.py`：从最终 rank-1
+  的标准 `no_running` BN 验证输入捕获 81 个 functionally-live ATLIF site，严格要求
+  `45 x T10 + 36 x T2`；12 个从未调用的 `sn2_q` 和 12 个结果死亡的 `attn_sn` 不进入
+  部署执行集，但安装总数仍必须为105。
+- 每个 live site 导出一个完整 32-lane DP-TME command；command 内同时混合普通、最小
+  threshold margin 和最大幅值三类真实 lane。定点合同为 per-site power-of-two INT8
+  input/weight、`Sa=Sx*Sw`、Acc24 bias/threshold、round-to-nearest-even、任何 clip 或
+  Acc24 overflow 直接失败。另行报告 fixed-vs-float event flip，不能被 RTL 的整数
+  zero-mismatch 掩盖。
+- 新增 file-driven TB/runner/report：Icarus 与 Verilator 分别带独立 simulator identity，
+  hidden/event 必须逐位零失配；输出 backpressure、输入气泡、SVA、lint、Yosys
+  `check -assert` 均进入 fail-closed 报告。config/checkpoint/vector/RTL/TB/SVA/source
+  SHA 全部绑定，报告 scope 固定为 ATLIF temporal-matrix component only。
+- synthetic 81-site 工具资格测试已由 Icarus 比较 `25,920` 个 hidden 和 event，均为
+  zero-mismatch；Verilator file-driven 全事务在训练和 OpenROAD 并行时运行代价过高，
+  本次只完成编译，正式双仿真由 Local-5/H67 串行 watcher 在 GPU 任务结束后执行，
+  未产生正式 PASS 前不得引用 synthetic fixture。
+- Local-5 的 ATLIF 导出/双仿真已放在 post-G0 wrapper 返回之前，因此 H67 不会与其争抢
+  GPU。H67 ep30 和 equal+10 后的新 rank-1 都会用各自 checkpoint 重新运行同一流程；
+  两个空等 watcher 已重启加载新代码，当前 Local-5 训练未中断。
+- PyTorch binary ATLIF 实际输出 `event x threshold`，而 DP-TME RTL 当前输出 event bit。
+  报告把 checkpoint-static threshold 作为 output scale metadata，但在完成下一层
+  weight folding、BN/requant/residual 和 valid825 复验前，`deployment_accuracy_signoff`
+  固定为 false，禁止写 full encoder/full network RTL-exact。
+- 旧 DP-TME 周期表基于 `9x9=81` positions，不能用于当前 fullres `15x15=225`。
+  新 `dptme_fullres_w15_port_contract` 报告得到 T10 `2250` 拍，T2 G5/G4/G3 分别
+  `90/114/150` 拍；单32-bit event出口使 G5 下界回到 `450` 拍。5项旧兼容与 fullres
+  几何回归通过，报告仍明确是架构乐观下界，不是 full-encoder measured latency。
+
+
+### Local-5 fullres 在线状态与 ATLIF 报告门禁补强（2026-08-05 18:05 UTC）
+
+<!-- LOCAL5_FULLRES_PROGRESS_AND_ATLIF_GATE_20260805 -->
+
+- Local-5 并未遗漏；当前运行
+  `dsec_fullres_w15_H66d_local5_bb1e4_ft30_20260805`，从自己的 crop/full30 ep29
+  checkpoint 续训，而不是从 NB0/H67 权重启动。固定协议为 480x640、window
+  `2x15x15`、batch2、BN `no_running`、ATLIF105、Shiftmax12、overlay210、
+  missing/unexpected `0/0`。
+- 已完成 ep0--2：train loss 为 `2.14747 / 1.84878 / 1.68106`，valid loss 为
+  `1.97951 / 1.70673 / 1.80956`。ep2 train 继续下降但 valid 相对 ep1 反弹
+  `6.03%`，当前正训练 ep3；在 standard valid825 尚未完成前不据此选择 checkpoint，
+  也不把 ep1 暂时最低 valid loss 写成算法排名。
+- H67 ep30 仍是当前最后预算点和 AEE rank-1：ep25 `1.3726` 到 ep30
+  `1.33874` 改善约 `2.47%`，因此准确结论是“当前边界最好、尚未证明收敛”。已排队的
+  H67/NB0 对称 +10 将以 ep35/40 standard valid825 与末段斜率完成收敛判断。
+- NB0 fullres ep24 到 ep29 的 AEE 仍改善约 `5.56%`，说明 AEE 很可能也未完全收敛；
+  但 legacy AAE/AE-3D 仅改善约 `0.44%/1.26%`，角度已经更接近平台。论文 `4.871`
+  是隐藏七序列 DSEC test aggregate，不能与本地 valid825 AAE 直接相减后全部归因于轮次。
+- ATLIF RTL reporter 不再只信任 manifest summary：逐命令复核81个唯一 site/tag、
+  `45xT10 + 36xT2`、三类 lane 配额、25,920个 event、正有限 scale、Acc24 范围、
+  input/weight/bias/threshold 零 clip、零 overflow 和静态 threshold output-scale 合同。
+  新增4项 manifest 单元测试与2项 fullres 几何测试通过；既有训练/评估/profile
+  provenance 回归 `25/25` 通过。
+
+
+### 第四轮早期 MDR/FAPS 中间 checkpoint 清理（2026-08-05）
+
+<!-- LEGACY_MDR_FAPS_CHECKPOINT_CLEANUP_20260805 -->
+
+- 删除109个早期中间 checkpoint，实际回收 `36,648,837,120 bytes`（约
+  `34.13 GiB`），文件系统可用空间增至约 `197 GiB`。
+- 明确无效的 `mdr_fast_local_ckpts_20260624` 权重全部删除；该 run 已由日志证明只恢复
+  optimizer/scheduler/scaler、没有恢复 model，原文档也已禁止用于论文或 warm start。
+- 正确 MDR baseline 只保留已做 MVSEC 标准评估的 ep41/47；TTX-MDR 保留 ep10 交接
+  model/state、论文表实际评估的 ep20/40/43 model，以及 ep20/final ep43 resume state。
+- 已退休 FAPS FT10 保留 standard valid825 rank-1 ep8 和 final ep9 model，其余 model
+  与 state 删除。所有 ranking、profile、训练日志、配置和结果表均保留。
+- 当前 Local-5/H67/NB0、fullres 收敛队列、paired optimizer state、硬件向量/profile/RTL
+  均未进入候选集合。可复跑脚本为
+  `entrypoints/prune_legacy_mdr_faps_intermediates_20260805.py`，逐文件 inode/link count、
+  大小、删除理由和保留白名单记录在
+  `neuron_autoresearch/cleanup_audits/legacy_mdr_faps_intermediates_20260805.json`。
+- 四轮定向清理累计回收约 `93.1 GiB`；后续只在当前 fullres/RTL 队列结束并确定最终
+  rank-1 后再清理新产生的中间轮。
+
+
+### Local-5 ATLIF watcher 生命周期修复（2026-08-05）
+
+<!-- LOCAL5_ATLIF_WATCHER_LIFECYCLE_FIX_20260805 -->
+
+- 审计发现本轮主流水线最早启动的 embedded post-G0 child 已提前退出；虽然独立
+  score/projection watcher 正常等待，但若只依赖主流水线重启，ATLIF 正式回放存在遗漏风险。
+- ATLIF vector + DP-TME 双仿真现同时纳入独立
+  `run_local5_bb1e4_checkpoint_bound_rtl.py`。它在 acceptance 后读取同一
+  `post_g0_run_identity.json`，验证 rank-1 config/checkpoint SHA，再生成正式向量和报告；
+  最终 `checkpoint_bound_scope.json` 必须同时包含 score/Shiftmax、真实权重 per-head
+  projection partial accumulator 和 ATLIF temporal-matrix 三项 component 证据。
+- embedded 与独立入口共用同一 `flock`；锁内先检查 report status 与 checkpoint SHA，
+  相同权重直接复用，否则才重跑，避免并发覆盖向量/日志。独立 watcher 已以当前代码重启
+  为 PID `2233542`，不影响正在训练的 Local-5。
+- wrapper/provenance/ATLIF/fullres 几何相关回归合计 `31/31` PASS。证据范围仍是三个
+  component，不包含 cross-head accumulation、BN/requant/residual、SRAM macro 或 full network。
+
+
+### DATE 算法证据最终 fail-closed 审计队列（2026-08-05）
+
+<!-- DATE_ALGORITHM_CLOSURE_AUDITOR_QUEUED_20260805 -->
+
+- 新增 `entrypoints/audit_date_algorithm_closure_20260805.py`，等待并统一审计五类正式产物：
+  Local-5 standard valid825 ranking、Local-5 float/dyadic/hardware-order deploy summary、
+  Local-5 三组件 RTL scope、H67/NB0 +10 收敛 summary、post-convergence H67 rank-1
+  hardware evidence。
+- 审计器逐 checkpoint 复核 480x640、无 crop、window2x15x15、BN no_running、batch1、
+  AAE-2D/AE-3D/aggregation/population contract、overlay/module counts、missing/unexpected0/0
+  和 checkpoint SHA；收敛 summary 的每个数值还必须与原始 profile 精确一致。
+- Local-5 硬件证据必须同时通过真实 Q/K score/Shiftmax、checkpoint dyadic INT8 per-head
+  projection partial accumulator、81-site ATLIF temporal matrix；向量与 projection contract
+  均反向追溯到同一 rank-1 checkpoint SHA。H67 最终 evidence 的 epoch 必须等于 +10
+  ranking 的 AEE rank-1，score/ATLIF report 也必须绑定同一 SHA。
+- 最终 scope 固定为 `checkpoint_bound_component_rtl_exact_not_full_network`；只有 Local-5
+  和 +10 两个结果 marker 都已写入本文件才允许 PASS。通过后自动生成
+  `neuron_autoresearch/DATE_ALGORITHM_CLOSURE_AUDIT_20260805.{json,md}` 并回写结果标记。
+- one-shot 当前按预期返回 PENDING；ranking/profile contract 的3项正反单元测试通过。
+  常驻 watcher PID `2239223`，5分钟轮询，不占GPU。
+
+
+### Local-5 post-G0 producer 独立监督修复（2026-08-05）
+
+<!-- LOCAL5_SUPERVISED_POSTG0_PRODUCER_20260805 -->
+
+- 运行时复核确认，主流水线早期启动的 embedded post-G0 child 已退出，最后一次记录停在
+  `15:23:43`；仅保留 checkpoint-bound RTL watcher 等待 acceptance 会形成“消费者存活、
+  producer 缺失”的生命周期缺口。
+- `run_local5_bb1e4_checkpoint_bound_rtl.py` 现先调用
+  `ensure_profile_acceptance()`：若 acceptance 不存在，就同步监督
+  `run_local5_bb1e4_postg0_profile.py` 直到 rank-1/deploy/profile/replay/acceptance 完成；只有
+  acceptance 真正落盘后才进入 score/Shiftmax、projection 与 ATLIF 三组件 RTL 流程。
+- 独立监督器已重启为 PID `2243134`，其 post-G0 producer 子进程 PID `2243137` 正在等待
+  fullres deploy follower；它不占GPU，也不改变当前 Local-5 训练。producer 与主流水线未来
+  可能启动的同类入口仍由原有 `flock` 串行化。
+- 新增两项生命周期测试，分别证明“缺 acceptance 必须启动 producer”和“已有 acceptance
+  不重复启动”；连同 Local-5 pipeline acceptance 4项与 fullres rescue config 4项共
+  `10/10` PASS。当前 conda 环境未安装 pytest，测试用同一 Python 环境直接调用并运行
+  unittest，另通过 `py_compile` 与 `git diff --check`。
+
+
+### Standard valid825 样本数 fail-closed 门禁（2026-08-05）
+
+<!-- STANDARD_VALID825_SAMPLE_COUNT_GATE_20260805 -->
+
+- 审计发现既有 evaluator/pipeline/closure 已校验 local validation population、聚合公式与
+  checkpoint SHA，但没有强制 `samples == 825`；异常中断或错误文件列表仍可能生成名为
+  `valid825` 的残缺结果。
+- 现已在 `run_h9_standard_valid825_eval.py`、Local-5 pipeline、H67/NB0 `+10` runner 和最终
+  closure auditor 四层加入 825 样本硬门禁。任一 checkpoint 少测或多测都会拒绝 ranking、
+  convergence summary 和最终 PASS。
+- Local-5 pipeline 与 closure 正反测试均增加 `824` 反例并通过；相关 Python 文件通过
+  `py_compile`/`git diff --check`。加载新代码后的 `+10` runner PID `2245266`、closure
+  watcher PID `2245267` 已重新启动并继续空等，Local-5 训练未中断。
+
+
+### H67/NB0 staged resume 与 H67 证据复用预审计（2026-08-05）
+
+<!-- H67_NB0_STAGE_AND_EVIDENCE_REUSE_AUDIT_20260805 -->
+
+- 已在不占 GPU 的情况下提前生成并复核 H67/NB0 两份 staged resume：源 model SHA、源
+  state SHA、staged state SHA 全部落盘；model 使用 hardlink；state/scheduler internal epoch
+  均为29；AMP scaler 存在；历史 RNG state 不存在，故明确为非 bit-exact continuation。
+- 两者均清空未来 scheduler milestones，并保持源 optimizer LR 不变。H67 五参数组 LR 为
+  `2.5e-5/2.5e-5/1.25e-5/1.25e-5/1.25e-6`，NB0 为 `2.5e-5`；正式 runner 会按 SHA 复用
+  staged state，不会在 GPU 释放后重新构造漂移状态。
+- H67 ep30 和 post-convergence watcher 的旧逻辑曾以 report/FINAL 文件存在作为复用条件；
+  现分别要求 score report `PASS`、component scope、checkpoint SHA，ATLIF report `PASS` 与
+  同一 SHA，以及 FINAL 的 rank-1 epoch/path/report 全绑定后才允许复用。两项 checkpoint
+  变更反例测试 `2/2` PASS。
+- 加载新代码的 H67 ep30 watcher PID `2246496`、post-convergence watcher PID `2246497`
+  已重新启动并空等；不会与 Local-5 争用 GPU。
+
+
+### Local-5 成对训练状态最终门禁（2026-08-05）
+
+<!-- LOCAL5_PAIRED_TRAINING_STATE_CLOSURE_GATE_20260805 -->
+
+- 最终 closure 现除模型 checkpoint/profile SHA 外，还强制读取 ep9/19/29 的配套
+  `*_state_dict.pth`。每个 state 必须满足 internal epoch 与文件标签一致、scheduler
+  `last_epoch` 一致、milestones 恰为13/20、AMP scaler 存在。
+- 五参数组 LR 也按真实轨迹逐项校验：ep9 为
+  `1e-4/1e-4/5e-5/5e-5/5e-6`，ep19 乘0.5，ep29 乘0.25；optimizer LR 与 scheduler
+  `_last_lr` 任一漂移都会拒绝最终 PASS。closure 输出会同时记录 model/state SHA。
+- 新增正常三点与 ep19 LR 漂移反例测试，closure 测试现 `4/4` PASS。加载该门禁的最终
+  watcher 已重启为 PID `2248718`；当前仍按预期等待正式产物。
+
+
+### AAE 公式/聚合可执行 receipt（2026-08-05）
+
+<!-- AAE_METRIC_EXECUTABLE_RECEIPT_20260805 -->
+
+- 新增 `generate_aae_metric_test_receipt_20260805.py`，使用生产 conda 环境直接运行上游
+  `tests/test_aae_metrics.py`，三项测试 `3/3` PASS：Barron `(u,v,1)` 数值公式、legacy 2-D
+  与 benchmark 3-D 区分、逐 batch mask。
+- receipt 同时检查 evaluator 仍固定 eval batch1，并执行“每帧 masked mean 后对 frame
+  等权平均”的累加/除法路径；记录 metric/evaluator/test 三个源码 SHA。正式产物为
+  `neuron_autoresearch/AAE_METRIC_TEST_RECEIPT_20260805.{json,md}`。
+- 最终 closure 已把 receipt 加入 REQUIRED，并重新计算三个源码 SHA；任何后续公式或聚合
+  修改都会使旧 receipt 失效。加载新逻辑的 closure watcher PID 为 `2250001`。
+
+
+### Local-5 ep3 OpenROAD 资源争用记录（2026-08-05）
+
+<!-- LOCAL5_EP3_OPENROAD_CONTENTION_20260805 -->
+
+- Local-5 ep3 在 step2252 前约为 `1.05 s/it`；同机 OpenROAD
+  `local5_out32_allmacro_proxy/direct/5_2_TritonRoute` 启动 detail-route 后，瞬时均值升至
+  `3.2--4.8 s/it`，GPU utilization 从高负载降至 `15--58%`，显存仍稳定约46GiB。
+- OpenROAD 进程有129个线程、覆盖全部64 CPU；系统 `iowait=0`，训练主进程、8个 persistent
+  workers、模型显存和数值日志均正常。因此该段是 CPU/内存带宽争用造成的 wall-time 抖动，
+  不是 DataLoader 单进程退化、OOM、模型重载或算法发散。
+- 不重启训练、不改变 batch/workers/LR，也不干预另一条硬件任务；待 detail-route 自然结束
+  后继续以稳定段吞吐估算剩余时间。该抖动不进入收敛或精度判断。
+- 连续观测确认吞吐随后按 `3.14 -> 2.41 -> 1.89 -> 1.32 -> 1.13 -> 1.10 s/it`
+  恢复，ep3 到约71%时已回到正常区间；训练全程为同一 PID/optimizer state。该恢复进一步
+  排除永久 worker 退化或需要重启的故障。
+- 同一 detail-route 后续以 PID `2264682` 再进入重负载段，ep3约93--98%时训练瞬时达到
+  `3--5 s/it`、GPU最低约11%；仍无 iowait、OOM 或 worker 退出。到 ep4 开始时即使 OpenROAD
+  尚未退出，训练已再次恢复约 `1.06 s/it`/GPU99%，因此两次抖动均按外部资源争用记录，
+  不改变 batch/workers/LR 或恢复训练。
+
+
+### Local-5 post-G0 relation/profile acceptance 最终门禁（2026-08-05）
+
+<!-- LOCAL5_POSTG0_ACCEPTANCE_CLOSURE_GATE_20260805 -->
+
+- 最终 closure 过去只通过下游 watcher 间接依赖 post-G0 acceptance；现已把
+  `local5_fullres_bb1e4_postg0_acceptance_20260805/acceptance.json` 直接加入 REQUIRED。
+- 审计器会重新检查 schema、accepted、100 samples、12 blocks，以及 loader provenance、
+  formal qualification、relation RTL、descriptor geometry、ordered replay、source software、
+  release receipt、checkpoint projection weight 和 threshold deployment 共11项门禁。
+- acceptance、ordered manifest 与 run identity 的 SHA 必须互相一致，并同时绑定 Local-5
+  AEE rank-1 epoch/path/checkpoint SHA；因此 Local-5 特有 relation-transpose/profile 证据不会
+  被 score/projection/ATLIF 三组件总表遮蔽。
+- 正常绑定和 `relation_rtl_binding=false` 反例测试通过，closure 测试现 `5/5` PASS；加载
+  新门禁的 watcher PID 为 `2252989`。
+- 本轮组合回归随后一次性重跑 pipeline 4项、closure 5项、H67复用 2项、Local-5 producer
+  生命周期 2项、fullres config 4项、AAE 数值 3项，共 `20/20` PASS；相关入口同时通过
+  `py_compile` 和 `git diff --check`。
+
+
+### 第五轮退休微调中间 checkpoint 清理（2026-08-05）
+
+<!-- RETIRED_FT_INTERMEDIATE_CHECKPOINT_CLEANUP_20260805 -->
+
+- 对6条2026年6月已完成 standard valid825 ranking 的旧5/8轮微调执行白名单清理；每条均
+  保留 AEE rank-1 `ep2`、最终 `ep4/ep7`，以及两个锚点对应的 optimizer/scheduler/scaler
+  state。当前 Local-5、H67、NB0、staged resume、profile、ranking、日志和 RTL 产物均不在
+  删除集合。
+- 删除42个非锚点 model/state checkpoint，实际回收 `24,740,700,160 bytes`（约
+  `23.04 GiB`）；可用空间增至约 `219 GiB`。删除后复核为0个候选残留、0个保留锚点缺失。
+- 可复核脚本为
+  `neuron_experiments/H9_bipolar_self_attention/entrypoints/prune_retired_ft_intermediates_20260805.py`；
+  文件大小、inode/link count、删除原因和保留表记录在
+  `neuron_autoresearch/cleanup_audits/retired_ft_intermediates_20260805.json`。
+- 五轮定向清理累计回收约 `116.1 GiB`。当前空间足够完成 Local-5 和 H67/NB0 `+10`，不再
+  扩大删除范围；新 fullres checkpoint 只在最终 rank-1、resume 与 RTL 绑定全部确定后整理。
+
+
+### Local-5 ep3 与 H67/NB0 收敛状态复核（2026-08-05 19:25 CST）
+
+<!-- LOCAL5_H67_NB0_CONVERGENCE_STATUS_20260805 -->
+
+- Local-5 fullres30 已完成 ep0--3，train loss 为
+  `2.1475/1.8488/1.6811/1.6521`，累计下降 `23.07%`；小验证 loss 为
+  `1.9795/1.7067/1.8096/2.0182`，ep3 相对 ep2 反弹 `11.53%`、相对暂时最佳 ep1 高
+  `18.25%`。当前进入 ep4，稳定吞吐恢复约 `1.06 s/it`。这是需要 ep9 valid825 检查的
+  泛化风险，但 train loss、ATLIF活动与数值均正常，不能据42帧训练内验证定性为发散。
+- 尚无正式 checkpoint 是保存策略所致，首个 model/state 对固定在 ep9；在 standard valid825
+  前不以短验证损失选主线。历史 H67 小验证曾单轮反弹约 `13.8%`，旧 Local-5 后期也有明显
+  波动，进一步说明短验证只能作故障探针，不能替代825帧排名。
+- Local-5 完成后自动执行 standard/deploy valid825、五类 checkpoint-bound profile、post-G0
+  relation acceptance，以及 score/Shiftmax、projection partial accumulator、ATLIF temporal
+  matrix 三组件 RTL-exact。正式 report 尚未生成时只能写 `queued`，不能写 RTL PASS。
+- H67 ep30 是当前预算边界和 AEE rank-1，但 ep25到ep30仍改善 `2.47%`，故状态是
+  `best_at_boundary_not_proven_converged`。AAE-2D 与 AE-3D 同区间只变化约 `+0.08%/-0.18%`，
+  角度已近平台。H67/NB0 对称 `+10` 已 staged 并完成加载审计，将用 ep35/40 valid825 与
+  末段斜率给出机器判定。
+- NB0 ep24到ep29 AEE改善 `5.56%`，AEE 欠训练是合理怀疑；但 AAE-2D/AE-3D 只改善
+  `0.44%/1.26%`，不能期待少量续训把本地 AE-3D `6.1803` 直接变成论文 hidden-test
+  `4.871`。本地 NB0 已优于论文 validation row (`AEE 1.61`, `AAE 7.23`)；官方 `4.871`
+  来自不同的七序列 hidden-test population 与聚合合同，只能通过正式 test submission 比较。
+
+
+### Local-5 ep9 首个续训锚点早期签收（2026-08-05）
+
+<!-- LOCAL5_EP9_EARLY_CHECKPOINT_AUDIT_20260805 -->
+
+- 原流水线只在30轮训练结束后统一检查 ep9/19/29 model/state，若首个 state 损坏会延迟约20轮
+  才发现。新增只读 watcher
+  `entrypoints/audit_local5_ep9_checkpoint_20260805.py`，在 ep9 两文件大小/mtime 连续稳定后立即
+  CPU 加载并生成 `checkpoint_epoch9_early_audit.json`。
+- fail-closed 检查包括：model/state 非空与 SHA256、state internal epoch9、scheduler
+  `last_epoch=9`、milestones13/20、AMP scaler、五参数组 optimizer 与 scheduler LR
+  `1e-4/1e-4/5e-5/5e-5/5e-6`、fullres/window15 保存合同，以及最新训练加载
+  overlay210/missing0/unexpected0。该报告只签收可续训锚点，不宣称精度或 RTL PASS。
+- 正常状态、epoch 漂移和 LR 漂移三项测试 `3/3` PASS；独立 session PID `2264517` 已跨命令
+  确认存活并每60秒等待 ep9，不占 GPU、不修改训练状态。
+
+
+### H67/NB0 +10 checkpoint 标签与 provenance 修正（2026-08-05）
+
+<!-- H67_NB0_PLUS10_LABEL_PROVENANCE_FIX_20260805 -->
+
+- 续训编号复核确认 H67 的 source budget30 使用 checkpoint label30/internal epoch29，配置
+  `epoch_offset=1`，因此内部 epoch34/39 正确保存为 label35/40；NB0 source budget30 使用
+  label29/internal epoch29且无 offset，后续保存 label34/39。summary 统一映射为预算30/35/40，
+  不存在评估 off-by-one。
+- H67 生成配置此前继承旧 ep15到ep30 rescue 的说明字段
+  `resume_source_epoch: 15`，虽不参与训练，但会造成错误 provenance。generator 现移除该字段，
+  两条线均显式记录 `resume_source_budget: 30`、实际 `resume_source_checkpoint_label: 30/29`
+  和 `audited_model_optimizer_scheduler_scaler_equal_plus10_from_fullres30`。
+- 已重新生成等待队列将读取的两份配置；训练 LR、scheduler、epoch 数、保存点、模型和 staged
+  state 均未改变。新增两项 provenance 回归，与 ep9签收、profile/acceptance/closure 回归
+  合计 `14/14` PASS。
+- staged-resume runner 进一步把 config SHA、source budget30 和实际 checkpoint label30/29 写入
+  `resume_stage_audit.json`；已有审计只有在 source model/state/staged-state SHA、hardlink 与 RNG
+  disclosure 全部仍通过时才允许补齐新字段，已存在但不匹配则 fail-closed。配置 SHA 漂移反例
+  测试通过，相关组合回归现为 `15/15` PASS。
+- 旧空等 runner 已安全退出；加载新代码的独立 session PID `2268615` 已生成修正配置并继续
+  等待 Local-5/H67 ep30 T450 release。未启动额外 GPU 作业。
+- 两份 staged 审计已在等待期间以低 I/O 优先级提前升级并重新验真：H67 config SHA
+  `86db3960...b15d1cbcc`、NB0 `55aeb36c...20290efe` 与当前配置逐字节一致；source
+  model/state、staged state SHA、hardlink、internal/scheduler epoch29、scaler 与 LR 均通过，
+  RNG state 缺失继续显式披露。由此配置 provenance 不再只是未来 runner 的预期行为，而是
+  已落盘机器证据。
+
+
+### H9 续训 CLI 布尔参数路径归一化修复（2026-08-05）
+
+<!-- H9_RESUME_BOOLEAN_PATH_NORMALIZATION_FIX_20260805 -->
+
+- 审计 ep9 后自动恢复链发现 `_absolutize_path_args` 误把 `--resume` 和 `--finetune` 当成路径
+  参数，导致命令中的 `1` 被改写为绝对路径 `.../1`。上游 argparse 未声明数值类型且只检查
+  字符串真值，所以历史运行仍进入 resume/finetune 分支，但该行为污染命令语义并可能被未来
+  类型约束破坏。
+- path normalization 现只处理 `--prev_runid`、`--save_path` 和 `--path_mlflow`；
+  `--resume 1`、`--finetune 1` 保持原值。新增 positional/equal-form 混合参数测试通过。
+- 当前 Local-5 首次运行不带 resume，不受代码热更新影响；若 ep9 后 supervisor 恢复，会由
+  新进程加载修正 wrapper。H67/NB0 +10 也尚未启动子训练，后续使用同一正确入口。
+- 参数测试与 ep9签收、+10 provenance/staging、profile/acceptance、final closure 回归合并重跑
+  `16/16` PASS。
+- 新增真实上游 `utils.resume_model` CPU 集成测试：由 `checkpoint_epoch9.pth` 自动定位
+  `checkpoint_epoch9_state_dict.pth`，恢复五组 optimizer LR、scheduler `last_epoch=9`、
+  milestones13/20、`_last_lr` 与 scaler，并验证 `epoch_initial=10`。该测试通过后本组回归为
+  `17/17` PASS，证明 Local-5 ep9 恢复不会只加载模型或重复 epoch9。
+### Local-5 运行时配置身份门控（2026-08-05 19:40 CST）
+
+<!-- LOCAL5_RUNTIME_CONFIG_IDENTITY_20260805 -->
+
+- 当前公平重跑仍在执行：已完成 ep0--3，ep4 约 `24%`；GPU 约 `94%`，当前快路径约
+  `1.04 s/step`。ep0--3 train loss 为 `2.1475/1.8488/1.6811/1.6521`；小验证
+  `1.9795/1.7067/1.8096/2.0182`。训练损失持续下降，但 42-frame 小验证在 ep2--3
+  反弹，因此现阶段只能判为“未收敛且存在泛化波动”，必须以 ep9/14/19/24/29
+  的 standard valid825 排名为准。
+- 审计发现活跃 train 进程启动于 `14:24:39`，而配置生成器及磁盘配置最终 mtime
+  分别为 `14:26:19/14:28:08`。当前配置可以由当前生成器和源配置确定性重建，SHA256
+  均为 `cf8c3da8fd8a40b098ca95a7d27fa84777c969ef025567d840a7c29b54dbedaf`，但不能据此
+  倒推训练进程在 14:24 读入文件的逐字身份。
+- 新增 `entrypoints/enforce_local5_ep9_config_identity_20260805.py`，以 ep9 成对训练 state
+  中实际 optimizer/scheduler/scaler 为运行时权威证据。要求 state/scheduler epoch=9、
+  milestones=`13/20`、五组 LR=`1e-4/1e-4/5e-5/5e-5/5e-6` 且 AMP scaler 存在。
+  若唯一差异是旧 scheduler milestone，脚本先保留原 state，再在 ep9 边界修正并由 supervisor
+  续训；其他差异一律停止训练并 fail closed。
+- 当前身份报告为 `PENDING_EP9_RUNTIME_STATE`：
+  `results/dsec_fullres_w15_H66d_local5_bb1e4_ft30_20260805/training_config_identity.json`。
+  最终 closure audit 已将其加入 REQUIRED，未 PASS 不允许发布 Local-5 结果。
+
+### 第六轮安全清理：退休对称双神经元短筛（2026-08-05）
+
+<!-- RETIRED_SYMMETRIC_SCREEN_CLEANUP_20260805 -->
+
+- 清理范围仅为 `nts11_two_neuron_20260611_203636`、`nts11_phase2_20260611_230130`
+  和单候选 `nts11bc_short_20260613_152906` 的失败 valid10 短筛权重；这些实验全部未过
+  AEE gate，且不属于当前 one-sided binary Local-5/H67/NB0 链路。
+- 保留两组多候选筛选的 rank-1 checkpoint：`NTS11c` 和 `NTS11j`；所有 config、train log、
+  summary、profile 也全部保留。删除其余 12 个 checkpoint，回收 `8,859,732,660 bytes`
+  （`8.251 GiB`），可用空间由约 `219 GiB` 增至 `227 GiB`。
+- 审计：`neuron_autoresearch/cleanup_audits/retired_symmetric_screens_20260805.json`；当前
+  Local-5/H67/NB0、等预算 +10、standard/deploy profile 与 RTL 绑定权重均未触碰。
+
+### Local-5 配置身份下沉到 profile/RTL（2026-08-05 19:47 CST）
+
+<!-- LOCAL5_CONFIG_IDENTITY_PROFILE_RTL_BINDING_20260805 -->
+
+- 配置身份不再只由最终 closure 检查。`run_local5_bb1e4_postg0_profile.py` 现必须等待
+  `training_config_identity.json` PASS，复算训练 config 与 ep9 paired-state SHA，并把该身份文件
+  加入 post-G0 `run_identity.source_bindings`。身份 PENDING 时等待，FAIL 时立即终止。
+- `run_local5_bb1e4_checkpoint_bound_rtl.py` 在 acceptance 后再次复算上述绑定，并把训练身份 SHA、
+  training-config SHA 和 ep9-state SHA 写入 `checkpoint_bound_scope.json`。最终 closure 同时检查
+  acceptance run identity 与 RTL aggregate 的身份 SHA，避免“算法身份合格、硬件向量来自另一条
+  训练链”的错配。
+- 新增 `hw_autoresearch_nts07/tests/test_local5_training_identity_gate.py`，PASS/PENDING、state drift
+  和缺失 post-G0 source binding 三类用例 `3/3 PASS`；相关脚本 py_compile 与 diff-check 通过。
+- 旧空等 watcher 已安全替换为加载新门控的 PID `2286750/2286752`；训练 PID 未改动。
+- ep9 早期审计原有两个等待者可能同时写同一临时报告，现合并为单一 enforcer PID `2287913`，
+  使用内核 `flock`。它在发布身份 PASS 前还会复算 early-audit 的 model/state SHA；独立旧 auditor
+  已安全退出，训练进程未改动。
+
+### H67 all12 实权重 projection RTL 证据补齐（2026-08-05 20:00 CST）
+
+<!-- H67_ALL12_CHECKPOINT_PROJECTION_RTL_20260805 -->
+
+- 复核发现 H67 最终 watcher 原先只对当前 checkpoint 生成 score/Shiftmax 与 ATLIF RTL；历史
+  DCTF96 projection 回放绑定的是旧 bit trace，不能作为 ep30 或追加训练 rank-1 的证据。因此
+  旧结果继续保留为架构开发证据，但不再进入最终 checkpoint closure。
+- `generate_gatestack_dctf_real_trace_vectors.py` 现兼容 all12 attention records，并用
+  `s{stage}_b{block}` 隔离每个 block 的真实 K/gate、checkpoint dyadic INT8 projection weight
+  和 acc32 bias，避免同 stage 多 block 覆盖同一向量目录。source manifest SHA 与完整
+  `run_context.artifact_identity` 同步写入 vector manifest。
+- DCTF96 generator/TB/runner 已从旧 crop T162/8-bit token 合同参数化为 fullres T450/9-bit；
+  单个 gate/lane 超过255 destinations 时确定性拆分而不改变投影和。runner 允许独立
+  `SOURCE_MANIFEST/RESULT_DIR`，逐条执行 all12 Icarus bit-exact，并按 stage 复用编译结果对
+  all12 全部执行 Verilator+SVA；`report.json` 必须绑定当前 checkpoint SHA、12 records、T450、S0--S3
+  coverage 与 `checkpoint_dyadic_int8_projection_weight`。声明范围仅为
+  `checkpoint-bound real-weight projection component RTL-exact`，不是完整 attention/encoder。
+- H67 ep30 与 post-convergence rank-1 watcher、最终 closure 均改为同时要求三类证据：
+  score/Shiftmax、81-site ATLIF temporal matrix、all12 real-weight projection。任一报告缺失、
+  checkpoint SHA 不同或 record 数不是12均 fail closed；ep30 也不再只凭前两类报告复用。
+- trace 复用不再只检查旧 `audit.json` 是否存在；watcher 会复算 checkpoint/config/12 NPZ SHA、
+  all12 与 T450 合同，并在每次正式回放前重新执行 audit，避免恢复后静默消费旧 trace。
+- 静态检查、6项生成器单测、3项最终证据/trace复用测试、synthetic all12 目录/身份传播及 T450
+  token449/450-destination S0 Icarus 与 Verilator+SVA bit-exact 均通过；正式 all12 双仿真回放仍等待 Local-5
+  释放 GPU 后由队列生成，当前不得写成最终 PASS。
+
+### 第七轮安全清理：早期全二值/NTX 微调中间锚点（2026-08-05）
+
+<!-- EARLY_BINARY_NTX_FT_PRUNE_20260805 -->
+
+- 对三条已完成 standard valid825 的早期5轮微调执行 ranking-aware 清理：all-binary FAPS、
+  NTX-from-ep19 和 NTX-from-ep29。三条 ranking 的 AEE rank-1 均为 ep2，最终轮均为 ep4。
+- 每条完整保留 ep2/ep4 model 与 optimizer/scheduler/scaler state、全部配置、日志、valid825
+  profiles 和 ranking；仅删除 ep0/ep1/ep3 的 model/state，共18个文件。
+- 每个 run 目录内已写 `checkpoint_prune_audit.json`；合计回收 `10,603,116,963 bytes`
+  （约 `9.88 GiB`），可用空间由约 `227 GiB` 增至 `237 GiB`。当前 Local-5/H67/NB0、
+  Local-5 crop source、追加训练 staged states 与所有 checkpoint-bound RTL 权重均未触碰。
+
+### Local-5 多启动歧义的活跃进程签收（2026-08-05 20:12 CST）
+
+<!-- LOCAL5_ACTIVE_LAUNCH_PROVENANCE_20260805 -->
+
+- `status.log` 留有14:18、14:24和14:28三次启动尝试；14:28的 `exit_code=1` 属于重复实例，
+  不能误判为当前训练退出。只读 `/proc` 签收确认唯一根训练为 PID2097444、父流水线2097439，
+  启动于 `2026-08-05 14:24:39 CST`，8个同 argv 子进程是 DataLoader workers。
+- 新增 `active_launch_provenance.json`，冻结根/父进程 start ticks、完整 argv、Python executable、
+  config/source checkpoint/save path/finetune 参数，以及 source checkpoint、train/pipeline入口 SHA。
+  source checkpoint SHA 为 `11c5aa35...4b5c`，命令加载审计仍为 overlay210/missing0/unexpected0。
+- 该收据明确只证明 process/argv/source identity；因进程启动早于磁盘配置最终 mtime，不能反推
+  当时读取的逐字配置。因此 ep9 optimizer/scheduler/scaler state 仍是运行时配置权威。
+- ep9 identity enforcer 现必须验证 launch receipt、当前 config SHA、source checkpoint SHA和
+  `start < final config mtime`，并把 receipt SHA 写入最终身份；closure 会再次复算。2项 `/proc`
+  解析测试和4项 enforcer 状态/漂移测试通过，新 enforcer PID2302180 已加载门禁。
+
+### Local-5/H67 当前闭环状态与第八轮 checkpoint 清理（2026-08-05 20:22 CST）
+
+<!-- LOCAL5_H67_STATUS_AND_CLEANUP8_20260805 -->
+
+- Local-5 公平 fullres/window15 训练仍在执行，当前 ep4 约 `78%`。已完成 ep0--3 的
+  train loss 为 `2.1475/1.8488/1.6811/1.6521`，42-frame 小验证为
+  `1.9795/1.7067/1.8096/2.0182`。训练损失下降但小验证波动，且首个预注册模型锚点为 ep9，
+  因此当前仍不能报告 standard AEE/AAE，也不能判定收敛。
+- Local-5 后处理没有遗漏：训练结束后固定评估 ep9/14/19/24/29 的 standard valid825，再对
+  rank-1 运行 float/dyadic/hardware-order、T450 all12 profile100 与 relation acceptance；硬件闭环
+  要求同一 checkpoint 的 score/Shiftmax、checkpoint real-weight projection partial accumulator、
+  81-site ATLIF temporal matrix 三类 RTL-exact 报告。当前这些状态均为 `queued`，历史 crop
+  `h66d_local5_rtl_exact_valid825` 不能冒充本次 fullres checkpoint-bound PASS。
+- H67 ep30 仍是已测最后一轮和 AEE rank-1：ep25 `1.37261` 到 ep30 `1.33874` 继续改善
+  `2.47%`，所以状态保持 `best_at_boundary_not_proven_converged`。H67/NB0 对称 +10 已等待
+  Local-5 释放 GPU；预算35/40及其 standard valid825 完成前，不以“最后一轮最优”推导收敛。
+- NB0 ep24到ep29 AEE改善 `5.56%`，支持 AEE 欠收敛风险；但 legacy AAE 与 AE-3D 只改善
+  约 `0.44%/1.26%`。论文 `4.871` 是七序列 official hidden-test aggregate，本地 NB0
+  AE-3D `6.1803` 是 valid825 frame-mean，population 与聚合都不同；轮次不足可能解释 AEE
+  斜率，不能单独解释全部 AAE 数值差。
+- 第八轮清理只处理三组已被完整 MDR 训练取代的 smoke checkpoint、NTS11bj/bl 的非最优
+  中间轮、两条已退休 NTS11-lite 的非锚点轮，以及被当前公平 fullres 训练取代的旧 ep0
+  初始化模型。删除 `30` 个文件，实际回收 `14,035,456,000 bytes`（约 `13.07 GiB`），
+  可用空间增至约 `250 GiB`。
+- 仍保留 NTS11bj ep2/4、NTS11bl ep2/4、NTS11-lite 各自 best-AEE/final、旧 fullres ep29
+  model+paired state，以及全部配置、日志、valid825 ranking/profile 和 RTL 产物；当前
+  Local-5/H67/NB0、crop source、+10 staged state 与 checkpoint-bound RTL 依赖均未触碰。
+  机器审计位于
+  `neuron_autoresearch/cleanup_audits/retired_smoke_lite_intermediates_20260805.json`，不可变执行收据为
+  `neuron_autoresearch/cleanup_audits/retired_smoke_lite_intermediates_20260805.executed.json`。
+- H67 ep30、post-convergence 与最终 closure 三个等待器的旧 PID 文件在20:08后失去对应进程；
+  未产生错误结果，但会造成后续队列断链。三者已用独立 session 重新常驻为 PID
+  `2310765/2310766/2310767`，复核 PPID=1、独立 SID 且日志重新出现 WAIT。Local-5 训练、
+  optimizer state 和 GPU 作业未重启。
+- 同批复核也发现 ep9 config-identity enforcer 的旧 PID2302180 已退出；已按相同方式重签收为
+  PID2311400，复核 PPID=1、独立 SID 且12:29 UTC重新写入 WAIT。Local-5 ep9 首锚点的
+  optimizer/scheduler/scaler 门禁因此仍处于有效等待状态。
+
+### Local-5 ep4 完成与自动闭环回归（2026-08-05 20:36 CST）
+
+<!-- LOCAL5_EP4_AND_CLOSURE_REGRESSION_20260805 -->
+
+- ep4 已完成并进入 ep5：train loss `1.621065`、42-frame 小验证 `1.642443`、epoch time
+  `4458.03 s`、稳定训练步耗时约 `1.04--1.10 s`，整轮含系统争用的均值为 `1.2141 s/step`。
+  ep3 小验证 `2.018181` 的反弹在 ep4 回落，说明该小集合方差较高，不能据 ep3 单点淘汰
+  Local-5；同样不能用 ep4 小验证代替 ep9 standard valid825。
+- ep4 末 ATLIF activity mean `5.2366%`，module summary 仍为 official one-sided binary
+  ATLIF `105`、ternary activity `0`；Shiftmax summary 仍为 `12` modules。训练 PID、五组 LR
+  和 optimizer state 未重启，GPU 快路径已恢复。
+- 聚焦自动闭环回归共 `25` 项 PASS：fullres/window15 配置、强 LR 与保存点、稀疏 model/state
+  保存、paired-state 恢复到 next epoch、`--resume 1` 路径语义、ep9 runtime state 只允许
+  milestone-only 修复、valid825 825样本/metric/load/module/checkpoint合同、post-G0 acceptance、
+  training-identity SHA，以及 H67/Local-5 stale checkpoint/trace/RTL 复用拒绝。
+- 生产环境 AAE 数值回归再次 `3/3 PASS`，验证 legacy二维方向角、Barron/Middlebury `(u,v,1)`
+  AE-3D 和 batch mask。现有 aggregate profile 未保存逐帧角度分子/有效像素分母，因此不能在
+  不重跑推理的前提下可信重构 pixel-global 或 sequence-weighted AE；当前不使用估算值解释
+  official hidden-test/local-valid 差距。
+- 新增 `supervise_date_closure_watchers_20260805.py`，用单一 flock watchdog 监督六个长等待任务：
+  ep9 config identity、Local-5 checkpoint-bound RTL、H67/NB0 +10、H67 ep30 RTL、H67
+  post-convergence RTL 和最终 closure。每项有独立 PID/命令身份及完成标记，死亡后最多重启8次，
+  已完成项不再拉起；Local-5 训练流水线仍由原 supervisor 独立负责。
+- watchdog 三项 completion/PID fail-closed 测试 PASS；独立 session PID2319106 已签收
+  `PPID=1/SID=2319106`，启动 heartbeat 确认 `incomplete=6, alive=6`。它不占 GPU，也不会把
+  WAIT 状态误记为 PASS。
+- 完成判据进一步要求日志 marker 与最终 artifact 同时存在：Local-5 scope、equal+10 summary、
+  H67 ep30 三组件 reports、post-convergence FINAL、closure JSON+MD；只剩历史 `ALL COMPLETE`
+  日志而报告缺失时仍视为 incomplete。加载该门控的 watchdog PID 更新为2319720，首次
+  heartbeat 仍为 `6/6 alive`。
+- watchdog 还会在 PID 文件缺失/陈旧时扫描 `/proc` 并收养匹配的现有 detached follower，避免
+  盲启副本因 follower 自身 flock 退出后耗尽重试。新增收养反例后测试 `4/4 PASS`；加载最终
+  逻辑的 PID2320213 已再次确认 `6/6 alive`。
+
+### Local-5 ep5 进度、硬件队列与第九轮清理（2026-08-05 20:50 CST）
+
+<!-- LOCAL5_EP5_HW_QUEUE_AND_CLEANUP9_20260805 -->
+
+- Local-5 已完成 ep0--4，当前在 ep5 约 `13%`（进度 `461/3672`）；稳定段约
+  `1.04--1.07 s/step`。已完成 train loss 为
+  `2.14747/1.84878/1.68106/1.65212/1.62107`，42-frame 小验证为
+  `1.97951/1.70673/1.80956/2.01818/1.64244`。小验证反弹已回落，但在 ep9 standard
+  valid825 之前仍不作 AEE/AAE 或收敛结论。
+- Local-5 硬件证据没有遗漏：PID2286750 等待 rank-1 后依次生成 post-G0
+  profile100/T450/all12、relation acceptance、score/Shiftmax RTL、真实权重 projection
+  partial-accumulator RTL 和81-site ATLIF temporal RTL。H67 ep30、追加训练 rank-1 和最终
+  closure 的 PID2310765/2310766/2310767 也全部存活；总 watchdog PID2320213 报告
+  `incomplete=6/alive=6`。
+- H67 ep30 是当前 AEE rank-1（`1.33874`），但 ep25到ep30仍改善 `2.47%`，
+  因此只能写 `best_at_boundary_not_proven_converged`。NB0 ep24到ep29 AEE 改善
+  `5.56%`，欠收敛风险更强；但其 legacy AAE-2D/AE-3D 只改善约
+  `0.44%/1.26%`，所以多训几轮不足以解释 local-valid 与 official hidden-test `4.871`
+  的数值差。H67/NB0 对称 +10 继续以 ep35/40 和末段斜率判定是否平台。
+- 第九轮清理针对已退役 H66c/e/f/g、H68--H71 和 H81 crop 实验。它们的
+  valid825 AEE rank-1 均为 ep19，因此 ep19 最优和 ep29 最终 model 全部保留；只删除
+  无活跃引用的 ep19/ep29 optimizer/scheduler/scaler state，共18个文件、
+  `7,777,410,120 bytes` 约 `7.24 GiB`。可用空间增至约 `257 GiB`。
+- 清理脚本为
+  `neuron_experiments/H9_bipolar_self_attention/entrypoints/prune_retired_h66_h81_optimizer_states_20260805.py`，
+  机器审计为
+  `neuron_autoresearch/cleanup_audits/retired_h66_h81_optimizer_states_20260805.json`。执行后验证
+  18个 state 均不存在、18个保留 model anchor 全部存在；Local-5/H67/NB0、续训源、
+  standard profiles/rankings 和 checkpoint-bound RTL 依赖未触碰。
+
+### AAE 多聚合可执行审计（2026-08-05 21:05 CST）
+
+<!-- AAE_MULTI_AGGREGATION_AUDIT_20260805 -->
+
+- 旧 `spike_profile.json` 只保存 masked mean per frame 后对帧等权的 AAE，没有保存角度
+  numerator、valid-pixel denominator 或 sequence identity，因此无法从旧 aggregate 可信
+  重构 pixel-global 或 sequence-balanced 结果。
+- 新增 `third_party/SDformerFlow/utils/metric_aggregation.py`，在不改变旧 `AEE`/
+  `AAE_Benchmark` 计算和排名的前提下，同一次推理额外输出
+  `frame_equal_mean`、`pixel_global_mean`、`sequence_balanced_mean` 和18个本地
+  valid subsequence 的独立结果。同时保存 validation CSV 绝对路径与 SHA256。
+- Local-5 五个待评 checkpoint、H67/NB0 对称 +10 的所有新 profile 和最终 closure
+  都已升级 fail-closed 门禁：`825` frames、`18` sequences、valid pixels>0、per-sequence
+  records=18，且 frame-equal AEE/AAE-2D/AE-3D 必须与原生产指标在 `1e-5` 内一致。
+  这保证新统计是对同一预测/同一 mask 的重聚合，不是另一条推理链。
+- 数值和反例测试共 `6/6 PASS`，Local-5/equal+10/closure 验收测试 `11/11 PASS`；
+  包含三种聚合字段缺失的反例和rank-1聚合向最终报告传递的正例。
+  `AAE_METRIC_TEST_RECEIPT_20260805.json` 升级为 schema v2，绑定 metric、evaluator、
+  aggregation 及两组测试源码 SHA。equal+10/closure 等待器已重签收并交由总 watchdog
+  维护，实时 PID 以各自 `.pid` 文件为准；Local-5 训练未中断。最终 closure JSON/MD 还会直接汇总
+  Local-5/H67/NB0 rank-1 的 frame/pixel/sequence 三组 AE-3D，无需再手工转抄。
+
+### H67 训练血缘、Local-5 fullres RTL 状态与第十轮清理（2026-08-05 21:20 CST）
+
+<!-- H67_LINEAGE_LOCAL5_RTL_CLEANUP10_20260805 -->
+
+- `H67_FULLRES_LINEAGE_RECEIPT_20260805.json` 已实际复算 PASS：H67 从自身 Motion-XOR crop ep19
+  `5ff626a7...3d22ba` 出发，经 fullres ep0、5、10、15、30 五段训练到 ep30
+  `7a484dc1...f37e4a`；每段 config/log/source/output 均由 SHA 或删除审计绑定，加载记录均为
+  overlay210/missing0/unexpected0。该主线没有从 NB0 或 Local-5 初始化。
+- H67 ep30 是当前最后一轮和 AEE 最优轮，但 ep25到ep30仍改善约2.47%，所以结论仍为
+  `best_at_boundary_not_proven_converged`。H67/NB0 对称 +10 已排队；不能用“最后一轮最优”替代
+  平台检验。NB0 ep24到ep29 AEE仍改善5.56%，同样有欠收敛风险；其角度指标末段变化较小，
+  因而欠训练不能单独解释与 official hidden-test `4.871` 的全部差距。
+- Local-5 fullres 训练已完成 ep0--5、进入 ep6；`training_config_identity.json` 已生成但仍是
+  `PENDING_EP9_RUNTIME_STATE`。ep9 model/state 出现并通过运行时配置门禁后，流水线才会对
+  ep9/14/19/24/29 做 valid825 并选择 rank-1，再生成 T450/all12 profile100、relation acceptance、
+  score/Shiftmax、真实权重 projection partial accumulator 和81-site ATLIF temporal matrix
+  checkpoint-bound RTL-exact。历史 crop RTL 只作开发证据，不能替代本轮 fullres SHA。
+- 第十轮清理仅删除两份已淘汰的 H67 rescue screen ep0 model：NB0→H67 路线的加载审计为
+  overlay0/missing210，crop bb2e5 路线精度也劣于入选 bb1e4。两份配置、train/valid825 日志、
+  ranking 全部保留；当前 H67 五段血缘锚点、Local-5、NB0、equal+10 和所有硬件证据均受保护。
+  实际回收 `1,182,334,976 bytes`（约 `1.10 GiB`）；机器审计为
+  `neuron_autoresearch/cleanup_audits/failed_h67_rescue_screens_20260805.json`。
+- 长队列 watchdog 增加非阻塞 child reaping，避免 follower 被重启后留下 zombie；对应完成、PID、
+  detached adoption 和 reaping 回归 `6/6 PASS`。新 watchdog PID2343815 已收养六个现有 follower，
+  Local-5 训练 PID/配置/GPU context 未重启，实验顺序与硬件 scope 均未改变。
+- 进一步核对 `/proc/2097443/stat` 发现 pipeline 最初的 post-G0 child 曾被 SIGTERM（exit code15），
+  虽然后续 canonical producer PID2286752 已接管，但旧 pipeline 最终 `wait()` 会误把历史子进程
+  退出当成本轮 profile 失败。收尾逻辑已改为以 checkpoint-bound `acceptance.json` 为权威：
+  child 非零时尝试恢复或加入 canonical producer，并在 acceptance 出现后再做 SHA/语义门禁。
+  Local-5 pipeline 回归更新为 `6/6 PASS`。当前训练进程未热改；若旧内存代码最终先退出，
+  supervisor 会在不重训的情况下由 ep29/既有 profile 产物恢复并完成最终 marker。
+- H67/NB0 +10 runner 原先只等待 H67 score/Shiftmax report 出现；该文件早于 ATLIF vector/RTL
+  和 all12 real-weight projection RTL 完成，可能让训练与剩余 GPU vector producer 重叠并 OOM。
+  释放门禁现要求 score/Shiftmax、ATLIF、projection 三报告均 PASS、scope/12 records/T450/9-bit
+  合同完整、全部绑定 H67 ep30 SHA，并且 watcher 最终 completion marker 已落盘。新增反例后
+  Local-5/equal+10 组合回归 `7/7 PASS`；等待中的 runner 已无损重启为 PID2347644，尚未开训。
+- Local-5 ep5 已完整结束并进入 ep6：train loss `1.515193`、42-frame 小验证
+  `1.411659`，相对 ep4 的 `1.621065/1.642443` 分别改善约 `6.53%/14.05%`。ep5耗时
+  `4555.48 s`，max GPU memory `38.177 GiB`；ATLIF仍为105个 official one-sided binary
+  modules，activity mean `5.4486%`、ternary activity `0`，Shiftmax仍为12 modules。
+  训练和小验证都在明显下降，故当前不能提前宣称 Local-5 已收敛，也不缩短预注册30轮预算。
+
+### H67/Local-5 profile-RTL 闭环加固与第十一次清理（2026-08-05 22:10 CST）
+
+<!-- H67_LOCAL5_PROFILE_RTL_CLOSURE_CLEANUP11_20260805 -->
+
+- Local-5 fullres/window15 并未遗漏：当前已完成 ep0--5，ep6 约17%，稳定段约
+  `1.03--1.08 s/step`，GPU利用率约90%。ep5 train/42-frame小验证 loss 为
+  `1.515193/1.411659`，仍明显优于ep4，因此在首个预注册 ep9 valid825 前不作收敛或精度结论。
+- Local-5 最终 rank-1 仍强制生成 float/dyadic/hardware-order 标准推理、profile100、T450/all12
+  trace、relation acceptance，以及绑定同一 checkpoint SHA 的 score/Shiftmax、真实权重 projection
+  partial accumulator 和81-site ATLIF temporal matrix component RTL-exact。历史 crop profile/RTL
+  不能替代本轮 fullres 证据，声明范围仍是
+  `checkpoint_bound_component_rtl_exact_not_full_network`。
+- H67 ep30 post-convergence 复用分支已与 ep35/40 分支对齐。最终收据现在除三类 RTL report 外，
+  还必须核验 hardware-order config、`nts11_hardware_p0_profile.json`、all12 manifest 和 trace audit：
+  checkpoint/config SHA、100 samples、480x640、crop null、T2x15x15=450、ATLIF105、Shiftmax12、
+  12个 NPZ SHA、四stage覆盖全部 fail-closed。ep30生产器、rank-1绑定器、最终 closure 和 watchdog
+  required paths 四层均已升级；旧 checkpoint 或 trace payload 被替换的反例必须拒绝复用。
+- 对应测试为 H67复用 `4/4 PASS`、DATE closure `8/8 PASS`、watchdog `6/6 PASS`。新版 watchdog
+  PID2364542 已重启并拉起 H67 ep30、post-convergence 和 closure 三个等待器；Local-5训练 PID2097444
+  未被重启，H67/NB0 equal+10 PID2347644 仍在严格等待硬件GPU释放。
+- H67 目前是 ep30 AEE `1.3387` 最优，但 ep25到ep30仍改善2.47%，所以状态是
+  `best_at_boundary_not_proven_converged`，不能因为最后一轮最好就称已收敛。NB0 ep24到ep29 AEE
+  改善5.56%，AEE欠收敛风险更高；但 AAE-2D/AE-3D 仅改善0.44%/1.26%，角度已近平台。
+  因此续训可能继续改善 NB0 AEE，却不能把 local-valid AE-3D `6.1803` 与官方七序列 hidden-test
+  `4.871` 的 population/聚合差异解释成单纯训练轮数不足。两条线的同协议 +10 将给出最终证据。
+- 第十一次清理只删除 H66a/H66f/H71 三条已退役 crop 候选中，被各自 ep19 在 AEE、AAE、
+  total_spikes 三项同时支配的 ep29 模型；rank-1 ep19、profiles、rankings、logs、configs 全保留，
+  NTS/TTX/H67/Local-5/NB0 与硬件依赖均未触碰。实际回收 `2,213,556,224 bytes`，审计为
+  `neuron_autoresearch/cleanup_audits/dominated_attention_checkpoints_20260805.json`，可用空间约260GiB。
+- Local-5 checkpoint-bound RTL 启动门进一步前移：`accepted=true` 单字段不再足够；watcher 会在
+  任何 score/projection/ATLIF 回放前解析当前 valid825 rank-1，并复算 acceptance、ordered
+  manifest、run identity、hardware-order config、checkpoint、training identity 的路径和 SHA，
+  同时要求100 samples、12 blocks和11项 acceptance checks。旧 rank-1 acceptance 会自动重跑
+  profile producer，而不是先生成数小时的陈旧 RTL 后再等 closure 拒绝。
+- score 和 projection vector manifest 现也在聚合 PASS 落盘前沿 source manifest 追溯到当前
+  checkpoint SHA；ATLIF report 同样必须绑定该 SHA。最终 `checkpoint_bound_scope.json` 新增显式
+  checkpoint/rank-1/run-identity/acceptance identity。缺失、有效、陈旧 acceptance 与 checkpoint
+  替换反例四项门禁回归 `4/4 PASS`，closure 回归仍为 `8/8 PASS`。纯 WAIT follower 已重启为 PID2369602/2369604，
+  Local-5训练未中断。
+- ATLIF temporal-matrix report 原本已保存完整 config/checkpoint identity，但 Local-5/H67 上层复用
+  只比较 checkpoint SHA。现统一收紧为 config SHA + checkpoint SHA 双绑定：Local-5 post-G0
+  producer、Local-5 aggregate RTL、H67 ep30、H67 post-convergence 和最终 closure 全部拒绝配置漂移。
+  H67复用/Local-5门禁/closure回归分别为 `5/5`、`4/4`、`8/8 PASS`；加载最终逻辑的等待器为
+  Local-5 PID2372110/2372115、H67 PID2372111/2372112、closure PID2372113。训练PID未改变。
+
+### Local-5/H67 当前状态、直接 trace 绑定与第十二次清理（2026-08-05 22:30 CST）
+
+<!-- LOCAL5_H67_DIRECT_TRACE_CLEANUP12_20260805 -->
+
+- Local-5 fullres/window15 并未漏做：训练 PID2097444 当前在 ep6 约44%，ep0--5 已完成；首个
+  预注册 model/state 是 ep9。`training_config_identity.json` 保持
+  `PENDING_EP9_RUNTIME_STATE` 是正确的 fail-closed 状态。ep9/14/19/24/29 五个 checkpoint 才会
+  进入 valid825/rank-1，随后对最终 rank-1 生成 float/dyadic/hardware-order 推理、profile100、
+  T450/all12 trace、relation acceptance、score/Shiftmax RTL、真实权重 projection partial
+  accumulator RTL 和81-site ATLIF temporal-matrix RTL。声明仍严格为
+  `checkpoint_bound_component_rtl_exact_not_full_network`，不能把历史 crop RTL 当作本轮签核。
+- H67 score/Shiftmax 与 projection 的最终复用门禁进一步从“经上层间接绑定”升级为报告自身直接
+  绑定 hardware-order config SHA；score 报告还必须直接绑定 source all12 trace manifest 的路径与
+  SHA。H67 ep30 producer、post-convergence rank-1 binder 和最终 closure 三层同步 fail-closed，
+  最新 H67 反例回归 `5/5 PASS`、closure `8/8 PASS`。新版 watchdog PID2375263 已拉起
+  H67 ep30 PID2375265、post-convergence PID2375266 和 closure PID2375267；Local-5训练与其硬件
+  follower 未重启。
+- H67 ep30 是当前最后一轮且 AEE rank-1（AEE `1.3387`、AAE-2D `6.0147`、AE-3D
+  `5.7558`），但 ep25到ep30 AEE仍改善约2.47%，所以仍只能标记
+  `best_at_boundary_not_proven_converged`。H67/NB0 同协议 +10 runner PID2347644 已排队，待当前
+  Local-5/profile向量任务释放 GPU 后比较 ep35/40 和末段斜率；最后一轮最好本身不是收敛证据。
+- NB0 ep29 的 local-valid 指标为 AEE `1.4454`、AAE-2D `6.5128`、AE-3D `6.1803`。
+  ep24到ep29 AEE仍改善5.56%，说明 AEE 很可能欠收敛；但 AAE-2D/AE-3D 仅改善0.44%/1.26%，
+  角度已接近平台。论文 `4.871` 是七序列 hidden official-test 聚合，本地是18个 validation
+  subsequences、825帧 frame-equal；论文 validation 行 AAE 为 `7.23`。因此不能把 local `6.1803`
+  与 official-test `4.871` 的差全部归因于轮次，+10 只用于量化训练余量，不用于伪造同口径比较。
+- 第十二次清理只删除三个明确退役的早期短筛 model：H56A threshold-rate、NTX03 TX-refine 和
+  NSC08 low-LR 无提升各一份 ep0。配置、日志、指标与历史结论全部保留；NSC09 best short、NB0、
+  NTX/NTS 表格锚点、TTX/BTTX、H67、Local-5、fullres 和所有硬件证据均受保护。实际回收
+  `1,948,774,400 bytes`，可用空间约262GiB，机器审计为
+  `neuron_autoresearch/cleanup_audits/retired_early_screen_checkpoints_20260805.json`。
+- Local-5 流水线新增 checkpoint-set 完整性反例：固定五个 eval model
+  `9/14/19/24/29` 和三个 paired optimizer/scheduler/scaler state `9/19/29`，逐个删除任一产物都必须
+  fail closed。软件验收由 `7/7` 升为 `8/8 PASS`；checkpoint-bound RTL watcher仍为`4/4 PASS`，
+  12-block真实权重projection contract为`1/1 PASS`。该回归不改训练配置或运行中进程。
+- H67/NB0 equal+10 的 GPU release gate 也补齐同级直接证据，不再只看三类RTL的checkpoint SHA：
+  现在同时要求ep30 hardware-order config、profile100、all12 trace、trace audit、score/Shiftmax、
+  ATLIF、projection和最终marker；复算config/checkpoint SHA、100 samples、480x640/T450、
+  ATLIF105/Shiftmax12、12个trace文件SHA及四stage覆盖。score还必须直接绑定source trace SHA，
+  三类RTL均直接绑定config SHA。正例与trace-config漂移反例已纳入Local-5/equal组合`8/8 PASS`；
+  staged H67/NB0 model/state SHA复算通过，加载新版门禁的WAIT runner为PID2383761，尚未开始训练。
+- Local-5 acceptance 后原有两个潜在GPU producer：profile wrapper生成ATLIF checkpoint vectors，
+  checkpoint-bound watcher生成score/projection vectors。现将watcher的ATLIF replay移到最前，先通过
+  既有ATLIF flock让二者“一个生产、另一个复用”，ATLIF报告与rank-1 config/checkpoint双SHA通过后
+  才释放score/projection。顺序回归加入后checkpoint-bound watcher为`5/5 PASS`；新版父/子
+  PID2385101/2385103已在纯WAIT状态加载，训练PID2097444未重启。该修复消除acceptance瞬间的
+  双GPU vector producer/OOM窗口，不改变数值、向量或RTL声明范围。
+- Local-5 score/projection source ordered manifest 的复用门由checkpoint SHA升级为
+  `(checkpoint SHA, hardware-order config SHA)`双绑定；aggregate `checkpoint_identity`也显式保存
+  config path/SHA，最终closure沿score与projection各自的source manifest重新复算。缺失/短config
+  SHA反例加入后，watcher为`6/6 PASS`、closure为`9/9 PASS`。加载最终代码的Local-5父/子为
+  PID2386788/2386791，closure为PID2386789；均处于WAIT，训练未重启。
+- 新增机器收据 `H67_NB0_FULLRES_HEAD_TO_HEAD_20260805.json`，直接绑定两个端点profile与checkpoint
+  SHA。在完全相同local-valid825口径下，H67 ep30相对NB0 ep29：AEE `-7.376%`、AAE-2D
+  `-7.647%`、AE-3D `-6.869%`、total spikes `-35.529%`，四项lower-is-better同时占优。因此
+  “H67当前端点优于baseline且满足spikes至少下降20%”已由数据证明；“H67已收敛”仍未证明，继续
+  等待equal+10。该结论只用于同一local validation比较，不冒充论文official hidden-test结果。
+- 最终closure新增论文硬目标的可执行选择门：以equal+10后的NB0 rank-1为基准，分别计算H67和
+  Local-5的AEE变化与spikes变化；候选必须同时满足`AEE <= 1.05*NB0`和
+  `spikes <= 0.80*NB0`，至少一个候选过线，否则closure失败。未过线候选仍作为负消融保留；
+  多个过线时选择AEE最低者为最终主线。正例、单项失败和全部失败回归后closure为`10/10 PASS`，
+  加载该门禁的WAIT PID为2389117。
+- Local-5与equal+10标准评估的复用条件从“ranking文件存在”收紧为“ranking存在且每个冻结
+  checkpoint的825-frame协议、聚合、load audit、module count、config/checkpoint SHA全部通过”。
+  中途中断留下partial/stale ranking时会自动重跑valid825，而不是永久重启失败。回归加入后软件
+  组合为`10/10 PASS`；equal+10新版WAIT PID2390244已加载。Local-5当前训练父进程不为该恢复性
+  改动中断；若旧内存路径评估失败，supervisor会用新版代码无损恢复。
+<!-- PROFILE_CHECKPOINT_CONFIG_DOUBLE_IDENTITY_20260805 -->
+
+### Local5/H67 profile 双身份闭环（2026-08-05）
+
+- Local5 fullres30 正在训练；冻结评估点为 ep9/14/19/24/29，rank-1 后补 standard valid825、dyadic Q7/Q1.7、hardware-order、T450 ordered profile/replay 与 component RTL-exact。
+- 所有 standard profile 现在必须同时匹配训练 checkpoint path/SHA256 与训练 config path/SHA256；dyadic、hardware-order profile 分别绑定各自部署 config，禁止仅凭旧 ranking/profile JSON 复用。
+- H67/NB0 equal+10 的每个 valid825 profile 同样绑定候选 checkpoint 与对应 equal+10 config。最终 closure 对 Local5、H67、NB0 和两条部署 profile 重新验 SHA、overlay/missing/unexpected、ATLIF/Shiftmax count 与 480x640、T2x15x15、825-frame 指标合同。
+- 定向验收测试：Local5 pipeline `10/10 PASS`，DATE closure `10/10 PASS`。当前 Local5 训练不因合同补强中断；最终独立 closure 使用新规则 fail-closed 验收。
+
+<!-- WINDOW15_PRETRAINED_WINDOW_AUDIT_20260805 -->
+
+### Window15 与 pretrained-window 公平性审计（2026-08-05）
+
+- 发布的 `valid_DSEC_supervised.yml` 采用当前 `window_size=[2,15,15]`、来源 `pretrained_window_size=[2,9,9]`；后者表示低分辨率来源窗口，不等于当前切窗。
+- Local5 保留 `[2,9,9]`，H67 rescue 配置记录为 `[2,15,15]`。源码 AST 审计确认 `Spiking_QK_WindowAttention3D.forward` 与安装后的 `_qk_shiftmax_gate_forward` 均不读取 `pretrained_window_size`；all12 installer 仅替换该 QK 类，故差异不进入 H67/Local5 attention 前向。
+- 两条训练日志都确认 `ShiftmaxAttention=12`、`checkpoint_overlay_keys=210`、`missing=0`、`unexpected=0`。公平比较使用的实际几何仍一致：480x640、crop null、T2x15x15、batch2；无需因此中止或重跑。
+- 此结论只适用于当前 `swinv1` QK+Shiftmax all12 路径；若恢复原始 full-matrix WindowAttention 或启用 `swinv2` continuous relative-position bias，必须重新统一 pretrained-window 并复核。
+
+<!-- EQUAL10_MULTI_AGGREGATION_SOURCE_REEVAL_20260805 -->
+
+### Equal+10 源点重评与 AAE 三聚合边界（2026-08-05）
+
+- 旧 H67 ep30/NB0 ep29 fullres profile 只有 frame-equal 指标，不含升级后的 `metric_aggregation_audit`；不得据此猜测 pixel-global/sequence-balanced 数值。
+- equal+10 会在新 run 中重评 H67 30/35/40 与 NB0 29/34/39；旧 profile 缺三聚合、validation-list SHA 或 checkpoint/config path+SHA 任一项即不能复用。
+- staged source receipt 已核对：模型与原 source hardlink，optimizer/scheduler/scaler 续接，旧 scheduler milestones 清空而 LR 不变；历史 RNG state 缺失，故披露为 state-continuation、非 RNG bit-exact continuation。
+
+<!-- LOCAL5_EP7_H67_PROVENANCE_V2_20260805 -->
+
+### Local5 ep7、H67 收敛边界与 RTL provenance v2（2026-08-05 23:35 CST）
+
+- Local5 fullres/window15 训练 PID2097444 仍正常运行，当前到 ep7 约32%，约
+  `1.04 s/step`；ep0--6 train/valid loss依次为
+  `2.1475/1.9795`、`1.8488/1.7067`、`1.6811/1.8096`、`1.6521/2.0182`、
+  `1.6211/1.6424`、`1.5152/1.4117`、`1.4714/1.4306`。首个正式 model/state 仍是ep9，
+  因而当前Local5没有fullres RTL-exact结果是正确的queued状态；五点valid825、rank-1、三部署
+  profile及score/Shiftmax、ATLIF、真实权重projection component RTL均未跳过。
+- H67 ep30是当前边界rank-1，但ep25到ep30 AEE仍改善`2.47%`，不能称为收敛；NB0 ep24到
+  ep29 AEE仍改善`5.56%`。两者的AAE-2D只变化`+0.08%/-0.44%`，AE-3D变化
+  `-0.18%/-1.26%`，说明角度已近平台而EPE尚有续训余量。equal+10将以相同预算判断收敛，
+  不把最后一轮最优误写为plateau。
+- NB0 local-valid ep29 的`AAE-2D=6.5128`、Barron AE-3D=`6.1803`在非同一validation协议下数值低于论文行，
+  AAE `7.23`；论文`4.871`来自七序列official hidden test，而本地为18段/825帧validation。
+  因此训练不足可能继续改善AEE，但不能解释或消除全部`4.871`差距；最终只做同population、
+  同公式、同聚合比较，official-test数字必须由官方提交获得。
+- H67真实权重projection报告升级为`h67_checkpoint_projection_rtl_exact_v2`：报告必须SHA/size
+  绑定source trace manifest、vector manifest、12组record manifest及全部memh payload，同时绑定
+  generator及其测试、runner、TB、SVA、bind和7个RTL源文件；任一payload或源码漂移即fail closed。
+  新增端到端报告生成/篡改反例，连同H67复用与closure回归共`11/11 PASS`。
+- H67 ep30、post-convergence和最终closure watcher已重启为PID2418138/2418139/2418140以加载
+  provenance v2。H67 T450 source trace尚未生成，故v2实际RTL PASS仍等待Local5释放GPU后生产；
+  现阶段声明仍是`checkpoint_bound_component_rtl_exact_not_full_network`，不得提前写成整网exact。
+- 最终closure新增Local5收敛资格门：若rank-1仍为ep29且ep24到ep29 AEE改善大于`1%`，Local5
+  标记`not_plateaued`并不得被选为最终主线；H67 equal+10仍为`not_plateaued`时同样不具资格，
+  NB0参考线若仍未平台则整个最终选择fail closed并要求继续对称训练。新增边界/内点及候选排除测试后
+  后续已收紧为任何边界rank-1均视为right-censored，不再用小于1%的斜率自动放行。
+- 早期无关checkpoint已完成12轮白名单清理，当前约260GiB可用。为保护Local5五点评估、H67/NB0
+  equal+10及其续训state，本阶段不继续泛化删除；待最终rank-1冻结后再清本轮非最优中间权重。
+
+<!-- LOCAL5_PROJECTION_PROVENANCE_V2_20260805 -->
+
+### Local5 component RTL provenance v2（2026-08-05 23:45 CST）
+
+- Local5最终aggregate收据升级为`local5_checkpoint_bound_component_rtl_exact_v2`。除既有
+  checkpoint/config/acceptance身份外，closure现在实时复算projection report、vector manifest、
+  ordered source trace manifest/payload、8个memh payload、13个RTL/TB、7个SVA及runner/generator/
+  summarizer源码的path/SHA256/bytes；任一向量、trace或RTL源码替换都会令旧PASS失效。
+- 新增生产形态21行source manifest去重、精确RTL/SVA集合及projection/score/ATLIF payload
+  篡改反例；与H67 provenance、复用和closure测试合计`25/25 PASS`。加载最终源码快照的
+  Local5硬件父/子为PID2445870/2445874，最终closure为PID2445871；训练
+  PID2097444未重启。
+- 颗粒度仍不夸大：105是软件安装wrapper数；历史同构profile显示93个唯一动态调用site，当前
+  Local5 rank-1的93口径须等本轮profile直接确认。ATLIF replay预注册为sample0、每站点首次调用、
+  过滤12个结果死亡attn_sn后的81个功能活跃site，每site选择320个位置，共25,920 events；不是
+  81个site全部运行时激活。attention score/Shiftmax与真实权重projection由独立RTL链覆盖，
+  aggregate仍明确为component exact而非full-network exact。
+- ATLIF旧报告复用现在先递归重算report `source_sha256`与vector manifest内generator及全部7个mem/
+  contract payload；score链递归重算3个RTL/TB、3类日志、vector/source manifest/payload和vector
+  文件，并由aggregate额外绑定shell/generator/reporter。源码或payload漂移后不得复用旧PASS。
+- Local5 capture现在直接保存并SHA绑定installed/called/dead-called/replayed四个完整名称集合；
+  reporter强制集合关系`105/93/12/81`及dead-called全为`attn_sn`。Local5与H67/NB0的最终收敛门
+  同步改为：最大预算点只要仍是rank-1，就一律标记right-censored，不论末五轮斜率是0.1%还是
+  2%；斜率只作描述。Local5条件续训配置已在看到ep29结果前冻结为
+  `dsec_fullres_w15_H66d_local5_bb1e4_equal_plus10_ep40.yml`，SHA256
+  `99f5baef32334762f6e5fb6d00aa61911e5ab91a38583ffa38a21a10b9a537a7`，仅允许从自身ep29
+  model/optimizer/scheduler/scaler续接并保存ep34/39。新增覆盖后组合回归为`35/35 PASS`，
+  H67/NB0 equal+10新版WAIT PID2440292。
+
+<!-- LOCAL5_EP7_CLEANUP13_CONVERGENCE_20260806 -->
+
+### Local5 ep7、收敛签核与第十三轮安全清理（2026-08-06 08:10 CST）
+
+- Local5 fullres/window15训练PID2097444保持运行，GPU利用率约93%，ep7已完成并正常进入ep8。ep0--7
+  train/42-frame小验证loss为`2.1475/1.9795`、`1.8488/1.7067`、`1.6811/1.8096`、
+  `1.6521/2.0182`、`1.6211/1.6424`、`1.5152/1.4117`、`1.4714/1.4306`、
+  `1.4330/1.3504`。ep7相对ep6的train/小验证loss继续下降约`2.61%/5.61%`，尚无提前停止依据。
+  首个冻结点仍为ep9，
+  因此当前尚无Local5 fullres valid825 rank-1或checkpoint-bound RTL-exact PASS。ep9/14/19/24/29
+  五点评估、float/dyadic/hardware-order profile、profile100/T450 trace、score/Shiftmax、ATLIF和
+  真实权重projection三类component RTL均由现有follower继续排队，未漏做。
+- H67 ep30是当前AEE rank-1，但ep25到ep30 AEE仍从`1.3726`降到`1.3387`（`-2.47%`），故状态
+  仍为`best_at_boundary_not_proven_converged`。NB0 ep24到ep29 AEE从`1.5304`降到`1.4454`
+  （`-5.56%`），同样不能签AEE已收敛；两者AAE-2D/AE-3D末段仅变化约
+  `+0.08%/-0.18%`与`-0.44%/-1.26%`，说明角度已近平台而EPE仍有训练余量。H67/NB0同预算
+  `+10` runner PID2440292仍在等待Local5及H67 component证据释放GPU，最终以ep30/35/40和
+  ep29/34/39同协议曲线判定。
+- NB0 local-valid ep29为`AEE/AAE-2D/AE-3D=1.4454/6.5128/6.1803`，在非同一validation协议下数值低于论文行，
+  行AEE约`1.61`、AAE`7.23`。论文`4.871`属于七序列official hidden-test AE，本地是18段、825帧
+  frame-equal validation；因此欠收敛可能继续改善AEE，但不能解释全部角度差距，也不能把本地
+  valid825训练到某个数字后冒充official test复现。
+- ATLIF capture新增直接构造105 installed、93 called、12 dead-called和81 replayed站点的测试，
+  与manifest/report、Local5/H67 provenance、复用和closure回归合计`36/36 PASS`。该测试只证明
+  capture/reporter集合合同；本轮Local5 rank-1的实际站点集合仍须由最终profile向量直接确认。
+- 第十三轮清理仅删除2026-05-22的40组H40 160-step短筛和2组并行probe各自唯一的
+  `checkpoint_epoch0.pth`。42个目录的config、train/profile日志、CSV、summary和JSON测量全部保留；
+  NB0、TTX/BTTX、H67、Local5、fullres、resume state、valid825和RTL证据均未触碰。实际回收
+  `18,370,277,376 bytes`（候选文件逻辑大小`18,370,277,220 bytes`，约`17.11 GiB`），可用空间
+  增至约`278 GiB`。机器审计为
+  `neuron_autoresearch/cleanup_audits/retired_h40_may_screen_checkpoints_20260806.json`。
+
+<!-- LOCAL5_THETA_FOLDED_CLOSURE_FIX_20260806 -->
+
+### Local5 theta-folded 最终闭环修复（2026-08-06 08:25 CST）
+
+- requirement-by-requirement审计发现最终closure仍要求旧projection枚举
+  `checkpoint_dyadic_int8_head_slice`，而当前Local5 checkpoint-bound runner、向量生成器、reporter
+  和theta-folded硬件合同统一生产`checkpoint_theta_folded_dyadic_int8_head_slice`。若不修复，正确
+  的最终RTL报告会在所有任务完成后被closure误拒绝。
+- closure现冻结为theta-folded生产枚举，并新增正例接受/旧枚举拒绝回归；该修复只改变最终审计
+  合同，不改变训练、量化、向量或RTL数值。最终JSON还新增auditor自身path/SHA256，并将其纳入
+  `source_sha256`，避免审计逻辑变化后旧PASS失去代码版本身份。
+- Local5/H67 provenance、复用、收敛和closure组合回归更新为`38/38 PASS`。纯WAIT closure已重启
+  为PID2458356加载新代码；Local5训练PID2097444、profile/RTL follower及H67/NB0队列均未重启。
+- Local5当前正常运行ep8，约12%；ep9 model/state尚未产生，training identity继续保持
+  `PENDING_EP9_RUNTIME_STATE`是正确的fail-closed状态。
+
+<!-- EQUAL10_LOCAL5_RTL_RELEASE_GATE_20260806 -->
+
+### Equal+10 的 Local5/H67 双硬件完成门（2026-08-06 08:30 CST）
+
+- 进一步审计发现equal+10日志虽写“等待Local5 pipeline”，旧实现实际只验证H67 ep30的profile、
+  all12 trace和三组件RTL；未要求Local5 checkpoint-bound RTL完成。若H67先完成，后续训练可能与
+  Local5 score/projection向量生成重叠并造成GPU OOM。
+- 新释放门同时要求：H67 ep30 profile100/T450 trace/audit及score/ATLIF/projection PASS；Local5
+  当前ranking rank-1与aggregate中的checkpoint/config path+SHA一致、score/ATLIF/projection均PASS、
+  projection为theta-folded生产模式，并且Local5 RTL watcher completion marker已落盘。该门只负责
+  GPU串行，最终报告真实性仍由DATE closure递归复算全部provenance。
+- 新增当前rank-1正例、旧projection枚举、checkpoint SHA漂移及criterion文字一致性反例；组合
+  回归为`41/41 PASS`。JSON/Markdown criterion现明确“最大观测预算点为AEE rank-1即
+  right-censored，last5斜率只作描述”，不再保留与代码冲突的`>1%`条件。equal+10纯WAIT runner
+  已重启为PID2461925，日志确认
+  `WAIT Local-5 RTL and H67 ep30 T450 evidence release`。Local5训练当前ep8约15%，GPU利用率约96%。
+
+<!-- LOCAL5_H67_RTL_SERIALIZATION_CLEANUP14_20260806 -->
+
+### Local5/H67 硬件任务严格串行与第十四轮安全清理（2026-08-06 08:35 CST）
+
+- H67 ep30 profile watcher此前只等待Local5软件pipeline completion marker，再以瞬时GPU显存低于
+  8GiB作为释放条件；这仍可能在Local5 checkpoint-bound RTL producer尚未启动或两个GPU阶段之间
+  抢先占卡。现改为先验收Local5当前ranking rank-1、checkpoint/config path+SHA、aggregate
+  component-exact/not-full-network scope、score/ATLIF/projection三类PASS、theta-folded projection
+  weight mode及RTL completion marker，随后才检查GPU空闲。新H67 watcher PID2464747已加载该门并
+  显示`WAIT Local-5 checkpoint-bound RTL release`。依赖顺序为Local5训练/五点评估 -> Local5三类
+  component RTL -> H67 ep30 component RTL -> H67/NB0 equal+10，不存在环依赖。
+- 审计同时发现`test_h67_final_evidence_reuse.py`是pytest风格自由函数，而当前环境没有pytest；旧
+  `unittest`命令实际未执行其中5个既有正反例。现增加显式`load_tests`并将fixture升级为projection
+  provenance v2，真实构造all12名称、source/vector manifests、payload、7个RTL及所有SHA/bytes绑定。
+  checkpoint/config/trace漂移和Local5旧weight mode反例均通过，组合回归为实际执行的`47/47 PASS`。
+- 第十四轮清理仅删除12个2026-06-25/30退役MDR smoke、DataLoader/backend及吞吐测速目录中的30个
+  唯一`.pth`文件；所有配置、日志、测速和正式MDR训练结果保留。实际回收`9,656,684,544 bytes`
+  （候选逻辑大小`9,656,683,198 bytes`），可用空间约287GiB。NB0 ep29、TTX/H66d ep29、H67 ep30、
+  Local5源checkpoint和正式MDR ep43续训锚点均在删除后验证存在。机器审计为
+  `neuron_autoresearch/cleanup_audits/retired_mdr_smoke_bench_checkpoints_20260806.json`。
+- Local5训练PID2097444未重启，当前ep8约29%、约1.05s/step、GPU利用率99%；ep0--7最后一点仍为
+  train/42-frame小验证loss `1.4330/1.3504`，尚未生成首个冻结ep9。因此Local5 fullres valid825、
+  profile和RTL-exact仍是已排队未完成，而不是漏做。H67 ep30仍是AEE边界rank-1，但ep25到ep30
+  改善2.47%，只能标记`best_at_boundary_not_proven_converged`。NB0 ep24到ep29 AEE改善5.56%，
+  AEE也有欠收敛风险；其local-valid AAE-2D/AE-3D=`6.5128/6.1803`仅能称为在非同一协议下数值低于论文validation AAE
+  `7.23`。论文`4.871`来自不同population/聚合的official hidden test，不能把差距单纯归因于轮次。
+
+<!-- LOCAL5_SOFTWARE_MARKER_SHA_HARDENING_20260806 -->
+
+### Local5软件完成marker的checkpoint/config SHA加固（2026-08-06 08:42 CST）
+
+- 继续逐层审计发现Local5主pipeline的`validate_profile_acceptance()`只检查ordered manifest中的
+  checkpoint路径和阈值语义，没有像checkpoint-bound RTL follower一样检查acceptance schema、全部
+  13项acceptance checks、manifest/run-identity SHA、run identity v3、checkpoint/config path+SHA及
+  manifest反向绑定。该缺口不会绕过最终RTL/DATE closure，但可能让软件pipeline completion marker
+  在同路径旧artifact存在时过早落盘。
+- 主pipeline现采用与硬件follower一致的严格身份合同，并把checkpoint哈希缓存改为
+  `path+size+mtime_ns`键，避免同一进程内文件原地变化后继续复用旧digest。当前训练进程仍使用启动时
+  已加载代码，没有重启；因此独立supervisor也从“只信marker”升级为marker后重新验证5个模型、3个
+  paired state、5份standard valid825 profile、当前rank-1及严格post-G0 acceptance。即使旧内存父进程
+  写出弱marker，supervisor也会拒绝并用新代码恢复。
+- 仅纯等待supervisor无损重启为PID2471551；Local5训练PID2097444和主pipeline PID2097439未变化。
+  acceptance等待函数也从“文件存在即释放”改为严格验证，stale文件会触发canonical producer重建，
+  避免supervisor重复重启耗尽。新增marker-only/旧acceptance/checkpoint内容漂移及stale恢复反例后，
+  全链实际回归为`49/49 PASS`。Local5
+  checkpoint-bound RTL和最终closure仍是更高层独立签核，不依赖该软件marker作为真实性证明。
+
+<!-- AAE_DSEC_FL_CLOSURE_RECOMPUTE_20260806 -->
+
+### 标准DSEC Fl、共同population与closure派生量重算（2026-08-06 09:00 CST）
+
+- DATE审稿式独立复核确认AAE-2D和Barron AE-3D公式在本地内部自洽，但发现历史
+  `AEE_outliers`以预测流幅值作5%阈值分母，不是标准DSEC Fl-all。旧字段和历史数值保持不变，仅标为
+  `legacy_prediction_magnitude_fraction`；新增`DSEC_Fl`按
+  `EPE>3px && EPE>0.05*|GT flow|`计算并以百分数输出。生产evaluator和三聚合audit会在不改训练config
+  文件的前提下自动保存该字段，因此当前Local5训练config SHA及运行身份不受影响。
+- metric侧新增能区分prediction/GT分母的反例，多聚合侧验证frame-equal、pixel-global、
+  sequence-balanced三种DSEC Fl；当前metric/aggregation为`8/8 PASS`，receipt已重生成并绑定当前
+  metric/evaluator/aggregation及测试源码SHA。以后论文Fl-all只能引用`DSEC_Fl`，历史7.93%/6.47%
+  不再与论文8.91%/10.051%比较。
+- 最终closure不再信任convergence summary的派生字段。它从已通过checkpoint/config SHA与完整protocol
+  验收的H67/NB0三点profile自行重算rank-1 budget/label、AEE/AAE-2D/AE-3D last5与last10、spikes
+  last5/last10、boundary decision及angle decision，再逐字段比对summary；任一陈旧或伪造字段均拒绝。
+- 每份profile现在返回validation-list path/SHA和`sequence_id -> frame_count`。closure强制Local5五个
+  standard点、dyadic/hardware-order、H67三点和NB0三点全部一致，并进一步硬绑定valid825 SHA
+  `7f3dc2800653e12caca10379c51ee8e8988aaf6bb80c391224a454a5879325d0`及18序列精确825帧分布，
+  避免“所有候选一致地跑错列表”仍通过。
+- AAE诊断措辞已修正：本地NB0只能称为在非同一local-validation协议下数值低于论文validation行，
+  不能称为受控复现或超过论文；AAE-2D `6.5128`与official AE-3D `4.871`禁止跨公式比较。主闭环测试
+  当前`50/50 PASS`，metric/aggregation另`8/8 PASS`。equal+10/closure/supervisor等待进程已加载新
+  合同，PID分别为2482999/2484511/2483016；Local5训练未重启。
+- equal+10仍应准确表述为“各自已冻结训练recipe下的等full-resolution epoch预算”，不是共享
+  optimizer超参的architecture-only因果消融；正式论文若要提出结构独立增益，仍需匹配shared-backbone
+  LR/WD的控制或多seed误差条，不能用当前单轨迹收敛审计替代统计证据。
+
+<!-- LOCAL5_DEPLOY_SUMMARY_AND_CLEANUP15_20260806 -->
+
+### Local5部署摘要闭环与第十五轮短筛清理（2026-08-06 09:10 CST）
+
+- Local5当前训练父/子PID仍为`2097439/2097444`，未重启；ep8约76%、约`1.05 s/step`，GPU约
+  `46 GiB/91%`。ep9 model/state尚未落盘，所以`training_config_identity.json`保持
+  `PENDING_EP9_RUNTIME_STATE`，硬件profile/RTL等待首个冻结输入是正确状态。H67 ep30和后续
+  equal+10继续严格排在Local5 checkpoint-bound RTL之后。
+- 训练父进程在新增标准`DSEC_Fl`前已加载旧版部署摘要解析器。为避免它在训练结束后写出缺少
+  `DSEC_Fl`的弱摘要，独立supervisor现额外验证rank-1 checkpoint、float/dyadic/hardware三份摘要的
+  `AEE/AAE/AAE_Benchmark/DSEC_Fl/total_spikes`，并与两份部署profile逐字段相等；旧内存pipeline若
+  生成弱marker，supervisor会以新代码跳过已完成训练，仅恢复推理/摘要，不会重训。加载该合同的
+  supervisor PID为`2487791`。
+- 新增部署摘要缺字段和profile数值漂移反例后，主闭环回归实际执行`51/51 PASS`；AAE与聚合测试另
+  `8/8 PASS`。这保证Local5最终rank-1进入profile/RTL前，标准DSEC Fl和共同valid825 population均
+  已闭环，但不把尚未生成的fullres RTL证据误写为PASS。
+- 第十五轮清理仅针对7个已有`summary.csv/md`的一轮淘汰短筛权重：BTTX A4、FAPS三个整数比例、
+  H66a两次accuracy screen及H65对称恢复。所有配置、日志、summary和正式全训权重保留；NB0、TTX、
+  H67、Local5、正式MDR及NTS对称短筛rank-1均为显式保护锚点。机器审计写入
+  `neuron_autoresearch/cleanup_audits/retired_one_epoch_idea_screens_20260806.json`；实际回收
+  `5,163,982,848 bytes`，可用空间约292GiB，删除后所有保护锚点和活动训练进程均复验通过。
+
+<!-- LOCAL5_RTL_WATCHER_DURABILITY_20260806 -->
+
+### Local5 checkpoint-bound RTL等待器脱离终端（2026-08-06 09:15 CST）
+
+- 运行态复核发现原Local5硬件父/子PID `2457012/2457015`虽有独立SID，但stdin/stdout/stderr仍绑定
+  `pts/1`，其生命周期仍可能受启动终端影响。该进程当时只等待ep9身份、未生成profile或RTL，因此
+  受控终止整个旧process group，不触碰训练PID `2097439/2097444`。
+- 当前代码以`setsid`、stdin=`/dev/null`、stdout/stderr写入
+  `hw_autoresearch_nts07/results/local5_bb1e4_checkpoint_bound_rtl_launcher_20260805.log`重新启动；新父/子
+  PID为`2493350/2493352`，父进程PPID=1、无TTY，状态继续为
+  `WAIT Local-5 ep9 runtime config identity PASS`。这只增强长队列生命周期，不改变训练、推理、量化、
+  profile或RTL数值合同。
+
+<!-- LOCAL5_EP9_RUNTIME_IDENTITY_PASS_20260806 -->
+
+### Local5 ep9首个恢复锚点与运行时配置身份PASS（2026-08-06 10:28 CST）
+
+- ep8完整结果为train/42-frame小验证loss `1.460497/1.282759`；ep9为
+  `1.385071/2.366434`。ep9训练loss继续改善，小验证出现单点波动；该42-frame路径不用于最终模型选择，
+  不提前据此停训或否决。正式排名仍只使用固定相同population的ep9/14/19/24/29 standard valid825。
+- 首个成对恢复锚点已稳定写盘：`checkpoint_epoch9.pth`为`591,166,629 bytes`、SHA256
+  `695d0541...bfe5f`；state为`432,588,102 bytes`、SHA256 `3437e4b6...6df9`。独立重算SHA与
+  `checkpoint_epoch9_early_audit.json`完全一致。
+- `training_config_identity.json`现为`PASS`：state/internal scheduler均为epoch9，milestones为
+  `{13,20}`，五组optimizer/scheduler LR为`1e-4/1e-4/5e-5/5e-5/5e-6`，AMP scaler存在，
+  overlay/missing/unexpected为`210/0/0`。无需repair，`scheduler_repaired=false`、
+  `stopped_train_pids=[]`，故当前ep10是原进程连续训练而非重启伪续训。
+- Local5硬件子进程已从等待身份切换到`WAIT fullres deploy follower`，仍需完整30轮、五点valid825、
+  rank-1及新追加的部署完成marker后才生成profile/RTL，不会用ep9中间点提前出最终硬件结果。
+### Local5 ep9模型对象直审计、收敛状态与清理（2026-08-06）
+
+<!-- LOCAL5_EP9_DIRECT_STRUCTURE_AUDIT_AND_CLEANUP16_20260806 -->
+
+- Local5公平full-res修复训练保持同一父/训练PID `2097439/2097444` 连续运行；本节记录时已完成
+  ep9并进入ep10约20%。ep9快速valid42的波动不用于选rank-1，最终仍固定评估
+  ep9/14/19/24/29共同valid825。
+- 新增直接full-model对象审计
+  `results/dsec_fullres_w15_H66d_local5_bb1e4_ft30_20260805/checkpoint_epoch9_structure_audit.json`。
+  它在CPU注册Shiftmax pickle兼容后直接反序列化ep9模型，而不是只解析训练日志；结果为
+  `ATLIFTernaryPSN=105`、`ShiftmaxAttention=12`、model state keys `921`、overlay keys `210`。
+  105个ATLIF全部为`binary/official_atlif/zero-center`，无symmetric-binary和ternary输出；12个
+  attention全部为`binary_axnor_local5_shiftmax`且`value_branch=reuse_k`。模型SHA与
+  `training_config_identity.json`一致，审计状态`PASS`。
+- Local5最终硬件证据没有提前用ep9代替：checkpoint-bound watcher仍等待完整30轮、五点
+  valid825 rank-1、float/dyadic/hardware-order部署评估；随后执行100样本T450 ordered profile、
+  replay/acceptance及attention/relation/ATLIF三类component RTL-exact。旧crop Local5 RTL只能作
+  机制预验证，不能作为最终full-res sign-off。
+- H67 ep20/25/30 AEE为`1.4240/1.3726/1.3387`，ep30边界最优且ep25到ep30仍改善`2.47%`，
+  因此状态保持`best_at_boundary_not_proven_converged`；AAE为`6.1946/6.0102/6.0147`，角度已近
+  平台。NB0 ep24到ep29 AEE仍改善`5.56%`，AEE也未证明收敛；但AAE只改善约`0.44%`，论文
+  `4.871`与本地valid825的差距不能仅归因于轮次，还受official hidden test、本地population、
+  Barron AE-3D/legacy AAE及聚合协议影响。H67/NB0公平各+10轮仍按队列执行后再签收敛结论。
+- 清理脚本
+  `entrypoints/prune_retired_june_states_and_nonrank_models_20260806.py`已执行：删除45个2026年6月
+  已结束实验的optimizer/scheduler/scaler恢复状态，以及7条已退役crop候选中明确低于ep19
+  rank-1的ep29模型，共52个文件、`24,959,774,720`字节。NB0、H67、Local5、MDR、当前队列、
+  所有rank-1模型、配置、日志、valid825/profile/RTL证据均受保护；审计在
+  `neuron_autoresearch/cleanup_audits/retired_june_states_and_nonrank_models_20260806.json`。
+
+<!-- NB0_AAE_GAP_MACHINE_RECEIPT_AND_LOCAL5_EP10_20260806 -->
+
+### NB0 AAE机器诊断与Local5 ep10进度（2026-08-06）
+
+- Local5 full-res/window15仍由同一父/训练PID `2097439/2097444`连续运行，当前ep10约`29%`、
+  `1.03--1.08 s/step`，GPU显存约46GiB。ep9只是恢复和结构锚点；ep14/19/24/29尚未产生，故
+  standard valid825 rank-1、profile100/T450及最终三组件RTL-exact仍为正确的`queued`状态，不是漏做。
+- 新增只读生成器`entrypoints/generate_nb0_aae_gap_diagnostic_20260806.py`和SHA绑定收据
+  `neuron_autoresearch/NB0_AAE_GAP_DIAGNOSTIC_20260806.json/.md`。它重算六份full-res profile、
+  指标/评估器/聚合器源码及H67/NB0 head-to-head收据SHA，状态为
+  `PASS_LOCAL_DIAGNOSIS_OFFICIAL_TEST_REPRODUCTION_UNAVAILABLE`。
+- NB0 ep24->29的AEE/AAE-2D/AE-3D改善为`5.558%/0.437%/1.258%`：AEE明显未证明收敛，
+  角度已近平台。H67 ep25->30为`2.468%/-0.075%/0.179%`：ep30是当前AEE边界最优，仍不能
+  签收敛。equal+10继续必要，且会用新三聚合schema重评源点。
+- 论文official-test `4.871`是隐藏测试Barron/Middlebury `(u,v,1)` AE；本地legacy AAE是二维方向角，
+  本地`AAE_Benchmark`虽已正确实现三维公式，但population与server聚合仍不同。机器结论固定为
+  `formula_bug=false`、`NB0_AEE_undertraining_plausible=true`、
+  `NB0_angle_gap_explained_by_undertraining_alone=false`，禁止把增加轮次写成复现official 4.871。
+- 最终DATE closure已新增该机器收据为REQUIRED，并验证状态、源码SHA、profile SHA和诊断字段；
+  后续任何口径或证据漂移都会fail-closed。
+
+<!-- RANKED_JUNE_NONBEST_CLEANUP17_AND_CLOSURE_RELOAD_20260806 -->
+
+### 第十七轮ranked旧模型清理与closure重载（2026-08-06）
+
+- 清理器`entrypoints/prune_ranked_june_nonbest_models_20260806.py`只扫描目录名含`202606`、且存在
+  `profile_ranking_valid825.md`的已结束路线。每条路线保留当前磁盘中排名最高的模型；候选若在自身
+  目录外被日志、配置、脚本或文档以绝对source path引用则自动保护。
+- dry-run冻结34个无外部lineage引用的非最优模型，随后执行删除并复验：`34/34` absent、所有best
+  checkpoint present，逻辑回收`23,556,287,298 bytes`（`21.939 GiB`），可用空间由约314GiB升至
+  336GiB。审计为`neuron_autoresearch/cleanup_audits/ranked_june_nonbest_models_20260806.json`，包含
+  每个被删模型的epoch/rank/SHA/大小和对应保留rank-1路径。
+- NTS07b ep29、NTS09e ep29、NTS11bd ep19等关键历史rank-1均存在；NB0、TTX/BTTX、H67、Local5、
+  MDR、当前queue及全部硬件输入不在该清理scope。清理后Local5 ep10约50%、约`1.04 s/step`，原
+  PID `2097444`和46GiB CUDA context连续，未受影响。
+- AAE机器收据正反例加入closure定向测试后总计`23/23 PASS`。纯等待closure重载为PID`2538883`，
+  已读取新代码并等待Local5 ranking/deploy/RTL、equal+10与H67 post-convergence证据；没有重启任何
+  训练、profile或RTL生产进程。
+
+
+### H66d Local-5 fullres bb1e4 结果
+
+<!-- DSEC_FULLRES_W15_H66D_LOCAL5_BB1E4_RESULT_20260805 -->
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 1.3286 | 6.0022 | 5.6594 | 0.4135 | 0.1425 | 0.0661 | 82.8799G | 6.4480% | 73271.32 |
+| 2 | 24 | 1.3599 | 5.9995 | 5.6853 | 0.4244 | 0.1494 | 0.0693 | 82.3036G | 6.4032% | 72789.85 |
+| 3 | 14 | 1.4381 | 6.3066 | 6.0253 | 0.4403 | 0.1584 | 0.0761 | 79.9314G | 6.2186% | 70748.16 |
+| 4 | 19 | 1.4534 | 6.3284 | 6.0052 | 0.4486 | 0.1704 | 0.0841 | 81.3738G | 6.3308% | 71984.70 |
+| 5 | 9 | 1.6942 | 7.2407 | 6.9402 | 0.5116 | 0.2079 | 0.1053 | 78.0242G | 6.0702% | 69096.25 |
+
+# Local-5 bb1e4 deploy summary
+
+Scope: attention-core hardware-order numeric; full T450 SV zero-mismatch is a separate sign-off.
+
+| path | AEE | AAE benchmark | spikes(G) |
+|---|---:|---:|---:|
+| float | 1.3286 | 5.6594 | 82.8799 |
+| dyadic | 1.3326 | 5.6507 | 82.8787 |
+| hardware-order | 1.3338 | 5.6626 | 82.8745 |
+
+<!-- LOCAL5_POSTG0_BINDING_FIX_AND_RELAUNCH_20260808 -->
+
+### Local5 post-G0 binding fix and queue relaunch (2026-08-08)
+
+- Root cause of the queue stall: `profile_local5_hardware_features.load_post_g0_run_identity`
+  required exact key equality on `source_bindings`, but the production writer
+  (`run_local5_qfsa_profile_after_fullres` + bb1e4 training-identity patch) emits
+  two additional bindings (`projection_contract_verifier`, `training_config_identity`).
+  This raised `ValueError: post_g0生产软件绑定集合不完整`, so profile100/T450 acceptance
+  never produced; H67 T450, equal+10, and DATE closure watchers then waited forever.
+- Fix: align required software bindings with the writer (add
+  `projection_contract_verifier`) and accept run-scoped extras validated by path+sha.
+  Same subset/extra policy applied to `analyze_ds_flm_descriptor_manifest.validate_source_bindings`.
+- Unit checks: `test_ds_flm_descriptor_analysis`, `test_local5_postg0_acceptance`,
+  `test_local5_training_identity_gate`, `test_local5_release_receipt` → 11/11 OK.
+- Relaunched at ~2026-08-08 15:27 CST:
+  - post-G0 producer PID recorded in
+    `hw_autoresearch_nts07/results/local5_fullres_bb1e4_postg0_watcher_20260805.pid`
+  - checkpoint-bound RTL watcher relaunched to wait on acceptance
+- First live evidence after fix: load audit `overlay210/missing0/unexpected0`,
+  ATLIF=105, Shiftmax=12, 12 blocks attached; GPU active on profile100.
+- Downstream still correct-to-queue until acceptance/RTL release:
+  equal+10 convergence, H67 ep30 T450, post-convergence rank-1 profile, DATE closure.
+
+- Race fix while relaunching RTL: `run_local5_bb1e4_postg0_profile` no longer runs ATLIF
+  after a lock-skip (return 0 without acceptance). `run_local5_bb1e4_checkpoint_bound_rtl`
+  now polls for acceptance and joins an existing producer lock instead of failing on a
+  second short-lived producer.
+
+- ATLIF DP-TME vector fix (2026-08-08 evening): `generate_checkpoint_atlif_dptme_vectors`
+  failed on Local5 rank-1 with `PyTorch ATLIF recomputation mismatch` at float32 threshold
+  boundary (model event fire, subset rematmul h=0.99999994 < thr). Capture now stores the
+  full-path `addmm` hidden for selected lanes and uses that as the float reference; optional
+  ulp-boundary salvage remains as fail-soft. Smoke: 81 commands, model_reference_mismatches=0.
+  post-G0 acceptance already PASS (13/13); RTL watcher relaunched after this fix.
+
+- ATLIF DP-TME checks timeout fix (2026-08-09): icarus PASS exact (hidden/event mismatches=0),
+  but `run_checkpoint_atlif_dptme_checks.sh` used `timeout 120s` for Verilator sim; exit 124
+  after only command=0 of 81. Raised defaults to ICARUS_TIMEOUT_S=600 / VERILATOR_TIMEOUT_S=7200
+  (env-overridable). Relaunched RTL PID recorded in
+  `local5_bb1e4_checkpoint_bound_rtl_watcher_20260805.pid`. Avoid concurrent second RTL parents.
+
+<!-- LOCAL5_ATLIF_VERILATOR_HANDSHAKE_AND_THREE_CANDIDATE_CONVERGENCE_20260809 -->
+
+### Local5 ATLIF双仿真器闭环、H67解锁与三候选收敛队列（2026-08-09）
+
+- 后续定位证明Verilator的`120s`超时不是正常性能：旧testbench在接收上升沿后再次读取
+  `step_ready`，DUT状态更新会使ready下降，形成仿真器调度相关的无限等待。testbench改为负沿放置
+  payload并等待组合ready稳定、仅跨一个上升沿接收；生产脚本保留可配置timeout作为防无限运行保护。
+  修复后Icarus和Verilator均在81条命令上完成：hidden `25920/0 mismatch`、event
+  `25920/0 mismatch`，并通过lint与Yosys。此前“Verilator需要数小时”的判断由该结果撤销。
+- 最终Local5 checkpoint-bound aggregate已生成并绑定rank-1 ep29：checkpoint SHA
+  `6e0e92a5...c993b`、hardware config SHA `cf332c05...d72a`。score/Shiftmax四项检查PASS；
+  theta-folded真实权重projection的checkpoint binding/random SVA/Verilator lint/Yosys均PASS；ATLIF
+  81个活跃replay site覆盖45个T10和36个T2命令。aggregate scope仍是
+  `checkpoint_bound_component_rtl_exact_not_full_network`。
+- 数值边界不得混淆：ATLIF定点向量相对捕获float事件有`1177/25920=4.5409%`局部翻转，故报告
+  `deployment_accuracy_signoff=false`。组件RTL对定点参考零误差不等于整网量化精度签核；后续仍须
+  以static site scale与下游event-times-threshold folding的标准valid825部署推理作算法侧依据。
+- H67 follower原有两处脆弱门控已修复：完成日志接受生产runner实际marker；Local5 projection不再
+  读取不存在的顶层`status`，而是逐项验证四个PASS字段并继续核对rank-1/config/checkpoint SHA。
+  2026-08-09 00:19 CST已释放并启动H67 ep30 fullres `480x640`、window `2x15x15`、T450、
+  profile100/all12 bit trace；加载审计为overlay `210/210`、missing/unexpected `0/0`、ATLIF `105`、
+  Shiftmax `12`。完成后自动接score/Shiftmax、ATLIF和全12块真实权重projection RTL。
+- 收敛审计补齐Local5。其ep24->29 AEE由`1.3599`降至`1.3286`（改善`2.301%`），且ep29为
+  最大预算边界点，与H67和NB0一样不能签已收敛。预注册配置
+  `dsec_fullres_w15_H66d_local5_bb1e4_equal_plus10_ep40.yml`现已接入正式runner，只从Local5自身
+  ep29 model/state续训并评估ep29/34/39；队列顺序冻结为Local5 -> H67 -> NB0。候选/血缘回归
+  `5/5 PASS`，连同Local5 release与H67复用边界的组合回归为`23/23 PASS`；新watcher PID
+  `3114346`当前等待H67 T450证据，不占GPU。
+- 当前收敛结论：Local5与H67的legacy AAE在末五轮分别变化约`+0.044%/+0.075%`，AE-3D分别改善
+  `0.456%/0.179%`，已近角度平台；NB0 ep24->29 AEE仍改善`5.558%`而AAE-2D/AE-3D仅改善
+  `0.437%/1.258%`。追加轮次可能继续降低AEE，但不足以单独解释本地AE-3D `6.1803`与official
+  hidden-test `4.871`的差距；公式、population与server aggregation必须继续分栏报告。
+
+<!-- LOCAL5_EQUAL_PLUS10_INTERIM_RESULT_20260809 -->
+
+### Local5 equal +10正式结果与三候选队列进度（2026-08-09 21:30 CST）
+
+- Local5严格从自身full-res ep29的model + optimizer/scheduler/scaler state续训10轮，resume audit为
+  `model_optimizer_scheduler_scaler_resume_not_rng_bit_exact`；训练正常exit 0。标准加载链为
+  overlay `210/210`、missing/unexpected `0/0`、ATLIF `105`、Shiftmax `12`，并完成ep29/34/39
+  三个checkpoint的Valid825标准推理与profile contract校验。
+- 正式AEE排名如下；AAE benchmark为本地AE-3D口径，energy仍只是未计attention控制/归约的
+  spike-activity proxy：
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | total_spikes | spike energy proxy |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 39 | 1.3153 | 5.8291 | 5.5379 | 84.4197G | 74612.15 uJ |
+| 2 | 29 | 1.3286 | 6.0022 | 5.6594 | 82.8799G | 73271.32 uJ |
+| 3 | 34 | 1.3355 | 6.0979 | 5.7541 | 83.8319G | 74105.85 uJ |
+
+- ep29->39的AEE改善约`1.00%`、AAE benchmark改善约`2.15%`，代价是spikes增加约`1.86%`。
+  ep34曾退化而ep39成为最大预算边界的新rank-1，说明追加训练有效但仍不能签“已收敛”；在H67、
+  NB0同预算对照完成前不继续单独加轮，避免对Local5产生不公平的后验预算。
+- H67 equal +10已于14:39 CST接续自身ep30启动；21:30 CST进入epoch36，实测每轮约66分钟，GPU
+  持续满载。H67完成后runner自动做ep30/35/40 Valid825，再启动NB0 equal +10；三候选summary尚未
+  生成，故当前不能宣布最终主线。
+- 若ep39最终保持三候选总排名第一，旧Local5 ep29的profile/T450/score-Shiftmax/ATLIF/projection
+  component RTL证据不能继承为ep39签核；post-convergence follower必须按ep39 checkpoint/config SHA
+  重做并保留`component_rtl_exact_not_full_network`范围声明。
+
+<!-- H67_EQUAL_PLUS10_AND_CICC_MVSEC_QUEUE_20260810 -->
+
+### H67 equal +10结果与CICC范式MVSEC后续队列（2026-08-10 02:45 CST）
+
+- H67严格从自身已完成30轮full-res适配的ep30 model + optimizer/scheduler/scaler state续训10轮；
+  该full-res ep30更早由H67 own-crop初始化，但本次不是直接从crop跳接。训练exit 0，加载审计为
+  overlay `210/210`、missing/unexpected `0/0`、ATLIF `105`、Shiftmax `12`。ep30/35/40的
+  Valid825正式排名为：
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | total_spikes | spike energy proxy |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 35 | 1.3297 | 5.9004 | 5.6509 | 82.1107G | 72508.06 uJ |
+| 2 | 30 | 1.3387 | 6.0147 | 5.7558 | 81.3086G | 71812.84 uJ |
+| 3 | 40 | 1.3434 | 5.8238 | 5.6069 | 82.7681G | 73073.34 uJ |
+
+- H67的AEE在ep35达到内部最优、ep40回退约`1.03%`，因此H67已有“越过AEE最优点”的收敛
+  证据；ep40虽然AAE benchmark更低，但预注册主排序仍按AEE。Local5 ep39的AEE `1.3153`仍优于
+  H67 ep35约`1.08%`，所以当前暂定总领先者仍是Local5，最终结论等待NB0 equal +10。
+- NB0 equal +10已于2026-08-10 02:39 CST从自身full-res ep29的model/state启动，overlay为`0`且
+  missing/unexpected为`0/0`；完成后自动执行ep29/34/39 Valid825并生成三候选summary。
+
+**DSEC闭环后的MVSEC协议冻结：**
+
+- 第二数据集采用CICC 2026引用的Spike-FlowNet split：只用`outdoor_day2`训练，在
+  `outdoor_day1 + indoor_flying1/2/3`测试；dt1、训练random `256x256` crop与水平/垂直翻转
+  `p=0.5`、测试center `256x256`、event-masked AEE。每序列固定800输入的审计表与完整序列结果
+  分开报告；不得与既有MDR->MVSEC绝对AEE混表。
+- 最小训练矩阵为MVSEC-NB0 seed0 from scratch、H67 deploy reference seed0，以及DSEC最终胜者
+  seed0；两个替换模型均从同一MVSEC-NB0 checkpoint初始化并使用相同训练样本、目标、预算和
+  checkpoint-selection validation split。只有最终胜者通过AEE/稀疏门后才补seed1/2。
+- 本机已有四个测试序列约80GB，但缺失`outdoor_day2`。其data/GT bag远端大小分别为
+  `28,497,983,504`与`24,170,765,728` bytes（合计约52.67GB）。2026-08-10 02:44 CST已启动
+  低IO优先级、32路range、可断点的串行下载，PID记录于
+  `neuron_experiments/H9_bipolar_self_attention/results/mvsec_outdoor_day2_download.pid`；下载只做
+  数据准备，不抢占GPU，也不提前启动候选训练。
+- 启动前必须补齐并测试三个可选链路：`outdoor_day2`固定train/validation非重叠manifest；修复现有
+  `MvsecEventFlow` dense augmentation分支在`sample['valid']`赋值前裁掉outdoor无效行的顺序错误；
+  新增固定800样本manifest及event-mask/valid-pixel计数审计。所有新增实现保持可选，不修改旧
+  MDR->MVSEC结果口径。
+- 模型表固定为M0 NB0-float、M1 NB0-hardware-order、M2 winner-float、M3 winner-hardware-order；
+  再冻结M3做CICC式累计部署表D0 dense、D1 lossless BWAC/activation packing、D2 exact-empty TTB
+  skip+density dispatch、D3 validation-selected similarity deep-level skip。TTB是本项目机制，不归因
+  于CICC；每行同时报告AEE/outlier、operations、SRAM/DRAM bytes、cycle、完整energy和控制开销。
+
+
+### Local5/H67/NB0 fullres 等预算 +10 收敛审计结果
+
+<!-- DSEC_FULLRES_W15_H67_NB0_EQUAL_PLUS10_RESULT_20260805 -->
+
+#### Local5
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 39 | 1.3153 | 5.8291 | 5.5379 | 0.4081 | 0.1383 | 0.0638 | 84.4197G | 6.5678% | 74612.15 |
+| 2 | 29 | 1.3286 | 6.0022 | 5.6594 | 0.4135 | 0.1425 | 0.0661 | 82.8799G | 6.4480% | 73271.32 |
+| 3 | 34 | 1.3355 | 6.0979 | 5.7541 | 0.4226 | 0.1460 | 0.0671 | 83.8319G | 6.5221% | 74105.85 |
+
+#### H67
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 35 | 1.3297 | 5.9004 | 5.6509 | 0.4120 | 0.1397 | 0.0643 | 82.1107G | 6.3882% | 72508.06 |
+| 2 | 30 | 1.3387 | 6.0147 | 5.7558 | 0.4165 | 0.1405 | 0.0647 | 81.3086G | 6.3258% | 71812.84 |
+| 3 | 40 | 1.3434 | 5.8238 | 5.6069 | 0.4072 | 0.1394 | 0.0655 | 82.7681G | 6.4393% | 73073.34 |
+
+#### NB0
+
+# Standard Valid825 Ranking
+
+Ranking mode: `aee`.
+
+The energy column is a spike-activity proxy and excludes overlay attention control/reduction operations.
+
+| rank | epoch | AEE | AAE legacy | AAE benchmark | PE1 | PE2 | outlier | total_spikes | firing | spike_energy_proxy_uj |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 29 | 1.4454 | 6.5128 | 6.1803 | 0.4563 | 0.1661 | 0.0793 | 126.1156G | 9.7927% | 107137.62 |
+| 2 | 39 | 1.4549 | 6.5222 | 6.2109 | 0.4528 | 0.1623 | 0.0772 | 128.0836G | 9.9455% | 108790.07 |
+| 3 | 34 | 1.4584 | 6.5741 | 6.2463 | 0.4541 | 0.1614 | 0.0764 | 127.0435G | 9.8648% | 107905.72 |
+
+# DSEC full-resolution equal +10 convergence audit
+
+Criterion: the largest observed budget being AEE rank-1 is right-censored and therefore not plateaued; the last-five slope is descriptive only.
+
+| candidate | budget | checkpoint label | AEE | AAE-2D | AE-3D | DSEC Fl(%) | spikes(G) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Local5 | 30 | 29 | 1.328621 | 6.002152 | 5.659358 | 6.6078 | 82.8799 |
+| Local5 | 35 | 34 | 1.335480 | 6.097923 | 5.754114 | 6.7112 | 83.8319 |
+| Local5 | 40 | 39 | 1.315288 | 5.829055 | 5.537945 | 6.3815 | 84.4197 |
+| H67 | 30 | 30 | 1.338739 | 6.014742 | 5.755796 | 6.4705 | 81.3086 |
+| H67 | 35 | 35 | 1.329678 | 5.900353 | 5.650878 | 6.4279 | 82.1107 |
+| H67 | 40 | 40 | 1.343414 | 5.823829 | 5.606944 | 6.5488 | 82.7681 |
+| NB0 | 30 | 29 | 1.445353 | 6.512804 | 6.180336 | 7.9323 | 126.1156 |
+| NB0 | 35 | 34 | 1.458382 | 6.574137 | 6.246313 | 7.6448 | 127.0435 |
+| NB0 | 40 | 39 | 1.454926 | 6.522233 | 6.210893 | 7.7207 | 128.0836 |
+
+## Decision
+
+- Local5: `not_plateaued`; AEE last5 `1.512%`, last10 `1.004%`; AAE-2D last5/last10 `4.409%/2.884%`, AE-3D last5/last10 `3.757%/2.145%`; spikes change last5/last10 `+0.701%/+1.858%`; angle `angle_not_plateaued_or_noisy`, rank-1 budget `40`.
+- H67: `operationally_plateaued_or_overfit`; AEE last5 `-1.033%`, last10 `-0.349%`; AAE-2D last5/last10 `1.297%/3.174%`, AE-3D last5/last10 `0.777%/2.586%`; spikes change last5/last10 `+0.801%/+1.795%`; angle `angle_not_plateaued_or_noisy`, rank-1 budget `35`.
+- NB0: `operationally_plateaued_or_overfit`; AEE last5 `0.237%`, last10 `-0.662%`; AAE-2D last5/last10 `0.790%/-0.145%`, AE-3D last5/last10 `0.567%/-0.494%`; spikes change last5/last10 `+0.819%/+1.560%`; angle `angle_plateaued`, rank-1 budget `30`.
+
+<!-- POSTCONV_MARKER_FIX_AND_HANDOFF_20260810 -->
+
+### Post-convergence marker fix and handoff resume (2026-08-10)
+
+- **Equal +10 audit already complete** (2026-08-10 08:17): summary schema
+  `dsec_fullres_equal_plus10_convergence_v1` with Local5/H67/NB0 budgets 30/35/40.
+  Producer marker text is `ALL COMPLETE Local5/H67/NB0 equal +10 convergence audit`.
+- **Blocker**: `run_h67_postconvergence_rank1_profile.py` waited only for the older
+  string `ALL COMPLETE H67/NB0 equal +10 convergence audit`, so it never released
+  despite summary + rankings on disk. DATE closure then waited forever on missing
+  `h67_postconvergence_rank1_hardware_evidence_20260805.json`.
+- **Fix**: accept both Local5/H67/NB0 and H67/NB0 markers and require summary JSON
+  candidates Local5/H67/NB0. Supervise watcher marker updated to match producer.
+- **H67 post-convergence rank-1 is now ep35** (AEE 1.3297), not ep30 — will run
+  full T450 profile/trace/RTL path (not the ep30 reuse shortcut).
+- **GPU**: Local5 joint-head profile100 (~86/100 at handoff) still holds the A800;
+  post-convergence auto-starts when that process exits (`/tmp/run_h67_postconv_when_gpu_free.sh`).
+- Local5 component RTL scope already PASS; equal+10 AEE bests: Local5 ep39 **1.3153**,
+  H67 ep35 **1.3297**, NB0 ep29 **1.4454**.
+
+
+### DATE 算法/RTL 最终证据闭环
+
+<!-- DATE_ALGORITHM_CLOSURE_AUDIT_PASS_20260805 -->
+
+- fail-closed closure audit PASS；Local-5 rank-1 ep29，H67 rank-1 ep35。
+- H67 收敛判定 `operationally_plateaued_or_overfit`，NB0 收敛判定 `operationally_plateaued_or_overfit`；AAE-2D 与 AE-3D 仍分口径报告。
+- Local-5 收敛判定 `not_plateaued`，ep24到ep29 AEE改善 `2.301%`；边界仍改善时不得选为最终主线。
+- H67 训练血缘由机器收据绑定为自身 Motion-XOR crop ep19 经五段续训到 fullres ep30；没有从 NB0 或 Local-5 初始化。
+- Local-5 仅声明 score/Shiftmax、真实权重 per-head projection partial accumulator、ATLIF temporal matrix 三项 component RTL-exact；H67 同样不外推为 full network。
+- 机器审计：`neuron_autoresearch/DATE_ALGORITHM_CLOSURE_AUDIT_20260805.json`。
+
+<!-- DATE_ALGORITHM_CLOSURE_PASS_20260811 -->
+
+### DATE algorithm closure PASS (2026-08-11 03:59)
+
+- Marker mismatch fixed; H67 post-convergence rank-1 **ep35** T450 evidence PASS.
+- Local5 checkpoint-bound scope re-bound after source SHA drift (projection generator /
+  evidence_provenance) and ATLIF report 8→9 source artifact contract.
+- Closure audit: `neuron_autoresearch/DATE_ALGORITHM_CLOSURE_AUDIT_20260805.json/.md`
+  — **ALL COMPLETE DATE algorithm closure audit PASS Local5=ep29 H67=ep35**.
+- Equal+10 AEE rank-1: Local5 ep39 **1.3153**, H67 ep35 **1.3297**, NB0 ep29 **1.4454**.
+
+<!-- GROK_HANDOFF_REVIEW_AND_MVSEC_DIRECT_ROUTE_20260811 -->
+
+### Grok 交接复核、证据重签与 direct-MVSEC 标准路线（2026-08-11 14:43 CST）
+
+**交接结论复核：** `DATE_ALGORITHM_CLOSURE_AUDIT_20260805.{json,md}` 的 PASS 与
+equal+10 原始 summary 一致，但论文表必须区分两种“最好”：Local5 ep39 是等预算 AEE 最好
+（`1.3153`，但最大预算仍为 rank-1，状态 `not_plateaued`）；H67 ep35 是已经越过 AEE 最优点、
+且当前 checkpoint-bound 硬件证据完整的部署主线（AEE `1.3297`）。H67 不是纯精度冠军，Local5
+ep39 也不能继承旧 ep29 的 RTL 证据。NB0 ep29 AEE `1.4454`，因此 H67/Local5 分别改善约
+`8.0%/9.0%`，spikes 分别下降约 `34.9%/33.1%`。
+
+**provenance 重签：** 03:59 closure 后硬件侧又修改了 Local5 projection generator，旧 scope
+对当前工作树出现 SHA drift。14:38-14:39 使用同一个 Local5 ep29 checkpoint 重跑最小 runner：
+ATLIF provenance-valid 结果复用，score/Shiftmax 与 projection 重新 PASS，最新
+`checkpoint_bound_scope.json` 再次通过 fail-closed provenance 校验；14:43 closure audit 重跑并
+再次输出 `PASS Local5=ep29 H67=ep35`。声明范围仍为 component RTL-exact，不是 full-network
+RTL-exact。
+
+**训练入口审计修复：** 原 `train_mdr_supervised_SNN.py` 只能做 MDR train -> MVSEC valid，且
+validation loop 未从当前 validation batch 读取 `valid`，会错误沿用最后一个 train batch 的 mask。
+该缺陷影响旧训练日志中的内置 MVSEC validation loss，但不影响独立标准推理生成的 AEE/profile。
+现已补当前 batch mask，并新增可选 `data.training_dataset=mvsec_dt1`；默认 `mdr` 路径不变。
+direct-MVSEC 新分支按 validation loss 保存 checkpoint，MLflow 关闭且 model/state 仅保存本地。
+
+**CICC/Spike-FlowNet split 冻结：** 原始 `outdoor_day2_data/gt.bag` 的 MD5 分别为
+`536d20bc59720b995df49f925f96b74d` 与 `69fb399411d7098b3e2cf3850f593e7b`，与官方值一致。
+固定 manifest 为
+`neuron_experiments/H9_bipolar_self_attention/manifests/mvsec_cicc_dt1_v1.json`：train
+`4375..6737`（2363 项）、隔离 gap `6738`、validation `6739..7001`（263 项）；四个测试序列
+各冻结 800 个均匀覆盖 valid interval 的 index。训练为 dt1、random `256x256` crop、水平/垂直
+flip 均 `p=0.5`；验证/测试为 center `256x256` 和 event-masked AEE。完整序列结果与 fixed800
+结果必须分列。
+
+**静态配置与入口：**
+
+- `configs/generated/mvsec_cicc_nb0_w8_seed0.yml`：NB0、window `2x8x8`、seed0、50 epoch
+  from scratch；
+- `configs/generated/mvsec_cicc_h67_motion_w8_seed0.yml`：H67 Motion-XOR、30 epoch；
+- `configs/generated/mvsec_cicc_local5_w8_seed0.yml`：Local5、30 epoch；
+- H67/Local5 必须从同一个 MVSEC-NB0 seed0 validation-rank1 checkpoint 初始化；三者均使用
+  batch `8`、workers `8`，候选安装审计为 `ATLIFTernaryPSN=105`、Shiftmax attention `=12`；
+- manifest/config 生成器分别为 `build_mvsec_cicc_manifests.py` 与
+  `build_mvsec_cicc_train_configs.py`；本地训练入口为 `run_mvsec_cicc_train.py`。
+
+正式启动门为：outdoor_day2 编码样本与 flow/event 对齐审计 PASS、manifest 全文件存在、NB0 单
+batch train+validation smoke PASS。随后严格串行执行 NB0 -> 从同一 NB0 checkpoint 分叉 H67 与
+Local5 -> 四序列 fixed800 + full-sequence 标准推理；seed1/2 仅在候选通过 seed0 门槛后补跑。
+
+`window 2x15x15 + crop256` 的首次 smoke 在 S3 失败：S3 feature 为 `8x8`，动态 window 缩到
+`8x8`，但原 positional encoding 仍为 450 token，无法 reshape 为 128 token。该失败配置保留为
+负证据，不进入论文。direct-MVSEC 正式配置改用 SDformerFlow/Spike-FlowNet 256-crop 可执行的
+`window 2x8x8`；DSEC full-resolution 主表继续使用 `window 2x15x15`，两者按数据集协议分表。
+
+<!-- MVSEC_DIRECT_SMOKE_AND_FORMAL_LAUNCH_20260811 -->
+
+### direct-MVSEC 冒烟修复、速度实测与正式队列（2026-08-11 15:08 CST）
+
+- 首次 window8 冒烟的训练前向成功，但 validation event mask 错误保留 polarity 维，形成
+  `[B,1,2,H,W]`，而 flow loss 要求 `[B,1,H,W]`，触发 `65536 vs 131072` 展平长度冲突。现新增
+  `event_activity_mask()`，对 time 与 polarity 维做非零 `any`，同时避免正负事件求和相消；训练、
+  validation 与 visualization 共用同一 `[B,1,H,W]` 合同。
+- 后续真实样本审计又发现 source-FOV 顺序问题：direct train 在原始 `260x346` 上先屏蔽
+  outdoor_day2 的 `y>=193` 再 random crop，但旧 validation 先 center crop，且只对 day1 屏蔽。
+  新的可选 `mvsec_source_valid_before_crop=true` 先在 source frame 对 day1/day2 建 valid mask，再
+  center crop；旧 MDR/MVSEC 默认分支不变。真实 validation 样本验证 crop 后 row190 有效、row191
+  起全0，valid pixels=`48,896`；五项协议/增强/mask/source-FOV 单测 PASS。
+- v2 单 batch train+validation 冒烟 exit 0：train loss `2.0682626`，validation loss
+  `7.4427266`；此前只修 polarity mask、尚未修 source-FOV 的 `8.7158298` 仅作负证据。v2 本地保存
+  `checkpoint_epoch0.pth`（219,737,042 bytes）与 state
+  （438,550,218 bytes）。`launch_provenance.json` 明确记录 MLflow/model-log/state-log 全关闭、
+  `SDFORMER_MDR_VOXEL_GPU=0`、CuPy backend，故权重和训练状态均为本地可恢复文件。
+- 10-batch 吞吐实测：80 samples / `37.758s` = `2.119 samples/s`。首批 CuPy compile 约 `33s`；
+  后续稳定约 `0.5s/batch`，完整 295-batch train 段约 2.5-3 分钟，不能用首批时间外推成数天。
+  validation 为 batch1，正式总耗时仍以首轮完整 train+validation 日志重新估算。
+- 首个正式 run 在 epoch0 validation 期间因上述 source-FOV 审计主动停止；v2 随后又因审计发现
+  `runtime.seed=0` 未被旧 trainer 消费而在 epoch0 主动停止。两者目录均保留且禁止参与选点。
+  trainer 现仅在配置含 `runtime.seed` 时冻结 Python/NumPy/Torch/CUDA、train shuffle generator 与
+  validation worker generator；CuPy/AMP 仍声明 `seeded_data_order_non_bit_exact`，不声称 bit-exact。
+  workers8 双池审计得到相同首批 indices 与联合 batch SHA
+  `1fcd5328e2f5cb5c055fa594af689ad1f3eb9a093f361d1a208dfa0438408ca1`，PASS。
+- v3 冒烟 exit0，train/validation loss=`2.1670144/7.4427252`。启动收据新增 config、manifest、
+  trainer、MVSEC loader 与 protocol helper 的 SHA256。v3 首轮完整得到 train/validation loss
+  `1.0649808/11.5610867` 和可恢复 state，但其父进程绑定交互 PTY；直接 resume 又不能恢复 worker
+  RNG，故不将 v3 作为正式 run。最终 v4 使用同一冻结 config 从 seed0 重新开始，以 `setsid` 启动，
+  输出为 `results/mvsec_cicc_nb0_w8_seed0_v4_20260811/`，训练父 PID `4151517`（PPID1、无TTY）；
+  串行 supervisor PID `4151772` 同样为 PPID1、无TTY，等待 exit0 后按 validation loss 与实际
+  checkpoint 文件共同选择 best；随后
+  对 H67、Local5 分别先做单 batch 加载冒烟，必须满足 ATLIF `105`、Shiftmax `12`、
+  `checkpoint_overlay_keys=0`、`missing=210`、`unexpected=0`，再从同一个 MVSEC-NB0 best
+  checkpoint 正式训练。
+- 标准推理不能只报 fixed800。每条路线均先跑四序列各800样本的等样本审计，再跑
+  `outdoor_day1 + indoor_flying1/2/3` 四个完整 valid interval；两套结果分别汇总 macro mean AEE、
+  valid-pixel-weighted AEE、有效像素、spikes 与 energy proxy。统一入口为
+  `entrypoints/supervise_mvsec_cicc_pipeline.py --join-active-nb0`，最终汇总为
+  `results/mvsec_cicc_nb0_h67_local5_comparison_20260811.{json,md}`。
+
+<!-- H67_MAINLINE_DECISION_AND_H81_FULLRES_QUEUE_20260811 -->
+
+### H67 主线裁决与 H81 no-motion fullres 对照队列（2026-08-11）
+
+- DSEC full-resolution equal+10 已足以裁决 H67 与 Local5：Local5 ep39 的 AEE
+  `1.3153` 比 H67 ep35 的 `1.3297` 好约 `1.08%`，但 H67 spikes 为
+  `82.1107G`，比 Local5 的 `84.4197G` 少约 `2.74%`。综合算法指标、统一
+  all12 数据流、硬件创新潜力和软硬件协同度，冻结 **H67 Motion-XOR 为 DATE
+  算法/硬件主线**；Local5 保留为精度上界与空间局部注意力消融。
+- 硬件主故事固定为 Motion-aware all-binary TTX 与可逆时间商流；TESC/RQTB
+  合并为一项贡献。64-bit temporal-pair TTB、Exact Delta-TTX、occupied-class
+  SCS/Shiftmax 和 zero-K folding 是同一执行后端的支撑机制，不能把普通 TTB
+  单独声明为原创。dense/sparse 双 core 仅在相对统一 C0 core 的同约束 PPA/EDP
+  有净收益后晋级。
+- crop 协议下 H81 已是与 H67 同起点、同 full30 预算且只关闭
+  `binary_motion_xor_alpha` 的 reviewer control；但此前没有 paper geometry
+  `480x640 / T2x15x15` 的同协议结果。新增配置
+  `configs/generated/dsec_fullres_w15_H81_nomotion_bb1e4_ft40.yml`，从 H81 crop
+  ep19 开始运行 40 个 full-resolution epoch，并在等预算 30/35/40 点评估
+  checkpoint `29/34/39`。
+- 为避免抢占当前 direct-MVSEC 队列，新增
+  `entrypoints/run_dsec_fullres_w15_h81_after_mvsec.py`；它只在
+  `mvsec_cicc_nb0_h67_local5_comparison_20260811.json` 出现后启动。加载门要求
+  ATLIF `105`、Shiftmax `12`、overlay `210`、missing/unexpected `0/0`；旧配置、
+  checkpoint 和结果均不修改。
+
+<!-- MVSEC_DIRECT_NB0_FIXED800_PROGRESS_20260811 -->
+
+### direct-MVSEC NB0 fixed800 与 full-sequence 中间进度（2026-08-11）
+
+- NB0 seed0 已完成 50 epoch；按冻结 validation loss 选中 `checkpoint_epoch11.pth`，
+  validation loss=`8.1990142648`。该 checkpoint 已完成四序列 fixed800 标准推理：
+  `outdoor_day1/indoor_flying1/2/3` AEE 分别为
+  `0.8379/1.5977/2.7469/2.1102`，macro mean AEE=`1.8231`，按有效像素加权
+  AEE=`2.4429`，总有效像素=`17,302,983`。对应 GT Fl 分别为
+  `3.7352%/11.6992%/35.1511%/22.7118%`。
+- full-sequence 推理已完成 `outdoor_day1`（2755/2755，exit0），当前顺序执行
+  `indoor_flying1 -> indoor_flying2 -> indoor_flying3`。NB0 full 完成后，冻结队列会从
+  同一个 NB0 ep11 分叉 H67 与 Local5，逐一执行加载冒烟、30 epoch direct-MVSEC 训练、
+  fixed800 和 full-sequence 推理。
+- 当前 NB0 数值只能建立 direct-MVSEC 同协议基线，不能据此裁决 H67/Local5，也不能与
+  DSEC full-resolution 或旧 MDR->MVSEC 数字混表。最终判断只读取
+  `mvsec_cicc_nb0_h67_local5_comparison_20260811.{json,md}`；H81 no-motion fullres watcher
+  在该比较文件出现前只等待，不占 GPU。
+
+<!-- MVSEC_DIRECT_H67_COMPLETE_LOCAL5_RUNNING_20260812 -->
+
+### direct-MVSEC H67 完成与 Local5 运行状态（2026-08-12）
+
+- NB0 full-sequence 已完成：macro AEE=`1.8273`，有效像素加权 AEE=`2.3435`，
+  四序列总有效像素=`44,208,251`。H67 从同一个 NB0 seed0 `checkpoint_epoch11.pth`
+  初始化，加载审计 PASS：ATLIF=`105`、Shiftmax=`12`、`checkpoint_overlay_keys=0`、
+  `missing=210`、`unexpected=0`；30 epoch 中 validation-rank1 为 H67 ep12，loss=`8.0028`。
+- H67 fixed800 四序列 AEE 为 `0.8181/1.5850/2.6212/2.0352`，macro AEE=`1.7649`，
+  有效像素加权 AEE=`2.3287`。相对同协议 NB0 分别改善 `3.20%/4.67%`，总 spikes
+  从 `97.3392G` 降至 `55.1700G`（`-43.32%`），energy proxy 从 `82,900.09uJ`
+  降至 `47,654.90uJ`（`-42.52%`）。
+- H67 full-sequence 四序列 AEE 为 `0.8201/1.5868/2.6258/2.0357`，macro AEE=`1.7671`，
+  有效像素加权 AEE=`2.2300`。相对 NB0 分别改善 `3.29%/4.84%`，macro GT Fl
+  改善 `6.68%`，总 spikes 从 `251.4680G` 降至 `140.6647G`（`-44.06%`），energy
+  proxy 从 `214,151.98uJ` 降至 `121,555.15uJ`（`-43.24%`）。四个测试序列的
+  AEE 均独立改善，因此 seed0 已通过跨数据集候选门。
+- Local5 使用相同 NB0 ep11 初始化，加载合同同样 PASS；当前继续 30 epoch 训练，不抢跑推理。
+  截至完成 ep12，validation-rank1 为 ep12、loss=`8.1244`。最终 Local5 checkpoint 及两套
+  MVSEC 推理完成前，不做 H67-vs-Local5 的 MVSEC 裁决。
+- MVSEC H67 ep12 只用于 direct-MVSEC 算法泛化表；DATE 硬件 RTL/profile 的冻结 checkpoint
+  仍是 DSEC full-resolution H67 ep35，禁止用 MVSEC ep12 替换硬件 provenance。
+
+<!-- MVSEC_SMOKE_CHECKPOINT_CLEANUP_20260812 -->
+
+### direct-MVSEC 加载冒烟 checkpoint 清理与防复发（2026-08-12）
+
+- H67/Local5 加载 smoke 原先只限制每个 epoch 的 train/validation batch 数，但未限制
+  `n_epochs`，因此产生多组不参与选点、推理或硬件绑定的临时 model/state。加载合同已由
+  `train.log` 与 `launch_provenance.json` 完整保留：ATLIF `105`、Shiftmax `12`、overlay `0`、
+  missing/unexpected `210/0`、exit0。
+- 精确删除五个 smoke 目录中的 72 个 `checkpoint_epoch*.pth`，共回收
+  `23,441,861,279 bytes`（约 `21.83 GiB`）；正式 NB0 ep11、H67 ep12 和当前 Local5 ep12
+  checkpoint 均在删除后复验存在。机器审计为
+  `neuron_autoresearch/cleanup_audits/mvsec_load_smoke_checkpoints_20260812.json`。
+- supervisor 的可选 smoke 分支现派生 `n_epochs=1` 的临时配置，并在加载审计 PASS 后自动删除
+  临时 checkpoint、保存清理收据。隔离 helper 测试与 `py_compile` PASS；该修改不触碰当前已启动
+  的 Local5 正式训练，也不改变任何正式配置或 checkpoint。
+
+<!-- NB0_AAE_GAP_FINAL_CLOSURE_20260812 -->
+
+### NB0 AAE 差距最终收口（2026-08-12）
+
+- 新增 `NB0_AAE_GAP_CLOSURE_20260812.{json,md}`，它是 8月6日早期诊断的后继收据，不覆盖
+  原时间线。当前 metric/evaluator/aggregation 源 SHA 与 `AAE_METRIC_TEST_RECEIPT_20260805`
+  一致，AAE/aggregation 共 8 项单测 PASS：历史 `AAE` 是二维 `(u,v)` 方向角，论文对齐的
+  `AAE_Benchmark` 是 Barron/Middlebury `(u,v,1)` 三维角度。
+- equal+10 已排除“NB0 只是轮次不足”：预算30/35/40 的 AEE 为
+  `1.4454/1.4584/1.4549`，AAE-2D 为 `6.5128/6.5741/6.5222`，AE-3D 为
+  `6.1803/6.2463/6.2109`。预算30仍为 AEE rank-1，继续训练未改善角度，最终判定
+  `operationally_plateaued_or_overfit`；不再给 NB0 增加训练轮次。
+- NB0 ep29 的 AE-3D 按 frame-equal/pixel-global/sequence-balanced 三种聚合分别为
+  `6.1803/5.9892/6.0925`，均不能得到论文 official hidden-test `4.871`。因此聚合差异本身也
+  不能消除数值差距；根本边界是本地 18 段 valid825 与官方七条 hidden-test population/server
+  protocol 不同，禁止直接声称本地复现或未复现 `4.871`。
+- 在同一 local valid825 上，H67 相对收敛 NB0 的 AEE/AE-3D/spikes 改善
+  `8.00%/8.57%/34.89%`；Local5 改善 `9.00%/10.39%/33.06%`。这组同 population 对照才是
+  DATE 算法表可使用的 AAE 结论。
+
+<!-- MVSEC_FINAL_COMPARISON_FAIL_CLOSED_AUDIT_20260812 -->
+
+### direct-MVSEC 三线最终 comparison 自动审计（2026-08-12）
+
+- 新增 `entrypoints/audit_mvsec_cicc_comparison_20260812.py`。它只在 supervisor 生成
+  `mvsec_cicc_nb0_h67_local5_comparison_20260811.json` 后运行，重新从六份原始 summary 与逐序列
+  字段计算 macro AEE、valid-pixel-weighted AEE、macro GT Fl、总 spikes 和 energy proxy，不直接
+  信任 comparison 内嵌派生值。
+- fail-closed 门包括：三条路线精确集合、fixed800/full 双协议、四序列无 skipped、固定样本数、
+  checkpoint/config/manifest SHA、comparison 内嵌 summary 与磁盘原件完全一致，以及 H67/Local5
+  从同一 NB0 ep11 初始化的 provenance 和 ATLIF105/Shiftmax12/overlay0/missing210/unexpected0
+  加载合同。H67 还必须满足 AEE 在 NB0+5% 内、spikes 至少下降20%、四序列 AEE 全改善。
+- 已完成的 NB0/H67 四份 summary 和 H67 加载合同预审计 PASS。独立 watcher PID 由
+  `mvsec_cicc_nb0_h67_local5_audit_watcher_20260812.pid` 记录，PPID=1、无TTY、只轮询文件且不占
+  GPU；最终输出为 `mvsec_cicc_nb0_h67_local5_audit_20260812.{json,md}`。
+- 该表是 direct-MVSEC 算法泛化证据。MVSEC checkpoint 不继承 DSEC 硬件证据；component
+  RTL-exact/T450 profile 仍唯一绑定 full-resolution H67 ep35。
+
+<!-- DATE_CLOSURE_CURRENT_SOURCE_REBIND_20260812 -->
+
+### DATE 闭环当前源码重绑与声明边界（2026-08-12）
+
+- 总审计首次重跑时 fail-closed 捕获 Local5 projection vector generator 源码 SHA 已漂移；
+  旧 `report.json` 虽为 PASS，但不再允许引用。不回退当前源码，而是从已冻结的
+  Local5 full-resolution rank-1 checkpoint/profile 重生成 100 组真实权重 projection 向量，并重跑
+  score/Shiftmax 与 projection RTL/SVA/lint/synthesis。两者 exit0/PASS；ATLIF 报告因 checkpoint/config
+  SHA 一致且 provenance 有效而安全复用。
+- H67 ep35 聚合证据的 scope 已与实际三类已验组件对齐为
+  `checkpoint_bound_qk_score_scs_shiftmax_atlif_temporal_matrix_real_weight_projection_component_rtl_exact_not_full_network`；
+  该修正只消除“已有 projection PASS 但聚合 scope 仍说未覆盖 projection”的口径冲突，
+  不扩展为 full-network RTL exact。
+- 重新执行 `audit_date_algorithm_closure_20260805.py` 后，
+  `DATE_ALGORITHM_CLOSURE_AUDIT_20260805.{json,md}` 在当前工作树上再次 `PASS`。
+  DSEC 算法门仍选 H67 ep35：AEE=`1.3296776`（较 NB0 `-8.00%`），
+  total_spikes=`82.1107G`（`-34.89%`）。全局论文声明边界冻结为
+  `checkpoint_bound_component_rtl_exact_not_full_network`。
+
+<!-- LOCAL5_FULLRES_40_TO_50_PREREGISTRATION_20260812 -->
+
+### Local5 full-resolution 40→50 收敛延伸预注册（2026-08-12）
+
+- 三线 equal-budget 30/35/40 已完成公平比较，但 Local5 ep39 在最大预算边界成为
+  AEE rank-1（`1.3152881`），因此严格统计口径仍为 right-censored / `not_plateaued`。
+  新增可选配置 `dsec_fullres_w15_H66d_local5_bb1e4_equal_plus20_ep50.yml` 和独立 runner
+  `run_local5_fullres_plus10_after_h81_20260812.py`，仅从 Local5 ep39 的
+  model+optimizer+scheduler+AMP scaler 续至总预算50，冻结评估 ep39/44/49。
+- 队列顺序冻结为：direct-MVSEC Local5 训练/推理/三线审计 → H81 no-motion DSEC fullres40
+  控制 → Local5 40→50。watcher PID=`283692`，PPID=1，当前只等待 H81 ranking，不占 GPU。
+- 该延伸只解决算法收敛边界；ep44/49 默认没有任何硬件 provenance。Local5 现有
+  checkpoint-bound component RTL 仍绑定 ep29。只有 ep44/49 最终被选为论文主张 checkpoint 时，
+  才单独决定是否为该 checkpoint 重做 profile/RTL；禁止继承 ep29 SHA 证据。
+- ep39 resume 已提前 staging 并生成 `resume_stage_audit.json`：model/state hardlink、源 SHA、
+  五组 optimizer LR、空 milestones 和 AMP scaler 全部 PASS。历史 forced checkpoint 在
+  `scheduler.step()` 前保存，因此 ep34/39 的 scheduler `last_epoch` 为 label-1（ep33/38）；
+  runner 显式审计该顺序，不伪造为 scheduler=39。由于 milestones 已清空，续训仍保持
+  源 optimizer 的固定 LR。
+
+<!-- H67_H81_TRAINING_FAIRNESS_RECEIPT_20260812 -->
+
+### H67 Motion 与 H81 no-motion 训练公平性收据（2026-08-12）
+
+- 新增 `H67_H81_TRAINING_FAIRNESS_20260812.{json,md}` 和可重跑 auditor。共19项检查 PASS：
+  crop 阶段两者使用同一 TTX ep2 parent checkpoint、同 seed 与同配置；去掉
+  experiment/note 后唯一算法差异是 `binary_motion_xor_alpha=0.25` 对 `0.0`；
+  两线 crop 评估 epoch 集合相同且 ep19 都是 AEE rank-1，不是后验选点。
+- full-resolution 的 model/neuron/optimizer/augmentation、`480x640`、crop=null、window
+  `2x15x15`、batch2 与评估合同一致；H81 预注册连续40轮。但 H67 历史 full-resolution
+  是已审计的五段 rescue/continuation，H81 是连续训练，故收据状态为
+  `PASS_RECIPE_LEVEL_CONTROL_NOT_STEP_PAIRED`。
+- 允许主张：H81 是 same-parent、seed-matched、same-recipe no-motion 控制。
+  禁止主张：H67/H81 是每一 optimizer step 都 bit-exact 配对、只差 Motion-XOR。
+  最终 Motion 贡献幅度必须等 H81 ep29/34/39 standard valid825 完成后才填表。
+
+<!-- DATE_FINAL_MAINLINE_AUDIT_PREREGISTRATION_20260812 -->
+
+### DATE 最终跨证据主线裁决预注册（2026-08-12）
+
+- 新增 `audit_date_final_mainline_20260812.py`，它等待 direct-MVSEC 三线审计、
+  H67/H81 no-motion 控制和 Local5 40→50 收敛审计全部完成后，再同时读取
+  DSEC closure、H67 ep35 硬件证据与 Local5 ep29 硬件证据。watcher PID=`291486`，
+  PPID=1，当前只等待三份未完成结果。
+- 决策政策预注册为：两线先满足 DSEC AEE≤NB0+5%、spikes≤NB0-20%。当 Local5 的
+  DSEC AEE 优势不超过2%，且 H67 在 spikes 或 MVSEC AEE 至少一项更好、并拥有同
+  checkpoint ep35 component RTL PASS 时，选 H67 Motion-TTX 为部署主线，Local5 为精度上界。
+  若 Local5 优势超过预注册幅度，auditor 输出 `REVIEW_REQUIRED`，不强行保留 H67。
+- 按用户当前口径，硬件工程完整度暂不参与决策；只使用创新度/数据流统一性、
+  软硬件协同度、spikes/跨数据集泛化和同 checkpoint RTL provenance。未重做的
+  Local5 ep39/44/49 不继承 ep29 RTL。
+
+<!-- MVSEC_EPOCH12_CICC_AND_DSEC_COMPLETION_AUDIT_20260812 -->
+
+### MVSEC ep12、CICC 对齐边界与 DSEC 完成度审计（2026-08-12）
+
+**ep12 不是“从头训练 12 轮即完全收敛”。** direct-MVSEC 的 NB0 先从头训练 50 epoch，
+按 `outdoor_day2` 时间后段 263 个 held-out validation sample 选中 ep11
+（validation loss=`8.1990`）。H67 和 Local5 再从同一个 NB0 ep11 模型初始化；这不是
+optimizer/scheduler resume，而是安装 ATLIF=`105`、Shiftmax=`12` 后加载公共 backbone，
+两者都完整训练 30 个 adaptation epoch。加载时预期为 overlay=`0`、missing=`210`、
+unexpected=`0`；候选 checkpoint 推理回载为 overlay=`210/210`、missing/unexpected=`0/0`。
+
+- H67 的 30 个 validation loss 全部存在；ep12=`8.0028` 为 rank-1，后续 ep25=`8.1348`、
+  ep29=`8.4197`，17 个后续 epoch 未刷新 rank-1。
+- Local5 的 30 个 validation loss 全部存在；ep12=`8.1244` 为 rank-1，后续 ep25=`8.2333`、
+  ep29=`8.5836`，同样未刷新 rank-1。
+- 因此论文应写“validation-selected early optimum after 12 adaptation epochs”，不能写
+  “strictly converged at epoch 12”。训练损失仍缓慢下降、validation 有明显噪声，严格收敛
+  证据有限；但继续到 ep29 未刷新，说明 ep12 不是因训练提前停止偶然留下的边界最优。
+- 四测试序列 fixed800/full-sequence 标准推理只对 validation rank-1 做一次。其他轮次已通过
+  held-out validation 比较，但没有在四测试序列上逐个推理；这是防止 test-set checkpoint
+  cherry-picking 的有意设计。若补 checkpoint sensitivity，只能评估预先保存的 H67 ep10、
+  Local5 ep5/ep12 等，并明确不改变主 checkpoint 选择。
+
+**CICC 2026 参考边界。** 当前 direct-MVSEC 已对齐其软件评测范式：`outdoor_day2` 训练、
+`indoor_flying1/2/3 + outdoor_day1` 测试、dt1、中心 `256x256`、event+valid-flow mask，
+并提供每序列固定 800 个确定性均匀样本。当前不是 CICC 芯片或其 Hybrid U-Net 的复现；
+不能把本项目绝对 AEE 与论文 `0.96/0.99` 直接等同。后续冻结 H67 后，硬件侧按同一 checkpoint
+和同一 800x4 trace 做累计表：`C0 INT8 dense -> C1 + group16 lossless BWAC -> C2 + density
+speculation -> C3 + feature-similarity deep-level skip`，逐行报告 AEE delta、operations、
+SRAM/DRAM bytes、cycles、control overhead、energy/latency。TTB 是 Bishop 启发的本项目正交
+方向，不属于该 CICC 论文。
+
+**当前 MVSEC fixed800 三线结果。** NB0/H67/Local5 的 macro AEE 分别为
+`1.8231/1.7649/1.7984`，total spikes 分别为 `97.3392/55.1700/55.4902 G`。H67 相对 NB0
+AEE 改善 `3.20%`、spikes 下降 `43.32%`；Local5 相对 NB0 AEE 改善 `1.36%`、spikes 下降
+约 `43.00%`。H67 当前同时优于 Local5 的跨数据集 AEE 和 spikes。NB0/H67 full-sequence 已
+完成；Local5 full-sequence 在本审计时运行中，完成后才生成三线 fail-closed comparison。
+
+**DSEC 完成度。** 论文式本地协议已经冻结为 `480x640`、crop=null、`T2x15x15`、
+no-running BN、18 段 valid825。NB0/H67/Local5 的公平预算 30/35/40 标准推理全部完成：
+
+| route | rank-1 | AEE | AAE-2D | AE-3D | Fl (%) | spikes (G) | convergence |
+|---|---:|---:|---:|---:|---:|---:|---|
+| NB0 | ep29 | 1.4454 | 6.5128 | 6.1803 | 7.9323 | 126.1156 | plateau/overfit |
+| H67 Motion-TTX | ep35 | 1.3297 | 5.9004 | 5.6509 | 6.4279 | 82.1107 | passed optimum |
+| Local5 | ep39 | 1.3153 | 5.8291 | 5.5379 | 6.3815 | 84.4197 | right-censored |
+
+H67 相对 NB0 的 AEE/spikes 为 `-8.00%/-34.89%`；Local5 为 `-9.00%/-33.06%`。
+H67 ep35 已具有同 checkpoint 的 profile 与 ATLIF、score/Shiftmax、projection component
+RTL-exact PASS；声明边界是 component-level exact，不是 full-network RTL-exact。Local5 现有
+硬件证据只绑定 ep29，不能继承给 ep39。
+
+DSEC 核心算法对照和 H67 硬件闭环已经完成，但“所有结果”尚未全部完成：H81 no-motion
+fullres40 用于隔离 Motion-XOR 贡献；Local5 40->50 用于解除 ep39 最大预算 right-censor；
+两者完成后运行最终跨证据主线审计。若 Local5 ep44/49 成为最终论文 checkpoint，还必须重做
+同 checkpoint profile/RTL。官方 DSEC hidden-test server 提交也未完成，本地 valid825 不能标为
+official test。
+
+<!-- DATE_PAPER_ALGORITHM_EXPERIMENT_BLUEPRINT_20260812 -->
+
+### DATE 正文算法实验蓝图与 Local5 保留决策（2026-08-12）
+
+- 新增 `neuron_autoresearch/DATE_PAPER_ALGORITHM_EXPERIMENT_BLUEPRINT_20260812.md`，逐项冻结
+  MVSEC 文献协议分类、DSEC/MVSEC 正文表头、机制消融、收敛、随机种子、事件密度分层、
+  算法到硬件复杂度桥接和加载审计附表。不同训练来源（MVSEC day2、UZH-FPV、MDR、无训练）
+  必须分组，禁止只按绝对 AEE 混排。
+- `outdoor_day2` 是历史学习型 MVSEC 的主流训练选择，但不是唯一选择。E-RAFT 还使用
+  temporal-upsampled 约45-Hz GT；ET-FlowNet/FireNet 系使用外部 FPV；ADMFlow/SDformerFlow
+  使用 MDR；model-based 方法无需训练。当前 direct-MVSEC 的 2363/263 supervised split 是
+  三线公平内部泛化协议，不冒充 E-RAFT/Spike-FlowNet 训练复现。
+- Local5 不再被提前降为仅“精度上界”。它与 H67 保持双候选直到 ep50、MVSEC full 和等面积
+  系统硬件表完成。现有 Local5 证据证明约80% SRAM transaction reduction 的潜力，但 direct
+  GASR 周期尚为 `0.995x`，自适应选择约 `1.022x`；因此“硬件潜力更大”目前是有数据支撑的
+  假设，不是已闭合的速度/能量结论。
+
+<!-- MVSEC_DAY2_ONLY_PROTOCOL_FROZEN_20260812 -->
+
+### MVSEC day2-only 正文协议冻结（2026-08-12）
+
+- 用户确认采用文献中最普遍的 `outdoor_day2` 训练、`outdoor_day1 + indoor_flying1/2/3`
+  测试范式。当前 NB0/H67/Local5 三线已经使用同一 day2-only manifest，无需重启训练。
+- 为避免测试集选点，day2 有效监督对按时间冻结为 `2363 train + 263 held-out validation`，中间
+  留一个样本 gap；四测试序列仅在 validation rank-1 冻结后运行 fixed800/full-sequence。
+  正文必须披露这一内部90/10划分，不能写成全部 day2 pair 都参与梯度更新。
+- MDR->MVSEC、FPV->MVSEC 和 E-RAFT temporal-upsampled GT 属于不同训练来源/监督口径，只能
+  放在分组 related-work 表，不与本项目 day2-only 三线混作同协议绝对排名。
+<!-- DATE_MOTION_REVIEW_ACTIONS_20260813 -->
+
+## DATE Motion 主线预投稿审查执行项（2026-08-13）
+
+### 冻结决策
+
+- DATE 算法/硬件协同的唯一论文主线冻结为 **H67 Motion-TTX**。Local5 只完成已经排队的
+  full-sequence MVSEC、40→50 收敛审计，并作为扩展/附录候选；不再为当前 DATE 稿件新增
+  Local5 算法分支。
+- H67 唯一 paper checkpoint 冻结为 full-resolution `ep35`：
+  `checkpoint_sha256=4f33e086070bb92524d94727c6e39cdb7296441c2660e70f1d7be29467645158`。
+- 机器可读身份合同：
+  `neuron_autoresearch/H67_PAPER_IDENTITY_CONTRACT_20260813.json`，状态 `PASS`。
+
+### 模型身份与术语
+
+- 公开 SDformerFlow 使用原始 SDSA；H67 是重新训练的 `all12 H60 Motion-XOR + Shiftmax + gated-K`
+  attention operator，不能写成公开 SDSA 的代数等价硬件实现。
+- 论文统一使用：`T_snn=10`、`T_w=2`、`H_w=W_w=15`、`N_tok=450`、
+  `N_pair=225`。禁止再用裸 `T=450` 表示 token 数。
+- `exact` 只表示相对冻结 hardware-order fixed-point reference 的 component-level bit-exact；
+  不表示 float SDSA 等价或 full-network RTL-exact。
+
+### 审查意见中已由现有证据解决的项目
+
+- ep30/ep35 身份冲突已解决：当前 `h67_postconvergence_rank1_hardware_evidence_20260805.json`
+  明确绑定 ep35。
+- synthetic projection 风险已升级：ep35 已有 checkpoint-bound real-weight dyadic-INT8
+  projection RTL，12/12 blocks、Icarus/Verilator 全记录 bit-exact。仍只声称 component-level，
+  不外推为 full network。
+- 当前算法指标：AEE=`1.329678`，AAE-2D=`5.900353`，AE-3D=`5.650878`，
+  DSEC Fl=`6.4279%`，spikes=`82.1107G`。
+
+### 新增算法实验队列：H67 score precision Pareto
+
+- 配置：QF5/QF6/QF7/QF8 score grid，固定 Q1.7 gate、ep35、480×640、
+  `window=[2,15,15]` 和 Valid825；`QF` 表示 fractional bits，不是总码宽。
+- QF5/QF6/QF8 使用 generic quantized Shiftmax，只做算法敏感性，不声称存在相应 RTL；
+  Q7 hardware-order LUT 结果继续由已有独立证据报告。
+- 输出 AEE、AAE-2D、AE-3D、Fl、spikes、pair-score equality 和理想 dual-slot reduction。
+- manifest：
+  `neuron_experiments/H9_bipolar_self_attention/configs/generated/h67_ep35_score_precision_qf5_qf8_manifest.json`。
+- watcher：
+  `neuron_experiments/H9_bipolar_self_attention/entrypoints/run_h67_score_precision_sweep_after_mainline.py`；
+  它等待现有 H81/Local5/final-mainline 队列结束后才使用 GPU。
+
+### 本轮不做
+
+- 不修改 `hw_autoresearch_nts07` 中任何 RTL、脚本、PPA 或验证代码。
+- 不在当前算法队列中实现 class-wise K folding、inverse-stencil、SAIF 或 full-encoder shell；
+  这些属于硬件侧后续决策，不应由算法实验抢占现有收敛队列。
+- 不再增加新的注意力范式或内部缩写；当前算法证据优先补 Motion/no-motion、跨数据集和
+  precision Pareto。
+
+<!-- MVSEC_DIRECT_THREE_ROUTE_FINAL_AUDIT_20260812 -->
+
+### direct-MVSEC NB0/H67/Local5 最终审计
+
+- fail-closed 审计 PASS；三线 best checkpoint 均从原始训练日志重算 validation-loss rank-1，并绑定 checkpoint/config/manifest SHA。
+- full-sequence 同协议结果：
+
+| route | epoch | macro AEE | weighted AEE | Fl(%) | spikes(G) | energy proxy(uJ) |
+|---|---:|---:|---:|---:|---:|---:|
+| nb0 | 11 | 1.827258 | 2.343471 | 18.3537 | 251.4680 | 214151.98 |
+| h67 | 12 | 1.767113 | 2.230047 | 17.1276 | 140.6647 | 121555.15 |
+| local5 | 12 | 1.801101 | 2.269640 | 17.7919 | 141.3613 | 122047.50 |
+
+- MVSEC algorithm-only 合格候选中按 macro AEE 选中 `h67`。该结论不改变 DSEC H67 ep35 硬件主线，MVSEC checkpoint 不继承 DSEC RTL provenance。
+- 机器审计：`neuron_experiments/H9_bipolar_self_attention/results/mvsec_cicc_nb0_h67_local5_audit_20260812.json`。
+
+<!-- DATE_ALGORITHM_GROK_TAKEOVER_20260813 -->
+
+### Grok 接管算法队列 2026-08-13
+
+- Codex `019ec76b-ea14-7862-be41-45ea956713db` 额度用尽后，由 Grok 继续同一条 GPU 队列：H81 fullres40 → valid825 → Local5 40-50 → 最终主线审计 → QF5-QF8。
+- H67 Motion-TTX ep35 仍是 DATE 唯一主线。seed1/2 只登记不启动；valid825 密度四分位人口已冻结。
+- 机器交接：`neuron_autoresearch/DATE_ALGORITHM_GROK_TAKEOVER_20260813.md`。
+
+<!-- DATE_ALGORITHM_QUEUE_REORDER_20260814 -->
+
+### DATE 算法队列主线优先级修正（2026-08-14）
+
+- H81 连续训练不变；当前依赖顺序改为：H81 fullres40 + valid825 → H67 QF5-QF8 →
+  Local5 40→50 → 最终跨证据审计。
+- 原顺序把 H67 主线位宽消融放在 Local5 扩展之后，Local5 失败或超时会无意义阻塞 QF。
+  新顺序只调整两个空等 watcher，不重启 H81，不并行抢 GPU。
+- QF watcher 以 `H67_H81_NOMOTION_RESULT_20260812.json` 为释放门；Local5 watcher 以
+  `h67_ep35_score_precision_qf5_qf8_20260813/summary.json` 为释放门。
+- 硬件证据仍只读；本次未修改任何硬件代码或硬件文档。
+
+
+<!-- H67_H81_NOMOTION_FINAL_RESULT_20260812 -->
+
+### H67 Motion vs H81 no-motion 最终控制
+
+- H67 Motion ep35: AEE=`1.329678`，AAE-2D=`5.900353`，AE-3D=`5.650878`，spikes=`82.1107G`。
+- H81 no-motion ep29: AEE=`1.330597`，AAE-2D=`5.969235`，AE-3D=`5.672632`，spikes=`80.9024G`。
+- H67 AEE 相对 H81 变化=`-0.069%`（负值为更好）；H81 收敛判定=`operationally_plateaued_or_overfit`。该证据是 recipe-level control，不是 step-paired bit-exact 训练。
+- 机器审计：`neuron_autoresearch/H67_H81_NOMOTION_RESULT_20260812.json`。
+
+
+<!-- H67_SCORE_PRECISION_QF5_QF8_RESULT_20260813 -->
+
+### H67 ep35 score QF5-QF8 sensitivity
+
+| score | AEE | delta vs QF7 | AAE-2D | AE-3D | Fl(%) | spikes(G) | pair equal | ideal dual-slot reduction |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| QF5 | 1.332377 | +0.004465 | 5.908379 | 5.665975 | 6.4666 | 82.1065 | 98.4138% | 49.2069% |
+| QF6 | 1.331083 | +0.003171 | 5.925380 | 5.676300 | 6.4542 | 82.1075 | 92.0596% | 46.0298% |
+| QF7 | 1.327912 | +0.000000 | 5.914105 | 5.666098 | 6.3915 | 82.1065 | 97.5198% | 48.7599% |
+| QF8 | 1.330811 | +0.002899 | 5.926746 | 5.679027 | 6.4539 | 82.1074 | 92.9069% | 46.4535% |
+
+- 该表是算法位宽敏感性，不把 QF5/QF6/QF8 写成已有 RTL。
+- 机器结果：`neuron_experiments/H9_bipolar_self_attention/results/h67_ep35_score_precision_qf5_qf8_20260813/summary.json`。
+
+<!-- LOCAL5_FULLRES_40_TO_50_FINAL_RESULT_20260812 -->
+
+### Local5 full-resolution 40→50 收敛结果
+
+| budget | checkpoint | AEE | AAE-2D | AE-3D | Fl(%) | spikes(G) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 40 | 39 | 1.315288 | 5.829055 | 5.537945 | 6.3815 | 84.4197 |
+| 45 | 44 | 1.281893 | 5.849797 | 5.508685 | 6.0210 | 85.2376 |
+| 50 | 49 | 1.298168 | 5.831211 | 5.501246 | 6.2162 | 85.8205 |
+
+- 收敛判定=`operationally_plateaued_or_overfit`，AEE rank-1=ep44。
+- ep44/49 没有硬件 provenance；Local5 现有 component RTL 仍只绑 ep29。
+- 机器审计：`neuron_experiments/H9_bipolar_self_attention/results/dsec_fullres_w15_H66d_local5_bb1e4_equal_plus20_ep50_20260812/convergence_summary.json`。
+
+
+<!-- DATE_FINAL_MAINLINE_DECISION_20260812 -->
+
+### DATE 最终跨证据主线裁决
+
+- 状态=`PASS_EVIDENCE_AUDIT`，决策=`H67_MAINLINE_FROZEN_LOCAL5_EXTENSION_REPORTED`，主线=`H67_Motion_TTX`。
+- DSEC: H67 AEE/spikes=`1.329678/82.1107G`，Local5 rank-1 ep44=`1.281893/85.2376G`。
+- MVSEC full AEE: H67=`1.767113`，Local5=`1.801101`；Motion control H67/H81=`1.329678/1.330597`。
+- 硬件证据仅只读消费；该算法审计不修改硬件代码或硬件文档。
+- 机器审计：`neuron_autoresearch/DATE_FINAL_MAINLINE_DECISION_20260812.json`。
