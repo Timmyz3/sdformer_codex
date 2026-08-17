@@ -246,9 +246,10 @@ post-synthesis, and proxy values explicitly. Never mix them without a provenance
 4. Final audit PASS: H67 stays the frozen mainline; Local5 is reported as an
    extension. Local5 rank1 and RTL checkpoint are not the same (ep44 vs ep29).
 5. Seed1/2 configs are registered and not launched. The paper claim is limited to seed0.
-8. MVSEC completion queued 2026-08-16: H81 same-protocol day2 scratch from the frozen
-   NB0 init, then Local5 DSEC-ep44 day2 fine-tune labeled separately to try to recover
-   indoor_flying1. Scratch Local5 remains the official same-protocol row.
+8. MVSEC completion finished 2026-08-16. H81 same-protocol full AEE 1.7926 fails the
+   all-four-sequences gate on indoor_flying1. Local5 DSEC-ep44 day2 FT full AEE 1.6686
+   beats NB0 on all four sequences, but it is a transfer protocol and must stay a
+   separate row. Scratch Local5 remains the official same-protocol Local5 line.
 6. Density-quartile population is frozen. Attach AEE/Fl/spikes only after the GPU queue.
    Hardware cycle/traffic/energy evidence is consumed read-only.
 7. If a later paper promotes Local5 and uses ep39/44/49, regenerate same-checkpoint

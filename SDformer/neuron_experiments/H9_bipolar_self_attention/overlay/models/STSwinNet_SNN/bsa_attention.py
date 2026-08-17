@@ -98,6 +98,8 @@ class ShiftmaxAttentionConfig:
     hardware_gate_max: float | None = None
     hardware_rtl_shiftmax_enabled: bool = False
     hardware_mask_invalid_candidates: bool = False
+    source_gate_cardinality_regularization_weight: float = 0.0
+    source_gate_cardinality_proxy_mode: str = "mean_collapse"
     direct_shiftmax_groups: int = 1
     direct_shiftmax_center_output: bool = False
     direct_shiftmax_signed_events: bool = False
@@ -186,6 +188,12 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         hardware_rtl_shiftmax_enabled=bool(raw.get("hardware_rtl_shiftmax_enabled", False)),
         hardware_mask_invalid_candidates=bool(
             raw.get("hardware_mask_invalid_candidates", False)
+        ),
+        source_gate_cardinality_regularization_weight=float(
+            raw.get("source_gate_cardinality_regularization_weight", 0.0) or 0.0
+        ),
+        source_gate_cardinality_proxy_mode=str(
+            raw.get("source_gate_cardinality_proxy_mode", "mean_collapse")
         ),
         direct_shiftmax_groups=int(raw.get("direct_shiftmax_groups", 1) or 1),
         direct_shiftmax_center_output=bool(raw.get("direct_shiftmax_center_output", False)),
@@ -2490,6 +2498,9 @@ def _binary_alpha_xnor_stencil_attention(
     invariant, so motion must not be broadcast across all stencil lanes.
     """
 
+    if profile_module is not None:
+        profile_module._h9_source_gate_cardinality_proxy = None
+
     q_event = (_qkformer_token_q(q_orig) > 0).to(dtype=q_orig.dtype)
     k_event = (k_orig > 0).to(dtype=q_orig.dtype)
     batch, heads, n_tokens, head_dim = q_event.shape
@@ -2574,6 +2585,19 @@ def _binary_alpha_xnor_stencil_attention(
         if cfg.hardware_mask_invalid_candidates:
             gate = gate.masked_fill(~valid_for_gate, 0.0)
     gate = _apply_hardware_gate_quant(gate, cfg)
+    if (
+        profile_module is not None
+        and cfg.source_gate_cardinality_regularization_weight > 0.0
+    ):
+        profile_module._h9_source_gate_cardinality_proxy = (
+            _source_gate_cardinality_proxy(
+                gate,
+                source_index=index,
+                valid=valid,
+                source_k=k_event,
+                mode=cfg.source_gate_cardinality_proxy_mode,
+            )
+        )
     value_candidates = k_orig[:, :, index, :]
     attn = (gate.unsqueeze(-1) * value_candidates).sum(dim=-2)
     row_sum = gate.sum(dim=-1)
@@ -2594,6 +2618,117 @@ def _binary_alpha_xnor_stencil_attention(
             gate=gate.detach(),
         )
     return attn, row_sum, gate
+
+
+def _source_gate_cardinality_proxy(
+    gate: torch.Tensor,
+    *,
+    source_index: torch.Tensor,
+    valid: torch.Tensor,
+    source_k: torch.Tensor,
+    mode: str = "mean_collapse",
+) -> torch.Tensor:
+    """Differentiable proxy for source-owned exact gate cardinality.
+
+    The hardware cost is proportional to ``popcount(K_s) * C_s``, where ``C_s``
+    is the number of distinct nonzero Q1.7 gate codes that consume source ``s``.
+    Counting classes is discrete. ``mean_collapse`` minimizes the weighted
+    deviation from one source-local mean. ``tail_gap_c2`` is aligned to a
+    two-wide issuer: after sorting the nonzero Q1.7 gates, it penalizes all
+    adjacent gaps except the largest, and is exactly zero for at most two gate
+    classes. The gate tensor already carries STE gradients from hardware
+    quantization; neither mode changes the forward value or prunes a relation.
+    """
+
+    if gate.ndim != 4:
+        raise ValueError("source gate proxy expects gate [B,H,N,R]")
+    batch, heads, tokens, roles = gate.shape
+    if source_index.shape != (tokens, roles) or valid.shape != (tokens, roles):
+        raise ValueError("source index/valid shape does not match gate")
+    if source_k.ndim != 4 or source_k.shape[:3] != (batch, heads, tokens):
+        raise ValueError("source K must use [B,H,N,D]")
+
+    edge_source = source_index.reshape(1, 1, -1).expand(batch, heads, -1)
+    edge_gate = gate.reshape(batch, heads, -1)
+    edge_valid = valid.reshape(1, 1, -1).expand(batch, heads, -1)
+    # Gate zero is not a source-owned product term. Keep this membership hard
+    # while retaining STE gradients through every nonzero gate value.
+    edge_live = edge_valid & edge_gate.detach().gt(0)
+    edge_live_f = edge_live.to(dtype=gate.dtype)
+
+    source_weight = source_k.detach().ne(0).sum(dim=-1).to(dtype=gate.dtype)
+    source_weight = source_weight / float(max(1, source_k.shape[-1]))
+    if mode == "mean_collapse":
+        source_sum = gate.new_zeros(batch, heads, tokens)
+        source_count = gate.new_zeros(batch, heads, tokens)
+        source_sum.scatter_add_(2, edge_source, edge_gate * edge_live_f)
+        source_count.scatter_add_(2, edge_source, edge_live_f)
+        source_mean = source_sum / source_count.clamp_min(1.0)
+        edge_mean = source_mean.gather(2, edge_source)
+        edge_weight = source_weight.gather(2, edge_source) * edge_live_f
+        numerator = ((edge_gate - edge_mean).abs() * edge_weight).sum()
+        denominator = edge_weight.sum().clamp_min(1.0)
+        return numerator / denominator
+    if mode != "tail_gap_c2":
+        raise ValueError(f"unsupported source gate cardinality proxy mode: {mode}")
+
+    source_role_gate = gate.new_zeros(batch, heads, tokens, roles)
+    source_role_live = gate.new_zeros(batch, heads, tokens, roles)
+    for role in range(roles):
+        role_source = source_index[:, role].reshape(1, 1, tokens).expand(
+            batch, heads, -1
+        )
+        role_live = (
+            valid[:, role].reshape(1, 1, tokens).expand(batch, heads, -1)
+            & gate[..., role].detach().gt(0)
+        )
+        source_role_gate[..., role].scatter_add_(
+            2, role_source, gate[..., role] * role_live
+        )
+        source_role_live[..., role].scatter_add_(
+            2, role_source, role_live.to(gate.dtype)
+        )
+    source_role_gate = source_role_gate * source_role_live.detach().gt(0).to(gate.dtype)
+    if roles < 2:
+        return source_role_gate.sum() * 0.0
+    sorted_gate = source_role_gate.sort(dim=-1).values
+    adjacent_live = sorted_gate[..., :-1].detach().gt(0) & sorted_gate[...,
+        1:
+    ].detach().gt(0)
+    gaps = (sorted_gate[..., 1:] - sorted_gate[..., :-1]) * adjacent_live.to(
+        gate.dtype
+    )
+    tail_gap = gaps.sum(dim=-1) - gaps.amax(dim=-1)
+    numerator = (tail_gap * source_weight).sum()
+    denominator = source_weight.sum().clamp_min(1.0)
+    return numerator / denominator
+
+
+def regularize_source_gate_cardinality(
+    model: nn.Module, raw_config: dict | None
+) -> torch.Tensor | None:
+    """Collect the optional Local5 gate-cardinality proxy from all blocks."""
+
+    cfg = config_from_dict(raw_config)
+    weight = float(cfg.source_gate_cardinality_regularization_weight)
+    if weight <= 0.0:
+        return None
+    if cfg.mode not in {"binary_axnor_local5_shiftmax", "lr_ttx", "h66_lr"}:
+        raise ValueError(
+            "source gate cardinality regularization is only defined for Local5"
+        )
+    losses = [
+        value
+        for module in model.modules()
+        if torch.is_tensor(
+            value := getattr(module, "_h9_source_gate_cardinality_proxy", None)
+        )
+    ]
+    if not losses:
+        raise RuntimeError(
+            "gate-cardinality regularization enabled but no Local5 proxy was captured"
+        )
+    return weight * torch.stack(losses).mean()
 
 
 _EEMFLOW_MC49_CHANNELS = (

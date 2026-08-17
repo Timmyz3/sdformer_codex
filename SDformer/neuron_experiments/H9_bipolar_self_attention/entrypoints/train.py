@@ -190,6 +190,33 @@ LOSS_PATCH = """                from models.STSwinNet_SNN.atlif_ternary_psn impo
                 h6_penalty = regularize_activity(model, config.get("atlif_ternary_psn"))
                 if h6_penalty is not None:
                     curr_loss = curr_loss + h6_penalty / num_acc_steps
+                from models.STSwinNet_SNN.bsa_attention import regularize_source_gate_cardinality
+                h9_flow_loss_before_gate_cardinality = curr_loss.detach()
+                h9_gate_cardinality_penalty = regularize_source_gate_cardinality(
+                    model, config.get("bsa_attention")
+                )
+                if h9_gate_cardinality_penalty is not None:
+                    curr_loss = curr_loss + h9_gate_cardinality_penalty / num_acc_steps
+                    h9_gate_log_interval = int(
+                        config.get("bsa_attention", {}).get(
+                            "source_gate_cardinality_log_interval_steps", 0
+                        )
+                        or 0
+                    )
+                    if h9_gate_log_interval > 0 and (sample + 1) % h9_gate_log_interval == 0:
+                        h9_gate_weight = float(
+                            config.get("bsa_attention", {}).get(
+                                "source_gate_cardinality_regularization_weight", 0.0
+                            )
+                            or 0.0
+                        )
+                        h9_gate_proxy = h9_gate_cardinality_penalty.detach() / h9_gate_weight
+                        print(
+                            f"[H9-GC] step {sample + 1}: "
+                            f"flow_loss={h9_flow_loss_before_gate_cardinality.item():.9g}, "
+                            f"unweighted_proxy={h9_gate_proxy.item():.9g}, "
+                            f"weighted_penalty={h9_gate_cardinality_penalty.detach().item():.9g}"
+                        )
                 # print("loss: ", curr_loss.item())
 
                 if np.isnan(curr_loss.item()):
