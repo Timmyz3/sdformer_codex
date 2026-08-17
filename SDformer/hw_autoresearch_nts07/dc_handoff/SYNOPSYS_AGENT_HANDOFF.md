@@ -32,6 +32,16 @@ git sparse-checkout set \
   SDformer/hw_autoresearch_nts07/rtl_ttx \
   SDformer/hw_autoresearch_nts07/rtl_qfit \
   SDformer/hw_autoresearch_nts07/rtl_local5 \
+  SDformer/hw_autoresearch_nts07/tb_h67 \
+  SDformer/hw_autoresearch_nts07/tb_qfit \
+  SDformer/hw_autoresearch_nts07/tb_local5 \
+  SDformer/hw_autoresearch_nts07/tb_ttx \
+  SDformer/hw_autoresearch_nts07/sim_h67 \
+  SDformer/hw_autoresearch_nts07/sim_qfit \
+  SDformer/hw_autoresearch_nts07/sim_new_arch \
+  SDformer/hw_autoresearch_nts07/sim_ttx \
+  SDformer/hw_autoresearch_nts07/verif_h67 \
+  SDformer/hw_autoresearch_nts07/verif_qfit \
   SDformer/hw_autoresearch_nts07/docs \
   SDformer/hw_autoresearch_nts07/scripts \
   SDformer/neuron_autoresearch
@@ -56,7 +66,9 @@ ff986c74070e39f2effe24494f911490dbc896036b798599ebf525779a1f6ebc
 
 包前缀是 `hw_autoresearch_nts07/`。包内活动仍是 Local5 **ep29** 论文合同，不是 ep44 sidecar。H81 不在包里。
 
-上面稀疏检出已经包含对照用的 RTL/文档。不要再全量 clone。不要检出 `build_*`、`results/`、`tb_*/vectors/`、`neuron_experiments/**/results/`、任何 `*.pth`。
+稀疏检出必须包含 `tb_*` / `sim_*` / `verif_*` 源码和已进 git 的向量，方便对照、Formality 调试和必要时重仿。论文 PPA 仍用包内已封 VCD 做 `vcd2saif`，不要为交差去重出一套活动。
+
+不要再全量 clone。不要检出：`build_*`、`results/`、`neuron_experiments/**/results/`、任何 `*.pth`。若干超大向量（约 20MB+ memh/txt）已从 git 拿掉，包内已有 DC 活动 VCD 和对应合同。
 
 ## 2. 先读这些，再碰 dc_shell
 
