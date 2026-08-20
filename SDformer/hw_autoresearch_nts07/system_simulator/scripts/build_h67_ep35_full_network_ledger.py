@@ -151,7 +151,7 @@ def build_operator_rows(rows: list[dict[str, str]], config: dict[str, Any]) -> l
 
 def build_atlif_rows(rows: list[dict[str, str]], config: dict[str, Any]) -> list[dict[str, Any]]:
     lanes = int(config["atlif_lanes"])
-    state_bits = int(config["atlif_state_bits"])
+    accumulator_bits = int(config["atlif_accumulator_bits"])
     result = []
     for source in rows:
         calls = integer(source, "calls")
@@ -160,6 +160,13 @@ def build_atlif_rows(rows: list[dict[str, str]], config: dict[str, Any]) -> list
         elements = per_frame(integer(source, "elements"))
         temporal = max(1, integer(source, "temporal_steps", 1))
         dense_macs = elements * temporal
+        first_call_elements = integer(source, "input_first_elements")
+        if first_call_elements % temporal != 0:
+            raise RuntimeError(
+                f"ATLIF first-call elements not divisible by T: "
+                f"{source['name']}={first_call_elements}/{temporal}"
+            )
+        output_row_elements = first_call_elements // temporal
         result.append({
             "name": source["name"],
             "calls_per_frame": calls // SAMPLES,
@@ -169,8 +176,12 @@ def build_atlif_rows(rows: list[dict[str, str]], config: dict[str, Any]) -> list
             "temporal_steps": temporal,
             "dense_macs_per_frame": int(round(dense_macs)),
             "cycles_at_config_lanes": ceil_div(dense_macs, lanes),
-            "state_read_bytes_per_frame": ceil_div(elements * state_bits, 8),
-            "state_write_bytes_per_frame": ceil_div(elements * state_bits, 8),
+            "full_temporal_output_buffer_bytes_per_frame": ceil_div(
+                elements * accumulator_bits, 8
+            ),
+            "minimum_streaming_accumulator_bytes_per_call": ceil_div(
+                output_row_elements * accumulator_bits, 8
+            ),
             "parameter_entries": integer(source, "parameter_entries"),
             "deployment_dead_result": source.get("deployment_dead_result") == "True",
         })
@@ -266,8 +277,12 @@ def main() -> int:
         for row in operators
     )
     unique_weight_bytes = sum(row["weight_bytes_int8"] for row in operators)
-    atlif_state_bytes = sum(
-        row["state_read_bytes_per_frame"] + row["state_write_bytes_per_frame"]
+    atlif_output_payload_bytes = sum(
+        row["full_temporal_output_buffer_bytes_per_frame"]
+        for row in atlif if not row["deployment_dead_result"]
+    )
+    largest_atlif_streaming_accumulator = max(
+        row["minimum_streaming_accumulator_bytes_per_call"]
         for row in atlif if not row["deployment_dead_result"]
     )
     category_cycles: Counter[str] = Counter()
@@ -308,7 +323,11 @@ def main() -> int:
             "contract": "materialize every profiled operator input/output; upper proxy, not residency",
             "operator_activation_bytes_int8": materialize_bytes,
             "unique_weight_bytes_int8": unique_weight_bytes,
-            "atlif_state_read_write_bytes": atlif_state_bytes,
+            "atlif_full_temporal_output_payload_bytes": atlif_output_payload_bytes,
+            "atlif_payload_contract": (
+                "output payload only; no SRAM read/write traffic is implied"
+            ),
+            "largest_atlif_streaming_accumulator_bytes": largest_atlif_streaming_accumulator,
             "peak_profiled_activation_object_bytes_int8": max(row["bytes_int8"] for row in activations),
         },
     }
@@ -331,10 +350,11 @@ def main() -> int:
         f"- modeled Fixed attention share: `{attention['fixed_cycles_per_frame'] / fixed_total:.6%}`",
         f"- materialize-all activation traffic: `{materialize_bytes}` bytes/frame",
         f"- unique INT8 weights: `{unique_weight_bytes}` bytes",
-        f"- ATLIF state read+write: `{atlif_state_bytes}` bytes/frame at {config['atlif_state_bits']} bits",
+        f"- ATLIF full temporal-output payload: `{atlif_output_payload_bytes}` bytes/frame at {config['atlif_accumulator_bits']} bits",
+        f"- largest one-row ATLIF streaming accumulator: `{largest_atlif_streaming_accumulator}` bytes",
         "",
         "This is the first full-network operator ledger. It is not yet the paper cycle/energy table.",
-        "CACTI, DRAMsim3, residency, bank conflicts, DMA overlap, and calibration of non-attention operators remain pending.",
+        "The ATLIF payload is not a membrane-state or SRAM-traffic measurement. CACTI, DRAMsim3, residency, bank conflicts, DMA overlap, and calibration of non-attention operators remain pending.",
     ]
     (args.output / "REPORT.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     print(json.dumps({
