@@ -16,4 +16,4 @@ Status: `PASS_POPULATION_FROZEN`; frames=`825`; density=`voxel L1`.
 | Q4 | 206 |
 
 Cuts are frozen on the validation voxels. Do not retune them after seeing AEE.
-AEE / Fl / spikes remain pending until a later same-checkpoint per-frame eval.
+AEE / Fl / spikes are attached in `DSEC_DENSITY_QUARTILE_TABLE_G_20260817.json`.

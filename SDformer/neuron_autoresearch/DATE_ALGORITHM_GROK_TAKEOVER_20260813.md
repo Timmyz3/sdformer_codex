@@ -30,8 +30,14 @@ H81 saves only ep29/34/39. First checkpoint is therefore still hours away.
 - Frozen valid825 voxel-L1 quartiles: Q25=556401.6, Q50=719957.9, Q75=891402.7.
 - Updated the 2026-08-12 algorithm blueprint.
 
+## Live 2026-08-17
+
+- Table G attached: `DSEC_DENSITY_QUARTILE_TABLE_G_20260817.json` (`PASS_AEE_ATTACHED`).
+- Four-line comparison: `DATE_FOUR_LINE_PAPER_FIT_20260817.md`
+- Load-audit appendix: `DATE_LOAD_AUDIT_APPENDIX_20260817.md`
+- Figures: `figures/date_four_line_20260817/`
+
 ## Not started
 
 - Seed1/2 training
-- Per-frame AEE attach for Table G
 - Any hardware job

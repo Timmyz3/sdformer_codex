@@ -244,6 +244,12 @@ class _SpikeProfiler:
             if any(p in cls or p in name for p in ("Spiking_neuron",)):
                 self.handles.append(module.register_forward_hook(self._hook(name)))
 
+    def current_totals(self):
+        return (
+            sum(r["spikes"] for r in self.records.values()),
+            sum(r["elements"] for r in self.records.values()),
+        )
+
     def close(self):
         for h in self.handles:
             h.remove()
@@ -456,6 +462,25 @@ def valid_test(args, config_parser):
     spike_profiler = _SpikeProfiler()
     spike_profiler.attach(model)
 
+    dump_per_frame_path = str(getattr(args, "dump_per_frame", "") or "")
+    dump_frames_dir = str(getattr(args, "dump_selected_frames_dir", "") or "")
+    dump_frame_list = str(getattr(args, "dump_frame_list", "") or "")
+    selected_files = set()
+    if dump_frame_list:
+        selected_files = {
+            line.strip()
+            for line in Path(dump_frame_list).read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+    dump_handle = None
+    if dump_per_frame_path:
+        Path(dump_per_frame_path).parent.mkdir(parents=True, exist_ok=True)
+        dump_handle = open(dump_per_frame_path, "w", encoding="utf-8")
+        dump_handle.write(
+            "file,sequence,valid_pixels,AEE,AAE,AAE_Benchmark,DSEC_Fl,gt_flow_mag,spikes,elements\n"
+        )
+        print(f"[PER-FRAME] writing {dump_per_frame_path}", flush=True)
+
     print('Validating... (test sequence)')
     sample = 0
     val_results = {}
@@ -490,7 +515,7 @@ def valid_test(args, config_parser):
             break
 
         functional.reset_net(model)
-
+        spikes_before, elements_before = spike_profiler.current_totals()
 
         chunk = chunk.to(device=device, dtype=torch.float32)
         label = label.to(device=device, dtype=torch.float32)  # [num_batches, 2, H, W]
@@ -574,10 +599,74 @@ def valid_test(args, config_parser):
             mask = mask * event_mask
 
         sequence_ids = []
+        frame_names = []
         for batch in range(pred.shape[0]):
             row = valid_dataset.files[dataset_offset + batch]
             target_file = row[1] if valid_dataset.num_chunks == 2 else row[0]
+            frame_names.append(str(target_file))
             sequence_ids.append("_".join(target_file.split("_")[:-1]))
+        if dump_handle is not None:
+            spikes_after, elements_after = spike_profiler.current_totals()
+            batch_spikes = spikes_after - spikes_before
+            batch_elements = elements_after - elements_before
+            maps = FlowMetricAggregationAudit._maps(
+                pred.detach(),
+                label.detach(),
+                config["metrics"]["flow_scaling"],
+            )
+            flat_mask = mask.detach().reshape(pred.shape[0], -1).to(dtype=pred.dtype)
+            gt_mag = label.detach().pow(2).sum(1).sqrt()
+            n_items = int(pred.shape[0]) if int(pred.shape[0]) else 1
+            per_item_spikes = batch_spikes / n_items
+            per_item_elements = batch_elements / n_items
+            for batch, target_file in enumerate(frame_names):
+                valid_pixels = float(flat_mask[batch].sum().cpu())
+                denom = valid_pixels + 1e-9
+                values = {}
+                for name, value_map in maps.items():
+                    numerator = float(
+                        (value_map[batch].reshape(-1) * flat_mask[batch]).sum().cpu()
+                    )
+                    values[name] = numerator / denom
+                gt_flow_mag = float(
+                    (gt_mag[batch].reshape(-1) * flat_mask[batch]).sum().cpu() / denom
+                )
+                dump_handle.write(
+                    ",".join(
+                        [
+                            target_file,
+                            sequence_ids[batch],
+                            f"{valid_pixels:.1f}",
+                            f"{values['AEE']:.10f}",
+                            f"{values['AAE']:.10f}",
+                            f"{values['AAE_Benchmark']:.10f}",
+                            f"{values['DSEC_Fl']:.10f}",
+                            f"{gt_flow_mag:.10f}",
+                            f"{per_item_spikes:.1f}",
+                            f"{per_item_elements:.1f}",
+                        ]
+                    )
+                    + "\n"
+                )
+                dump_handle.flush()
+                if dump_frames_dir and target_file in selected_files:
+                    import numpy as np
+
+                    out_dir = Path(dump_frames_dir)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    stem = Path(target_file).stem
+                    try:
+                        np.savez_compressed(
+                            str(out_dir / f"{stem}.npz"),
+                            filename=np.array(target_file),
+                            sequence=np.array(sequence_ids[batch]),
+                            pred=(pred[batch].detach().cpu().numpy() * float(config["metrics"]["flow_scaling"])),
+                            gt=label[batch].detach().cpu().numpy(),
+                            mask=mask[batch].detach().cpu().numpy(),
+                            aee=maps["AEE"][batch].detach().cpu().numpy(),
+                        )
+                    except Exception as exc:
+                        print(f"[PER-FRAME] selected-frame dump failed for {target_file}: {exc}", flush=True)
         metric_aggregation_audit.update(
             pred,
             label,
@@ -781,7 +870,9 @@ def valid_test(args, config_parser):
             json.dump(profile, f, indent=2, default=str)
         print(f"[SPARSITY] profile saved to {spike_path}")
 
-
+    if dump_handle is not None:
+        dump_handle.close()
+        print(f"[PER-FRAME] closed {dump_per_frame_path}", flush=True)
 
 
 if __name__ == "__main__":
@@ -812,6 +903,21 @@ if __name__ == "__main__":
         choices=("running", "no_running"),
         default=None,
         help="override config test.bn_policy for BatchNorm evaluation",
+    )
+    parser.add_argument(
+        "--dump-per-frame",
+        default="",
+        help="optional CSV path for per-frame AEE/Fl/spikes",
+    )
+    parser.add_argument(
+        "--dump-selected-frames-dir",
+        default="",
+        help="optional directory for selected-frame pred/gt/mask dumps",
+    )
+    parser.add_argument(
+        "--dump-frame-list",
+        default="",
+        help="optional text file of filenames to dump as npz",
     )
 
     args = parser.parse_args()

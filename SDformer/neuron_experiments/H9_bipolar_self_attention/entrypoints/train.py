@@ -190,8 +190,36 @@ LOSS_PATCH = """                from models.STSwinNet_SNN.atlif_ternary_psn impo
                 h6_penalty = regularize_activity(model, config.get("atlif_ternary_psn"))
                 if h6_penalty is not None:
                     curr_loss = curr_loss + h6_penalty / num_acc_steps
-                from models.STSwinNet_SNN.bsa_attention import regularize_source_gate_cardinality
+                from models.STSwinNet_SNN.bsa_attention import (
+                    regularize_class_stability,
+                    regularize_member_jaccard,
+                    regularize_source_gate_cardinality,
+                )
                 h9_flow_loss_before_gate_cardinality = curr_loss.detach()
+                h9_class_stability_penalty = regularize_class_stability(
+                    model, config.get("bsa_attention")
+                )
+                if h9_class_stability_penalty is not None:
+                    curr_loss = curr_loss + h9_class_stability_penalty / num_acc_steps
+                h9_member_jaccard_penalty = regularize_member_jaccard(
+                    model, config.get("bsa_attention")
+                )
+                if h9_member_jaccard_penalty is not None:
+                    curr_loss = curr_loss + h9_member_jaccard_penalty / num_acc_steps
+                from models.STSwinNet_SNN.bsa_attention import regularize_row_jaccard
+                h9_row_jaccard_penalty = regularize_row_jaccard(
+                    model, config.get("bsa_attention")
+                )
+                if h9_row_jaccard_penalty is not None:
+                    curr_loss = curr_loss + h9_row_jaccard_penalty / num_acc_steps
+                from models.STSwinNet_SNN.bsa_attention import regularize_h85_delta
+                h9_h85_penalty = regularize_h85_delta(model, config.get("bsa_attention"))
+                if h9_h85_penalty is not None:
+                    curr_loss = curr_loss + h9_h85_penalty / num_acc_steps
+                from models.STSwinNet_SNN.bsa_attention import regularize_h86_member_tv
+                h9_h86_penalty = regularize_h86_member_tv(model, config.get("bsa_attention"))
+                if h9_h86_penalty is not None:
+                    curr_loss = curr_loss + h9_h86_penalty / num_acc_steps
                 h9_gate_cardinality_penalty = regularize_source_gate_cardinality(
                     model, config.get("bsa_attention")
                 )

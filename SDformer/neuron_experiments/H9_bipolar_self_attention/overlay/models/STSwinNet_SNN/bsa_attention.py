@@ -100,9 +100,20 @@ class ShiftmaxAttentionConfig:
     hardware_mask_invalid_candidates: bool = False
     source_gate_cardinality_regularization_weight: float = 0.0
     source_gate_cardinality_proxy_mode: str = "mean_collapse"
+    class_stability_regularization_weight: float = 0.0
     direct_shiftmax_groups: int = 1
     direct_shiftmax_center_output: bool = False
     direct_shiftmax_signed_events: bool = False
+    temporal_quotient_steps: int = 0  # D1 (h87): SNN num_steps for T=5 grouping (10 for w15 fullres)
+    temporal_quotient_len: int = 5  # D1 (h87): quintuple time-quotient length (contract-pinned)
+    temporal_quotient_batch: int = 0  # D1 (h87): explicit batch for batch-dim window decomposition (0=auto)
+    a3s_delta_bins: int = 0  # D3 (h88): A3S 方向场分数偏移（Q7 1/128 网格档；8 = Δ=1/16；0 = Δ=0 恒等锚点）
+    a3s_delta_warmup_steps: int = 0  # D3 (h88): Δ 注入式渐增步数（0 = 立即满档；>0 时从 0 线性渐增至满档）
+    sw12_window_size: int = 0  # D2 (h89): stride-12 重叠滑窗窗口边长（0 = 默认 15 = 现网 Swin 窗）
+    sw12_stride: int = 0  # D2 (h89): 重叠滑窗步长（0 = 默认 12；15 = 退化解 = 稠密非重叠基线）
+    sw12_num_steps: int = 0  # D2 (h89): SNN num_steps（w15 fullres 为 10）
+    sw12_batch: int = 0  # D2 (h89): batch 维窗口分解显式偏好（0 = 自动；= 每 field 窗口数）
+    sw12_window_grid: tuple[int, int] = (0, 0)  # D2 (h89): (n_y, n_x) field 网格显式钉死（(0,0) = 自动）
 
 
 def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
@@ -195,9 +206,26 @@ def config_from_dict(raw: dict | None) -> ShiftmaxAttentionConfig:
         source_gate_cardinality_proxy_mode=str(
             raw.get("source_gate_cardinality_proxy_mode", "mean_collapse")
         ),
+        class_stability_regularization_weight=float(
+            raw.get("class_stability_regularization_weight", 0.0) or 0.0
+        ),
         direct_shiftmax_groups=int(raw.get("direct_shiftmax_groups", 1) or 1),
         direct_shiftmax_center_output=bool(raw.get("direct_shiftmax_center_output", False)),
         direct_shiftmax_signed_events=bool(raw.get("direct_shiftmax_signed_events", False)),
+        temporal_quotient_steps=int(raw.get("temporal_quotient_steps", 0) or 0),
+        temporal_quotient_len=int(raw.get("temporal_quotient_len", 5) or 5),
+        temporal_quotient_batch=int(raw.get("temporal_quotient_batch", 0) or 0),
+        a3s_delta_bins=int(raw.get("a3s_delta_bins", 0) or 0),
+        a3s_delta_warmup_steps=int(raw.get("a3s_delta_warmup_steps", 0) or 0),
+        sw12_window_size=int(raw.get("sw12_window_size", 0) or 0),
+        sw12_stride=int(raw.get("sw12_stride", 0) or 0),
+        sw12_num_steps=int(raw.get("sw12_num_steps", 0) or 0),
+        sw12_batch=int(raw.get("sw12_batch", 0) or 0),
+        sw12_window_grid=(
+            tuple(int(item) for item in raw.get("sw12_window_grid", (0, 0)))
+            if raw.get("sw12_window_grid")
+            else (0, 0)
+        ),
     )
 
 
@@ -1783,6 +1811,1307 @@ def _binary_temporal_k_xor_popcount(
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# D1 (h87): Motion T=5 quintuple time quotient
+#
+# Contract: CLAUDE_OPERATOR_CONTRACT_DRAFTS_20260818.md 的 D1（Motion T>2 时间商）。
+# 每时间槽位 t 的规范融合式（合同钉死，硬件与部署同式）：
+#   s_t = min(RNE16(64·o_t + sz_t + 16·m̄_t), 162)
+#   q_t = popcount(Q_t), k_t = popcount(K_t), o_t = popcount(Q_t & K_t)
+#   sz_t = 32 − q_t − k_t + o_t（容斥界：max(0,q+k−32) ≤ o ≤ min(q,k)）
+#   m̄_t = 槽位 t 的运动边（K_{t-1}⊕K_t 的 popcount；组内首槽 t≡0 采用组内第 1 条边，
+#         与 H67 T=2 pair 的“pair 内唯一运动边同时喂两个槽位”语义一致，见 I4/I5 恒等式）
+# 槽位分解 s_t = 4·o_t + r_t, r_t ∈ {0,1,2} 唯一（I2；物理域内无 s%4==3）。
+#
+# 布局约定（与 _binary_temporal_k_xor_popcount 相同）：
+#   q_orig = [T=2, B*, H, N, D]，k_orig = [B*, H, 2N, D]
+#   Swin window_partition_v2 把全部时间对窗堆叠进 batch 维：
+#   B* = B × n_pairs × n_sw，行序 row = (b·n_pairs + wd)·n_sw + s。
+#   因此 T=5 分组（跨窗时间槽）可在算子内部完成：10 bin → 2 组 × 5 槽，
+#   组 g 覆盖 bin [5g, 5g+4]，跨组边 (4,5) 不可见（I7：8/9 时间边覆盖）。
+# 实现方式选择：保持 Swin 分窗 (2,15,15) 与全部模型参数不动（续训起点
+# Motion ep35 checkpoint 可直接加载，对比口径 = 纯算子消融），时间商分组
+# 在算子内完成（选项 b；理由见 D1_MOTION_T5_IMPLEMENTATION_20260818.md）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# D1 全分辨率 (2,15,15) 分窗族各 stage 的空间窗数（含 ceil padding），
+# 用于 batch 维自动分解 B* = B × n_pairs × n_sw 的候选（按 n_sw 降序试解，
+# 首个整除解即采用；显式 cfg.temporal_quotient_batch 优先）。
+_D1_SPATIAL_WINDOW_CANDIDATES = (1376, 352, 88, 24, 6, 2)
+
+
+def _rne16_div_pow2_ste(
+    numerator: torch.Tensor,
+    denominator: int = 16,
+) -> torch.Tensor:
+    """Round-to-nearest-even 除以 2 的幂（与 RTL/analyze_binary_temporal_pair_arch 同式）。
+
+    ``numerator`` 必须是整值张量（由 STE 二值事件的整数组合给出）；除法在
+    int64 上逐位精确（Q7 档值域远小于 2^53，float32 无精度损失）。STE
+    backward 按真实导数 1/denominator 直通（F2 修复，2026-08-19）：forward
+    恒为 RNE16 商（与 RTL 逐位一致），梯度路径 ÷16，消除恒等 backward 造成
+    的 o 项系数 65/16 梯度放大（D1 漂移诊断 §3.4/§6-F2）。
+    """
+
+    rounded = torch.round(numerator)
+    # floor 商转 int64（分子 <= 2592 << 2^53，精确）：bitwise 奇偶判定需整型
+    quotient = torch.div(rounded, denominator, rounding_mode="floor").to(torch.int64)
+    remainder = torch.remainder(rounded, denominator)
+    half = denominator // 2
+    increment = remainder.gt(half) | (
+        remainder.eq(half) & quotient.bitwise_and(1).ne(0)
+    )
+    result = (quotient + increment.to(dtype=quotient.dtype)).to(dtype=numerator.dtype)
+    return numerator / float(denominator) + (
+        result - numerator / float(denominator)
+    ).detach()
+
+
+def _d1_decompose_temporal_batch(
+    batch_total: int,
+    n_pairs: int,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[int, int]:
+    """把 attention batch 维分解为 (B, n_sw)：B* = B × n_pairs × n_sw。
+
+    行序 row = (b·n_pairs + wd)·n_sw + s 由 window_partition_v2 固定
+    （batch 维 = B × 时间对窗 × 空间窗）。在 D1 w15 全分辨率族各 stage
+    的空间窗数候选中按 n_sw 降序试解；``temporal_quotient_batch`` 是
+    **偏好**而非覆盖：训练 bs2 与评测 bs1 共用同一配置时，优先取与配置
+    batch 一致的候选分解，无匹配时回退到首个整除解（评测时 batch 变化）。
+    """
+
+    candidates = []
+    for n_sw in _D1_SPATIAL_WINDOW_CANDIDATES:
+        if n_pairs * n_sw > 0 and batch_total % (n_pairs * n_sw) == 0:
+            batch = batch_total // (n_pairs * n_sw)
+            if n_sw * n_pairs * batch == batch_total:
+                candidates.append((batch, n_sw))
+    if not candidates:
+        raise ValueError(
+            "D1 batch decomposition failed: batch_total={} cannot be factored as "
+            "B × {} (n_pairs) × n_sw for any D1 spatial-window count {}; set "
+            "bsa_attention.temporal_quotient_batch explicitly".format(
+                batch_total, n_pairs, _D1_SPATIAL_WINDOW_CANDIDATES
+            )
+        )
+    explicit = int(cfg.temporal_quotient_batch or 0)
+    if explicit > 0:
+        for batch, n_sw in candidates:
+            if batch == explicit:
+                return batch, n_sw
+    return candidates[0]
+
+
+def _binary_t5_quotient_token_scores(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, dict[str, Any], dict[str, torch.Tensor]]:
+    """D1 规范融合式 T=5 时间商逐 token 分数，布局 [B*, H, 2N, 1]。
+
+    返回 (scores, rle_stats, slot_views)：
+      scores     [B*, H, 2N, 1] —— 与 q/k 原 token 布局一致
+                 （token (t_local, n) 取槽位 2·wd(idx) + t_local 的分数）
+      rle_stats  dict —— 时间维 run-length 广播账（I6：每位置独立门数、
+                 eq 边率、广播节省；供验证实验 3 的 dump 裁决）
+      slot_views dict —— 5-slot 时间商视图（scores/overlap/remainder，
+                 [B*, H, num_steps, N]，每位置 5 槽，I2 槽位分解 r=s%4）
+    """
+
+    if q_orig.ndim != 5 or k_orig.ndim != 4:
+        raise ValueError("D1 T5 quotient requires q_orig=[T,B,H,N,D] and k_orig=[B,H,T*N,D]")
+    t_steps, batch, heads, spatial_tokens, head_dim = q_orig.shape
+    if t_steps != 2:
+        raise ValueError("D1 T5 quotient requires the two-slice temporal window (2,15,15)")
+    if tuple(k_orig.shape) != (batch, heads, t_steps * spatial_tokens, head_dim):
+        raise ValueError("k_orig shape is inconsistent with q_orig temporal/spatial layout")
+    num_steps = int(cfg.temporal_quotient_steps)
+    quotient_len = int(cfg.temporal_quotient_len)
+    if num_steps <= 0 or num_steps % t_steps != 0:
+        raise ValueError(
+            "D1 requires bsa_attention.temporal_quotient_steps > 0 and divisible by "
+            f"the window T=2; got {num_steps}"
+        )
+    if quotient_len != 5:
+        raise ValueError(f"D1 contract pins the quintuple length to 5; got {quotient_len}")
+    n_pairs = num_steps // t_steps
+    if num_steps % quotient_len != 0:
+        raise ValueError(
+            f"D1 requires num_steps % 5 == 0 (num_steps=10 -> 2 groups); got {num_steps}"
+        )
+    n_groups = num_steps // quotient_len
+
+    q_event = _binary_event_ste(_qkformer_token_q(q_orig)).reshape(
+        batch, heads, t_steps, spatial_tokens, head_dim
+    )
+    k_event = _binary_event_ste(k_orig).reshape(batch, heads, t_steps, spatial_tokens, head_dim)
+
+    # ── 跨窗时间槽分组（I7 语义）：行序 row=(b·n_pairs+wd)·n_sw+s ──
+    batch_actual, n_sw = _d1_decompose_temporal_batch(batch, n_pairs, cfg)
+    if batch_actual * n_pairs * n_sw != batch:
+        raise ValueError(
+            f"D1 batch decomposition inconsistent: {batch_actual} × {n_pairs} × {n_sw} != {batch}"
+        )
+    row = torch.arange(batch, device=q_orig.device)
+    wd_of_row = (row // n_sw) % n_pairs
+    s_of_row = row % n_sw
+    b_of_row = row // (n_pairs * n_sw)
+    base_row = b_of_row * (n_pairs * n_sw) + s_of_row  # 同 (b, s) 的 pair 0 行号
+
+    # 按全局 bin 重排：slot tb 的 K/Q = 行 base_row + (tb//2)·n_sw 处、
+    # pair 内 t_local = tb%2 的事件。结果 [batch, H, num_steps, N, D]。
+    q_slot_list = []
+    k_slot_list = []
+    for tb in range(num_steps):
+        pair_row = base_row + (tb // 2) * n_sw
+        # q_event 布局 [B*, H, 2, N, D]：时间维是第 3 维（tb % 2），
+        # 第 1 维是 batch（行）。错误写成 q_event[tb % 2] 会取错行/越界。
+        q_slot_list.append(q_event[:, :, tb % 2].index_select(0, pair_row))
+        k_slot_list.append(k_event[:, :, tb % 2].index_select(0, pair_row))
+    q_slot = torch.stack(q_slot_list, dim=2)  # [batch, H, num_steps, N, D]
+    k_slot = torch.stack(k_slot_list, dim=2)
+
+    # ── 每槽统计（I2 的物理域：容斥界）──
+    q_count = q_slot.sum(dim=-1)  # [batch, H, num_steps, N]
+    k_count = k_slot.sum(dim=-1)
+    overlap = (q_slot * k_slot).sum(dim=-1)  # o_t = popcount(Q_t & K_t)
+    same_zero = head_dim - q_count - k_count + overlap  # sz_t
+    # 运动边：edge[tb] = popcount(K_{tb} ⊕ K_{tb+1})，tb=0..num_steps-2；
+    # 槽位 t 采用边 min(t,1)-1 语义：首槽 t=0 采用组内第 1 条边（I4 与
+    # H67 pair 的“同一运动边喂两个槽位”一致），t>=1 采用边 (t-1,t)。
+    k_diff = (k_slot[:, :, :-1] - k_slot[:, :, 1:]).abs().sum(dim=-1)  # [batch, H, num_steps-1, N]
+    slot_edge_index = torch.zeros(num_steps, dtype=torch.long, device=q_orig.device)
+    for g in range(n_groups):
+        slot_edge_index[g * quotient_len] = g * quotient_len  # 首槽复用组内第 1 条边
+        slot_edge_index[g * quotient_len + 1 : (g + 1) * quotient_len] = torch.arange(
+            g * quotient_len, (g + 1) * quotient_len - 1, device=q_orig.device
+        )
+    motion = k_diff.index_select(2, slot_edge_index)  # [batch, H, num_steps, N]
+
+    # ── 规范融合式（I1：RNE16(64o+sz+16m̄) 为唯一规范，拆解式平局翻转处差 1 档）──
+    numerator = 64.0 * overlap + same_zero + 16.0 * motion
+    slot_scores = torch.clamp(_rne16_div_pow2_ste(numerator), max=162.0)
+
+    # ── 时间维 run-length 广播账（I6：eq 边沿 T 广播）──
+    group_scores = slot_scores.unflatten(2, (n_groups, quotient_len))
+    eq_edge = group_scores[:, :, :, :-1].eq(group_scores[:, :, :, 1:])  # [batch, H, ng, 4, N]
+    runs = 1 + (quotient_len - 1 - eq_edge.sum(dim=3).to(dtype=torch.float))  # [batch, H, ng, N]
+    mean_runs = float(runs.float().mean().item())
+    eq_rate = float(eq_edge.float().mean().item())
+    rle_stats = {
+        "mean_runs_per_position": mean_runs,
+        "independent_gate_ratio": mean_runs / float(quotient_len),
+        "broadcast_saving": 1.0 - mean_runs / float(quotient_len),
+        "eq_edge_rate": eq_rate,
+        "num_steps": num_steps,
+        "quotient_len": quotient_len,
+        "batch_decomposition": (batch_actual, n_pairs, n_sw),
+    }
+
+    # ── 写回原 token 布局：token (t_local, n) ← 槽 2·wd(idx) + t_local ──
+    tb_of_token = (wd_of_row * 2).unsqueeze(-1) + torch.arange(
+        2, device=q_orig.device
+    ).view(1, 2)  # [batch, 2]
+    gather_index = tb_of_token.unsqueeze(-1).expand(
+        batch, 2, spatial_tokens
+    ).unsqueeze(1).expand(batch, heads, 2, spatial_tokens)
+    scores = slot_scores.gather(2, gather_index).reshape(
+        batch, heads, t_steps * spatial_tokens, 1
+    )
+
+    slot_views = {
+        "scores": slot_scores,
+        "overlap": overlap,
+        "remainder": slot_scores % 4,
+        "motion": motion,
+        "same_zero": same_zero,
+    }
+    return scores, rle_stats, slot_views
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B2 (h87b): Motion T=4 + pad wildcard 时间商（D1 的 plan B 预案）
+#
+# Contract: D1_VARIANT_SEARCH_20260819.md §4.1（T=4+pad12）。num_steps=10 →
+# 3 组 T=4 四元组：(0,1,2,3)、(4,5,6,7)、(8,9,pad,pad)——末组 2 个 pad 槽。
+#
+# pad 槽 wildcard 掩码语义（与敏感度账 len-2 口径等价）：
+#   * pad 槽不参与商组：不贡献 run-length 统计（不产生 eq 边、不产生 run
+#     断点——wildcard 合并；(pad,pad) 恒等），广播时按掩码跳过；
+#   * pad 槽不进 slot 融合式（无 (o, sz, m̄) 统计、无分数）；
+#   * 真实槽的融合式与 D1 逐位一致：s_t = min(RNE16(64·o_t + sz_t + 16·m̄_t), 162)，
+#     组内首槽采用组内第 1 条边（I4）；跨组边 (3,4)/(7,8) 不可见（I7：
+#     7/9 时间边覆盖——(8,9) 仍是 within-pair 边 0.9808）。
+#
+# 位账（逐边模型，敏感度账口径）：E[独立门]/位置 = Σ_g (1 + Σ_{组内真实边}(1−eq))
+#   = (1+3(1−p̄₁)) + (1+3(1−p̄₂)) + (1+(1−p_w8,9)) = 3 + 7·(1−p̄)，p̄=0.879
+#   → 1 − 3.851/10 = −61.5%（合同 −61.4%，全组口径 −64.6% 不采用：第三组
+#   pad 不得与真实槽合并）。rle_stats.mean_runs_per_position 即 10 槽序列的
+#   每位置总独立门数（非 D1 的每 (组,位置) 口径——pad 槽无门数可言）。
+#
+# 实现选择 (a)：独立新函数 + 新 mode motion_t4_pad_quotient/h87b，不触碰
+# h87 函数与 I1-I7 既有单测（h87 的 quotient_len==5 / steps%5==0 校验原样
+# 保留）；B2 与 D1 同族候选 n_sw、同一 batch 分解与布局写回。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _binary_t4_pad_quotient_token_scores(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, dict[str, Any], dict[str, torch.Tensor]]:
+    """B2 (h87b) 规范融合式 T=4+pad 时间商逐 token 分数，布局 [B*, H, 2N, 1]。
+
+    返回 (scores, rle_stats, slot_views)：
+      scores     [B*, H, 2N, 1] —— 与 q/k 原 token 布局一致（真实槽）
+      rle_stats  dict —— 含 wildcard pad 的 run-length 广播账（真实边 7 条、
+                 group_lengths=(4,4,2)、pad_slots、coverage_edges=7）
+      slot_views dict —— scores/overlap/remainder/motion/same_zero 仅真实槽
+                 [B*, H, num_steps, N]；pad_mask [B*, H, n_groups, 4, N]
+                 （True = pad，wildcard 掩码）；grouped_runs [B*, H, n_groups, N]
+    """
+
+    if q_orig.ndim != 5 or k_orig.ndim != 4:
+        raise ValueError(
+            "B2 T4 pad quotient requires q_orig=[T,B,H,N,D] and k_orig=[B,H,T*N,D]"
+        )
+    t_steps, batch, heads, spatial_tokens, head_dim = q_orig.shape
+    if t_steps != 2:
+        raise ValueError("B2 T4 pad quotient requires the two-slice temporal window (2,15,15)")
+    if tuple(k_orig.shape) != (batch, heads, t_steps * spatial_tokens, head_dim):
+        raise ValueError("k_orig shape is inconsistent with q_orig temporal/spatial layout")
+    num_steps = int(cfg.temporal_quotient_steps)
+    quotient_len = int(cfg.temporal_quotient_len)
+    if num_steps <= 0 or num_steps % t_steps != 0:
+        raise ValueError(
+            "B2 requires bsa_attention.temporal_quotient_steps > 0 and divisible by "
+            f"the window T=2; got {num_steps}"
+        )
+    if quotient_len != 4:
+        raise ValueError(f"B2 contract pins the quadruple length to 4; got {quotient_len}")
+    if num_steps % quotient_len == 0:
+        raise ValueError(
+            f"B2 requires num_steps % 4 != 0 (pad wildcard group; num_steps=10 -> 2 pad "
+            f"slots); got {num_steps}; exact quadruple division belongs to h87"
+        )
+    pad_slots = quotient_len - (num_steps % quotient_len)
+    n_pairs = num_steps // t_steps
+    n_groups = (num_steps + quotient_len - 1) // quotient_len
+
+    q_event = _binary_event_ste(_qkformer_token_q(q_orig)).reshape(
+        batch, heads, t_steps, spatial_tokens, head_dim
+    )
+    k_event = _binary_event_ste(k_orig).reshape(batch, heads, t_steps, spatial_tokens, head_dim)
+
+    # ── 跨窗时间槽分组（I7 语义，与 D1 同一行序）──
+    batch_actual, n_sw = _d1_decompose_temporal_batch(batch, n_pairs, cfg)
+    if batch_actual * n_pairs * n_sw != batch:
+        raise ValueError(
+            f"B2 batch decomposition inconsistent: {batch_actual} × {n_pairs} × {n_sw} != {batch}"
+        )
+    row = torch.arange(batch, device=q_orig.device)
+    wd_of_row = (row // n_sw) % n_pairs
+    s_of_row = row % n_sw
+    b_of_row = row // (n_pairs * n_sw)
+    base_row = b_of_row * (n_pairs * n_sw) + s_of_row  # 同 (b, s) 的 pair 0 行号
+
+    q_slot_list = []
+    k_slot_list = []
+    for tb in range(num_steps):
+        pair_row = base_row + (tb // 2) * n_sw
+        # q_event 布局 [B*, H, 2, N, D]：时间维是第 3 维（tb % 2）
+        q_slot_list.append(q_event[:, :, tb % 2].index_select(0, pair_row))
+        k_slot_list.append(k_event[:, :, tb % 2].index_select(0, pair_row))
+    q_slot = torch.stack(q_slot_list, dim=2)  # [batch, H, num_steps, N, D]
+    k_slot = torch.stack(k_slot_list, dim=2)
+
+    # ── 每真实槽统计（I2 物理域，与 D1 同式）──
+    q_count = q_slot.sum(dim=-1)
+    k_count = k_slot.sum(dim=-1)
+    overlap = (q_slot * k_slot).sum(dim=-1)  # o_t
+    same_zero = head_dim - q_count - k_count + overlap  # sz_t
+    k_diff = (k_slot[:, :, :-1] - k_slot[:, :, 1:]).abs().sum(dim=-1)  # 边 (t,t+1)
+    # 槽位 t 的运动边：组内首槽采用组内第 1 条边（I4），其余采用边 (t-1,t)；
+    # 末组 (8,9) 两槽共享组内唯一边 (8,9)；跨组边 (3,4)/(7,8) 不可见（I7）。
+    slot_edge_index = torch.zeros(num_steps, dtype=torch.long, device=q_orig.device)
+    for g in range(n_groups):
+        first = g * quotient_len
+        last = min((g + 1) * quotient_len, num_steps)
+        slot_edge_index[first] = first
+        if last - first > 1:
+            slot_edge_index[first + 1 : last] = torch.arange(
+                first, last - 1, device=q_orig.device
+            )
+    motion = k_diff.index_select(2, slot_edge_index)  # [batch, H, num_steps, N]
+
+    # ── 规范融合式（I1：与 D1 逐位同式）──
+    numerator = 64.0 * overlap + same_zero + 16.0 * motion
+    slot_scores = torch.clamp(_rne16_div_pow2_ste(numerator), max=162.0)  # [batch, H, 10, N]
+
+    # ── 组布局 + wildcard pad 掩码：真实槽排进 [B, H, ng, 4, N] ──
+    group_lengths = tuple(
+        min(quotient_len, num_steps - g * quotient_len) for g in range(n_groups)
+    )
+    global_slot = (
+        torch.arange(n_groups, device=q_orig.device).view(1, 1, n_groups, 1, 1) * quotient_len
+        + torch.arange(quotient_len, device=q_orig.device).view(1, 1, 1, quotient_len, 1)
+    )  # [1, 1, ng, 4, 1] 组布局中的全局槽位
+    valid = (global_slot >= 0) & (global_slot < num_steps)  # [1, 1, ng, 4, 1]
+    src_slot = global_slot.clamp(0, num_steps - 1)
+    grouped = slot_scores.unsqueeze(3).expand(
+        batch, heads, num_steps, quotient_len, spatial_tokens
+    ).gather(
+        2, src_slot.expand(batch, heads, n_groups, quotient_len, spatial_tokens)
+    )  # [B, H, ng, 4, N]；pad 位填充（值无意义），一律由 valid 掩码排除
+
+    # ── 时间维 run-length 广播账（pad 跳过：仅真实边计入，含 7/9 覆盖）──
+    edge_valid = valid[:, :, :, :-1] & valid[:, :, :, 1:]  # [1, 1, ng, 3, 1]
+    eq_edge = grouped[:, :, :, :-1].eq(grouped[:, :, :, 1:]) & edge_valid
+    valid_edge_count = edge_valid.to(torch.float32).sum(dim=3)  # 各 3/3/1
+    runs = 1.0 + valid_edge_count - eq_edge.to(torch.float32).sum(dim=3)  # [B, H, ng, N]
+    total_gates = runs.sum(dim=2)  # [B, H, N] 每位置 10 槽序列总独立门数
+    mean_runs_per_position = float(total_gates.float().mean().item())
+    n_real_edges = int(edge_valid.float().sum().item())
+    n_positions = batch * heads * spatial_tokens
+    eq_edge_rate = float(eq_edge.float().sum().item()) / (n_real_edges * n_positions)
+    rle_stats = {
+        "mean_runs_per_position": mean_runs_per_position,  # E[独立门]/位置（10 槽）
+        "independent_gate_ratio": mean_runs_per_position / float(num_steps),
+        "broadcast_saving": 1.0 - mean_runs_per_position / float(num_steps),
+        "eq_edge_rate": eq_edge_rate,  # 仅 7 条真实边
+        "num_steps": num_steps,
+        "quotient_len": quotient_len,
+        "n_groups": n_groups,
+        "group_lengths": group_lengths,
+        "pad_slots": pad_slots,
+        "coverage_edges": n_real_edges,
+        "batch_decomposition": (batch_actual, n_pairs, n_sw),
+    }
+
+    # ── 写回原 token 布局：token (t_local, n) ← 槽 2·wd(idx) + t_local ──
+    tb_of_token = (wd_of_row * 2).unsqueeze(-1) + torch.arange(
+        2, device=q_orig.device
+    ).view(1, 2)  # [batch, 2]
+    gather_index = tb_of_token.unsqueeze(-1).expand(
+        batch, 2, spatial_tokens
+    ).unsqueeze(1).expand(batch, heads, 2, spatial_tokens)
+    scores = slot_scores.gather(2, gather_index).reshape(
+        batch, heads, t_steps * spatial_tokens, 1
+    )
+
+    pad_mask = valid.logical_not().expand(
+        batch, heads, n_groups, quotient_len, spatial_tokens
+    )  # [B*, H, 3, 4, N] True = pad（wildcard 掩码）
+    slot_views = {
+        "scores": slot_scores,  # 仅真实槽 [B*, H, 10, N]
+        "overlap": overlap,
+        "remainder": slot_scores % 4,
+        "motion": motion,
+        "same_zero": same_zero,
+        "pad_mask": pad_mask,
+        "grouped_runs": runs,
+        "group_lengths": group_lengths,
+    }
+    return scores, rle_stats, slot_views
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# D3 (h88): local5_a3s —— 各向异性 stencil（A3S, Axis-Aligned Anisotropic Stencil）
+#
+# Contract: CLAUDE_OPERATOR_CONTRACT_DRAFTS_20260818.md 的 D3（Local5 线）。
+# Local5 的 5-lane stencil 分数加方向场偏移 ±Δ（Δ=1/16 == 8 个 1/128 网格档，
+# 网格精确位移，K2），方向场 = 3×3 时域 XOR 梯度 argmax（2bit/pixel，K3），
+# 对齐 lane +Δ、正交 −Δ，把"唯一门"从 1 组 ident-K 分裂为对齐/正交/self 3 偏移类
+# （K5；self 折叠进正交 => 2 类权重，gate-plane +1 slot/destination，raw16 广播 ×2）。
+#
+# Δ=0 锚点恒等（K1）：_binary_axnor_local5_a3s_attention 在 delta_bins==0 时
+# **完全不触碰 scores**，其余算术与 _binary_alpha_xnor_stencil_attention
+# （temporal_pair=False, spatial_cross=True, motion=0）逐式一致，故与现网
+# Local5 门逐位一致（消融与回滚锚点，可注入式训练关键）。
+#
+# 数学定义（与 check_d3_axis_stencil_20260818.py 的 axis_field / a3s_gate 逐式一致）：
+#   m = mean_t popcount(K_t ⊕ K_{t+1})            时域 XOR 梯度（uint8 位异或）
+#   grad_axis = |roll(m, (dy,dx)) − m|             3×3 空间差分（E/W/N/S 各向）
+#   dirs = argmax(grad_E, grad_W, grad_N, grad_S)  2bit/pixel 方向场码
+#   offset[lane] = +Δ if dirs == lane_axis else −Δ（self lane 恒 0）
+#
+# 新存储对象：方向场位图（2bit/pixel，450bit/窗，<1% 现网存储增量）+ 对齐/正交
+# 双权重槽（Δ 固定参数，无需训练，无梯度——方向场 .detach()，argmax 不传梯度）。
+# 新执行对象：方向感知唯一门（ident-K 目的地 1 组 -> 3 偏移类；非 ident-K
+# 目的地方向场 2bit 查表决定 lane 分组）。
+# 诚实生效指标（K4 修正）：门质量再分配受 2^s 门动态范围约束天然有界，诚实
+# 指标为**对齐 lane 量化分数 argmax 命中率**（winner class 指向运动轴）。
+# Δ 注入式训练：a3s_delta_bins 满档、a3s_delta_warmup_steps > 0 时 Δ 从 0
+# 线性渐增至满档（读 module._h9_global_step），起调档位即现网 Local5 恒等。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_D3_AXIS_CODES = {"E": 0, "W": 1, "N": 2, "S": 3}  # 方向场码（与 check_d3 一致）
+
+
+def _d3_axis_field(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+) -> torch.Tensor:
+    """3×3 时域 XOR 梯度 argmax 方向场，返回 [B, H, H, W] 码（E=0 W=1 N=2 S=3）。
+
+    与 check_d3_axis_stencil_20260818.py 的 axis_field 逐式一致：时域 XOR
+    popcount 平面（uint8 位异或 + 通道求和）先做时间平均，再对 E/W/N/S 四个
+    轴向取 |roll(m) − m| 空间差分，最后 argmax。k_orig 布局 [B, H, T*N, D]
+    （t-major token 序，与 _binary_temporal_k_xor_popcount 同式），reshape
+    为 [B, H, T, side, side, D]。方向场是固定位图（新存储对象，2bit/pixel，
+    无梯度——.detach()，argmax 本身亦不可微）。
+    """
+
+    if q_orig.ndim != 5 or k_orig.ndim != 4:
+        raise ValueError(
+            "A3S direction field requires q_orig=[T,B,H,N,D] and k_orig=[B,H,T*N,D]"
+        )
+    t_steps, batch, heads, spatial_tokens, head_dim = q_orig.shape
+    if t_steps < 2:
+        raise ValueError("A3S direction field requires the two-slice temporal window (T>=2)")
+    if tuple(k_orig.shape) != (batch, heads, t_steps * spatial_tokens, head_dim):
+        raise ValueError("k_orig shape is inconsistent with q_orig temporal/spatial layout")
+    spatial_side = math.isqrt(spatial_tokens)
+    if spatial_side * spatial_side != spatial_tokens:
+        raise ValueError("A3S direction field requires a square spatial window")
+    k_bin = (k_orig.detach() > 0).to(dtype=torch.uint8)
+    k_planes = k_bin.reshape(
+        batch, heads, t_steps, spatial_side, spatial_side, head_dim
+    )
+    motion = (k_planes[:, :, 1:] ^ k_planes[:, :, :-1]).sum(dim=-1).to(torch.float32)
+    motion = motion.mean(dim=2)  # 时间平均（与 check_d3 的 mean(dim=0) 同式）
+    grads = []
+    for dy, dx in ((0, 1), (0, -1), (-1, 0), (1, 0)):  # E, W, N, S
+        rolled = torch.roll(motion, shifts=(dy, dx), dims=(-2, -1))
+        grads.append((rolled - motion).abs())
+    stacked = torch.stack(grads, dim=-1)  # [B, H, H, W, 4]
+    return stacked.argmax(dim=-1)
+
+
+def _d3_effective_delta_bins(
+    cfg: ShiftmaxAttentionConfig,
+    profile_module: nn.Module | None,
+) -> int:
+    """Δ 注入式渐增：a3s_delta_warmup_steps 内从 0 线性升至 a3s_delta_bins 满档。
+
+    warmup<=0（或满档 0）时立即返回满档（0 = Δ=0 恒等锚点档）。起调 Δ=0 档
+    = 现网 Local5 逐位恒等（K1），随后平滑注入各向异性偏移——loss 不塌的
+    结构性保障（同 D1 的"起调即锚点"纪律）。
+    """
+
+    target = max(0, int(cfg.a3s_delta_bins))
+    warmup = max(0, int(cfg.a3s_delta_warmup_steps))
+    if target <= 0 or warmup <= 0:
+        return target
+    step = max(0, int(getattr(profile_module, "_h9_global_step", 0)))
+    return min(target, int(round(target * step / warmup)))
+
+
+def _d3_a3s_offset(
+    scores: torch.Tensor,
+    dirs: torch.Tensor,
+    delta_bins: int,
+) -> torch.Tensor:
+    """对齐 lane +Δ / 正交 −Δ / self 0 的分数偏移（[B, H, T*N, 5]）。
+
+    lane 序 = self, N, S, W, E（与 _binary_alpha_xnor_stencil_attention 的
+    spatial_cross 循环 (0,0),(-1,0),(1,0),(0,-1),(0,1) 同序）。偏移式与
+    check_d3 的 a3s_gate 一致：offset = +Δ·[dirs==axis] − Δ·(1−[dirs==axis])
+    （self lane 恒 0）。Δ = delta_bins × 1/128，Q7 网格精确位移（K2：与分数
+    量化 commute，clamp 外）。方向场按像素（两时间切片共享同一 2bit 位图）。
+    """
+
+    if delta_bins <= 0:
+        return torch.zeros_like(scores)
+    if scores.shape[-1] != 5:
+        raise ValueError("A3S offset expects the Local5 5-lane score layout")
+    batch, heads, tokens, _ = scores.shape
+    dirs_flat = dirs.reshape(batch, heads, -1)  # [B, H, N]
+    spatial_tokens = dirs_flat.shape[-1]
+    if tokens % spatial_tokens != 0:
+        raise ValueError("A3S offset cannot tile the direction field onto tokens")
+    t_steps = tokens // spatial_tokens
+    delta = float(delta_bins) * (1.0 / 128.0)
+    dirs_tokens = (
+        dirs_flat.unsqueeze(2)
+        .expand(batch, heads, t_steps, spatial_tokens)
+        .reshape(batch, heads, tokens)
+    )
+    lane_axis = ("self", "N", "S", "W", "E")
+    lane_codes = {
+        "N": _D3_AXIS_CODES["N"],
+        "S": _D3_AXIS_CODES["S"],
+        "W": _D3_AXIS_CODES["W"],
+        "E": _D3_AXIS_CODES["E"],
+    }
+    offset = torch.zeros_like(scores)
+    for li, axis in enumerate(lane_axis):
+        if axis == "self":
+            continue
+        aligned = (dirs_tokens == lane_codes[axis]).to(dtype=scores.dtype)
+        offset[..., li] = delta * aligned - delta * (1.0 - aligned)
+    return offset
+
+
+def _binary_axnor_local5_a3s_attention(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+    *,
+    profile_module: nn.Module | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    """Local5 5-lane stencil + A3S 方向场偏移 ±Δ 的注意力（mode local5_a3s/h88）。
+
+    算术顺序与 _binary_alpha_xnor_stencil_attention（temporal_pair=False,
+    spatial_cross=True, motion_xor_alpha=0.0）逐式一致；唯一差异是在
+    _apply_hardware_score_quant 之前插入方向场偏移：
+      scores += +Δ·[dirs==lane_axis] − Δ·[dirs!=lane_axis]（self lane 恒 0）
+    delta_bins==0（K1 锚点）时不触碰 scores——与现网 Local5 逐位一致，
+    消融与回滚锚点，可注入式训练关键。motion alpha 与 Local5 分支同纪律
+    （静默忽略，H66d 模板继承 binary_motion_xor_alpha 时保持位稳定）。
+
+    返回 (attn, row_sum, gate, a3s_stats)：
+      attn/row_sum/gate 与现网 Local5 同布局；
+      a3s_stats：direction_field [B,H,H,W] 位图 / delta_bins 实际档 /
+      axis_frac_ew（E/W 轴占比，K3 语义账）/ winner_hit_rate（对齐 lane
+      argmax 命中率，K4 诚实指标，仅运动承载像素）/ aligned_lane /
+      motion_mask（forward 验证挂载用，均 .detach()）。
+    """
+
+    if profile_module is not None:
+        profile_module._h9_source_gate_cardinality_proxy = None
+
+    q_event = (_qkformer_token_q(q_orig) > 0).to(dtype=q_orig.dtype)
+    k_event = (k_orig > 0).to(dtype=q_orig.dtype)
+    batch, heads, n_tokens, head_dim = q_event.shape
+    t_steps = int(q_orig.shape[0])
+    spatial_tokens = n_tokens // t_steps
+    spatial_side = math.isqrt(spatial_tokens)
+    height, width = spatial_side, spatial_side
+    if t_steps * height * width != n_tokens:
+        raise ValueError(
+            "binary axnor Local5 A3S expects a T x H x H square window, "
+            f"got T={t_steps}, tokens={n_tokens}"
+        )
+
+    grid = torch.arange(n_tokens, device=q_orig.device).reshape(t_steps, height, width)
+    neighbor_indices = [grid]
+    valid_masks = [torch.ones_like(grid, dtype=torch.bool)]
+
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        yy = torch.arange(height, device=q_orig.device).view(1, height, 1) + dy
+        xx = torch.arange(width, device=q_orig.device).view(1, 1, width) + dx
+        valid = (yy >= 0) & (yy < height) & (xx >= 0) & (xx < width)
+        yy = yy.clamp(0, height - 1).expand(t_steps, height, width)
+        xx = xx.clamp(0, width - 1).expand(t_steps, height, width)
+        tt = torch.arange(t_steps, device=q_orig.device).view(t_steps, 1, 1).expand_as(yy)
+        neighbor_indices.append(grid[tt, yy, xx])
+        valid_masks.append(valid.expand(t_steps, height, width))
+
+    index = torch.stack(neighbor_indices, dim=-1).reshape(n_tokens, -1)
+    valid = torch.stack(valid_masks, dim=-1).reshape(n_tokens, -1)
+    k_candidates = k_event[:, :, index, :]
+    q_candidates = q_event.unsqueeze(-2)
+    same_spike = (q_candidates * k_candidates).sum(dim=-1)
+    same_silent = ((1.0 - q_candidates) * (1.0 - k_candidates)).sum(dim=-1)
+    scores = same_spike + float(cfg.alpha0) * same_silent
+    scores = _normalize_consensus_score(scores, head_dim, cfg, active=None)
+    if float(cfg.matrix_diag_bias) != 0.0:
+        scores[..., 0] = scores[..., 0] + float(cfg.matrix_diag_bias)
+
+    # D3: 方向场偏移（Δ=0 档不触碰 scores —— K1 逐位恒等锚点）
+    dirs = _d3_axis_field(q_orig, k_orig)
+    delta_bins = _d3_effective_delta_bins(cfg, profile_module)
+    if delta_bins > 0:
+        offset = _d3_a3s_offset(scores, dirs, delta_bins)
+        scores = scores + offset
+
+    # Deploy path：Q7 分数网格，然后掩掉无效候选到最小编码（与现网同式）。
+    scores = _apply_hardware_score_quant(scores, cfg)
+    invalid_fill = (
+        float(cfg.hardware_score_min)
+        if cfg.hardware_quant_enabled and cfg.hardware_score_min is not None
+        else -1.0e4
+    )
+    scores = scores.masked_fill(~valid.view(1, 1, n_tokens, -1), invalid_fill)
+    valid_for_gate = valid.view(1, 1, n_tokens, -1)
+
+    if cfg.hardware_rtl_shiftmax_enabled:
+        gate = _rtl_shiftmax_gate_q17(
+            scores,
+            dim=-1,
+            preserve_mean=bool(cfg.preserve_mean),
+            valid_mask=(
+                valid_for_gate
+                if cfg.hardware_mask_invalid_candidates
+                else None
+            ),
+        )
+    else:
+        gate_scores = (
+            scores.masked_fill(~valid_for_gate, -float("inf"))
+            if cfg.hardware_mask_invalid_candidates
+            else scores
+        )
+        gate = shiftmax(gate_scores, dim=-1, eps=cfg.eps)
+        if cfg.preserve_mean:
+            gate = gate * float(index.shape[-1])
+        if cfg.hardware_mask_invalid_candidates:
+            gate = gate.masked_fill(~valid_for_gate, 0.0)
+    gate = _apply_hardware_gate_quant(gate, cfg)
+
+    value_candidates = k_orig[:, :, index, :]
+    attn = (gate.unsqueeze(-1) * value_candidates).sum(dim=-2)
+    row_sum = gate.sum(dim=-1)
+
+    # D3 挂载账本（诚实成本 + 方向场语义；forward 验证用，均 .detach()）
+    dirs_flat = dirs.reshape(batch, heads, -1)
+    n_spatial = dirs_flat.shape[-1]
+    axis_frac_ew = float(
+        (dirs_flat <= _D3_AXIS_CODES["W"])
+        .to(dtype=torch.float32)
+        .mean()
+        .detach()
+        .cpu()
+    )
+    # 运动承载像素：至少一个时刻、任一通道有事件的像素（K4 只在此子集上度量）
+    bar_mask = (
+        k_event.detach()
+        .reshape(batch, heads, t_steps, n_spatial, head_dim)
+        .sum(dim=(2, 4))
+        > 0
+    )  # [B, H, N]
+    aligned_lane = torch.full(
+        (batch, heads, n_spatial), -1, dtype=torch.long, device=q_orig.device
+    )
+    for code, lane in (
+        (_D3_AXIS_CODES["E"], 4),
+        (_D3_AXIS_CODES["W"], 3),
+        (_D3_AXIS_CODES["N"], 1),
+        (_D3_AXIS_CODES["S"], 2),
+    ):
+        aligned_lane = torch.where(dirs_flat == code, lane, aligned_lane)
+    gate_argmax = gate.detach().argmax(dim=-1).reshape(
+        batch, heads, t_steps, n_spatial
+    )
+    mask_tokens = (
+        bar_mask.unsqueeze(2)
+        .expand(batch, heads, t_steps, n_spatial)
+        .reshape(batch, heads, -1)
+    )
+    hit = gate_argmax == aligned_lane.unsqueeze(2)
+    winner_hit_rate = (
+        float(hit.reshape(batch, heads, -1)[mask_tokens].float().mean().detach().cpu())
+        if bool(mask_tokens.any())
+        else 0.0
+    )
+    a3s_stats = {
+        "direction_field": dirs.detach(),
+        "delta_bins": delta_bins,
+        "axis_frac_ew": axis_frac_ew,
+        "winner_hit_rate": winner_hit_rate,
+        "aligned_lane": aligned_lane.detach(),
+        "motion_mask": bar_mask.detach(),
+    }
+    return attn, row_sum, gate, a3s_stats
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# D2 (h89): motion_sw12_overlap —— 跨窗语义（stride-12/窗口-15 重叠滑窗 + 滚动分母）
+#
+# Contract: CLAUDE_OPERATOR_CONTRACT_DRAFTS_20260818.md 的 D2（J1-J6 恒等式，
+# CPU 验证脚本 entrypoints/check_d2_overlap_rolling_partition_20260818.py）。
+#
+# 窗口划分决策（与 check_d2 的 window_partition_overlap 逐式一致）：
+#   在注意力算子内部做 stride-12 滑动分区（不动 Swin window_partition_v2 底层）：
+#   Swin 把每个时间对窗的 (2,15,15) tile 堆叠进 batch 维，行序
+#   row = (b·n_pairs + wd)·n_sw + s（s = ty·n_x + tx 为 tile 行优先索引）。
+#   算子把同一 (b, wd) 场的 n_sw 个 tile 还原为 padded 场 (15·n_y, 15·n_x)
+#   （“在算子输入上做重叠窗口的重新分区与还原”），再按 1D 链
+#   start = 0, stride, 2·stride, …（end 在 total 处 clamp，尾窗部分覆盖）对
+#   每个轴做重叠分区，得 n_oy × n_ox 个重叠窗，每窗 450 token（尾窗更少）。
+#   token 身份码 = 场坐标 (t, y, x)：相邻窗交叠带（3 宽 × 15 长 × 2 时 = 90
+#   token/窗边）中的同一 token 在两侧窗中携带相同身份码与相同 Q7 分数码
+#   （J2，按构造成立）；该身份码即跨窗 quotient 目录的机制基板（J4/J5）。
+#
+# 每 token 分数 = Motion-XOR 规范融合式（D1 同款 canonical，m̄ 在 RNE 内）：
+#   q_t=popcount(Q_t), k_t=popcount(K_t), o_t=popcount(Q_t&K_t)
+#   sz_t = head_dim − q_t − k_t + o_t
+#   m̄ = popcount(K_0 ⊕ K_1)（pair 运动边，逐位置）
+#   s = min(RNE16(64·o_t + sz_t + 16·m̄), 162)（Q7 网格 [0,162]；
+#       m̄=0 时与 check_d2 的 score_of_token 逐位一致 -> J4/J5 草案实测
+#       （J mean 0.948 / 目录贡献 55.0%）在算子分数上原样成立）
+#
+# 滚动分母（J1 逐位精确，硬约束）：
+#   Z_{i+1} = Z_i − Σ_leave + Σ_enter。Z = Σ 2^{s} 是整数幂和（最大
+#   s=162 -> 2^162，超出 int64），故用 16bit 块分解（11 块：
+#   c = s>>4，v = 1<<(s&15)；每块和 ≤ 450·2^15 < 2^24，int64 逐位精确），
+#   增量式用闭环 z_roll = z_full[0] + cumsum(enter − leave)（行优先链，
+#   prev(w) = w−1 恒成立，w=0 时 leave=enter=0），与全量重算逐位相等（J1）。
+#   leave/enter 项从算子内数据得到：members[w] 由窗口几何（ys/xs 坐标）与
+#   dense 布局索引直接算出，leave = members[w−1] \ members[w]（12 宽出带，
+#   尾窗 clamp），enter = members[w] \ members[w−1]（12 宽进带，尾窗 clamp）。
+#
+# 门与还原（J3）：每重叠窗内 shiftmax 归一化（无效 token 掩掉）-> 门 g_w；
+#   逐 token 聚合 g_final(t) = Σ_{w∋t} g_w(t)，还原门 = g_final/mult
+#   （mult = 重叠重数），故 Σ_t mean(t)·mult(t) == #windows 精确成立（J3
+#   等价式）；还原回 Swin dense tile 布局 [B*, H, 450]。
+#
+# 流量账（J6，check_d2 同式）：450 → 270 exp-term/窗（−40%），窗口数
+#   +58.7%（300×390 网格），净 exp-add −4.8%；增量执行器 + 跨窗目录
+#   （目录缓存 y 向共享带 90 项，见本文件 _d2_catalog_*）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# D2 全分辨率 w15 族各 stage 的 (n_y, n_x) tile 网格（n_y·n_x = D1 空间窗数：
+# 1376/352/88/24/6/2），用于从 batch 分解自动反推 padded 场形状。
+_D2_FIELD_GRID_BY_WINDOWS = {
+    1376: (32, 43),
+    352: (16, 22),
+    88: (8, 11),
+    24: (4, 6),
+    6: (2, 3),
+    2: (1, 2),
+}
+_D2_CHUNK_BITS = 16
+_D2_N_CHUNKS = 11  # s ∈ [0, 162] -> c = s>>4 ∈ [0, 10]
+
+
+def _d2_overlap_chain(
+    total: int,
+    wsize: int,
+    stride: int,
+) -> list[tuple[int, int]]:
+    """1D 重叠窗链（含尾部 pad clamp），与 check_d2 的 window_partition_overlap 同式。
+
+    返回 (start, end) 列表：start = 0, stride, 2·stride, …；end = min(start+wsize,
+    total)；当 end 触及 total 时链终止（尾窗部分覆盖，宽度 < wsize）。
+    """
+
+    if wsize <= 0 or stride <= 0:
+        raise ValueError("D2 overlap chain requires wsize > 0 and stride > 0")
+    win: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        end = min(start + wsize, total)
+        win.append((start, end))
+        if end >= total:
+            break
+        start += stride
+    return win
+
+
+def _d2_decompose_field_batch(
+    batch_total: int,
+    n_pairs: int,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[int, int]:
+    """把 attention batch 维分解为 (B, n_sw)：B* = B × n_pairs × n_sw。
+
+    行序 row = (b·n_pairs + wd)·n_sw + s 由 window_partition_v2 固定；候选
+    n_sw 与 D1 同一族（各 stage 空间窗数），`sw12_batch` 是偏好而非覆盖
+    （评测 bs1 时 batch 变化，自动回退首个整除解）。
+    """
+
+    candidates = []
+    for n_sw in _D1_SPATIAL_WINDOW_CANDIDATES:
+        if n_pairs * n_sw > 0 and batch_total % (n_pairs * n_sw) == 0:
+            batch = batch_total // (n_pairs * n_sw)
+            if batch * n_pairs * n_sw == batch_total:
+                candidates.append((batch, n_sw))
+    if not candidates:
+        raise ValueError(
+            "D2 field-batch decomposition failed: batch_total={} cannot be "
+            "factored as B × {} (n_pairs) × n_sw for any D2 spatial window "
+            "count {}; set bsa_attention.sw12_window_grid explicitly".format(
+                batch_total, n_pairs, _D1_SPATIAL_WINDOW_CANDIDATES
+            )
+        )
+    explicit = int(cfg.sw12_batch or 0)
+    if explicit > 0:
+        for batch, n_sw in candidates:
+            if batch == explicit:
+                return batch, n_sw
+    return candidates[0]
+
+
+def _d2_field_grid(
+    n_sw: int,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[int, int]:
+    """(n_y, n_x) tile 网格：cfg.sw12_window_grid 显式优先，否则按 n_sw 查表。"""
+
+    explicit = tuple(int(v) for v in (cfg.sw12_window_grid or (0, 0)))
+    if explicit != (0, 0):
+        if explicit[0] <= 0 or explicit[1] <= 0 or explicit[0] * explicit[1] != int(n_sw):
+            raise ValueError(
+                f"D2 sw12_window_grid {explicit} is inconsistent with n_sw={n_sw}"
+            )
+        return explicit
+    grid = _D2_FIELD_GRID_BY_WINDOWS.get(int(n_sw))
+    if grid is None:
+        raise ValueError(
+            f"D2 auto field grid failed for n_sw={n_sw}; known w15 grids are "
+            f"{sorted(_D2_FIELD_GRID_BY_WINDOWS)}; set sw12_window_grid explicitly"
+        )
+    return grid
+
+
+def _d2_overlap_window_plan(
+    n_y: int,
+    n_x: int,
+    wsize: int,
+    stride: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    """重叠窗几何计划：窗口坐标、成员索引、身份码、重叠重数 mult。
+
+    返回 dict：
+      ys / xs     1D 重叠链 [(start, end)]（场坐标）
+      n_oy / n_ox / n_ow   各轴链长与重叠窗总数
+      field_h / field_w    padded 场尺寸（15·n_y, 15·n_x）
+      row_idx / tok_idx   [n_ow, t·225] 每个重叠窗成员的 dense 行内 tile
+                          （row_idx）与行内 token 下标（tok_idx，含 t·225 偏移）；
+                          成员 = 场上 15×15（尾窗 clamp 后更少）矩形
+      valid               [n_ow, t·225] 有效成员掩码（尾窗边界外为 False）
+      mult                [n_sw, t·225] 每 dense token 的重叠重数 mult_y·mult_x
+      members             [n_ow, t·225] 布尔成员掩码（== valid 展开）
+    """
+
+    field_h, field_w = wsize * n_y, wsize * n_x
+    ys = _d2_overlap_chain(field_h, wsize, stride)
+    xs = _d2_overlap_chain(field_w, wsize, stride)
+    n_oy, n_ox = len(ys), len(xs)
+    n_ow = n_oy * n_ox
+    n_sw = n_y * n_x
+    y0 = torch.tensor([s for s, _ in ys], device=device, dtype=torch.long)
+    x0 = torch.tensor([s for s, _ in xs], device=device, dtype=torch.long)
+    yloc = torch.arange(wsize, device=device, dtype=torch.long)
+    xloc = torch.arange(wsize, device=device, dtype=torch.long)
+    # 场坐标 fy [n_oy, 15, 1] / fx [1, n_ox, 1, 15]（fx 已是 4D，勿再增维）
+    fy = y0[:, None, None] + yloc[None, :, None]
+    fx = x0[None, :, None, None] + xloc[None, None, None, :]
+    valid_y = (fy < field_h)[:, None, :, :]  # [n_oy, 1, 15, 1]
+    valid_x = (fx < field_w)[None, :, :, :]  # [1, 1, n_ox, 15]
+    fy = fy[:, None, :, :].expand(n_oy, n_ox, wsize, wsize)
+    fx = fx.expand(n_oy, n_ox, wsize, wsize)
+    valid = valid_y & valid_x  # 广播到 [n_oy, n_ox, 15, 15]
+    # dense 行内下标：行 = tile (y//15, x//15) 行优先，token = (y%15)*15 + (x%15)
+    row = (fy // wsize) * n_x + (fx // wsize)
+    tok = (fy % wsize) * wsize + (fx % wsize)
+    row = row.reshape(n_ow, wsize * wsize)
+    tok = tok.reshape(n_ow, wsize * wsize)
+    valid = valid.reshape(n_ow, wsize * wsize)
+    # 两时间切片展开：[n_ow, 2·225]，token 下标含 t·225 偏移
+    t_idx = torch.arange(2, device=device, dtype=torch.long)
+    row = row[:, None, :].expand(n_ow, 2, wsize * wsize).reshape(n_ow, 2 * wsize * wsize)
+    tok = (t_idx[None, :, None] * (wsize * wsize) + tok[:, None, :]).reshape(
+        n_ow, 2 * wsize * wsize
+    )
+    valid = valid[:, None, :].expand(n_ow, 2, wsize * wsize).reshape(
+        n_ow, 2 * wsize * wsize
+    )
+    # 尾窗越界成员的下标钳制到 0：这些位置只在 gather 后被 valid 掩掉
+    # （scores −inf / terms 0 / gates 0），钳制保证 gather 永不出界。
+    row = torch.where(valid, row, torch.zeros_like(row))
+    tok = torch.where(valid, tok, torch.zeros_like(tok))
+    # 滚动链的 entry/exit 条带（J1 的 leave/enter 项，按窗口几何直接得到）：
+    #   entry_band[w] = 窗 w 的 stride 宽进带（水平：x_loc >= wsize−stride，
+    #     垂直换行：y_loc >= wsize−stride，均按场边界 clamp；w=0 恒 0）
+    #   exit_band[w]  = 窗 w 的 stride 宽出带（水平：x_loc < stride，行尾换行：
+    #     y_loc < stride；末窗恒 0）
+    # 注意：leave/enter 是 (row, tok) 键集差，不能由成员掩码相减得到，
+    # 因为相邻窗的 900 个 gather 位置布局不同——故用场坐标条带几何直接给。
+    yloc2 = yloc[:, None]
+    xloc2 = xloc[None, :]
+    entry_band = torch.zeros(n_oy, n_ox, wsize, wsize, dtype=torch.bool, device=device)
+    exit_band = torch.zeros(n_oy, n_ox, wsize, wsize, dtype=torch.bool, device=device)
+    for wy in range(n_oy):
+        for wx in range(n_ox):
+            if wx > 0:
+                entry_band[wy, wx] = (xloc2 >= wsize - stride) & (
+                    x0[wx] + xloc2 < field_w
+                )
+            elif wy > 0:
+                entry_band[wy, wx] = (yloc2 >= wsize - stride) & (
+                    y0[wy] + yloc2 < field_h
+                )
+            if wy == n_oy - 1 and wx == n_ox - 1:
+                continue  # 末窗无后继
+            if wx < n_ox - 1:
+                exit_band[wy, wx] = xloc2 < stride
+            else:
+                exit_band[wy, wx] = yloc2 < stride
+    entry_band = entry_band.reshape(n_ow, wsize * wsize)[:, None, :].expand(
+        n_ow, 2, wsize * wsize
+    ).reshape(n_ow, 2 * wsize * wsize)
+    exit_band = exit_band.reshape(n_ow, wsize * wsize)[:, None, :].expand(
+        n_ow, 2, wsize * wsize
+    ).reshape(n_ow, 2 * wsize * wsize)
+    # 重叠重数 mult（每 dense token 被多少窗覆盖）
+    mult_y = (
+        (y0[:, None] <= torch.arange(field_h, device=device)[None, :])
+        & (torch.arange(field_h, device=device)[None, :] < y0[:, None] + wsize)
+    ).sum(dim=0)  # [field_h]
+    mult_x = (
+        (x0[:, None] <= torch.arange(field_w, device=device)[None, :])
+        & (torch.arange(field_w, device=device)[None, :] < x0[:, None] + wsize)
+    ).sum(dim=0)  # [field_w]
+    ty = torch.arange(n_y, device=device)
+    tx = torch.arange(n_x, device=device)
+    ypix = torch.arange(wsize, device=device)
+    xpix = torch.arange(wsize, device=device)
+    # 每 dense token（s, t, yt·15+xt）的场坐标 y = 15·(s//n_x) + yt, x = 15·(s%n_x) + xt
+    s_idx = torch.arange(n_sw, device=device)
+    fy_dense = (s_idx[:, None, None] // n_x) * wsize + ypix[None, :, None]  # [n_sw, 15, 15]
+    fx_dense = (s_idx[:, None, None] % n_x) * wsize + xpix[None, None, :]  # [n_sw, 15, 15]
+    mult = (
+        mult_y[fy_dense] * mult_x[fx_dense]
+    ).reshape(n_sw, wsize * wsize)[:, None, :].expand(
+        n_sw, 2, wsize * wsize
+    ).reshape(n_sw, 2 * wsize * wsize)
+    return {
+        "ys": ys,
+        "xs": xs,
+        "n_y": n_y,
+        "n_x": n_x,
+        "n_oy": n_oy,
+        "n_ox": n_ox,
+        "n_ow": n_ow,
+        "field_h": field_h,
+        "field_w": field_w,
+        "wsize": wsize,
+        "stride": stride,
+        "row_idx": row,
+        "tok_idx": tok,
+        "valid": valid,
+        "members": valid,
+        "entry_band": entry_band,
+        "exit_band": exit_band,
+        "mult": mult,
+    }
+
+
+def _d2_pow2_chunk(
+    win_scores: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Q7 分数整数幂和的 16bit 块分解：(块号 c, 块内值 v=1<<(s&15))，int64 精确。
+
+    块级位移是 4bit（c = s>>4 ∈ [0,10]），每块容纳 16 个值位
+    （v = 1<<(s&15) ≤ 2^15）；重组 s = 16·c + (s&15) 由 16·c 位移恢复。
+    """
+
+    chunk = torch.div(win_scores, 1 << 4, rounding_mode="floor")
+    term = torch.bitwise_left_shift(
+        torch.ones_like(win_scores), win_scores.bitwise_and(_D2_CHUNK_BITS - 1)
+    )
+    return chunk, term
+
+
+def _d2_exp_flow_ledger(
+    field_h: int,
+    field_w: int,
+    wsize: int,
+    stride: int,
+    t_slices: int = 2,
+) -> dict[str, Any]:
+    """exp-add 流量账（J6，与 check_d2 的 check_J6 逐式一致）。
+
+    合同口径（check_d2 同式）：每新窗的增量 exp 项 = 450 − 2 条 3 宽共享带
+    ×90 = 270/窗（y/x 向共享带分别由滚动链与跨窗目录复用），窗口数按
+    stride-12 链计数（尾窗 clamp 不改变计数公式）。
+    """
+
+    dense_w = (field_h // wsize) * (field_w // wsize)
+    n_y = (
+        (field_h - wsize) // stride + 1
+        if (field_h - wsize) % stride == 0
+        else (field_h - wsize) // stride + 2
+    )
+    n_x = (
+        (field_w - wsize) // stride + 1
+        if (field_w - wsize) % stride == 0
+        else (field_w - wsize) // stride + 2
+    )
+    overlap_w = n_y * n_x
+    per_win_full = wsize * wsize * t_slices
+    per_win_inc = per_win_full - 2 * t_slices * wsize * (wsize - stride)
+    dense_terms = dense_w * per_win_full
+    overlap_terms = overlap_w * per_win_inc
+    return {
+        "dense_windows": dense_w,
+        "overlap_windows": overlap_w,
+        "window_ratio": overlap_w / dense_w,
+        "per_window_full": per_win_full,
+        "per_window_incremental_formula": per_win_inc,
+        "dense_total_terms": dense_terms,
+        "overlap_total_terms": overlap_terms,
+        "net_delta": 1.0 - overlap_terms / dense_terms,
+    }
+
+
+def _d2_catalog_bands(
+    plan: dict[str, Any],
+    scores_field: torch.Tensor,
+) -> dict[str, Any]:
+    """跨窗 quotient 目录：相邻窗共享带的身份码与类码（新存储对象）。
+
+    x 带 = 水平相邻对 (wy, xi)-(wy, xi+1) 的 3 宽列带；y 带 = 垂直相邻对
+    (yi, wx)-(yi+1, wx) 的 3 宽行带。身份码 = 场坐标压平下标
+    (t·field_h + y)·field_w + x；类码 = 共享 token 的 Q7 分数码（按构造
+    两侧窗相同，J2；类码 ⊆ 两侧窗类集交集 -> J4 下界 / J5 目录贡献）。
+
+    scores_field 布局 [n_fields, heads, 2, field_h, field_w]（float，Q7 码）。
+    返回 {x_identities, x_classes, y_identities, y_classes, x_pairs, y_pairs}，
+    全部 .detach()。
+    """
+
+    wsize = int(plan["wsize"])
+    n_oy, n_ox = int(plan["n_oy"]), int(plan["n_ox"])
+    field_h, field_w = int(plan["field_h"]), int(plan["field_w"])
+    n_fields, heads = scores_field.shape[0], scores_field.shape[1]
+    yloc = torch.arange(wsize, device=scores_field.device, dtype=torch.long)
+    xloc = torch.arange(wsize, device=scores_field.device, dtype=torch.long)
+    x_pairs, y_pairs = [], []
+    x_idents, x_classes = [], []
+    y_identities, y_classes = [], []
+    for wy in range(n_oy):
+        y_start, y_end = plan["ys"][wy]
+        y_len = y_end - y_start
+        for xi in range(n_ox - 1):
+            s_lo = plan["xs"][xi + 1][0]
+            e_hi = plan["xs"][xi][1]
+            x_len = e_hi - s_lo  # 恒 = wsize − stride（尾窗 clamp 亦同）
+            ys_full = y_start + yloc[:y_len]
+            xs_band = s_lo + xloc[:x_len]
+            # 身份码跨 (t, y, x) 三维：坐标广播到 t 维后展平
+            ident = (
+                torch.arange(2, device=scores_field.device, dtype=torch.long)
+                .view(2, 1, 1)
+                .expand(2, y_len, x_len)
+            )
+            y_id = ys_full[:, None].expand(y_len, x_len)
+            x_id = xs_band[None, :].expand(y_len, x_len)
+            flat = ((ident * field_h + y_id[None]) * field_w + x_id[None]).reshape(-1)
+            codes = scores_field[:, :, :, ys_full[:, None], xs_band[None, :]].reshape(
+                n_fields, heads, 2 * y_len * x_len
+            )
+            x_pairs.append((wy, xi))
+            x_idents.append(flat)
+            x_classes.append(codes)
+    for yi in range(n_oy - 1):
+        s_lo = plan["ys"][yi + 1][0]
+        e_hi = plan["ys"][yi][1]
+        y_len = e_hi - s_lo
+        for wx in range(n_ox):
+            x_start, x_end = plan["xs"][wx]
+            x_len = x_end - x_start
+            ys_band = s_lo + yloc[:y_len]
+            xs_full = x_start + xloc[:x_len]
+            ident = (
+                torch.arange(2, device=scores_field.device, dtype=torch.long)
+                .view(2, 1, 1)
+                .expand(2, y_len, x_len)
+            )
+            y_id = ys_band[:, None].expand(y_len, x_len)
+            x_id = xs_full[None, :].expand(y_len, x_len)
+            flat = ((ident * field_h + y_id[None]) * field_w + x_id[None]).reshape(-1)
+            codes = scores_field[:, :, :, ys_band[:, None], xs_full[None, :]].reshape(
+                n_fields, heads, 2 * y_len * x_len
+            )
+            y_pairs.append((yi, wx))
+            y_identities.append(flat)
+            y_classes.append(codes)
+    return {
+        "x_identities": [t.detach() for t in x_idents],
+        "x_classes": [t.detach() for t in x_classes],
+        "y_identities": [t.detach() for t in y_identities],
+        "y_classes": [t.detach() for t in y_classes],
+        "x_pairs": x_pairs,
+        "y_pairs": y_pairs,
+    }
+
+
+def _binary_motion_sw12_overlap_attention(
+    q_orig: torch.Tensor,
+    k_orig: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    """D2 (h89): stride-12/窗口-15 重叠滑窗 Motion 注意力 + 滚动分母。
+
+    返回 (attn, row_sum, gate, sw12_stats)：
+      attn / row_sum / gate   [B*, H, 450, D] / [B*, H] / [B*, H, 450]
+                              （还原到 Swin dense tile 布局）
+      sw12_stats              dict：scores（Q7 码）、rolling_z / z_full
+                              （16bit 块分解 int64，逐位相等 = J1）、
+                              exp_ledger（J6）、catalog（J5）、window_plan、
+                              gate_final / gate_mult（J3 账）。
+    """
+
+    if q_orig.ndim != 5 or k_orig.ndim != 4:
+        raise ValueError("D2 overlap requires q_orig=[T,B,H,N,D] and k_orig=[B,H,T*N,D]")
+    t_steps, batch, heads, spatial_tokens, head_dim = q_orig.shape
+    if t_steps != 2:
+        raise ValueError("D2 overlap requires the two-slice temporal window (2,15,15)")
+    if tuple(k_orig.shape) != (batch, heads, t_steps * spatial_tokens, head_dim):
+        raise ValueError("k_orig shape is inconsistent with q_orig temporal/spatial layout")
+    wsize = int(cfg.sw12_window_size or 0) or 15
+    stride = int(cfg.sw12_stride or 0) or 12
+    if wsize <= 0 or stride <= 0 or stride > wsize:
+        raise ValueError(f"D2 overlap requires 0 < stride <= wsize; got {stride}/{wsize}")
+    if spatial_tokens != wsize * wsize:
+        raise ValueError(
+            f"D2 contract pins a square {wsize}x{wsize} spatial window; got {spatial_tokens} tokens"
+        )
+    num_steps = int(cfg.sw12_num_steps or 0)
+    if num_steps <= 0 or num_steps % t_steps != 0:
+        raise ValueError(
+            "D2 requires bsa_attention.sw12_num_steps > 0 and divisible by the "
+            f"window T=2; got {num_steps}"
+        )
+    n_pairs = num_steps // t_steps
+    if batch % n_pairs != 0:
+        raise ValueError(f"D2 batch {batch} not divisible by n_pairs={n_pairs}")
+
+    # ── 每 token 分数：Motion-XOR 规范融合式（Q7 网格 [0,162]）──
+    q_event = _binary_event_ste(_qkformer_token_q(q_orig)).reshape(
+        batch, heads, t_steps, spatial_tokens, head_dim
+    )
+    k_event = _binary_event_ste(k_orig).reshape(batch, heads, t_steps, spatial_tokens, head_dim)
+    q_count = q_event.sum(dim=-1)
+    k_count = k_event.sum(dim=-1)
+    overlap = (q_event * k_event).sum(dim=-1)
+    same_zero = head_dim - q_count - k_count + overlap
+    motion = (k_event[:, :, 0] - k_event[:, :, 1]).abs().sum(dim=-1)  # [B*, H, N]
+    numerator = 64.0 * overlap + same_zero + 16.0 * motion.unsqueeze(2)
+    scores = torch.clamp(_rne16_div_pow2_ste(numerator), max=162.0)  # [B*, H, 2, N]
+    scores = scores.reshape(batch, heads, t_steps * spatial_tokens)
+
+    # ── 场还原与重叠窗分区（窗口坐标：行序 row=(b·n_pairs+wd)·n_sw+s）──
+    batch_actual, n_sw = _d2_decompose_field_batch(batch, n_pairs, cfg)
+    if batch_actual * n_pairs * n_sw != batch:
+        raise ValueError(
+            f"D2 field-batch decomposition inconsistent: "
+            f"{batch_actual} × {n_pairs} × {n_sw} != {batch}"
+        )
+    n_y, n_x = _d2_field_grid(n_sw, cfg)
+    plan = _d2_overlap_window_plan(n_y, n_x, wsize, stride, q_orig.device)
+    n_ow = int(plan["n_ow"])
+    # 行块：field f = (b·n_pairs + wd) 覆盖 rows [f·n_sw, (f+1)·n_sw)，
+    # 故 n_fields = batch // n_sw（= B × n_pairs）
+    n_fields = batch // n_sw
+    sc = scores.view(n_fields, n_sw, heads, t_steps * spatial_tokens).permute(
+        0, 2, 1, 3
+    )  # [n_fields, heads, n_sw, 450]
+    # 窗成员一次 gather 取齐：(row, tok) 两维线性化为一个下标。
+    # 注意不能用 sc.gather(2, row).gather(3, tok) 两级 gather——两次 gather
+    # 各按自己的位置 k 取索引，等价于 (row[tok[k]], tok[k])，成员错配；
+    # 必须展平 (row·450+tok) 单次 gather（与 gate 还原的 win_key 同键）。
+    sc_flat = sc.reshape(n_fields, heads, n_sw * (t_steps * spatial_tokens))
+    win_key3 = (plan["row_idx"] * (t_steps * spatial_tokens) + plan["tok_idx"]).view(
+        1, 1, n_ow, -1
+    ).expand(n_fields, heads, n_ow, -1)
+    win_valid = plan["valid"].view(1, 1, n_ow, -1).expand(n_fields, heads, n_ow, -1)
+    win_scores = sc_flat.gather(
+        2, win_key3.reshape(n_fields, heads, -1)
+    ).view(n_fields, heads, n_ow, -1)
+    win_scores_masked = win_scores.masked_fill(~win_valid, -float("inf"))
+    gate_w = shiftmax(win_scores_masked, dim=-1, eps=cfg.eps)
+    gate_w = gate_w.masked_fill(~win_valid, 0.0)
+
+    # ── 门还原：g_final = scatter_add(g_w)，gate = g_final / mult（J3）──
+    # 线性化 (tile, token) -> 行内展开下标后沿 token 维 scatter_add
+    # （index_put_ 的多维 index 语义会把 4D index 广播成 6D，不可用；
+    #  scatter_add_ 要求 index 与 self 同秩，故展平 (n_ow, 900) 两维）。
+    win_key = win_key3.reshape(n_fields, heads, -1)
+    g_final_flat = torch.zeros(
+        n_fields, heads, n_sw * t_steps * spatial_tokens,
+        dtype=gate_w.dtype, device=q_orig.device,
+    )
+    g_final_flat.scatter_add_(2, win_key, gate_w.reshape(n_fields, heads, -1))
+    g_final = g_final_flat.view(
+        n_fields, heads, n_sw, t_steps * spatial_tokens
+    )
+    mult = plan["mult"].view(1, 1, n_sw, -1).to(dtype=gate_w.dtype)
+    gate = g_final / mult
+    gate = gate.permute(0, 2, 1, 3).reshape(batch, heads, t_steps * spatial_tokens)
+    if cfg.preserve_mean:
+        gate = gate * float(t_steps * spatial_tokens)
+    gate = _apply_hardware_gate_quant(gate, cfg)
+    row_sum = gate.sum(dim=2)
+    attn = k_orig.mul(gate.unsqueeze(-1))
+    attn = _window_context_broadcast(attn, cfg)
+
+    # ── 滚动分母账（J1：16bit 块分解 int64 逐位精确）──
+    # 闭环 z_roll[w] = z_full[0] + Σ_{i<=w} enter[i] − Σ_{i<w} exit[i]
+    # （enter[i] = 窗 i 进带项，exit[i] = 窗 i 出带项；行优先链 prev(w)=w−1
+    #  由 entry_band/exit_band 的场坐标几何直接给出，与键集差逐位一致）。
+    sc_i = scores.to(torch.int64).view(n_fields, n_sw, heads, -1).permute(0, 2, 1, 3)
+    win_s = sc_i.reshape(
+        n_fields, heads, n_sw * (t_steps * spatial_tokens)
+    ).gather(2, win_key3.reshape(n_fields, heads, -1)).view(n_fields, heads, n_ow, -1)
+    win_s = win_s.masked_fill(~win_valid, 0)
+    chunk, term = _d2_pow2_chunk(win_s)
+    term = term.masked_fill(~win_valid, 0)
+    z_full = torch.zeros(
+        n_fields, heads, n_ow, _D2_N_CHUNKS, dtype=torch.int64, device=q_orig.device
+    ).scatter_add_(3, chunk, term)
+    entry_band = plan["entry_band"].to(device=q_orig.device)
+    exit_band = plan["exit_band"].to(device=q_orig.device)
+    enter_t = term * entry_band.view(1, 1, n_ow, -1)
+    exit_t = term * exit_band.view(1, 1, n_ow, -1)
+    enter_chunks = torch.zeros_like(z_full).scatter_add_(3, chunk, enter_t)
+    exit_chunks = torch.zeros_like(z_full).scatter_add_(3, chunk, exit_t)
+    cum_enter = enter_chunks.cumsum(dim=2)
+    cum_exit = exit_chunks.cumsum(dim=2)
+    exit_shifted = torch.cat(
+        [torch.zeros_like(cum_exit[:, :, :1, :]), cum_exit[:, :, :-1, :]], dim=2
+    )
+    z_roll = z_full[:, :, :1, :] + cum_enter - exit_shifted
+
+    # ── exp 流量账（J6）与目录（J5）──
+    flow = _d2_exp_flow_ledger(
+        int(plan["field_h"]), int(plan["field_w"]), wsize, stride, t_slices=t_steps
+    )
+    # scores_field 布局 [n_fields, heads, 2, field_h, field_w]（目录用）
+    sc_field = sc.reshape(n_fields, heads, n_sw, t_steps, wsize, wsize)
+    sc_field = sc_field.permute(0, 1, 4, 2, 5, 3).reshape(
+        n_fields, heads, n_y, n_x, wsize, wsize, t_steps
+    ).permute(0, 1, 6, 2, 4, 3, 5).reshape(
+        n_fields, heads, t_steps, n_y * wsize, n_x * wsize
+    )
+    catalog = _d2_catalog_bands(plan, sc_field)
+    sw12_stats = {
+        "scores": scores.detach(),
+        "rolling_z": z_roll.detach(),
+        "z_full": z_full.detach(),
+        "exp_ledger": dict(flow),
+        "catalog": catalog,
+        "window_plan": {
+            "n_y": n_y,
+            "n_x": n_x,
+            "n_oy": int(plan["n_oy"]),
+            "n_ox": int(plan["n_ox"]),
+            "n_ow": n_ow,
+            "field_h": int(plan["field_h"]),
+            "field_w": int(plan["field_w"]),
+            "wsize": wsize,
+            "stride": stride,
+            "ys": list(plan["ys"]),
+            "xs": list(plan["xs"]),
+            "row_idx": plan["row_idx"].detach(),
+            "tok_idx": plan["tok_idx"].detach(),
+            "valid": plan["valid"].detach(),
+            "mult": plan["mult"].detach(),
+        },
+        "gate_final": g_final.detach(),
+        "gate_mult": mult.detach(),
+        "batch_decomposition": (batch_actual, n_pairs, n_sw),
+        "window_counts": {"dense": n_sw, "overlap": n_ow},
+    }
+    return attn, row_sum, gate, sw12_stats
+
+
 def _castling_aux_weight(module: nn.Module, cfg: ShiftmaxAttentionConfig) -> float:
     """Linearly remove the full-matrix auxiliary before deployment."""
 
@@ -2728,6 +4057,697 @@ def regularize_source_gate_cardinality(
         raise RuntimeError(
             "gate-cardinality regularization enabled but no Local5 proxy was captured"
         )
+    return weight * torch.stack(losses).mean()
+
+
+def _class_major_shiftmax_gate(
+    scores: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Shiftmax over unique Q7 classes, then expand gates to tokens.
+
+    This is not a multiplicity-weighted rewrite of token Shiftmax. Each occupied
+    Q7 code casts one vote in the partition function; multiplicity is Class File
+    metadata used only when expanding K. That is the C8.3 ISA.
+    """
+
+    if scores.ndim != 4 or scores.shape[-1] != 1:
+        raise ValueError("class-major Shiftmax expects scores [B,H,N,1]")
+    step = float(cfg.hardware_score_step) or (1.0 / 128.0)
+    lo = -2.0 if cfg.hardware_score_min is None else float(cfg.hardware_score_min)
+    hi = 2.0 if cfg.hardware_score_max is None else float(cfg.hardware_score_max)
+    if hi <= lo or step <= 0.0:
+        raise ValueError("invalid Q7 class grid")
+    n_bins = int(round((hi - lo) / step)) + 1
+    squeezed = scores.squeeze(-1)
+    batch, heads, tokens = squeezed.shape
+    codes = torch.round((squeezed.detach() - lo) / step).to(dtype=torch.long)
+    codes = codes.clamp(0, n_bins - 1)
+    ones = squeezed.new_ones(batch, heads, tokens)
+    multiplicity = squeezed.new_zeros(batch, heads, n_bins)
+    member_sum = squeezed.new_zeros(batch, heads, n_bins)
+    multiplicity.scatter_add_(-1, codes, ones)
+    member_sum.scatter_add_(-1, codes, squeezed)
+    occupied = multiplicity > 0
+    class_mean = member_sum / multiplicity.clamp_min(1.0)
+    centers = lo + step * torch.arange(n_bins, device=scores.device, dtype=scores.dtype)
+    class_score = class_mean + (centers - class_mean).detach()
+    class_score = class_score.masked_fill(~occupied, -1.0e4)
+    gate_c = shiftmax(class_score, dim=-1, eps=cfg.eps)
+    gate_c = gate_c * occupied.to(dtype=gate_c.dtype)
+    gate = gate_c.gather(-1, codes)
+    if cfg.preserve_mean:
+        gate = gate * float(tokens)
+    n_class = occupied.to(dtype=squeezed.dtype).sum(dim=-1)
+    pair_equal = squeezed.new_zeros(())
+    if tokens % 2 == 0:
+        left = codes.reshape(batch, heads, 2, tokens // 2)[:, :, 0]
+        right = codes.reshape(batch, heads, 2, tokens // 2)[:, :, 1]
+        pair_equal = left.eq(right).to(dtype=squeezed.dtype).mean()
+    stats = {
+        "n_occupied_classes": n_class.mean(),
+        "multiplicity_mean": multiplicity.masked_select(occupied).mean()
+        if bool(occupied.any())
+        else squeezed.new_zeros(()),
+        "pair_class_equal": pair_equal,
+        "codes": codes,
+        "multiplicity": multiplicity,
+        "gate_c": gate_c,
+    }
+    if cfg.class_stability_regularization_weight > 0.0:
+        spatial = int(math.isqrt(tokens // 2)) if tokens % 2 == 0 else int(math.isqrt(tokens))
+        if spatial * spatial * (2 if tokens % 2 == 0 else 1) == tokens:
+            t_steps = 2 if tokens % 2 == 0 else 1
+            grid = squeezed.reshape(batch, heads, t_steps, spatial, spatial)
+            horiz = (grid[..., :, 1:] - grid[..., :, :-1]).abs().mean()
+            vert = (grid[..., 1:, :] - grid[..., :-1, :]).abs().mean()
+            stats["stability_proxy"] = 0.5 * (horiz + vert)
+        else:
+            stats["stability_proxy"] = (squeezed[..., 1:] - squeezed[..., :-1]).abs().mean()
+    return gate.unsqueeze(-1), stats
+
+
+def regularize_class_stability(
+    model: nn.Module, raw_config: dict | None
+) -> torch.Tensor | None:
+    """C8.1: penalize spatial score TV so Q7 class membership can stay put."""
+
+    cfg = config_from_dict(raw_config)
+    weight = float(cfg.class_stability_regularization_weight)
+    if weight <= 0.0:
+        return None
+    if cfg.mode not in {"h82", "class_major_ttx", "cmt_ttx"}:
+        return None
+    losses = [
+        value
+        for module in model.modules()
+        if torch.is_tensor(value := getattr(module, "_h9_class_stability_proxy", None))
+    ]
+    if not losses:
+        raise RuntimeError("class-stability regularization enabled but no proxy was captured")
+    return weight * torch.stack(losses).mean()
+
+
+def _q7_class_grid(cfg: ShiftmaxAttentionConfig) -> tuple[float, float, float, int]:
+    step = float(cfg.hardware_score_step) or (1.0 / 128.0)
+    lo = -2.0 if cfg.hardware_score_min is None else float(cfg.hardware_score_min)
+    hi = 2.0 if cfg.hardware_score_max is None else float(cfg.hardware_score_max)
+    if hi <= lo or step <= 0.0:
+        raise ValueError("invalid Q7 class grid")
+    n_bins = int(round((hi - lo) / step)) + 1
+    return step, lo, hi, n_bins
+
+
+def _class_file_from_scores(
+    scores: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> dict[str, torch.Tensor]:
+    """Occupied Class File: the H83 ISA, not a discarded histogram sidecar."""
+
+    if scores.ndim != 4 or scores.shape[-1] != 1:
+        raise ValueError("class file expects scores [B,H,N,1]")
+    step, lo, _hi, n_bins = _q7_class_grid(cfg)
+    squeezed = scores.squeeze(-1)
+    batch, heads, tokens = squeezed.shape
+    codes = torch.round((squeezed.detach() - lo) / step).to(dtype=torch.long).clamp(
+        0, n_bins - 1
+    )
+    ones = squeezed.new_ones(batch, heads, tokens)
+    multiplicity = squeezed.new_zeros(batch, heads, n_bins)
+    member_sum = squeezed.new_zeros(batch, heads, n_bins)
+    multiplicity.scatter_add_(-1, codes, ones)
+    member_sum.scatter_add_(-1, codes, squeezed)
+    occupied = multiplicity > 0
+    class_mean = member_sum / multiplicity.clamp_min(1.0)
+    centers = lo + step * torch.arange(n_bins, device=scores.device, dtype=scores.dtype)
+    class_score = class_mean + (centers - class_mean).detach()
+    occupied_score = class_score.masked_fill(~occupied, -1.0e4)
+    gate_c = shiftmax(occupied_score, dim=-1, eps=cfg.eps) * occupied.to(dtype=scores.dtype)
+    class_id = torch.arange(n_bins, device=scores.device).view(1, 1, n_bins).expand_as(
+        occupied
+    )
+    temporal_pair_mask = occupied.new_zeros(batch, heads, n_bins, 2)
+    member_jaccard = squeezed.new_zeros(())
+    if tokens % 2 == 0:
+        pair = tokens // 2
+        spatial = int(math.isqrt(pair))
+        codes_t = codes.reshape(batch, heads, 2, pair)
+        for time_idx in (0, 1):
+            presence = squeezed.new_zeros(batch, heads, n_bins)
+            presence.scatter_add_(
+                -1,
+                codes_t[:, :, time_idx],
+                squeezed.new_ones(batch, heads, pair),
+            )
+            temporal_pair_mask[..., time_idx] = presence > 0
+        if spatial * spatial == pair:
+            one_hot = torch.nn.functional.one_hot(codes, n_bins).to(dtype=scores.dtype)
+            one_hot = one_hot.reshape(batch, heads, 2, pair, n_bins)
+            inter = (one_hot[:, :, 0] * one_hot[:, :, 1]).sum(dim=2)
+            union = (one_hot[:, :, 0] + one_hot[:, :, 1]).gt(0).sum(dim=2).to(
+                dtype=scores.dtype
+            )
+            both = temporal_pair_mask.all(dim=-1)
+            member_jaccard = (inter / union.clamp_min(1.0))[both].mean() if bool(both.any()) else squeezed.new_zeros(())
+    return {
+        "class_id": class_id,
+        "occupied": occupied,
+        "multiplicity": multiplicity,
+        "class_score": class_score,
+        "gate_c": gate_c,
+        "codes": codes,
+        "temporal_pair_mask": temporal_pair_mask,
+        "member_jaccard_t0t1": member_jaccard,
+        "n_occupied_classes": occupied.to(dtype=scores.dtype).sum(dim=-1),
+    }
+
+
+def _expand_k_from_class_file(
+    k_orig: torch.Tensor,
+    class_file: dict[str, torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply class gates to member K. Destinations keep their own K rows.
+
+    This is the Class File expand step. It is not token Shiftmax, and it is not
+    class-wise K folding that drops the destination.
+    """
+
+    codes = class_file["codes"]
+    gate_c = class_file["gate_c"]
+    token_gate = gate_c.gather(-1, codes).unsqueeze(-1)
+    return k_orig.mul(token_gate), token_gate
+
+
+def regularize_member_jaccard(
+    model: nn.Module, raw_config: dict | None
+) -> torch.Tensor | None:
+    """C8.1 on H83: 1 - T0/T1 member Jaccard of occupied classes."""
+
+    cfg = config_from_dict(raw_config)
+    weight = float(cfg.class_stability_regularization_weight)
+    if weight <= 0.0:
+        return None
+    if cfg.mode not in {"h83", "class_file_isa"}:
+        return None
+    losses = [
+        (1.0 - value).clamp_min(0.0)
+        for module in model.modules()
+        if torch.is_tensor(value := getattr(module, "_h9_member_jaccard", None))
+    ]
+    if not losses:
+        raise RuntimeError("H83 class-stability enabled but no member Jaccard was captured")
+    return weight * torch.stack(losses).mean()
+
+
+def _soft_hard_membership(
+    squeezed: torch.Tensor,
+    centers: torch.Tensor,
+    step: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Hard occupied one-hot with STE through a Gaussian-bin soft assignment."""
+
+    logits = -((squeezed.unsqueeze(-1) - centers) ** 2) / (2.0 * step * step + 1.0e-12)
+    soft = torch.softmax(logits, dim=-1)
+    hard_idx = soft.argmax(dim=-1)
+    hard = torch.nn.functional.one_hot(hard_idx, centers.numel()).to(dtype=squeezed.dtype)
+    return hard + (soft - soft.detach()), hard
+
+
+def _pack_occupied_class_file(
+    member: torch.Tensor,
+    hard: torch.Tensor,
+    squeezed: torch.Tensor,
+    centers: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> dict[str, torch.Tensor]:
+    """Packed occupied records. Expand may only use this dict."""
+
+    batch, heads, tokens, n_bins = member.shape
+    occupied = hard.sum(dim=2) > 0
+    counts = occupied.to(dtype=torch.long).sum(dim=-1)
+    packed_len = int(counts.max().item()) if counts.numel() else 0
+    if packed_len <= 0:
+        packed_len = 1
+    class_id = squeezed.new_zeros(batch, heads, packed_len, dtype=torch.long)
+    valid = squeezed.new_zeros(batch, heads, packed_len, dtype=torch.bool)
+    member_mask = squeezed.new_zeros(batch, heads, packed_len, tokens)
+    class_score = squeezed.new_full((batch, heads, packed_len), -1.0e4)
+    for b in range(batch):
+        for h in range(heads):
+            ids = occupied[b, h].nonzero(as_tuple=False).flatten()
+            n_live = int(ids.numel())
+            if n_live == 0:
+                continue
+            valid[b, h, :n_live] = True
+            class_id[b, h, :n_live] = ids
+            member_mask[b, h, :n_live] = member[b, h, :, ids].transpose(0, 1)
+            class_score[b, h, :n_live] = (
+                member[b, h, :, ids] * squeezed[b, h].unsqueeze(-1)
+            ).sum(0) / member[b, h, :, ids].sum(0).clamp_min(1.0)
+    gate_c = shiftmax(class_score.masked_fill(~valid, -1.0e4), dim=-1, eps=cfg.eps)
+    gate_c = gate_c * valid.to(dtype=gate_c.dtype)
+    multiplicity = member_mask.sum(dim=-1)
+    return {
+        "class_id": class_id,
+        "valid": valid,
+        "member_mask": member_mask,
+        "class_score": class_score,
+        "gate_c": gate_c,
+        "multiplicity": multiplicity,
+        "n_occupied_classes": counts.to(dtype=squeezed.dtype),
+    }
+
+
+def _expand_k_from_packed_class_file(
+    k_orig: torch.Tensor,
+    class_file: dict[str, torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply packed class gates through member_mask. No T450 codes.gather."""
+
+    if "codes" in class_file:
+        raise RuntimeError("H84 expand forbids a codes tensor in the Class File")
+    member_mask = class_file["member_mask"]
+    gate_c = class_file["gate_c"]
+    token_gate = (member_mask * gate_c.unsqueeze(-1)).sum(dim=2).unsqueeze(-1)
+    return k_orig.mul(token_gate), token_gate
+
+
+def _adjacent_row_class_jaccard(member_mask: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+    """C8.1: Jaccard of occupied class sets on adjacent spatial rows."""
+
+    batch, heads, packed_len, tokens = member_mask.shape
+    if tokens % 2 != 0:
+        return member_mask.new_zeros(())
+    spatial = int(math.isqrt(tokens // 2))
+    if spatial * spatial * 2 != tokens or spatial < 2:
+        return member_mask.new_zeros(())
+    grid = member_mask.reshape(batch, heads, packed_len, 2, spatial, spatial)
+    row_set = grid.sum(dim=-1).clamp(0.0, 1.0)
+    a = row_set[..., :, :-1]
+    b = row_set[..., :, 1:]
+    inter = (a * b).sum(dim=2)
+    union = (a + b - a * b).sum(dim=2)
+    live = valid.to(dtype=member_mask.dtype).unsqueeze(-1).unsqueeze(-1).expand_as(a)
+    weight = live.sum(dim=2).clamp_min(1.0)
+    value = (inter / union.clamp_min(1.0)) * (weight > 0).to(dtype=member_mask.dtype)
+    return value.sum() / weight.gt(0).to(dtype=member_mask.dtype).sum().clamp_min(1.0)
+
+
+def regularize_row_jaccard(
+    model: nn.Module, raw_config: dict | None
+) -> torch.Tensor | None:
+    cfg = config_from_dict(raw_config)
+    weight = float(cfg.class_stability_regularization_weight)
+    if weight <= 0.0 or cfg.mode not in {"h84", "packed_class_file"}:
+        return None
+    losses = [
+        (1.0 - value).clamp_min(0.0)
+        for module in model.modules()
+        if torch.is_tensor(value := getattr(module, "_h9_row_jaccard", None))
+    ]
+    if not losses:
+        raise RuntimeError("H84 row-Jaccard regularization enabled but no proxy was captured")
+    return weight * torch.stack(losses).mean()
+
+
+def _h85_window_hw(tokens: int) -> tuple[int, int]:
+    if tokens % 2 != 0:
+        raise ValueError("H85 requires T=2 tokens")
+    spatial = int(math.isqrt(tokens // 2))
+    if spatial * spatial * 2 != tokens:
+        raise ValueError("H85 requires a T x S x S window")
+    return 2, spatial
+
+
+def _build_h85_row_files(
+    scores: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> dict[str, torch.Tensor]:
+    """Per spatial-row packed Class File plus adjacent-row deltas."""
+
+    if scores.ndim != 4 or scores.shape[-1] != 1:
+        raise ValueError("H85 expects scores [B,H,N,1]")
+    step, lo, _hi, n_bins = _q7_class_grid(cfg)
+    batch, heads, tokens, _ = scores.shape
+    t_steps, spatial = _h85_window_hw(tokens)
+    grid = scores.squeeze(-1).reshape(batch, heads, t_steps, spatial, spatial)
+    centers = lo + step * torch.arange(n_bins, device=scores.device, dtype=scores.dtype)
+    max_class = spatial
+    class_id = scores.new_zeros(batch, heads, t_steps, spatial, max_class, dtype=torch.long)
+    valid = scores.new_zeros(batch, heads, t_steps, spatial, max_class, dtype=torch.bool)
+    member_idx = scores.new_zeros(batch, heads, t_steps, spatial, max_class, spatial, dtype=torch.long)
+    member_ok = scores.new_zeros(batch, heads, t_steps, spatial, max_class, spatial, dtype=torch.bool)
+    class_score = scores.new_full((batch, heads, t_steps, spatial, max_class), -1.0e4)
+    multiplicity = scores.new_zeros(batch, heads, t_steps, spatial, max_class)
+    n_class = scores.new_zeros(batch, heads, t_steps, spatial, dtype=torch.long)
+    for time_idx in range(t_steps):
+        for row in range(spatial):
+            row_scores = grid[:, :, time_idx, row, :]
+            member, hard = _soft_hard_membership(row_scores, centers, step)
+            occupied = hard.sum(dim=2) > 0
+            for b in range(batch):
+                for h in range(heads):
+                    ids = occupied[b, h].nonzero(as_tuple=False).flatten()
+                    n_live = int(ids.numel())
+                    if n_live == 0:
+                        continue
+                    n_class[b, h, time_idx, row] = n_live
+                    valid[b, h, time_idx, row, :n_live] = True
+                    class_id[b, h, time_idx, row, :n_live] = ids
+                    for c_i in range(n_live):
+                        hit = hard[b, h, :, ids[c_i]] > 0
+                        idx = hit.nonzero(as_tuple=False).flatten()
+                        member_idx[b, h, time_idx, row, c_i, : idx.numel()] = idx
+                        member_ok[b, h, time_idx, row, c_i, : idx.numel()] = True
+                        multiplicity[b, h, time_idx, row, c_i] = float(idx.numel())
+                    soft_mass = member[b, h, :, ids]
+                    class_score[b, h, time_idx, row, :n_live] = (
+                        (soft_mass * row_scores[b, h].unsqueeze(-1)).sum(0)
+                        / soft_mass.sum(0).clamp_min(1.0)
+                    )
+    gate_c = shiftmax(class_score.masked_fill(~valid, -1.0e4), dim=-1, eps=cfg.eps)
+    gate_c = gate_c * valid.to(dtype=gate_c.dtype)
+    prev = torch.nn.functional.one_hot(class_id[:, :, :, :-1].clamp_min(0), n_bins)
+    prev = prev * valid[:, :, :, :-1].unsqueeze(-1)
+    curr = torch.nn.functional.one_hot(class_id[:, :, :, 1:].clamp_min(0), n_bins)
+    curr = curr * valid[:, :, :, 1:].unsqueeze(-1)
+    prev_set = prev.any(dim=4)
+    curr_set = curr.any(dim=4)
+    shared = prev_set & curr_set
+    insert = curr_set & ~prev_set
+    delete = prev_set & ~curr_set
+    same_set = shared.any(dim=-1) & ~insert.any(dim=-1) & ~delete.any(dim=-1)
+    return {
+        "class_id": class_id,
+        "valid": valid,
+        "member_idx": member_idx,
+        "member_ok": member_ok,
+        "gate_c": gate_c,
+        "multiplicity": multiplicity,
+        "n_class": n_class,
+        "shared_ids": shared,
+        "insert_ids": insert,
+        "delete_ids": delete,
+        "reuse_set": same_set,
+        "n_bins": scores.new_tensor(n_bins, dtype=torch.long),
+    }
+
+
+def _expand_k_from_h85_row_files(
+    k_orig: torch.Tensor,
+    class_file: dict[str, torch.Tensor],
+) -> torch.Tensor:
+    """Class-major scatter from per-row member ids. No T450 token gate."""
+
+    forbidden = ("codes", "token_gate", "member_mask")
+    if any(key in class_file for key in forbidden):
+        raise RuntimeError("H85 expand forbids T450 addressing tensors")
+    if k_orig.ndim != 4:
+        raise ValueError("H85 expand expects k [B,H,N,D]")
+    batch, heads, tokens, dim = k_orig.shape
+    t_steps, spatial = _h85_window_hw(tokens)
+    k_grid = k_orig.reshape(batch, heads, t_steps, spatial, spatial, dim)
+    attn = k_orig.new_zeros(k_grid.shape)
+    member_idx = class_file["member_idx"]
+    member_ok = class_file["member_ok"]
+    gate_c = class_file["gate_c"]
+    class_id = class_file["class_id"]
+    valid = class_file["valid"]
+    shared_ids = class_file["shared_ids"]
+    insert_ids = class_file["insert_ids"]
+    n_bins = int(class_file["n_bins"].item())
+    for time_idx in range(t_steps):
+        for row in range(spatial):
+            idx = member_idx[:, :, time_idx, row]
+            ok = member_ok[:, :, time_idx, row].to(dtype=k_orig.dtype)
+            live = valid[:, :, time_idx, row].to(dtype=k_orig.dtype)
+            codes = class_id[:, :, time_idx, row].clamp(0, n_bins - 1)
+            if row == 0:
+                apply = live
+            else:
+                shared = shared_ids[:, :, time_idx, row - 1].gather(-1, codes)
+                inserted = insert_ids[:, :, time_idx, row - 1].gather(-1, codes)
+                apply = live * (shared | inserted).to(dtype=k_orig.dtype)
+            gather_idx = idx.clamp(0, spatial - 1).unsqueeze(-1).expand(
+                batch, heads, idx.shape[2], idx.shape[3], dim
+            )
+            k_row = k_grid[:, :, time_idx, row]
+            k_mem = k_row.unsqueeze(2).expand(batch, heads, idx.shape[2], spatial, dim)
+            k_sel = k_mem.gather(3, gather_idx)
+            scale = (gate_c[:, :, time_idx, row] * apply).unsqueeze(-1).unsqueeze(-1)
+            contrib = k_sel * scale * ok.unsqueeze(-1)
+            attn[:, :, time_idx, row].scatter_add_(
+                2,
+                gather_idx.reshape(batch, heads, -1, dim),
+                contrib.reshape(batch, heads, -1, dim),
+            )
+    return attn.reshape(batch, heads, tokens, dim)
+
+
+def regularize_h85_delta(
+    model: nn.Module, raw_config: dict | None
+) -> torch.Tensor | None:
+    cfg = config_from_dict(raw_config)
+    weight = float(cfg.class_stability_regularization_weight)
+    if weight <= 0.0 or cfg.mode not in {"h85", "row_delta_class_file"}:
+        return None
+    losses = [
+        (1.0 - value).clamp_min(0.0)
+        for module in model.modules()
+        if torch.is_tensor(value := getattr(module, "_h9_reuse_set_rate", None))
+    ]
+    if not losses:
+        raise RuntimeError("H85 delta regularization enabled but no reuse_set rate was captured")
+    return weight * torch.stack(losses).mean()
+
+
+_H86_FORBIDDEN_KEYS = (
+    "codes",
+    "token_gate",
+    "member_mask",
+    "member_idx",
+    "shared_ids",
+    "insert_ids",
+    "delete_ids",
+    "occupied",
+    "n_bins",
+    "reuse_set",
+)
+_H86_FORBIDDEN_LAST_DIMS = {513}
+
+
+def _h86_assert_expand_operands(class_file: dict[str, torch.Tensor]) -> None:
+    """H86 expand may not see T450 addressing tensors or a 513-bin occupancy hist."""
+
+    for key in _H86_FORBIDDEN_KEYS:
+        if key in class_file:
+            raise RuntimeError(f"H86 expand forbids operand {key!r}")
+    for key, value in class_file.items():
+        if not torch.is_tensor(value) or value.ndim == 0:
+            continue
+        if int(value.shape[-1]) in _H86_FORBIDDEN_LAST_DIMS:
+            raise RuntimeError(
+                f"H86 expand forbids 513-bin occupancy tensor {key!r} shape={tuple(value.shape)}"
+            )
+
+
+def _h86_pack_true_ids(mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pack True columns on the last axis into (idx, ok) of the same width."""
+
+    idx = mask.to(dtype=torch.float32).argsort(dim=-1, descending=True)
+    ok = mask.gather(-1, idx) > 0
+    return idx, ok
+
+
+def _h86_ids_to_col_mask(
+    idx: torch.Tensor,
+    ok: torch.Tensor,
+    spatial: int,
+) -> torch.Tensor:
+    mask = idx.new_zeros(*idx.shape[:-1], spatial, dtype=torch.float32)
+    mask = mask.scatter_add(-1, idx.clamp(0, spatial - 1), ok.to(dtype=mask.dtype))
+    return mask.clamp(0.0, 1.0)
+
+
+def _pack_window_class_major(
+    scores: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> dict[str, torch.Tensor]:
+    """H82 window class-major, packed to occupied records. No token expand."""
+
+    if scores.ndim != 4 or scores.shape[-1] != 1:
+        raise ValueError("H86 expects scores [B,H,N,1]")
+    step, lo, _hi, n_bins = _q7_class_grid(cfg)
+    squeezed = scores.squeeze(-1)
+    batch, heads, tokens = squeezed.shape
+    codes = torch.round((squeezed.detach() - lo) / step).to(dtype=torch.long).clamp(
+        0, n_bins - 1
+    )
+    ones = squeezed.new_ones(batch, heads, tokens)
+    multiplicity = squeezed.new_zeros(batch, heads, n_bins)
+    member_sum = squeezed.new_zeros(batch, heads, n_bins)
+    multiplicity.scatter_add_(-1, codes, ones)
+    member_sum.scatter_add_(-1, codes, squeezed)
+    occupied = multiplicity > 0
+    class_mean = member_sum / multiplicity.clamp_min(1.0)
+    centers = lo + step * torch.arange(n_bins, device=scores.device, dtype=scores.dtype)
+    class_score = class_mean + (centers - class_mean).detach()
+    gate_full = shiftmax(class_score.masked_fill(~occupied, -1.0e4), dim=-1, eps=cfg.eps)
+    gate_full = gate_full * occupied.to(dtype=gate_full.dtype)
+    counts = occupied.to(dtype=torch.long).sum(dim=-1)
+    packed_len = int(counts.max().item()) if counts.numel() else 1
+    packed_len = max(packed_len, 1)
+    class_id = codes.new_zeros(batch, heads, packed_len)
+    valid = occupied.new_zeros(batch, heads, packed_len)
+    gate_c = squeezed.new_zeros(batch, heads, packed_len)
+    for batch_idx in range(batch):
+        for head_idx in range(heads):
+            ids = occupied[batch_idx, head_idx].nonzero(as_tuple=False).flatten()
+            n_live = int(ids.numel())
+            if n_live == 0:
+                continue
+            valid[batch_idx, head_idx, :n_live] = True
+            class_id[batch_idx, head_idx, :n_live] = ids
+            gate_c[batch_idx, head_idx, :n_live] = gate_full[batch_idx, head_idx, ids]
+    return {
+        "class_id": class_id,
+        "valid": valid,
+        "gate_c": gate_c,
+        "codes": codes,
+        "centers": centers,
+        "n_occupied_classes": counts.to(dtype=squeezed.dtype),
+    }
+
+
+def _build_h86_member_delta_file(
+    scores: torch.Tensor,
+    cfg: ShiftmaxAttentionConfig,
+) -> dict[str, torch.Tensor]:
+    """Window class-major file whose row>0 members exist only as insert/delete."""
+
+    packed = _pack_window_class_major(scores, cfg)
+    batch, heads, tokens, _ = scores.shape
+    t_steps, spatial = _h85_window_hw(tokens)
+    class_id = packed["class_id"]
+    valid = packed["valid"]
+    packed_len = class_id.shape[-1]
+    codes_grid = packed["codes"].reshape(batch, heads, t_steps, spatial, spatial)
+    col_of_class = codes_grid.unsqueeze(-1).eq(class_id[:, :, None, None, None, :])
+    col_of_class = col_of_class & valid[:, :, None, None, None, :]
+    col_of_class = col_of_class.permute(0, 1, 2, 3, 5, 4).to(dtype=scores.dtype)
+    row0_idx, row0_ok = _h86_pack_true_ids(col_of_class[:, :, :, 0])
+    prev = col_of_class[:, :, :, :-1]
+    curr = col_of_class[:, :, :, 1:]
+    insert_mask = curr * (1.0 - prev)
+    delete_mask = prev * (1.0 - curr)
+    insert_idx, insert_ok = _h86_pack_true_ids(insert_mask)
+    delete_idx, delete_ok = _h86_pack_true_ids(delete_mask)
+    prev_live = prev.sum(dim=-1) > 0
+    curr_live = curr.sum(dim=-1) > 0
+    class_shared = prev_live & curr_live
+    class_insert = (~prev_live) & curr_live
+    class_delete = prev_live & (~curr_live)
+    centers = packed["centers"]
+    member_ste, _hard = _soft_hard_membership(scores.squeeze(-1), centers, float(cfg.hardware_score_step) or (1.0 / 128.0))
+    ste_grid = member_ste.reshape(batch, heads, t_steps, spatial, spatial, centers.numel())
+    ste_idx = class_id[:, :, None, None, None, :].expand(
+        batch, heads, t_steps, spatial, spatial, packed_len
+    ).clamp(0, centers.numel() - 1)
+    ste_col = ste_grid.gather(-1, ste_idx) * valid[:, :, None, None, None, :].to(dtype=scores.dtype)
+    ste_col = ste_col.permute(0, 1, 2, 3, 5, 4)
+    prev_s = ste_col[:, :, :, :-1]
+    curr_s = ste_col[:, :, :, 1:]
+    inter = (prev_s * curr_s).sum(dim=-1)
+    union = (prev_s + curr_s - prev_s * curr_s).sum(dim=-1)
+    surviving = class_shared.to(dtype=scores.dtype)
+    pair_weight = surviving.sum()
+    if float(pair_weight.detach()) <= 0.0:
+        member_jaccard = scores.new_ones(())
+    else:
+        member_jaccard = (inter / union.clamp_min(1.0) * surviving).sum() / pair_weight.clamp_min(1.0)
+    return {
+        "class_id": class_id,
+        "valid": valid,
+        "gate_c": packed["gate_c"],
+        "row0_member_idx": row0_idx,
+        "row0_member_ok": row0_ok,
+        "member_insert": insert_idx,
+        "member_insert_ok": insert_ok,
+        "member_delete": delete_idx,
+        "member_delete_ok": delete_ok,
+        "class_shared": class_shared,
+        "class_insert": class_insert,
+        "class_delete": class_delete,
+        "member_jaccard_surviving": member_jaccard,
+        "n_occupied_classes": packed["n_occupied_classes"],
+    }
+
+
+def _expand_k_from_h86_member_delta(
+    k_orig: torch.Tensor,
+    class_file: dict[str, torch.Tensor],
+) -> torch.Tensor:
+    """Rebuild row members as prev + insert − delete, then apply window gate_c."""
+
+    _h86_assert_expand_operands(class_file)
+    if k_orig.ndim != 4:
+        raise ValueError("H86 expand expects k [B,H,N,D]")
+    batch, heads, tokens, dim = k_orig.shape
+    t_steps, spatial = _h85_window_hw(tokens)
+    k_grid = k_orig.reshape(batch, heads, t_steps, spatial, spatial, dim)
+    attn = k_orig.new_zeros(k_grid.shape)
+    valid = class_file["valid"].to(dtype=k_orig.dtype)
+    gate_c = class_file["gate_c"]
+    members = _h86_ids_to_col_mask(
+        class_file["row0_member_idx"],
+        class_file["row0_member_ok"],
+        spatial,
+    )
+    insert_idx = class_file["member_insert"]
+    insert_ok = class_file["member_insert_ok"]
+    delete_idx = class_file["member_delete"]
+    delete_ok = class_file["member_delete_ok"]
+    class_shared = class_file["class_shared"].to(dtype=k_orig.dtype)
+    class_insert = class_file["class_insert"].to(dtype=k_orig.dtype)
+    class_delete = class_file["class_delete"].to(dtype=k_orig.dtype)
+    for row in range(spatial):
+        if row > 0:
+            pair = row - 1
+            inserted = _h86_ids_to_col_mask(
+                insert_idx[:, :, :, pair],
+                insert_ok[:, :, :, pair],
+                spatial,
+            )
+            deleted = _h86_ids_to_col_mask(
+                delete_idx[:, :, :, pair],
+                delete_ok[:, :, :, pair],
+                spatial,
+            )
+            rebuilt = (members + inserted - deleted).clamp(0.0, 1.0)
+            shared = class_shared[:, :, :, pair].unsqueeze(-1)
+            allocated = class_insert[:, :, :, pair].unsqueeze(-1)
+            dropped = class_delete[:, :, :, pair].unsqueeze(-1)
+            members = rebuilt * shared + inserted * allocated + members.new_zeros(()) * dropped
+        scale = gate_c[:, :, None, :, None] * members * valid[:, :, None, :, None]
+        k_row = k_grid[:, :, :, row]
+        attn[:, :, :, row] = (k_row.unsqueeze(3) * scale.unsqueeze(-1)).sum(dim=3)
+    return attn.reshape(batch, heads, tokens, dim)
+
+
+def regularize_h86_member_tv(
+    model: nn.Module, raw_config: dict | None
+) -> torch.Tensor | None:
+    cfg = config_from_dict(raw_config)
+    weight = float(cfg.class_stability_regularization_weight)
+    if weight <= 0.0 or cfg.mode not in {"h86", "member_delta_class_file"}:
+        return None
+    losses = [
+        (1.0 - value).clamp_min(0.0)
+        for module in model.modules()
+        if torch.is_tensor(value := getattr(module, "_h9_member_jaccard_surviving", None))
+    ]
+    if not losses:
+        raise RuntimeError("H86 member-TV regularization enabled but no surviving Jaccard was captured")
     return weight * torch.stack(losses).mean()
 
 
@@ -4116,6 +6136,259 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             attn = torch.lerp(attn, matrix_aux, castling_weight)
         attn = _window_context_broadcast(attn, cfg)
         self.h9_castling_aux_weight = float(castling_weight)
+    elif cfg.mode in {"h82", "class_major_ttx", "cmt_ttx"}:
+        # H82 / C8.3: H81 token scores, but Shiftmax is over unique Q7 classes.
+        # Gates expand from the Class File. Motion and Local5 stay off.
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError("H82 forbids Motion-XOR; do not mix C8.3 with H67")
+        mu = _apply_hardware_mu_quant(_scheduled_bipolar_mu(self, cfg), cfg)
+        tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        scores = tx_scores + mu * sc_scores
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+        scores = _apply_hardware_score_quant(scores, cfg)
+        gate, class_stats = _class_major_shiftmax_gate(scores, cfg)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            row_sum = row_sum / float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
+        self._h9_class_file_stats = {
+            key: value.detach()
+            for key, value in class_stats.items()
+            if key not in {"codes", "multiplicity", "gate_c"}
+        }
+        self._h9_class_stability_proxy = class_stats.get("stability_proxy")
+        attn = k_orig.mul(gate)
+        attn = _window_context_broadcast(attn, cfg)
+    elif cfg.mode in {"h83", "class_file_isa"}:
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError("H83 forbids Motion-XOR")
+        mu = _apply_hardware_mu_quant(_scheduled_bipolar_mu(self, cfg), cfg)
+        tx_scores, sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        scores = tx_scores + mu * sc_scores
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+        scores = _apply_hardware_score_quant(scores, cfg)
+        class_file = _class_file_from_scores(scores, cfg)
+        class_file["gate_c"] = _apply_hardware_gate_quant(class_file["gate_c"], cfg)
+        attn, token_gate = _expand_k_from_class_file(k_orig, class_file)
+        gate = token_gate
+        row_sum = class_file["gate_c"].sum(dim=-1)
+        self._h9_class_file = {
+            "n_occupied_classes": class_file["n_occupied_classes"].detach(),
+            "multiplicity": class_file["multiplicity"].detach(),
+            "occupied": class_file["occupied"].detach(),
+            "gate_c": class_file["gate_c"].detach(),
+            "temporal_pair_mask": class_file["temporal_pair_mask"].detach(),
+            "member_jaccard_t0t1": class_file["member_jaccard_t0t1"].detach(),
+        }
+        self._h9_member_jaccard = class_file["member_jaccard_t0t1"]
+        attn = _window_context_broadcast(attn, cfg)
+    elif cfg.mode in {"h84", "packed_class_file"}:
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError("H84 forbids Motion-XOR")
+        mu = _apply_hardware_mu_quant(_scheduled_bipolar_mu(self, cfg), cfg)
+        tx_scores, _sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        scores = tx_scores + mu * _sc_scores
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+        scores = _apply_hardware_score_quant(scores, cfg)
+        step, lo, _hi, n_bins = _q7_class_grid(cfg)
+        squeezed = scores.squeeze(-1)
+        centers = lo + step * torch.arange(n_bins, device=scores.device, dtype=scores.dtype)
+        member, hard = _soft_hard_membership(squeezed, centers, step)
+        class_file = _pack_occupied_class_file(member, hard, squeezed, centers, cfg)
+        class_file["gate_c"] = _apply_hardware_gate_quant(class_file["gate_c"], cfg)
+        attn, token_gate = _expand_k_from_packed_class_file(k_orig, class_file)
+        gate = token_gate
+        row_sum = class_file["gate_c"].sum(dim=-1)
+        row_jaccard = _adjacent_row_class_jaccard(
+            class_file["member_mask"], class_file["valid"]
+        )
+        self._h9_class_file = {
+            "class_id": class_file["class_id"].detach(),
+            "valid": class_file["valid"].detach(),
+            "member_mask": class_file["member_mask"].detach(),
+            "gate_c": class_file["gate_c"].detach(),
+            "multiplicity": class_file["multiplicity"].detach(),
+            "n_occupied_classes": class_file["n_occupied_classes"].detach(),
+            "row_jaccard": row_jaccard.detach(),
+        }
+        self._h9_row_jaccard = row_jaccard
+        attn = _window_context_broadcast(attn, cfg)
+    elif cfg.mode in {"h85", "row_delta_class_file"}:
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError("H85 forbids Motion-XOR")
+        mu = _apply_hardware_mu_quant(_scheduled_bipolar_mu(self, cfg), cfg)
+        tx_scores, _sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        scores = tx_scores + mu * _sc_scores
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+        scores = _apply_hardware_score_quant(scores, cfg)
+        class_file = _build_h85_row_files(scores, cfg)
+        class_file["gate_c"] = _apply_hardware_gate_quant(class_file["gate_c"], cfg)
+        attn = _expand_k_from_h85_row_files(k_orig, class_file)
+        gate = class_file["gate_c"]
+        row_sum = class_file["gate_c"].sum(dim=-1)
+        reuse = class_file["reuse_set"].to(dtype=scores.dtype).mean()
+        self._h9_class_file = {
+            "class_id": class_file["class_id"].detach(),
+            "valid": class_file["valid"].detach(),
+            "member_idx": class_file["member_idx"].detach(),
+            "member_ok": class_file["member_ok"].detach(),
+            "gate_c": class_file["gate_c"].detach(),
+            "shared_ids": class_file["shared_ids"].detach(),
+            "insert_ids": class_file["insert_ids"].detach(),
+            "delete_ids": class_file["delete_ids"].detach(),
+            "reuse_set": class_file["reuse_set"].detach(),
+            "n_class": class_file["n_class"].detach(),
+        }
+        self._h9_reuse_set_rate = reuse
+        attn = _window_context_broadcast(attn, cfg)
+    elif cfg.mode in {"h86", "member_delta_class_file"}:
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError("H86 forbids Motion-XOR")
+        mu = _apply_hardware_mu_quant(_scheduled_bipolar_mu(self, cfg), cfg)
+        tx_scores, _sc_scores = _tx_sc_fusion_score_pair(q_orig, k_orig, cfg)
+        scores = tx_scores + mu * _sc_scores
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+        scores = _apply_hardware_score_quant(scores, cfg)
+        class_file = _build_h86_member_delta_file(scores, cfg)
+        class_file["gate_c"] = _apply_hardware_gate_quant(class_file["gate_c"], cfg)
+        attn = _expand_k_from_h86_member_delta(k_orig, class_file)
+        gate = class_file["gate_c"]
+        row_sum = class_file["gate_c"].sum(dim=-1)
+        self._h9_class_file = {
+            "class_id": class_file["class_id"].detach(),
+            "valid": class_file["valid"].detach(),
+            "gate_c": class_file["gate_c"].detach(),
+            "row0_member_idx": class_file["row0_member_idx"].detach(),
+            "member_insert": class_file["member_insert"].detach(),
+            "member_delete": class_file["member_delete"].detach(),
+            "class_shared": class_file["class_shared"].detach(),
+            "class_insert": class_file["class_insert"].detach(),
+            "class_delete": class_file["class_delete"].detach(),
+            "member_jaccard_surviving": class_file["member_jaccard_surviving"].detach(),
+            "n_occupied_classes": class_file["n_occupied_classes"].detach(),
+        }
+        self._h9_member_jaccard_surviving = class_file["member_jaccard_surviving"]
+        attn = _window_context_broadcast(attn, cfg)
+    elif cfg.mode in {"motion_t5_quotient", "h87"}:
+        # D1: Motion T=5 时间商（Motion-XOR 线的扩展，合同草案 D1）。
+        # 每槽规范融合式 s_t = min(RNE16(64·o_t + sz_t + 16·m̄_t), 162)；
+        # 时间维 run-length 广播执行账（I6：eq=0.979 下独立门 1.084/5，−78.3%）。
+        # 保持 Swin 分窗 (2,15,15) 不动，T=5 分组在算子内完成（跨窗时间槽），
+        # 全部模型参数与 Motion ep35 锚点 checkpoint 兼容（纯算子消融口径）。
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError(
+                "h87/motion_t5_quotient embeds the canonical 16·m̄ term; "
+                "set binary_motion_xor_alpha=0 (do not double-count motion)"
+            )
+        scores, rle_stats, slot_views = _binary_t5_quotient_token_scores(
+            q_orig, k_orig, cfg
+        )
+        # F1（2026-08-19）：Q7 整数分数（0..162）进 shiftmax 前 ÷128 —— 定点
+        # 指数语义 2^(s/128) 对齐 h67 现网与 RTL q17（D1 漂移诊断 §5 根因）。
+        # 分数位账（I1-I7）不变：slot_views/挂载视图仍为整数 Q7。
+        scores = scores / 128.0
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        pre_quant_scores = scores
+        scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+        pre_quant_scores = scores
+        scores = _apply_hardware_score_quant(scores, cfg)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
+        attn = k_orig.mul(gate)
+        attn = _window_context_broadcast(attn, cfg)
+        self._h9_d1_rle_stats = rle_stats
+        self._h9_d1_slot_scores = slot_views["scores"].detach()
+        self._h9_d1_slot_overlap = slot_views["overlap"].detach()
+        self._h9_d1_slot_remainder = slot_views["remainder"].detach()
+    elif cfg.mode in {"motion_t4_pad_quotient", "h87b"}:
+        # B2: Motion T=4 + pad wildcard 时间商（D1 的 plan B 预案，
+        # D1_VARIANT_SEARCH_20260819.md §4.1）。真实槽融合式与 D1 逐位一致
+        # （s_t = min(RNE16(64·o_t + sz_t + 16·m̄_t), 162)）；末组 2 个 pad
+        # 槽以 wildcard 掩码跳过（不参与商组/统计/广播）。运动项嵌入规范
+        # 融合式：motion alpha 非 0 抛错（同 D1，运动不双重计数）。
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError(
+                "h87b/motion_t4_pad_quotient embeds the canonical 16·m̄ term; "
+                "set binary_motion_xor_alpha=0 (do not double-count motion)"
+            )
+        scores, rle_stats, slot_views = _binary_t4_pad_quotient_token_scores(
+            q_orig, k_orig, cfg
+        )
+        # F1（2026-08-19）：与 h87 同 —— Q7 整数分数进 shiftmax 前 ÷128
+        # （定点指数语义 2^(s/128) 对齐 RTL q17；真实槽分数位账不变）。
+        scores = scores / 128.0
+        if cfg.center_scores:
+            scores = scores - scores.mean(dim=2, keepdim=True)
+        scores = _event_selective_temperature(scores, q_orig, k_orig, cfg)
+        scores = _apply_hardware_score_quant(scores, cfg)
+        gate = shiftmax(scores, dim=2, eps=cfg.eps)
+        row_sum = gate.sum(dim=2)
+        if cfg.preserve_mean:
+            gate = gate * float(n_tokens)
+        gate = _apply_hardware_gate_quant(gate, cfg)
+        attn = k_orig.mul(gate)
+        attn = _window_context_broadcast(attn, cfg)
+        self._h9_b2_rle_stats = rle_stats
+        self._h9_b2_slot_scores = slot_views["scores"].detach()
+        self._h9_b2_slot_overlap = slot_views["overlap"].detach()
+        self._h9_b2_slot_remainder = slot_views["remainder"].detach()
+        self._h9_b2_pad_mask = slot_views["pad_mask"].detach()
+        self._h9_b2_grouped_runs = slot_views["grouped_runs"].detach()
+    elif cfg.mode in {"binary_axnor_local5_a3s_shiftmax", "local5_a3s", "h88"}:
+        # D3: Local5 5-lane stencil + 方向场偏移 ±Δ（A3S，合同草案 D3）。
+        # 方向场 = 3×3 时域 XOR 梯度 argmax（2bit/pixel，固定位图，无梯度）；
+        # 对齐 lane +Δ、正交 −Δ、self 0（Δ 以 Q7 1/128 档计，8 档 = Δ=1/16）。
+        # Δ=0 档与现网 Local5 逐位一致（K1 锚点，可注入式训练）；motion alpha
+        # 同 Local5 纪律静默忽略（H66d 模板继承时保持位稳定）。
+        attn, row_sum, gate, a3s_stats = _binary_axnor_local5_a3s_attention(
+            q_orig,
+            k_orig,
+            cfg,
+            profile_module=self,
+        )
+        scores = torch.zeros((), device=q_orig.device, dtype=q_orig.dtype)
+        self._h9_a3s_direction_field = a3s_stats["direction_field"]
+        self._h9_a3s_delta_bins = a3s_stats["delta_bins"]
+        self._h9_a3s_axis_frac_ew = a3s_stats["axis_frac_ew"]
+        self._h9_a3s_winner_hit_rate = a3s_stats["winner_hit_rate"]
+    elif cfg.mode in {"motion_sw12_overlap", "h89"}:
+        # D2: Motion 跨窗语义 —— stride-12/窗口-15 重叠滑窗 + 滚动分母
+        # （合同草案 D2，J1-J6）。窗口划分在算子内部完成（不动 Swin
+        # window_partition 与模型参数，checkpoint 兼容，纯算子消融口径）。
+        # 运动项嵌入规范融合式（16·m̄，同 D1 纪律）：motion alpha 非 0 抛错。
+        if float(cfg.binary_motion_xor_alpha) != 0.0:
+            raise RuntimeError(
+                "h89/motion_sw12_overlap embeds the canonical 16·m̄ term; "
+                "set binary_motion_xor_alpha=0 (do not double-count motion)"
+            )
+        attn, row_sum, gate, sw12_stats = _binary_motion_sw12_overlap_attention(
+            q_orig, k_orig, cfg
+        )
+        scores = torch.zeros((), device=q_orig.device, dtype=q_orig.dtype)
+        self._h9_d2_scores = sw12_stats["scores"].detach()
+        self._h9_d2_rolling_z = sw12_stats["rolling_z"].detach()
+        self._h9_d2_z_full = sw12_stats["z_full"].detach()
+        self._h9_d2_exp_ledger = sw12_stats["exp_ledger"]
+        self._h9_d2_catalog = sw12_stats["catalog"]
+        self._h9_d2_window_plan = sw12_stats["window_plan"]
+        self._h9_d2_gate_final = sw12_stats["gate_final"].detach()
+        self._h9_d2_gate_mult = sw12_stats["gate_mult"].detach()
+        self._h9_d2_batch_decomposition = sw12_stats["batch_decomposition"]
+        self._h9_d2_window_counts = sw12_stats["window_counts"]
     elif cfg.mode in {
         "sc_ad_confidence_carrier_blend_shiftmax",
         "sc_agree_disagree_confidence_carrier_blend_shiftmax",
@@ -4308,6 +6581,11 @@ def _qk_shiftmax_gate_forward(self, x, mask=None):
             "tx_direct_group_shiftmax/h63, "
             "tx_direct_token_channel_shiftmax/h63_stc, "
             "h60/tx_sc_k_mag_no_carrier_shiftmax, "
+            "h82/class_major_ttx/cmt_ttx, "
+            "h83/class_file_isa, "
+            "h84/packed_class_file, "
+            "h85/row_delta_class_file, "
+            "h86/member_delta_class_file, "
             "ternary_alpha_xnor_local_shiftmax/h59_local, "
             "sc_ad_confidence_carrier_blend_shiftmax/h56mc, "
             "ternary_alpha_xnor_shiftmax/h18a, ternary_alpha_xnor_shiftmax_residual/h48, "

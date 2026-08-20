@@ -205,15 +205,29 @@ See `DSEC_SEED12_REGISTRY_20260813.json`.
 ### Table G: Event-density/workload stratification
 
 | Dataset | Method | Density quartile | Frames | AEE | Fl | Spikes/frame | Active relations | Memo hit rate | Cycles/frame |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| DSEC valid825 | population | Q1 voxel-L1 <= 556401.6 | 207 | pending | pending | pending | hardware read-only | hardware read-only | hardware read-only |
-| DSEC valid825 | population | Q2 voxel-L1 <= 719957.9 | 206 | pending | pending | pending | hardware read-only | hardware read-only | hardware read-only |
-| DSEC valid825 | population | Q3 voxel-L1 <= 891402.7 | 206 | pending | pending | pending | hardware read-only | hardware read-only | hardware read-only |
-| DSEC valid825 | population | Q4 voxel-L1 > 891402.7 | 206 | pending | pending | pending | hardware read-only | hardware read-only | hardware read-only |
+|---|---|---|---:|---:|---:|---:|---|---|---|
+| DSEC valid825 | NB0 | Q1 voxel-L1 <= 556401.6 | 207 | 1.3741 | 6.2213 | 1.423e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H81 | Q1 voxel-L1 <= 556401.6 | 207 | 1.2623 | 4.9927 | 9.163e7 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H67 | Q1 voxel-L1 <= 556401.6 | 207 | 1.2886 | 5.0558 | 9.306e7 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | Local5 | Q1 voxel-L1 <= 556401.6 | 207 | **1.1757** | **4.5174** | 9.649e7 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | NB0 | Q2 voxel-L1 <= 719957.9 | 206 | 1.3612 | 6.5766 | 1.507e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H81 | Q2 voxel-L1 <= 719957.9 | 206 | 1.2622 | 5.5715 | 9.684e7 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H67 | Q2 voxel-L1 <= 719957.9 | 206 | 1.2475 | 5.4153 | 9.830e7 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | Local5 | Q2 voxel-L1 <= 719957.9 | 206 | **1.2386** | **5.3216** | 1.021e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | NB0 | Q3 voxel-L1 <= 891402.7 | 206 | 1.3799 | 7.1168 | 1.548e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H81 | Q3 voxel-L1 <= 891402.7 | 206 | 1.2839 | 6.0175 | 9.944e7 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H67 | Q3 voxel-L1 <= 891402.7 | 206 | 1.2723 | 5.8833 | 1.009e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | Local5 | Q3 voxel-L1 <= 891402.7 | 206 | **1.2432** | **5.6194** | 1.048e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | NB0 | Q4 voxel-L1 > 891402.7 | 206 | 1.6664 | 11.8226 | 1.637e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H81 | Q4 voxel-L1 > 891402.7 | 206 | 1.5144 | 9.1492 | 1.044e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | H67 | Q4 voxel-L1 > 891402.7 | 206 | 1.5106 | 9.3638 | 1.059e8 | hardware read-only | hardware read-only | hardware read-only |
+| DSEC valid825 | Local5 | Q4 voxel-L1 > 891402.7 | 206 | **1.4705** | **8.6331** | 1.099e8 | hardware read-only | hardware read-only | hardware read-only |
 
-The 825-frame voxel-L1 cuts are frozen in
-`DSEC_VALID825_DENSITY_POPULATION_20260813.json`. Do not retune them after seeing AEE.
-Per-frame AEE/Fl/spikes attach after the live GPU queue. Hardware columns stay read-only.
+Cuts stay frozen in `DSEC_VALID825_DENSITY_POPULATION_20260813.json`.
+Attached AEE/Fl/spikes are in `DSEC_DENSITY_QUARTILE_TABLE_G_20260817.json`.
+Re-eval AEE matches rank-1 profiles to ~1e-9. Hardware columns stay read-only.
+Local5 wins every quartile; the extra gain vs H81 is largest on Q1.
+H67 is slightly worse than H81 on Q1 and slightly better on Q2–Q4.
 
 ### Table H: Algorithm-to-hardware complexity bridge
 
@@ -250,8 +264,8 @@ post-synthesis, and proxy values explicitly. Never mix them without a provenance
    all-four-sequences gate on indoor_flying1. Local5 DSEC-ep44 day2 FT full AEE 1.6686
    beats NB0 on all four sequences, but it is a transfer protocol and must stay a
    separate row. Scratch Local5 remains the official same-protocol Local5 line.
-6. Density-quartile population is frozen. Attach AEE/Fl/spikes only after the GPU queue.
-   Hardware cycle/traffic/energy evidence is consumed read-only.
+6. Density-quartile Table G is attached (2026-08-17). Four rank-1 re-evals match
+   the existing valid825 AEE to ~1e-9. Hardware columns stay read-only.
 7. If a later paper promotes Local5 and uses ep39/44/49, regenerate same-checkpoint
    hardware evidence in the hardware workstream; it cannot inherit ep29 provenance.
 
