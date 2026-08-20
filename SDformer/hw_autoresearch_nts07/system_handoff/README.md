@@ -16,8 +16,14 @@ roughly 958 MB Q/K trace population, and a large profiler JSON.
 
 The existing trace is attention-complete for the stated population. It is not
 a full-network transaction trace: projection outside the attention slice,
-ATLIF state traffic, residual/FFN, decoder, DMA, and off-chip residency still
+ATLIF temporal-accumulator traffic, residual/FFN, decoder, DMA, and off-chip residency still
 need to be exported by the full-network trace instrumentation.
+
+The profiler now emits `execution_trace.csv` when run with `--ordered-trace`.
+That optional file unifies operator, ATLIF, and attention call order per sample.
+The sealed archive predates this field, so it must not be inferred from the
+aggregate CSVs; a future GPU profile rerun is required before address-timed
+memory generation.
 
 The trace manifest locks the profiler and trace-writer SHAs. The included
 `bsa_attention.py` is the current backward-compatible superset, not a claim

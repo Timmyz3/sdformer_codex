@@ -55,6 +55,48 @@ class BinaryTemporalPairArchitectureTest(unittest.TestCase):
         self.assertEqual(record["parameter_q8_event_mismatch"], 0)
         self.assertIn("input_first_binary01_ratio", record)
 
+    def test_ordered_execution_trace_unifies_operator_attention_and_atlif(self):
+        try:
+            from profile_nts11_hardware_p0 import HardwareProfiler
+            from models.STSwinNet_SNN.atlif_ternary_psn import ATLIFTernaryPSN
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"profiling environment dependency unavailable: {exc}")
+
+        profiler = HardwareProfiler(torch.nn.Identity(), ordered_trace=True)
+        profiler.begin_sample(3, sample_key="sample3", sequence_key="seq")
+
+        linear = torch.nn.Linear(2, 3, bias=False)
+        linear_input = torch.ones(1, 2)
+        profiler._operator_hook("unit.linear")(
+            linear, (linear_input,), linear(linear_input)
+        )
+
+        attention = torch.nn.Identity()
+        attention._h9_windows_per_sample = 4
+        profiler._h60_collector("S0.B0.attn")(
+            attention, {"stage": 0, "pair_total": 8, "token_total": 16}
+        )
+
+        atlif = ATLIFTernaryPSN(
+            T=2,
+            thresh=1.0,
+            output_mode="binary",
+            threshold_mode="official_atlif",
+        )
+        atlif_input = torch.ones(2, 2)
+        atlif_output = atlif(atlif_input)
+        profiler._atlif_hook("unit.atlif")(
+            atlif, (atlif_input,), atlif_output
+        )
+
+        records = profiler.execution_records
+        self.assertEqual([row["call_index"] for row in records], [0, 1, 2])
+        self.assertEqual([row["kind"] for row in records], ["operator", "attention", "atlif"])
+        self.assertEqual(records[0]["dense_macs"], 6)
+        self.assertEqual(records[1]["windows"], 4)
+        self.assertEqual(records[2]["dense_macs"], 8)
+        self.assertTrue(all(row["sample_id"] == 3 for row in records))
+
     def test_sample_workload_record_joins_flow_and_pair_features(self):
         try:
             from profile_nts11_hardware_p0 import HardwareProfiler

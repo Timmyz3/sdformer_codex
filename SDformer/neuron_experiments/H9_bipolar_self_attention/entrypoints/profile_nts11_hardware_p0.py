@@ -326,6 +326,8 @@ class HardwareProfiler:
         self.same_sequence_as_previous = False
         self._previous_stage_samples: dict[str, torch.Tensor] = {}
         self.operator_records: dict[str, dict[str, Any]] = {}
+        self.execution_records: list[dict[str, Any]] = []
+        self._sample_call_index = 0
         self.atlif_records: dict[str, dict[str, Any]] = defaultdict(lambda: {
             "calls": 0,
             "elements": 0,
@@ -386,11 +388,19 @@ class HardwareProfiler:
         self.handles.clear()
 
     def _h60_collector(self, name: str):
-        def collect(_module: torch.nn.Module, stats: dict[str, Any]) -> None:
+        def collect(module: torch.nn.Module, stats: dict[str, Any]) -> None:
             stats = dict(stats)
             stats["name"] = name
             stats["sample_id"] = self.current_sample
             self.h60_records.append(stats)
+            self._record_execution(
+                kind="attention",
+                name=name,
+                windows=int(getattr(module, "_h9_windows_per_sample", 0)),
+                stage=stats.get("stage", ""),
+                pair_total=stats.get("pair_total", 0),
+                token_total=stats.get("token_total", 0),
+            )
 
         return collect
 
@@ -430,6 +440,7 @@ class HardwareProfiler:
         self.current_sample = int(sample_id)
         self.current_sample_key = str(sample_key)
         self.current_sequence_key = str(sequence_key)
+        self._sample_call_index = 0
         self.same_sequence_as_previous = bool(
             self.current_sample > 0
             and self.current_sequence_key
@@ -598,6 +609,18 @@ class HardwareProfiler:
             rec["neg"] += int(t.lt(0).sum().item())
             rec["output_mode"] = str(getattr(module, "output_mode", "unknown"))
             rec["threshold_mode"] = str(getattr(module, "threshold_mode", "unknown"))
+            inputs = list(iter_tensors(inp))
+            temporal = int(inputs[0].shape[0]) if inputs else 0
+            self._record_execution(
+                kind="atlif",
+                name=name,
+                input_elements=int(inputs[0].numel()) if inputs else 0,
+                output_elements=int(t.numel()),
+                temporal_steps=temporal,
+                dense_macs=int(t.numel()) * temporal,
+                input_shape=list(inputs[0].shape) if inputs else [],
+                output_shape=list(t.shape),
+            )
 
         return hook
 
@@ -648,8 +671,34 @@ class HardwareProfiler:
             row["activity_weighted_macs_proxy"] += (
                 dense_macs * input_active / input_elements if input_elements else 0.0
             )
+            self._record_execution(
+                kind="operator",
+                name=name,
+                operator=module.__class__.__name__,
+                scope=self._operator_scope(name),
+                input_elements=input_elements,
+                input_active=input_active,
+                output_elements=int(output_tensor.numel()),
+                dense_macs=dense_macs,
+                input_shape=list(input_tensor.shape),
+                output_shape=list(output_tensor.shape),
+            )
 
         return hook
+
+    def _record_execution(self, *, kind: str, name: str, **payload: Any) -> None:
+        if not self.ordered_trace:
+            return
+        self.execution_records.append({
+            "sample_id": self.current_sample,
+            "sample_key": self.current_sample_key,
+            "sequence_key": self.current_sequence_key,
+            "call_index": self._sample_call_index,
+            "kind": kind,
+            "name": name,
+            **payload,
+        })
+        self._sample_call_index += 1
 
     @staticmethod
     def _operator_scope(name: str) -> str:
@@ -1175,6 +1224,7 @@ class HardwareProfiler:
             "cross_sample_by_stage": sorted(cross_sample_by_stage.values(), key=lambda row: row["name"]),
             "atlif_rows": atlif_rows,
             "operator_rows": operator_rows,
+            "execution_records": self.execution_records,
             "operator_by_scope": sorted(operator_by_scope.values(), key=lambda row: row["scope"]),
             "delta_ttx": delta_ttx,
             "score_quantization": {
@@ -1604,6 +1654,7 @@ def main() -> int:
     write_csv(args.output_dir / "stage_cross_sample_delta.csv", result["summary"]["cross_sample_by_stage"])
     write_csv(args.output_dir / "atlif_activity.csv", result["summary"]["atlif_rows"])
     write_csv(args.output_dir / "operator_runtime.csv", result["summary"]["operator_rows"])
+    write_csv(args.output_dir / "execution_trace.csv", result["summary"]["execution_records"])
     write_csv(args.output_dir / "operator_by_scope.csv", result["summary"]["operator_by_scope"])
     write_csv(args.output_dir / "sample_workload.csv", result["summary"]["sample_records"])
     write_md(args.output_dir / "nts11_hardware_p0_profile.md", result)
