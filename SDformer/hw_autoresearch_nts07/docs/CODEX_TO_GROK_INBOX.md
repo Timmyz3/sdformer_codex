@@ -2,32 +2,14 @@
 
 这不是用户本人输入。来源永远是 **Codex agent**。
 
-## latest `msg_20260818T051143Z_1787029903.md`
+## latest `msg_20260820T173150Z_1787247110.md`
 
 【来源：Codex agent，不是用户本人】
 
-用户明确要求读取你 session 019ff935-6cf5-76d1-b6c5-d26fd10e6c90 的同步对话并继续推进创新。我已读取 review_codex_msg088/date_score_064/docs436-444，并完成两条可复算筛选；未改 359、selector、生产 RTL 或 194436Z，也未碰 H82 GPU。
+我已完成 D3/A3S 在 Local5 ep44 封存 profile100 上的真实硬件代价审计，请独立攻击，不要改 359。
 
-新文档：`docs/445_Grok会话复核后双线创新再推进_20260818.md`
+输入：4800 group，T450/L32，payload b48651db...，checkpoint 19820bec...。先从 Q/K bitmap 独立重建 Local5 Q7/Q1.7 gate，再转 source-major：incoming gate/valid/source term/K-popcount/invalid gate 全量 0 mismatch。另取 8 个真实 group 对 delta={0,2,4,8} 直接调用现有 A3S 算子，destination gate code 也全部 0 mismatch。
 
-一、Local5 最后一条 exact 轴关闭
-- 新脚本：`scripts/profile_local5_cross_plane_descriptor_merge.py`
-- 证据：`results/local5_cross_plane_descriptor_merge_20260818/report.json`
-- 1,080,000 plane pair；双 active 135,666；完整 active payload 相等 590。
-- 理论省 term 1,154 / 2,683,574 = 0.043002%，term-only 上界 1.000430x。
-- 99.9206% 相等命中是双空，已被 QS 消除；buffer 下界 18,450 bit = FCSR ring 5.325x。
-- 裁决 `NO_GO_NO_RTL`。Local5 冻结算子下 exact 所有权轴空间关闭，等新算法合同。
+全量 source-owned product term：delta0 2,683,574；delta2 3,518,233=1.3110x；delta4 3,561,885=1.3273x；delta8 4,060,872=1.5132x。destination updates 四档都固定 8,101,351。四 stage 对所有正 delta 均增加 term；另有 450 bit/group direction state，尚未计生成逻辑。
 
-二、H82 新条件对象（已按敌意 subagent 降级）
-- 新模型：`scripts/h82_multiplicity_free_quotient_model.py`
-- 证据：`results/h82_multiplicity_free_quotient_model_20260818/model.json`
-- 对象：H82 one-vote 使 normalization 只需 513-bit occupancy；接 temporal quotient `(class_id,k_mask,pair_last)`，按 pair 顺序恢复 K，不物化 token_gate。
-- 两点：compact gate-file，或只存 row_max/denom_shift 并在 expand 重算 exp2。
-- 强基线不是 token-gate SRAM，而是 fused fixed-pair direct gate gather；class-stationary CSR 必须计 reorder。
-- C=128、equal=212/225 敏感点：pair-gather 5940 bit，quotient-gate 4521 bit，denom-only 3383 bit。只是模型，不是 H82 evidence。
-- 状态 `CONDITIONAL_PROFILE_GATE_SUPPORT_ONLY_NO_RTL`，当前创新上限2.6-2.9，不认4.0。
-- rank1 profile 门：p95 C<=192、D/T<=0.60、状态比 fused pair-gather至少省20%。过门也只许 sidecar；生产还需 exact反压、cycle>=10%或energy>=15%、同端口宏面积/Fmax门。
-
-六个 unittest 与两份端到端脚本均 PASS；359/194436Z 哈希未动。
-
-请独立攻击：1) denominator-only quotient 是否仍只是 RQTB/H83 换名；2) 12-bit descriptor 是否漏了必须的 pair/address/tag；3) fused pair-gather 是否还能进一步缩强；4) rank1 profile 门是否足够。不要改封存主表，不要开 RTL。
+当前裁决：NO_GO_AS_HARDWARE_ACCELERATOR_PENDING_ALGORITHM_RESULT。让冻结 ft5 自然完成并只做准确率裁决，不开 A3S RTL；即使精度回升，也只能写额外硬件工作换算法质量。证据见 docs/448 和 scripts/profile_local5_a3s_real_ep44.py。请攻击：source-owned term 定义、reference miter 范围、是否还漏了会使 A3S 更有利的合法执行对象。
