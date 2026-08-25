@@ -12365,3 +12365,187 @@ official test。
 - MVSEC full AEE: H67=`1.767113`，Local5=`1.801101`；Motion control H67/H81=`1.329678/1.330597`。
 - 硬件证据仅只读消费；该算法审计不修改硬件代码或硬件文档。
 - 机器审计：`neuron_autoresearch/DATE_FINAL_MAINLINE_DECISION_20260812.json`。
+
+<!-- DATE_ALGORITHM_CAUSAL_CONTROLS_QUEUE_20260821 -->
+
+### DATE 算法因果控制与 score-pair 补证队列（2026-08-21）
+
+本轮只推进算法实验，不修改 `hw_autoresearch_nts07` 中的 RTL、验证、PPA 或硬件文档；按用户要求，
+暂不执行官方 DSEC hidden-test 上传。已有 H67/H81 仍按
+`PASS_RECIPE_LEVEL_CONTROL_NOT_STEP_PAIRED` 使用，不能把二者近似相同的 AEE 写成严格逐 step 因果证据。
+
+**P0-A：H67/H81 分类 score-pair profile。** 新增
+`entrypoints/analyze_h67_h81_score_pairs_20260821.py`，使用两线前 20 个匹配 sample、所有 12 个
+attention block、每 block 首个真实 window 的 Q/K bit trace，分别报告：
+
+- all pair equality；
+- 排除四向量全空后的 non-empty equality；
+- 两个时间 K slice 都非空的 both-K-active equality；
+- 上述三类的 stage breakdown 与理想 dual-slot reduction。
+
+H67 使用 Motion-TTX Q7 score，H81 使用 TTX Q7 score。该证据是 first-window-per-block 的真实张量
+抽样，不冒充 full-valid825 population；跨 checkpoint 差异仍是描述性比较。输出冻结为
+`neuron_autoresearch/H67_H81_SCORE_PAIR_PROFILE_20260821.{json,md}`。
+
+**P0-B：同父 checkpoint 的全分辨率因果矩阵。** 六月的 binary-only/PSN+TX 结果采用
+`2x9x9 + crop288x384`，不能混入当前 DATE 主表。本轮五格全部从同一冻结的 full-resolution
+NB0 ep29 模型开始，使用 fresh optimizer、seed0、10 epoch、`480x640`、crop=null、
+`window=2x15x15`、no-running BN，并只在预注册的 ep4/ep9 上跑 local standard valid825：
+
+| cell | neuron | attention | motion term | purpose |
+|---|---|---|---:|---|
+| C00 | PSN | original SDSA | 0 | 同父训练漂移控制 |
+| C10 | all-binary ATLIF | original SDSA | 0 | 隔离神经元替换 |
+| C01 | PSN | all12 TTX | 0 | 隔离注意力替换 |
+| C11 | all-binary ATLIF | all12 TTX | 0 | 神经元与 TTX 联合作用 |
+| C12 | all-binary ATLIF | all12 Motion-TTX | 0.25 | 同父 Motion 增量控制 |
+
+配置 manifest：
+`configs/generated/date_fullres_factorial_controls_20260821.json`。标准评估入口只增加配置感知的
+模块审计：ATLIF enabled 时要求 `ATLIFTernaryPSN>0`，attention enabled 时要求
+`ShiftmaxAttention>0`；禁用模块反向要求 count=0。因此 `PSN+TTX` 的合法合同为
+ATLIF=`0`、Shiftmax=`12`、missing/unexpected=`0/0`，不再被旧的“双模块都必须非零”规则误拒。
+
+顺序队列为：D3 ep4 standard valid825 完成 -> H81 profile20 -> H67/H81 score-pair 分析 ->
+C00/C10/C01/C11/C12 逐个训练与 valid825。队列入口：
+`entrypoints/run_date_algorithm_evidence_queue_20260821.py`；启动 PID=`3413402`，PPID=`1`，
+MLflow 关闭且同一时间只允许一个 GPU 工作负载。五格最终汇总写入
+`results/date_fullres_factorial_controls_20260821/summary.{json,md}`。
+
+<!-- D3_LOCAL5_A3S_STANDARD_VALID825_RESULT_20260821 -->
+
+### D3 Local5-A3S short 标准结果（2026-08-21）
+
+- H88/D3 ep4 已完成 local standard valid825：AEE=`1.313923`、AAE-2D=`6.005969`、
+  AE-3D=`5.677714`、DSEC Fl=`6.4559%`、spikes=`85.2456G`、spike-energy proxy
+  `75316.29uJ`。
+- 加载链完整：ATLIF=`105`、Shiftmax=`12`、checkpoint overlay=`210/210`、
+  missing/unexpected=`0/0`；config SHA=`84c1a50f...`，checkpoint SHA=`a43dc1bc...`。
+- 相对 H67 ep35，D3 的 AEE 约好 `1.18%`，但 AAE-2D 更差且 spikes 高约 `3.82%`；相对其
+  直接父线 Local5 ep44，AEE 反而差约 `2.50%`，AAE-2D 更差，spikes 基本不降。
+- 裁决：保留为“方向场分数偏移没有超过 Local5 父线”的标准 short 负向消融，不升 full40。
+  算子新颖性档案可留作未来工作，但当前 DATE 算法主线仍是 H67，精度上界仍是 Local5 ep44。
+
+<!-- H67_H81_CLASSIFIED_SCORE_PAIR_RESULT_20260821 -->
+
+### H67/H81 分类 score-pair 结果（2026-08-21）
+
+20 个匹配 sample、12 blocks、每 block 首个真实 window 的结果如下：
+
+| route | all equality | non-empty equality | both-K-active equality | non-empty ideal slot reduction |
+|---|---:|---:|---:|---:|
+| H67 Motion-TTX | 90.0465% | 83.4249% | 73.6666% | 41.7124% |
+| H81 TTX | 90.8161% | 84.7366% | 75.7512% | 42.3683% |
+
+- 排除空 pair 后仍有超过 `83%` 的精确 Q7 temporal score equality，说明可逆 score-class
+  coalescing 不是由空输入虚构出来的；both-K-active 子集仍有 `73.7%--75.8%`。
+- 但 H67 的三种 equality 都低于 H81。**禁止再声称 Motion-XOR 产生或提高 score 等价率**；
+  正确表述是 TTX 时间 score 本身具有强等价性，Motion 在保留大部分等价机会的同时修改运动响应。
+- H67/H81 的 stage S3 both-K-active equality 都约为 `68%`，明显低于浅层，后续硬件模型必须报告
+  stage 分布，不能只报全网平均。
+- Motion 是否值得承担额外 datapath，等待同父 fresh-optimizer C11/C12 的 AEE、AAE、spikes
+  因果结果；在此之前不因既有 H67 硬件完整度强行锁定算法结论。
+- 机器结果：`neuron_autoresearch/H67_H81_SCORE_PAIR_PROFILE_20260821.{json,md}`。
+
+<!-- LOCAL5_SAME_PARENT_CONTROL_QUEUE_20260821 -->
+
+### Local5 同父公平控制追加（2026-08-21）
+
+- 五格因果矩阵当前运行 C00 `PSN + original SDSA`，已完成 epoch0/1/2，validation loss 分别为
+  `1.1694/1.1949/1.0570`，epoch3 训练中；单个 epoch 约 `32 min`。当前任务是算法因果补证，
+  不是硬件 RTL/PPA 执行。
+- Motion 完整性由 C11 `binary+TTX` 与 C12 `binary+Motion-TTX` 的同父、同 seed、同 fresh
+  optimizer 结果补齐；它将解决历史 H67/H81 只能作为 recipe-level control 的限制。
+- Local5 历史 ep44 虽为 DSEC 精度最优，但采用 own-crop 谱系。为避免 Local 与 Motion 的比较继续
+  受训练谱系质疑，新增 C20 `all-binary ATLIF + all12 Local5`：同一 NB0 ep29 parent、seed0、
+  fresh optimizer、10 epoch、`480x640 / T2x15x15 / no-running BN`，预注册 ep4/ep9 valid825。
+- C20 配置：
+  `configs/generated/dsec_fullres_w15_factorial_c20_binary_local5_nb0ep29_ft10_20260821.yml`；
+  watcher：`entrypoints/run_date_local5_same_parent_after_factorial_20260821.py`，PID=`3426726`，
+  只等待五格 `summary.json`，当前不占 GPU。
+- D3/A3S 已在标准 short 上相对 Local5 ep44 回退约 `2.50%`，因此不升 full40。Local 算法线的
+  完整性由“成熟 Local5 的同父公平控制”继续推进，不用失败的新偏移机制消耗训练预算。
+- 硬件创新完整度仍由硬件工作流单独闭环；本算法 watcher 不读写 RTL、PPA 或硬件文档。
+
+<!-- DATE_LOW_COST_ALGORITHM_FEEDBACK_PREREGISTRATION_20260823 -->
+
+### Motion/Local5 低硬件改动算法反哺预注册（2026-08-23）
+
+- 保持现有 C12 -> C20 训练与标准 valid825 队列不变。新增敏感性侧车只在 C12/C20 都完成后
+  运行，不修改已有 checkpoint、训练配置、Attention 源码或任何硬件文件。
+- Motion 使用 C12 ep9 冻结 checkpoint，仅在推理时比较
+  `binary_motion_xor_alpha={0,1/8,1/4,1/2}`。`1/4` 是训练基准点；其余点只改变一个
+  dyadic 常数，不改变候选数、Shiftmax、K carrier 或输出 shape。
+- Local5 使用 C20 ep9 冻结 checkpoint，仅在推理时比较 Q7 self-lane bias
+  `matrix_diag_bias={-1/64,0,+1/64,+1/32}`。该字段已存在于 Local5 算子；非零部署仅需
+  self score 的定点常数加法，不改变五邻域拓扑、relation 数或 source-major 数据流。
+- 所有候选使用同一 local DSEC valid825、`480x640 / T2x15x15 / no-running BN`，输出
+  AEE、AAE-2D、AE-3D、Fl、spikes，并审计 ATLIF=`105`、Shiftmax=`12`、overlay=`210`、
+  missing/unexpected=`0/0`。checkpoint 使用 hardlink，避免重复占用磁盘。
+- Motion 升级到短微调的门：相对 `alpha=1/4`，AEE 改善至少 `0.3%` 或 AAE-2D 改善至少
+  `0.5%`，且 spikes 增幅不超过 `2%`。Local5 升级门：相对 bias=`0`，AEE 改善至少
+  `0.3%`，且 spikes 增幅不超过 `2%`。不达门即停止，不做无意义全训。
+- 该实验严格标注为 frozen-checkpoint deployment-constant sensitivity，不是重新训练后的因果
+  消融。若候选过门，才从对应同源 checkpoint 做一个5-epoch短微调并重新跑标准 valid825。
+- 生成器：`entrypoints/make_date_low_cost_feedback_configs_20260823.py`；条件 runner：
+  `entrypoints/run_date_low_cost_feedback_after_c20_20260823.py`；manifest：
+  `configs/generated/date_low_cost_feedback_sensitivity_20260823.json`。
+- 强模型跨拓扑蒸馏列为 P1：Local5 可作为 Motion 的空间匹配教师，Motion 可作为 Local5 的
+  跨数据集泛化教师；教师仅训练期存在、部署网络不变。历史普通 angular loss 与弱 NB0 teacher
+  蒸馏已经失败，不重复。只有上述常数敏感性没有足够收益时，才实现强教师短筛。
+
+<!-- DATE_TWO_CONTRIBUTION_FULL_REPLACEMENT_FREEZE_20260825 -->
+
+### DATE 算法两贡献与全量替换口径冻结（2026-08-25）
+
+- 论文算法侧只保留两个贡献：`全网 one-sided binary ATLIF` 神经元，以及 `全量 all12 TTX`
+  注意力。TTX 的内部定义包含 dyadic score、temporal motion correction、Shiftmax 和 gated-K；
+  Motion 与 Shiftmax 不再分别声明为第三、第四项独立算法贡献。
+- 所有论文主实验均采用全量替换，不使用 S2-only、部分 stage、TX/SC 混合或二值/三值混合结构。
+  H81/no-motion、C01 和 C11 继续保留为内部因果审计或附录证据，但不作为主结果表中的独立网络路线。
+- DSEC 同父全分辨率五格已经完成：同一 NB0 ep29 parent、seed0、fresh optimizer、10 epoch、
+  `480x640 / T2x15x15 / no-running BN`，标准 local valid825 在预注册 ep4/ep9 中选 rank-1。
+
+| cell | 全网 binary ATLIF | 全量 TTX | AEE | AAE-2D | AE-3D | Fl (%) | spikes (G) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C00 PSN + original | 0 | 0 | 1.427353 | 6.724532 | 6.357416 | 7.6801 | 128.9324 |
+| C10 ATLIF only | 1 | 0 | 1.480472 | 6.262138 | 6.045349 | 8.4317 | 61.5937 |
+| C12 ATLIF + complete TTX | 1 | 1 | 1.435804 | 6.062826 | 5.829910 | 7.9355 | 61.8243 |
+
+- C00 -> C10 说明神经元贡献主要是效率：spikes 下降 `52.23%`，AAE-2D/AE-3D 改善，但 AEE
+  上升 `3.72%`。C10 -> C12 说明完整 TTX 在保持同一低脉冲区间的同时将 AEE 改善约 `3.02%`、
+  AAE-2D 改善约 `3.18%`；两项贡献存在明确协同。C00 -> C12 的 AEE 仅高约 `0.59%`，spikes
+  下降约 `52.05%`，满足 DATE 精度约束与稀疏目标。
+- 正文采用递进三行，而不是宣称两个模块各自独立提高所有精度指标：ATLIF 提供事件稀疏性，
+  TTX 是为 ATLIF 事件表示协同设计、用于恢复匹配精度的统一注意力。C01 PSN+TTX 的
+  `AEE=1.449987` 作为内部审计保留，也支持“不把 TTX 写成脱离 ATLIF 的通用精度插件”。
+- MVSEC day2-only 目前完成的是跨数据集整网验证，而不是完整 2x2 消融：NB0 macro AEE
+  `1.8273`、macro Fl `18.354%`、spikes `251.468G`；完整 ATLIF+TTX/H67 为 `1.7671`、
+  `17.128%`、`140.665G`，分别改善约 `3.29%`、`6.68%` 和 `44.06%`。DATE 正文采用
+  “DSEC 做模块消融、DSEC+MVSEC 做最终模型验证”的常见口径；除非审稿预审明确要求，不为 MVSEC
+  重复训练 ATLIF-only 和 TTX-only 两个昂贵控制。
+- 权威五格结果：
+  `results/date_fullres_factorial_controls_20260821/summary.{json,md}`。这些是 local valid825，
+  不是 DSEC official hidden-test 结果。
+
+<!-- MVSEC_ATLIF_ONLY_ABLATION_PREREG_20260825 -->
+
+### MVSEC 全量 ATLIF-only 两贡献消融预注册（2026-08-25）
+
+- 目的：补齐 MVSEC 的递进三行 `NB0 -> 全网 binary ATLIF -> 全网 binary ATLIF + 全量 TTX`。
+  只新增中间 ATLIF-only 行，不跑 PSN+TTX、no-motion、部分 stage 或混合注意力。
+- ATLIF-only 与 H67 使用同一
+  `mvsec_cicc_nb0_w8_seed0_v4_20260811/checkpoint_epoch11.pth` parent、seed0、fresh optimizer、
+  day2-only manifest、dt1、crop256、window `2x8x8`、30 epoch 和相同 optimizer/scheduler。
+- 结构合同：105 个 one-sided binary ATLIF；原始 SDformer attention；Shiftmax=0。初始化 smoke
+  必须为 `checkpoint_overlay_keys=0 / missing=210 / unexpected=0`；自身 checkpoint 标准推理必须为
+  overlay/model keys `210/210`、missing/unexpected `0/0`。
+- validation rank-1 按训练期 held-out day2 validation loss 选择；选择完成后仅对 rank-1 做一次
+  OD1/IF1/IF2/IF3 的 fixed800 和 full-sequence 标准推理，不按测试结果挑 checkpoint。
+- 配置生成器：
+  `entrypoints/make_mvsec_atlif_only_ablation_20260825.py`；配置：
+  `configs/generated/mvsec_cicc_atlif_only_w8_seed0_20260825.yml`；串行队列：
+  `entrypoints/run_mvsec_atlif_only_ablation_20260825.py`。队列先等待 GPU 连续空闲，再执行
+  smoke -> full30 -> rank-1 -> fixed800 -> full-sequence。
+- 完成后权威收据写入
+  `neuron_autoresearch/MVSEC_TWO_CONTRIBUTION_ABLATION_20260825.{json,md}`，并自动把最终三行表追加到本文档。

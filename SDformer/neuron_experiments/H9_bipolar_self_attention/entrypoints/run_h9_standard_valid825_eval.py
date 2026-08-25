@@ -123,11 +123,12 @@ def main() -> int:
     run_dir = args.run_dir.resolve()
     config = args.config.resolve()
     config_data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
-    h9_enabled = bool(
-        config_data.get("atlif_ternary_psn", {}).get("enabled")
-        or config_data.get("bsa_attention", {}).get("enabled")
-        or config_data.get("simple_ternary_psn", {}).get("enabled")
+    atlif_enabled = bool(config_data.get("atlif_ternary_psn", {}).get("enabled"))
+    attention_enabled = bool(config_data.get("bsa_attention", {}).get("enabled"))
+    simple_ternary_enabled = bool(
+        config_data.get("simple_ternary_psn", {}).get("enabled")
     )
+    h9_enabled = atlif_enabled or attention_enabled or simple_ternary_enabled
     epochs = args.epoch or [19, 24, 29]
 
     rows: list[dict[str, Any]] = []
@@ -192,10 +193,24 @@ def main() -> int:
                 audit.get("unexpected_count", -1)
             ):
                 raise RuntimeError(f"epoch{epoch} H9 checkpoint load is incomplete: {audit}")
-            if int(counts.get("ATLIFTernaryPSN", 0)) <= 0 or int(
-                counts.get("ShiftmaxAttention", 0)
-            ) <= 0:
-                raise RuntimeError(f"epoch{epoch} H9 module coverage is empty: {counts}")
+            atlif_count = int(counts.get("ATLIFTernaryPSN", 0))
+            attention_count = int(counts.get("ShiftmaxAttention", 0))
+            if atlif_enabled and atlif_count <= 0:
+                raise RuntimeError(
+                    f"epoch{epoch} ATLIF is enabled but module coverage is empty: {counts}"
+                )
+            if not atlif_enabled and atlif_count != 0:
+                raise RuntimeError(
+                    f"epoch{epoch} ATLIF is disabled but modules were installed: {counts}"
+                )
+            if attention_enabled and attention_count <= 0:
+                raise RuntimeError(
+                    f"epoch{epoch} attention is enabled but module coverage is empty: {counts}"
+                )
+            if not attention_enabled and attention_count != 0:
+                raise RuntimeError(
+                    f"epoch{epoch} attention is disabled but modules were installed: {counts}"
+                )
         rows.append({"epoch": epoch, **parse_profile(profile)})
 
     if not rows:

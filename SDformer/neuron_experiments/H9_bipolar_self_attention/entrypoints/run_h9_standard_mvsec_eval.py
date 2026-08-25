@@ -92,22 +92,33 @@ def patch_config_sequence(
 
 def audit_eval_load(log_path: Path, config_data: dict[str, Any]) -> None:
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
-    h9_enabled = bool(config_data.get("atlif_ternary_psn", {}).get("enabled")) or bool(
-        config_data.get("bsa_attention", {}).get("enabled")
-    )
-    if h9_enabled:
-        required = (
-            "[H9] eval installed ATLIFTernaryPSN: 105 modules",
-            "[H9] eval installed Shiftmax attention: 12 modules",
-            "checkpoint_overlay_keys=210, model_overlay_keys=210, missing=0, unexpected=0",
-        )
+    atlif_enabled = bool(config_data.get("atlif_ternary_psn", {}).get("enabled"))
+    attention_enabled = bool(config_data.get("bsa_attention", {}).get("enabled"))
+    expected_atlif = 105 if atlif_enabled else 0
+    expected_attention = 12 if attention_enabled else 0
+    expected_overlay = 210 if atlif_enabled else 0
+    required = []
+    forbidden = []
+    if atlif_enabled:
+        required.append(f"[H9] eval installed ATLIFTernaryPSN: {expected_atlif} modules")
     else:
-        required = (
-            "checkpoint_overlay_keys=0, model_overlay_keys=0, missing=0, unexpected=0",
-        )
+        forbidden.append("[H9] eval installed ATLIFTernaryPSN:")
+    if attention_enabled:
+        required.append(f"[H9] eval installed Shiftmax attention: {expected_attention} modules")
+    else:
+        forbidden.append("[H9] eval installed Shiftmax attention:")
+    required.append(
+        f"checkpoint_overlay_keys={expected_overlay}, "
+        f"model_overlay_keys={expected_overlay}, missing=0, unexpected=0"
+    )
     missing = [marker for marker in required if marker not in log_text]
     if missing:
         raise RuntimeError(f"MVSEC eval load audit failed for {log_path}: missing {missing}")
+    unexpected = [marker for marker in forbidden if marker in log_text]
+    if unexpected:
+        raise RuntimeError(
+            f"MVSEC eval load audit failed for {log_path}: unexpected installers {unexpected}"
+        )
 
 
 def mvsec_sequence_ready(sequence: str) -> tuple[bool, str]:
