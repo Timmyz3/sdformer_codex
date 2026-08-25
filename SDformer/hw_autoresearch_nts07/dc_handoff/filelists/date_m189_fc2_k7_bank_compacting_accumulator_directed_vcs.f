@@ -1,0 +1,3 @@
+rtl_m189/m189_fc2_k7_bank_compacting_accumulator.sv
+verif_m189/m189_fc2_k7_bank_compacting_accumulator_assertions.sv
+tb_m189/tb_m189_fc2_k7_bank_compacting_accumulator.sv

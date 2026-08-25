@@ -27,7 +27,8 @@ if {![info exists ::env(OPERATING_CONDITION)] || $::env(OPERATING_CONDITION) eq 
 set_operating_conditions $::env(OPERATING_CONDITION)
 read_sdc $mapped_sdc
 set power_enable_analysis true
-set_power_analysis_mode averaged
+# PrimeTime W-2024.09 rejects the legacy set_power_analysis_mode command.
+set_app_var power_analysis_mode averaged
 
 if {[info exists ::env(SPEF_FILE)] && $::env(SPEF_FILE) ne ""} {
     set spef_file [file normalize $::env(SPEF_FILE)]
@@ -42,6 +43,13 @@ puts $scope_fp "operating_condition=$::env(OPERATING_CONDITION)"
 puts $scope_fp "corner_role=$::env(CORNER_ROLE)"
 puts $scope_fp "netlist=$mapped_netlist"
 puts $scope_fp "saif=$saif_file"
+set rtl_gate_map_entries 0
+if {[info exists ::env(RTL_GATE_MAP_TCL)] && $::env(RTL_GATE_MAP_TCL) ne ""} {
+    set rtl_gate_map_tcl [file normalize $::env(RTL_GATE_MAP_TCL)]
+    source $rtl_gate_map_tcl
+    puts $scope_fp "rtl_gate_map=$rtl_gate_map_tcl"
+}
+puts $scope_fp "rtl_gate_map_entries=$rtl_gate_map_entries"
 close $scope_fp
 if {[llength [info commands report_annotated_parasitics]] > 0} {
     report_annotated_parasitics -check \

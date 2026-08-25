@@ -1,0 +1,79 @@
+`timescale 1ns/1ps
+`default_nettype none
+
+module m127_block_phased_pipelined_k4_row_fold_assertions (
+    input logic clk_core,
+    input logic rst_core,
+    input logic weight_fill_valid,
+    input logic weight_fill_ready,
+    input logic weight_fill_accept,
+    input logic row_valid,
+    input logic row_ready,
+    input logic row_accept,
+    input logic update_valid,
+    input logic update_ready,
+    input logic update_accept,
+    input logic [2:0] update_block,
+    input logic [8:0] update_row,
+    input logic [1823:0] update_delta,
+    input logic [15:0] update_selected_mask,
+    input logic [15:0] observed_remaining_mask,
+    input logic observed_pair_pipeline_valid,
+    input logic row_done,
+    input logic protocol_error
+);
+`ifdef SVA_RUNTIME_ENABLED
+    ap_fill_handshake: assert property (@(posedge clk_core)
+        weight_fill_accept == (weight_fill_valid && weight_fill_ready));
+    ap_row_handshake: assert property (@(posedge clk_core)
+        row_accept == (row_valid && row_ready));
+    ap_update_handshake: assert property (@(posedge clk_core)
+        update_accept == (update_valid && update_ready));
+    ap_pipeline_visibility: assert property (
+        @(posedge clk_core) disable iff (rst_core)
+        !protocol_error |-> update_valid == observed_pair_pipeline_valid);
+    ap_selected_nonempty_bounded: assert property (
+        @(posedge clk_core) disable iff (rst_core)
+        update_valid |-> $countones(update_selected_mask) inside {[1:4]});
+    ap_selected_subset: assert property (@(posedge clk_core) disable iff (rst_core)
+        update_valid
+        |-> (update_selected_mask & ~observed_remaining_mask) == 0);
+    ap_select_and_clear: assert property (@(posedge clk_core) disable iff (rst_core)
+        update_accept
+        |=> observed_remaining_mask
+            == ($past(observed_remaining_mask)
+                & ~$past(update_selected_mask)));
+    ap_update_stable_on_stall: assert property (
+        @(posedge clk_core) disable iff (rst_core)
+        update_valid && !update_ready
+        |=> update_valid
+            && $stable({update_block, update_row, update_delta,
+                        update_selected_mask}));
+    ap_row_done_clear: assert property (@(posedge clk_core) disable iff (rst_core)
+        row_done |-> observed_remaining_mask == 0);
+    ap_fault_quarantine: assert property (@(posedge clk_core) disable iff (rst_core)
+        protocol_error |-> !weight_fill_ready && !row_ready && !update_valid);
+    ap_reset_isolation: assert property (@(posedge clk_core)
+        rst_core && $past(rst_core)
+        |-> !weight_fill_ready && !weight_fill_accept
+            && !row_ready && !row_accept
+            && !update_valid && !update_accept && !row_done
+            && !protocol_error);
+
+    cp_four_ii1_groups: cover property (@(posedge clk_core) disable iff (rst_core)
+        update_accept ##1 update_accept ##1 update_accept ##1 update_accept);
+    cp_full_k4: cover property (@(posedge clk_core) disable iff (rst_core)
+        update_accept && $countones(update_selected_mask) == 4);
+    cp_tail_k1: cover property (@(posedge clk_core) disable iff (rst_core)
+        update_accept && $countones(update_selected_mask) == 1);
+    cp_update_stall_release: cover property (@(posedge clk_core) disable iff (rst_core)
+        update_valid && !update_ready ##1 update_valid && update_ready);
+    cp_empty_row: cover property (@(posedge clk_core) disable iff (rst_core)
+        row_accept && observed_remaining_mask == 0 ##1 row_done);
+    cp_reset_requests_quiesced: cover property (@(posedge clk_core)
+        rst_core && weight_fill_valid && row_valid
+        && !weight_fill_accept && !row_accept && !update_accept);
+`endif
+endmodule
+
+`default_nettype wire

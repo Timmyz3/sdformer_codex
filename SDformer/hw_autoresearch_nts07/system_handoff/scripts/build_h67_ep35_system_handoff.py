@@ -151,7 +151,7 @@ for entry in manifest["files"]:
     if digest.hexdigest() != entry["sha256"] or path.stat().st_size != entry["size"]:
         errors.append(f"identity mismatch: {entry['path']}")
 if errors:
-    raise SystemExit("FAIL\n" + "\n".join(errors))
+    raise SystemExit("FAIL\\n" + "\\n".join(errors))
 print(f"PASS files={len(manifest['files'])} bytes={manifest['total_bytes']}")
 """
     destination.write_text(verifier, encoding="utf-8")

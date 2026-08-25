@@ -1,0 +1,3 @@
+rtl_m171/m171_fc2_bitmap_k4_group_replay_frontend.sv
+verif_m171/m171_fc2_bitmap_k4_group_replay_frontend_assertions.sv
+tb_m171/tb_m171_fc2_bitmap_k4_group_replay_frontend.sv

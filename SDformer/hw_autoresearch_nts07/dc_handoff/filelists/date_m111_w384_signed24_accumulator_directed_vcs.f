@@ -1,0 +1,3 @@
+rtl_m111/m111_w384_signed24_accumulator_frontend.sv
+verif_m111/m111_w384_signed24_accumulator_assertions.sv
+tb_m111/tb_m111_w384_signed24_accumulator_frontend.sv

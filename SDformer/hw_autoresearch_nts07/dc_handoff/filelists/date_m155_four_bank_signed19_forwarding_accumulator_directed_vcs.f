@@ -1,0 +1,3 @@
+rtl_m155/m155_four_bank_signed19_forwarding_accumulator.sv
+verif_m155/m155_four_bank_signed19_forwarding_accumulator_assertions.sv
+tb_m155/tb_m155_four_bank_signed19_forwarding_accumulator.sv

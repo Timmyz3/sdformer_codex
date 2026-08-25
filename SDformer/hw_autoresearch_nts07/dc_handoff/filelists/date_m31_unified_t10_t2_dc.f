@@ -1,0 +1,2 @@
+rtl_m31/qfit_signed_int8_mul96_pool.sv
+rtl_m31/qfit_atlif_unified_t10_t2_stream_core.sv

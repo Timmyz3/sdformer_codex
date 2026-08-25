@@ -1,0 +1,3 @@
+rtl_m177/m177_fc2_indexed_nonzero96_k4_replay_frontend.sv
+verif_m177/m177_fc2_indexed_nonzero96_k4_replay_frontend_assertions.sv
+tb_m177/tb_m177_fc2_indexed_nonzero96_k4_replay_frontend.sv

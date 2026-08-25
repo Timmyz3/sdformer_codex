@@ -86,6 +86,90 @@ def test_unannotated_objects_are_fail_closed() -> None:
     assert parse("clean report with no explicit total") is None
 
 
+def test_w2024_switching_table_is_parsed_by_driver_class() -> None:
+    parse_rows = load_function(
+        "audit_synopsys_postrun.py", "switching_activity_rows"
+    )
+    parse_coverage = load_function(
+        "audit_synopsys_postrun.py", "switching_coverage"
+    )
+    parse_unannotated = load_function(
+        "audit_synopsys_postrun.py", "unannotated_object_count"
+    )
+    header = """Switching Activity Overview Statistics for \"dut\"
+Object Type From Activity File (%) columns
+Nets 900(90.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 10(1.00%) 40(4.00%) 50(5.00%) 0(0.00%) 0(0.00%) 1000
+Nets Driven by
+Primary Input 98(98.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 2(2.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 100
+Sequential 300(100.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 300
+Combinational 502(83.67%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 8(1.33%) 40(6.67%) 50(8.33%) 0(0.00%) 0(0.00%) 600
+Static Probability Overview Statistics for \"dut\"
+Nets 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 0(0.00%) 1000(100.00%) 0(0.00%) 0(0.00%) 0(0.00%) 1000
+"""
+    rows = parse_rows(header)
+    assert rows["Nets"]["from_activity_file"]["count"] == 900
+    assert rows["Primary Input"]["from_activity_file"]["pct"] == 98.0
+    assert rows["Combinational"]["propagated"]["pct"] == 8.33
+    assert parse_coverage(header) == 96.0
+    assert parse_unannotated(header) == 0
+
+
+def test_pt_effective_sdc_removes_only_dc_corner_binding() -> None:
+    prepare = load_function(
+        "prepare_pt_sdc.py", "remove_operating_condition_commands"
+    )
+    source = (
+        "set_units -time ns\n"
+        "set_operating_conditions slow_corner -library slow_lib\n"
+        "create_clock -period 3.0 clk\n"
+    )
+    result, removed = prepare(source)
+    assert removed == 1
+    assert "set_operating_conditions" not in result
+    assert "set_units -time ns" in result
+    assert "create_clock -period 3.0 clk" in result
+
+
+def test_pt_effective_sdc_explicit_corner_neutral_requires_opt_in(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "explicit.sdc"
+    source.write_text("create_clock -period 3.0 clk\n", encoding="utf-8")
+    output = tmp_path / "effective.sdc"
+    rejected = run_script(
+        "prepare_pt_sdc.py",
+        "--source", str(source),
+        "--output", str(output),
+        "--operating-condition", "ff_test",
+    )
+    assert rejected.returncode != 0
+    accepted = run_script(
+        "prepare_pt_sdc.py",
+        "--source", str(source),
+        "--output", str(output),
+        "--operating-condition", "ff_test",
+        "--allow-corner-neutral-source",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "removed_dc_corner_commands=0" in output.read_text(encoding="utf-8")
+
+
+def test_synopsys_manifest_parses_effective_clock_uncertainty(
+    tmp_path: Path,
+) -> None:
+    parse = load_function(
+        "write_synopsys_run_manifest.py", "parse_clock_uncertainties"
+    )
+    sdc = tmp_path / "effective.sdc"
+    sdc.write_text(
+        "create_clock -period 3.0 clk\n"
+        "set_clock_uncertainty -setup 0.200 [get_clocks clk]\n"
+        "set_clock_uncertainty -hold 0.050 [get_clocks clk]\n",
+        encoding="utf-8",
+    )
+    assert parse(sdc) == {"setup": "0.200", "hold": "0.050"}
+
+
 def test_paper_population_contract_is_workload_specific() -> None:
     admit = load_function("report_activity_vcd.py", "paper_population_contract")
     fixed_rows = [
@@ -439,3 +523,72 @@ def test_ptsta_supports_separate_corner_run_directories() -> None:
     assert 'PT_RUN_DIR="${PT_RUN_DIR:-$DC_RUN_DIR}"' in text
     assert 'export OUTPUT_DIR="$PT_RUN_DIR"' in text
     assert '--run-dir "$PT_RUN_DIR"' in text
+
+
+def test_rtl_to_gate_saif_map_matches_multidimensional_registers(
+    tmp_path: Path,
+) -> None:
+    netlist = tmp_path / "mapped.v"
+    netlist.write_text(
+        """module dut(input clk);
+DFQD1 acc_q_reg_3__95__31_ (.CP(clk), .Q(n0));
+DFQD1 remaining_q_reg_0__48_ (.CP(clk), .Q(n1));
+DFQD1 scalar_q_reg (.CP(clk), .Q(n2));
+DFQD1 optimized_q_reg_1_ (.CP(clk), .Q(n3));
+endmodule
+""",
+        encoding="utf-8",
+    )
+    saif = tmp_path / "trace.saif"
+    saif.write_text(
+        r"""(SAIFILE
+ (INSTANCE tb
+  (INSTANCE dut
+   (NET
+    (acc_q\[3\]\[95\]\[31\]
+     (T0 1) (T1 1) (TX 0) (TC 2) (IG 0))
+    (remaining_q\[0\]\[48\]
+     (T0 1) (T1 1) (TX 0) (TC 2) (IG 0))
+    (scalar_q
+     (T0 1) (T1 1) (TX 0) (TC 2) (IG 0))))))
+""",
+        encoding="utf-8",
+    )
+    mapping = tmp_path / "map.tcl"
+    manifest = tmp_path / "map.json"
+    result = run_script(
+        "generate_rtl_to_gate_saif_map.py",
+        "--netlist",
+        str(netlist),
+        "--saif",
+        str(saif),
+        "--output",
+        str(mapping),
+        "--manifest",
+        str(manifest),
+    )
+    assert result.returncode == 0, result.stderr
+    text = mapping.read_text(encoding="utf-8")
+    assert "set rtl_gate_map_entries 3" in text
+    assert "-rtl {acc_q[3][95][31]} -gate {acc_q_reg_3__95__31_}" in text
+    assert "-rtl {remaining_q[0][48]} -gate {remaining_q_reg_0__48_}" in text
+    assert "-rtl {scalar_q} -gate {scalar_q_reg}" in text
+    assert "optimized_q" not in text
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["derived_register_instance_count"] == 4
+    assert payload["mapped_pair_count"] == 3
+
+    qnet_mapping = tmp_path / "qnet_map.tcl"
+    qnet_manifest = tmp_path / "qnet_map.json"
+    qnet_result = run_script(
+        "generate_rtl_to_gate_saif_map.py",
+        "--netlist", str(netlist),
+        "--saif", str(saif),
+        "--output", str(qnet_mapping),
+        "--manifest", str(qnet_manifest),
+        "--gate-target", "qnet",
+    )
+    assert qnet_result.returncode == 0, qnet_result.stderr
+    qnet_text = qnet_mapping.read_text(encoding="utf-8")
+    assert "-rtl {acc_q[3][95][31]} -gate {n0}" in qnet_text
+    assert json.loads(qnet_manifest.read_text(encoding="utf-8"))["gate_target"] == "qnet"

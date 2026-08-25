@@ -60,6 +60,7 @@ cd "$REPO"
   --samples "$SAMPLES" \
   --num-workers 0 \
   --ordered-trace \
+  --dual-line-trace \
   --bit-trace-dir "$TRACE_DIR" \
   --bit-trace-samples "$SAMPLES" \
   --bit-trace-windows 1 \

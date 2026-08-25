@@ -1,0 +1,6 @@
+rtl_m82/zero_bubble_elastic_pwp_stream.sv
+rtl_m85/guarded_wordpacked_pwp_stream.sv
+rtl_m99/phase_slack_guarded_wordpacked_pwp_stream.sv
+verif_m99/phase_slack_guarded_wordpacked_pwp_stream_assertions.sv
+tb_m99/tb_m99_phase_slack_guarded_wordpacked_pwp_stream.sv
+tb_m99/tb_m99_phase_slack_actual_records.sv

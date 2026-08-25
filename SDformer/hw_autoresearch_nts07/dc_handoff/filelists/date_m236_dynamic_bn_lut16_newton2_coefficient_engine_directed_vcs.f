@@ -1,0 +1,3 @@
+rtl_m236/m236_dynamic_bn_lut16_newton2_coefficient_engine.sv
+verif_m236/m236_dynamic_bn_lut16_newton2_coefficient_engine_assertions.sv
+tb_m236/tb_m236_dynamic_bn_lut16_newton2_coefficient_engine.sv

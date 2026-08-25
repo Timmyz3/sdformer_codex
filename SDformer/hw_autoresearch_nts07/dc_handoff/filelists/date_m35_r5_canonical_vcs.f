@@ -1,0 +1,3 @@
+rtl_m35_r4/qfit_complement_csd8_canonical.sv
+verif_m35_r5/qfit_complement_csd8_canonical_assertions.sv
+tb_m35_r5/tb_qfit_complement_csd8_canonical.sv

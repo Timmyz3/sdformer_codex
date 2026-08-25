@@ -1,0 +1,3 @@
+rtl_m154/m154_four_bank_destination_vector_supplier.sv
+verif_m154/m154_four_bank_destination_vector_supplier_assertions.sv
+tb_m154/tb_m154_four_bank_destination_vector_supplier.sv

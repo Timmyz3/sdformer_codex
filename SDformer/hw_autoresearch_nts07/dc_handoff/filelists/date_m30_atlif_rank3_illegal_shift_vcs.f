@@ -1,0 +1,2 @@
+rtl_m30/qfit_atlif_rank3_resident_stream_core.sv
+tb_m30/tb_qfit_atlif_rank3_illegal_shift.sv

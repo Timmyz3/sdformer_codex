@@ -55,11 +55,11 @@ update_timing -full
 report_analysis_coverage -status_details untested \
     > "$output_dir/reports/ptsta_analysis_coverage.rpt"
 report_global_timing > "$output_dir/reports/ptsta_global_timing.rpt"
-report_timing -delay_type max -max_paths 100 -nworst 10 -path_type full_clock_expanded \
+report_timing -delay_type max -slack_lesser_than 1000000 -max_paths 100 -nworst 10 -path_type full_clock_expanded -significant_digits 4 \
     > "$output_dir/reports/ptsta_timing_setup.rpt"
-report_timing -delay_type min -max_paths 100 -nworst 10 -path_type full_clock_expanded \
+report_timing -delay_type min -slack_lesser_than 1000000 -max_paths 100 -nworst 10 -path_type full_clock_expanded -significant_digits 4 \
     > "$output_dir/reports/ptsta_timing_hold.rpt"
-report_constraint -all_violators -verbose \
+report_constraint -all_violators -verbose -significant_digits 4 \
     > "$output_dir/reports/ptsta_constraint_violators.rpt"
 write_sdf "$output_dir/netlist/${design_name}.sdf"
 quit

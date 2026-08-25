@@ -1,0 +1,1 @@
+rtl_qfit/qfit_dual_line_descriptor_resident_engine.sv

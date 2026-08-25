@@ -318,7 +318,8 @@ module tb_qfit_local5_score_projection_postg0 #(
         end
     end
 
-    always_ff @(posedge clk_core) begin
+    // VCS ICPD: do not mix always_ff with initial assignment of the same integer.
+    always @(posedge clk_core) begin
         if (dump_active)
             dump_measured_cycles <= dump_measured_cycles + 1;
     end
@@ -526,6 +527,16 @@ module tb_qfit_local5_score_projection_postg0 #(
         repeat (30_000_000) @(posedge clk_core);
         $fatal(1, "Local5 score-to-projection timeout");
     end
+
+`ifdef SNPS_FSDB
+    string fsdb_file;
+    initial begin
+        if ($value$plusargs("FSDB_FILE=%s", fsdb_file)) begin
+            $fsdbDumpfile(fsdb_file);
+            $fsdbDumpvars(0, tb_qfit_local5_score_projection_postg0);
+        end
+    end
+`endif
 endmodule
 
 `default_nettype wire

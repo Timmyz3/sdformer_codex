@@ -1,0 +1,3 @@
+rtl_m184/m184_fc2_dual_window_k8_fixed_bank_frontend.sv
+verif_m184/m184_fc2_dual_window_k8_fixed_bank_frontend_assertions.sv
+tb_m184/tb_m184_fc2_dual_window_k8_fixed_bank_frontend.sv

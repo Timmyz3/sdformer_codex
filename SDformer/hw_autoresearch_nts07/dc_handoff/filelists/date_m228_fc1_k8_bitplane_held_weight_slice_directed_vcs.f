@@ -1,0 +1,3 @@
+rtl_m228/m228_fc1_k8_bitplane_held_weight_slice.sv
+verif_m228/m228_fc1_k8_bitplane_held_weight_slice_assertions.sv
+tb_m228/tb_m228_fc1_k8_bitplane_held_weight_slice.sv

@@ -265,17 +265,11 @@ module tb_h67_temporal_slot_flow_real_trace_2s #(
         integer lane;
         if (!rst_core) begin
             if (fixed_pair_valid && fixed_pair_ready && !u_fixed.pair_commit)
-                $fatal(1, "fixed pair rejected id=%0d next=%0d id_legal=%0d score_legal=%0d score0=%0d score1=%0d packet_ready=%0d",
-                    fixed_pair_id, u_fixed.u_encoder.next_pair_q,
-                    u_fixed.u_encoder.id_legal, u_fixed.u_encoder.score_legal,
-                    u_fixed.u_encoder.score0_w, u_fixed.u_encoder.score1_w,
-                    u_fixed.packet_ready);
+                $fatal(1, "fixed pair accepted without commit id=%0d pair_ready=%0d packet_ready=%0d",
+                    fixed_pair_id, fixed_pair_ready, u_fixed.packet_ready);
             if (rqtb_pair_valid && rqtb_pair_ready && !u_rqtb.pair_commit)
-                $fatal(1, "rqtb pair rejected id=%0d next=%0d id_legal=%0d score_legal=%0d score0=%0d score1=%0d packet_ready=%0d",
-                    rqtb_pair_id, u_rqtb.u_encoder.next_pair_q,
-                    u_rqtb.u_encoder.id_legal, u_rqtb.u_encoder.score_legal,
-                    u_rqtb.u_encoder.score0_w, u_rqtb.u_encoder.score1_w,
-                    u_rqtb.packet_ready);
+                $fatal(1, "rqtb pair accepted without commit id=%0d pair_ready=%0d packet_ready=%0d",
+                    rqtb_pair_id, rqtb_pair_ready, u_rqtb.packet_ready);
             if (fixed_row_active && !fixed_done)
                 fixed_occ_hist[fixed_fifo_occ] = fixed_occ_hist[fixed_fifo_occ] + 1;
             if (rqtb_row_active && !rqtb_done)

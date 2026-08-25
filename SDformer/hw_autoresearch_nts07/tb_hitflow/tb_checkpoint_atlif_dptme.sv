@@ -110,6 +110,8 @@ module tb_checkpoint_atlif_dptme;
         $display("SIMULATOR=icarus");
 `elsif SIMULATOR_VERILATOR
         $display("SIMULATOR=verilator");
+`elsif SIMULATOR_VCS
+        $display("SIMULATOR=Synopsys VCS");
 `else
         $fatal(1, "simulator identity define missing");
 `endif

@@ -1,0 +1,3 @@
+rtl_m218/m218_fc2_tagged_slice_service_island.sv
+verif_m218/m218_fc2_tagged_slice_service_assertions.sv
+tb_m218/tb_m218_fc2_tagged_slice_service_island.sv

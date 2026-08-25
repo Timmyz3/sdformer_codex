@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+task_dc_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+task_hw_root="$(cd "$task_dc_root/.." && pwd)"
+task_run="$task_dc_root/runs/m200_fc2_raw4_to_descriptor2_stable_compactor_logic_only_dc_3p000ns_r1_sealed_20260825"
+task_dc_shell="${DC_SHELL:-/opt/synopsys/syn/V-2023.12-SP3/bin/dc_shell}"
+task_lib="/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/timing_power_noise/NLDM/tcbn28hpcplusbwp35p140_180a/tcbn28hpcplusbwp35p140ssg0p9v125c.db"
+task_min_lib="/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/timing_power_noise/NLDM/tcbn28hpcplusbwp35p140_180a/tcbn28hpcplusbwp35p140ffg1p05vm40c.db"
+if [[ -e "$task_run" ]]; then echo "refusing to overwrite M200 sealed DC run" >&2; exit 2; fi
+[[ -x "$task_dc_shell" && -s "$task_lib" && -s "$task_min_lib" ]] || exit 3
+mkdir -p "$(dirname "$task_run")"; mkdir "$task_run"
+task_complete=0
+trap 'task_rc=$?; if [[ $task_complete -ne 1 ]]; then printf "status=FAILED_OR_INCOMPLETE_DO_NOT_CITE\nrunner_exit_code=%s\n" "$task_rc" > "$task_run/RUN_FAILED_OR_INCOMPLETE.txt"; fi' EXIT
+
+cd "$task_hw_root"
+task_files="dc_handoff/filelists/date_m200_fc2_raw4_to_descriptor2_stable_compactor_rtl.f"
+task_sdc="dc_handoff/constraints/date_m97_m85_logic_only_3ns.sdc"
+task_tcl="dc_handoff/scripts/run_dc_m135r3_flattened_logic_only.tcl"
+declare -A task_expected=(
+    ["rtl_m200/m200_fc2_raw4_to_descriptor2_stable_compactor.sv"]="d6aa9cf2e485fd53b1776b80d9e94d17ace0165e25c5a49a534561ae9e2a2027"
+    ["$task_files"]="acb75de145bbe43e56fb0d9d4bf96d8dca9f67aaaec5d8e633c7793705d85e6e"
+    ["$task_sdc"]="808307c496bd67843907b727acdfe18ea3b48565798f97cb55e689c70c1183f5"
+    ["$task_tcl"]="837b50d1c1700ef83edebd070ca3ebb6a6de166a2d649272f7b597c13e56dbe9"
+    ["contracts/m200_fc2_raw4_to_descriptor2_stable_compactor_logic_only_dc_contract_r1_20260825.json"]="8602032f4d1bd8e05af55f82a68b5e2b2ba22cbf41ce42a126ab646b70c514c4"
+    ["contracts/m200_fc2_raw4_to_descriptor2_stable_compactor_vcs_contract_r1_20260825.json"]="0df527d4f0d6c145632a27b126acc055e6a3f51d3e6b7c41cdd229c442cd34e8"
+    ["dc_handoff/runs/m200_fc2_raw4_to_descriptor2_stable_compactor_vcs_r1_sealed_20260825/RUN_COMPLETE.txt"]="1a8522e816e87d3d3df24e1b42757667ae38789f5b9df60610e693a3bb25b1da"
+    ["results/m199_h67_fc2_decoupled_scanner_compactor_dse_r1_20260825/manifest.sha256"]="e23a72e2a59e4119a3d54eb78bcbf56dd768a165c1e883b364cf6cb4075c0c08"
+    ["results/m199_independent_hammer_review_r1_20260825/SHA256SUMS"]="ae383f764c40899579dbdc2b8592d80ef1c5079e5b7149662803dab48a341c00"
+    ["docs/359_DATE终局冻结_20260813.md"]="dedde7ce44c3e595098f25ce6550dc0f6dfd66ce7227bcffd3dab0426a7bdfc4"
+)
+: > "$task_run/preflight_sha_checks.txt"
+for task_path in "${!task_expected[@]}"; do
+    task_observed="$(sha256sum "$task_path" | awk '{print $1}')"
+    printf 'path=%s expected=%s observed=%s\n' "$task_path" "${task_expected[$task_path]}" "$task_observed" >> "$task_run/preflight_sha_checks.txt"
+    [[ "$task_observed" == "${task_expected[$task_path]}" ]] || exit 10
+done
+sha256sum "${!task_expected[@]}" > "$task_run/input_sha256.txt"
+
+export DESIGN_NAME="m200_fc2_raw4_to_descriptor2_stable_compactor"
+export HW_ROOT="$task_hw_root" RTL_FILELIST="$task_hw_root/$task_files"
+export LIB_DB="$task_lib" MIN_LIB_DB="$task_min_lib"
+export SDC_FILE="$task_hw_root/$task_sdc" OUTPUT_DIR="$task_run"
+export OPERATING_CONDITION="ssg0p9v125c"
+set +e
+"$task_dc_shell" -f "$task_hw_root/$task_tcl" > "$task_run/dc.log" 2>&1
+task_rc=$?
+set -e
+printf '%s\n' "$task_rc" > "$task_run/dc.rc"
+[[ "$task_rc" -eq 0 ]] || exit 20
+if grep -Eq 'ELAB-312|TIM-209|OPT-150|^Error:|^Fatal:' "$task_run/dc.log"; then exit 21; fi
+grep -Fq 'Thank you...' "$task_run/dc.log" || exit 22
+for task_report in area.rpt qor.rpt timing_setup.rpt timing_hold.rpt constraint_violators.rpt check_design_postcompile.rpt check_timing_postcompile.rpt resources_postcompile.rpt; do
+    [[ -s "$task_run/reports/$task_report" ]] || exit 30
+done
+[[ -s "$task_run/netlist/${DESIGN_NAME}_mapped.v" && -s "$task_run/netlist/${DESIGN_NAME}_mapped.sdc" && -s "$task_run/netlist/${DESIGN_NAME}.ddc" ]] || exit 31
+if grep -Fq 'slack (VIOLATED)' "$task_run/reports/timing_setup.rpt" "$task_run/reports/timing_hold.rpt"; then exit 32; fi
+grep -Fq 'slack (MET)' "$task_run/reports/timing_setup.rpt" || exit 33
+grep -Fq 'slack (MET)' "$task_run/reports/timing_hold.rpt" || exit 33
+[[ "$(grep -Fc 'This design has no violated constraints.' "$task_run/reports/constraint_violators.rpt")" -eq 5 ]] || exit 34
+[[ "$(tr -d '[:space:]' < "$task_run/reports/check_design_postcompile.rpt")" == "1" ]] || exit 35
+[[ "$(tail -n 1 "$task_run/reports/check_timing_postcompile.rpt" | tr -d '[:space:]')" == "1" ]] || exit 36
+grep -Fq 'Number of macros/black boxes:               0' "$task_run/reports/area.rpt" || exit 37
+if grep -Eq 'DW_mult|mult_[0-9]' "$task_run/reports/resources_postcompile.rpt"; then exit 38; fi
+
+task_area="$(awk '/Total cell area:/ {print $4; exit}' "$task_run/reports/area.rpt")"
+task_cells="$(awk '/Number of cells:/ {print $4; exit}' "$task_run/reports/area.rpt")"
+task_seq="$(awk '/Number of sequential cells:/ {print $5; exit}' "$task_run/reports/area.rpt")"
+task_levels="$(awk '/Levels of Logic:/ {print $4; exit}' "$task_run/reports/qor.rpt")"
+task_path="$(awk '/Critical Path Length:/ {print $4; exit}' "$task_run/reports/qor.rpt")"
+task_setup="$(awk '/slack \(MET\)/ {print $3; exit}' "$task_run/reports/timing_setup.rpt")"
+task_hold="$(awk '/slack \(MET\)/ {print $3; exit}' "$task_run/reports/timing_hold.rpt")"
+awk -v x="$task_area" 'BEGIN {exit !(x < 6000.0)}' || exit 39
+awk -v x="$task_cells" 'BEGIN {exit !(x < 8000)}' || exit 40
+awk -v x="$task_seq" 'BEGIN {exit !(x < 1000)}' || exit 41
+awk -v x="$task_setup" 'BEGIN {exit !(x >= 0.5)}' || exit 42
+awk -v x="$task_hold" 'BEGIN {exit !(x >= 0.0)}' || exit 43
+awk -v x="$task_levels" 'BEGIN {exit !(x <= 40)}' || exit 44
+
+task_additive_total="$(awk -v a="$task_area" 'BEGIN {printf "%.6f", 37144.673821+a}')"
+task_additive_density="$(awk -v a="$task_area" 'BEGIN {printf "%.9f", 1.2413530123517351/((37144.673821+a)/37144.673821)}')"
+{
+    echo "status=PASS_M200_FC2_RAW4_TO_DESCRIPTOR2_STABLE_COMPACTOR_LOGIC_ONLY_DC_3NS"
+    echo "exact_sha=true"
+    echo "tool=Synopsys_DC_V-2023.12-SP3"
+    echo "clock_period_ns=3.000"
+    echo "clock_network=ideal"
+    echo "wireload=ZeroWireload"
+    echo "cell_area_um2=$task_area"
+    echo "cell_count=$task_cells"
+    echo "sequential_cells=$task_seq"
+    echo "logic_levels=$task_levels"
+    echo "critical_path_length_ns=$task_path"
+    echo "setup_worst_slack_ns=$task_setup"
+    echo "hold_worst_slack_ns=$task_hold"
+    echo "macro_count=0"
+    echo "multipliers_in_mapped_resource_report=0"
+    echo "m199_stage_aware_abstract_speed=1.2413530123517351"
+    echo "m186_plus_m200_additive_logic_area_um2=$task_additive_total"
+    echo "conditional_additive_throughput_per_area=$task_additive_density"
+    echo "standalone_compactor_area_only=true"
+    echo "integrated_frontend=false"
+    echo "weight_sram_response=false"
+    echo "complete_fc2=false"
+    echo "physical_speedup=false"
+    echo "system_speedup=false"
+    echo "paper_ppa_ready=false"
+    echo "headline=false"
+} > "$task_run/RUN_COMPLETE.txt"
+sha256sum "$task_run"/dc.log "$task_run"/reports/*.rpt "$task_run"/netlist/* "$task_run"/RUN_COMPLETE.txt > "$task_run/evidence_manifest.sha256"
+sha256sum "dc_handoff/scripts/run_dc_m200_fc2_raw4_to_descriptor2_stable_compactor_logic_only.sh" > "$task_run/runner_sha256.txt"
+task_complete=1
+echo "PASS M200 FC2 raw4-to-descriptor2 stable compactor logic-only DC sealed at $task_run"

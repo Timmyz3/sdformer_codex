@@ -15,7 +15,7 @@ INIT_ANCHOR = """    model.to(device)
 INIT_PATCH = """    model.to(device)
     model.init_weights()
     def _h9_is_overlay_key(key):
-        markers = (".linear_v.", ".bn_v.", ".sn_v.", "._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta", ".spiking_neuron.thresh", ".spiking_neuron.center")
+        markers = (".linear_v.", ".bn_v.", ".sn_v.", "._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta", ".spiking_neuron.thresh", ".spiking_neuron.center", ".temporal_factor_left", ".temporal_factor_right")
         return any(marker in key for marker in markers)
 
     def _h9_load_profile_checkpoint(checkpoint, model, device, remap=None):

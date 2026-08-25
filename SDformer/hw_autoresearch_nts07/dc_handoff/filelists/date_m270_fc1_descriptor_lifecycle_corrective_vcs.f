@@ -1,0 +1,3 @@
+rtl_m270/m270_fc1_descriptor_lifecycle_wrapper.sv
+verif_m270/m270_fc1_descriptor_lifecycle_assertions.sv
+tb_m270/tb_m270_fc1_descriptor_lifecycle_wrapper.sv

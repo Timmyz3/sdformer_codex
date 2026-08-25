@@ -1,0 +1,5 @@
+rtl_m66/qfit_k4_parent_delta_p8_l96_ctx16_lookahead.sv
+rtl_m66/qfit_m66_m53_schedule_bridge_lookahead.sv
+verif_m54/qfit_k4_parent_delta_p8_l96_ctx16_assertions.sv
+verif_m66/qfit_k4_parent_delta_lookahead_assertions.sv
+tb_m66/tb_m66_m53_schedule_bridge_lookahead.sv

@@ -1,0 +1,3 @@
+rtl_m149/m149_destination_conflict_resolved_k4_combiner.sv
+verif_m149/m149_destination_conflict_resolved_k4_combiner_assertions.sv
+tb_m149/tb_m149_destination_conflict_resolved_k4_combiner.sv

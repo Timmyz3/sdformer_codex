@@ -1,0 +1,3 @@
+rtl_m104/m104_held_weight_correction_broadcaster.sv
+verif_m104/m104_held_weight_correction_broadcaster_assertions.sv
+tb_m104/tb_m104_held_weight_correction_broadcaster.sv

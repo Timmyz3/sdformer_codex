@@ -109,6 +109,8 @@ module tb_hitflow_dptme_array;
         $display("SIMULATOR=icarus");
 `elsif SIMULATOR_VERILATOR
         $display("SIMULATOR=verilator");
+`elsif SIMULATOR_VCS
+        $display("SIMULATOR=Synopsys VCS");
 `else
         $fatal(1, "simulator identity define missing");
 `endif

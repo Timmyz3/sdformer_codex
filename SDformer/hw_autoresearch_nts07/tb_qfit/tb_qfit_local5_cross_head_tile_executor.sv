@@ -249,7 +249,11 @@ module tb_qfit_local5_cross_head_tile_executor;
     assign weight_rsp_data = 8'(weight_value(weight_lane_q, weight_out_q));
     assign weight_rsp_error = 1'b0;
 
-    always_ff @(posedge clk_core) begin
+    // Testbench service model: token/weight counters are initialized by the
+    // stimulus process and updated here, so this is intentionally not
+    // always_ff. VCS correctly rejects multiple-process variables in
+    // always_ff; Verilator previously accepted this testbench idiom.
+    always @(posedge clk_core) begin
         if (rst_core) begin
             lfsr_q <= service_seed;
             token_pending_q <= 1'b0;

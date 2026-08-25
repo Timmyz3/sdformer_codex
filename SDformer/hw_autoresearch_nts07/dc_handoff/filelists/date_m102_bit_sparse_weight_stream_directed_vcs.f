@@ -1,0 +1,4 @@
+rtl_m82/zero_bubble_elastic_pwp_stream.sv
+rtl_m102/m102_bit_sparse_weight_stream.sv
+verif_m102/m102_bit_sparse_weight_stream_assertions.sv
+tb_m102/tb_m102_bit_sparse_weight_stream.sv

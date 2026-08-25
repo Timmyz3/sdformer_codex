@@ -1,0 +1,3 @@
+rtl_m146/m146_four_bank_age_queue_scheduler.sv
+verif_m146/m146_four_bank_age_queue_scheduler_assertions.sv
+tb_m146/tb_m146_four_bank_age_queue_scheduler.sv

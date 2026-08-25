@@ -5,6 +5,7 @@ set lib_db [file normalize $::env(LIB_DB)]
 set mapped_netlist [file normalize $::env(MAPPED_NETLIST)]
 set svf_file [file normalize $::env(SVF_FILE)]
 set output_dir [file normalize $::env(OUTPUT_DIR)]
+set implementation_top $::env(IMPLEMENTATION_TOP)
 
 file mkdir "$output_dir/reports"
 set_svf $svf_file
@@ -26,13 +27,34 @@ while {[gets $fp line] >= 0} {
 close $fp
 
 read_sverilog -r $rtl_files
-set_top r:/WORK/$design_name
+# The descriptor engines use a protocol-bounded 4-bit index for a 12-entry
+# array. Formality otherwise treats the unreachable values 12..15 as a fatal
+# interpretation diagnostic before equivalence can run. Keep that descriptor-
+# only diagnostic visible as a warning and let compare-point verification prove
+# the netlist. M31 uses statically bounded phase slices and must never rely on
+# this filter.
+if {$design_name eq "qfit_dual_line_descriptor_resident_engine"
+        || $design_name eq "qfit_dual_line_descriptor_stateful_engine"} {
+    set_mismatch_message_filter -warn FMR_ELAB-147
+}
+if {[info exists ::env(ELAB_PARAMETERS)] && $::env(ELAB_PARAMETERS) ne ""} {
+    set_top r:/WORK/$design_name -parameter $::env(ELAB_PARAMETERS)
+} else {
+    set_top r:/WORK/$design_name
+}
 read_verilog -i $mapped_netlist
-set_top i:/WORK/$design_name
+set_top i:/WORK/$implementation_top
 match
 report_unmatched_points > "$output_dir/reports/formality_unmatched.rpt"
 set verification_succeeded [verify]
-report_verification -verbose > "$output_dir/reports/formality_verify.rpt"
+if {[llength [info commands report_failing_points]] > 0} {
+    report_failing_points > "$output_dir/reports/formality_verify.rpt"
+} else {
+    redirect "$output_dir/reports/formality_verify.rpt" {
+        echo "verify returned $verification_succeeded"
+        report_status
+    }
+}
 set status_fp [open "$output_dir/reports/formality_status.txt" w]
 if {$verification_succeeded} {
     puts $status_fp "PASS"

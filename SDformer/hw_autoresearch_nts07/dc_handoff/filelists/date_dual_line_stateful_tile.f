@@ -1,0 +1,4 @@
+rtl_qfit/qfit_dual_line_tile_selector.sv
+rtl_qfit/qfit_dual_line_source_streamer.sv
+rtl_qfit/qfit_dual_line_tile_executor.sv
+rtl_qfit/qfit_dual_line_stateful_tile_top.sv

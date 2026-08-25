@@ -11,6 +11,34 @@ SPEC.loader.exec_module(MODULE)
 
 
 class FullNetworkLedgerTest(unittest.TestCase):
+    def test_multisample_attention_anchor_scales_exact_stage_means(self):
+        receipt = {
+            "schema": "h67_attention_multisample_vcs_anchor_v1",
+            "status": "PASS_FRESH_VCS_RTL",
+            "identity": "H67 ep35",
+            "sample_count": 10,
+            "rows": 1380,
+            "rows_per_sample": 138,
+            "tokens_per_row": 450,
+            "fixed_cycles_total": 1057895,
+            "rqtb_cycles_total": 899249,
+            "fixed_rqtb_equal_mismatches": 0,
+            "fixed_rqtb_emitted_mismatches": 0,
+            "rtl_index_emitted_mismatches": 0,
+            "stages": [
+                {"stage": 0, "fixed_cycles_sum": 27866, "rqtb_cycles_sum": 23857},
+                {"stage": 1, "fixed_cycles_sum": 43484, "rqtb_cycles_sum": 36325},
+                {"stage": 2, "fixed_cycles_sum": 460806, "rqtb_cycles_sum": 383028},
+                {"stage": 3, "fixed_cycles_sum": 525739, "rqtb_cycles_sum": 456039},
+            ],
+        }
+        result = MODULE.attention_cycles_from_multisample_receipt(
+            receipt, {"0": 440, "1": 120, "2": 30, "3": 10}
+        )
+        self.assertEqual(result["fixed_cycles_per_frame"], 3656069)
+        self.assertEqual(result["rqtb_cycles_per_frame"], 3090731)
+        self.assertAlmostEqual(result["speedup"], 1.1829140096630861)
+
     def test_atlif_temporal_mac_and_streaming_accumulator_contract(self):
         source = {
             "name": "unit.atlif",

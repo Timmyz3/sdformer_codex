@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
 import json
@@ -311,11 +312,21 @@ class HardwareProfiler:
         model: torch.nn.Module,
         *,
         ordered_trace: bool = False,
+        dual_line_trace: bool = False,
         bit_trace_writer: Any | None = None,
+        dual_line_tile_writer: Any | None = None,
+        full_spatial_c4_writer: Any | None = None,
+        dual_line_cohort_writer: Any | None = None,
+        shift_residual_writer: Any | None = None,
     ):
         self.model = model
         self.ordered_trace = bool(ordered_trace)
+        self.dual_line_trace = bool(dual_line_trace)
         self.bit_trace_writer = bit_trace_writer
+        self.dual_line_tile_writer = dual_line_tile_writer
+        self.full_spatial_c4_writer = full_spatial_c4_writer
+        self.dual_line_cohort_writer = dual_line_cohort_writer
+        self.shift_residual_writer = shift_residual_writer
         self.handles: list[Any] = []
         self.h60_records: list[dict[str, Any]] = []
         self.activation_records: list[dict[str, Any]] = []
@@ -327,6 +338,7 @@ class HardwareProfiler:
         self._previous_stage_samples: dict[str, torch.Tensor] = {}
         self.operator_records: dict[str, dict[str, Any]] = {}
         self.execution_records: list[dict[str, Any]] = []
+        self.dual_line_records: list[dict[str, Any]] = []
         self._sample_call_index = 0
         self.atlif_records: dict[str, dict[str, Any]] = defaultdict(lambda: {
             "calls": 0,
@@ -671,6 +683,71 @@ class HardwareProfiler:
             row["activity_weighted_macs_proxy"] += (
                 dense_macs * input_active / input_elements if input_elements else 0.0
             )
+            if self.dual_line_trace and isinstance(
+                module, (torch.nn.Linear, torch.nn.Conv2d)
+            ):
+                from h67_dual_line_trace import profile_operator_temporal_work
+
+                operator_call_index = int(row["calls"]) - 1
+                temporal_work = profile_operator_temporal_work(
+                    module, input_tensor, temporal_steps=10
+                )
+                for work in temporal_work:
+                    self.dual_line_records.append({
+                        "sample_id": self.current_sample,
+                        "sample_key": self.current_sample_key,
+                        "sequence_key": self.current_sequence_key,
+                        "name": name,
+                        "operator": module.__class__.__name__,
+                        "scope": self._operator_scope(name),
+                        "operator_call_index": operator_call_index,
+                        **work,
+                    })
+                if self.dual_line_tile_writer is not None:
+                    self.dual_line_tile_writer.record_operator(
+                        module,
+                        input_tensor,
+                        name=name,
+                        sample_id=self.current_sample,
+                        sample_key=self.current_sample_key,
+                        sequence_key=self.current_sequence_key,
+                        operator_call_index=operator_call_index,
+                        temporal_steps=10,
+                    )
+                if self.dual_line_cohort_writer is not None:
+                    self.dual_line_cohort_writer.record_operator(
+                        module,
+                        input_tensor,
+                        reference_work=temporal_work,
+                        name=name,
+                        sample_id=self.current_sample,
+                        sample_key=self.current_sample_key,
+                        sequence_key=self.current_sequence_key,
+                        operator_call_index=operator_call_index,
+                        temporal_steps=10,
+                    )
+                if self.shift_residual_writer is not None:
+                    self.shift_residual_writer.record_operator(
+                        module,
+                        input_tensor,
+                        name=name,
+                        sample_id=self.current_sample,
+                        sample_key=self.current_sample_key,
+                        sequence_key=self.current_sequence_key,
+                        operator_call_index=operator_call_index,
+                        temporal_steps=10,
+                    )
+                if self.full_spatial_c4_writer is not None:
+                    self.full_spatial_c4_writer.record_operator(
+                        module,
+                        input_tensor,
+                        name=name,
+                        sample_id=self.current_sample,
+                        sample_key=self.current_sample_key,
+                        sequence_key=self.current_sequence_key,
+                        operator_call_index=operator_call_index,
+                        temporal_steps=10,
+                    )
             self._record_execution(
                 kind="operator",
                 name=name,
@@ -1220,6 +1297,7 @@ class HardwareProfiler:
             "h60_by_block": self._aggregate_numeric(self.h60_records, h60_keys, "name"),
             "h60_by_stage": self._aggregate_numeric(self.h60_records, h60_keys, "stage"),
             "activation_records": self.activation_records,
+            "dual_line_records": self.dual_line_records,
             "activation_by_kind": sorted(act_by_kind.values(), key=lambda row: row["kind"]),
             "cross_sample_by_stage": sorted(cross_sample_by_stage.values(), key=lambda row: row["name"]),
             "atlif_rows": atlif_rows,
@@ -1502,6 +1580,71 @@ def main() -> int:
         help="store compressed stage/block-ordered Delta and TTB count traces",
     )
     parser.add_argument(
+        "--dual-line-trace",
+        action="store_true",
+        help="emit exact per-operator/per-timestep Local versus Motion source work",
+    )
+    parser.add_argument(
+        "--dual-line-tile-dir",
+        type=Path,
+        default=None,
+        help="optional deterministic real 256-bit Local/Motion tile descriptors",
+    )
+    parser.add_argument("--dual-line-tile-bits", type=int, default=256)
+    parser.add_argument("--dual-line-tile-pairs-per-call", type=int, default=4)
+    parser.add_argument(
+        "--dual-line-cohort-census-dir",
+        type=Path,
+        default=None,
+        help="optional exact streaming T10 Local/Motion coefficient-cohort census",
+    )
+    parser.add_argument("--cohort-census-source-chunk-size", type=int, default=256)
+    parser.add_argument("--cohort-census-row-block-size", type=int, default=512)
+    parser.add_argument("--cohort-census-max-working-set-mib", type=int, default=256)
+    parser.add_argument(
+        "--shift-residual-census-dir",
+        type=Path,
+        default=None,
+        help="optional exact T10 Conv2d shift-compensated residual opportunity census",
+    )
+    parser.add_argument("--shift-residual-radius", type=int, default=1)
+    parser.add_argument("--shift-residual-output-tile", type=int, nargs=2, default=(16, 16))
+    parser.add_argument("--shift-residual-source-chunk-size", type=int, default=256)
+    parser.add_argument("--shift-residual-accumulator-bits", type=int, default=24)
+    parser.add_argument("--shift-residual-expected-operator-calls", type=int, default=0)
+    parser.add_argument("--shift-residual-expected-exact-calls", type=int, default=0)
+    parser.add_argument(
+        "--full-spatial-c4-dir",
+        type=Path,
+        default=None,
+        help="optional exact full-spatial adjacent-C4 direct-M4 sufficient statistics",
+    )
+    parser.add_argument(
+        "--full-spatial-c4-dependency-audit",
+        type=Path,
+        default=None,
+        help="identity-locked dependency audit defining the direct-M4 producer allowlist",
+    )
+    parser.add_argument(
+        "--full-spatial-c4-dependency-manifest",
+        type=Path,
+        default=None,
+        help="v2 dependency manifest content-bound to the M17 audit",
+    )
+    parser.add_argument(
+        "--full-spatial-c4-dependency-events",
+        type=Path,
+        default=None,
+        help="dependency JSONL used to bind the exact sample and producer call indices",
+    )
+    parser.add_argument(
+        "--dependency-trace-dir",
+        type=Path,
+        default=None,
+        help="optional metadata-only storage/version and functional-op dependency DAG",
+    )
+    parser.add_argument("--dependency-trace-samples", type=int, default=1)
+    parser.add_argument(
         "--bit-trace-dir",
         type=Path,
         default=None,
@@ -1578,13 +1721,177 @@ def main() -> int:
                 },
             }
         )
+    dual_line_tile_writer = None
+    if args.dual_line_tile_dir is not None:
+        if not args.dual_line_trace:
+            raise ValueError("--dual-line-tile-dir requires --dual-line-trace")
+        from h67_dual_line_tile_trace import DualLineTileTraceWriter
+
+        dual_line_tile_writer = DualLineTileTraceWriter(
+            args.dual_line_tile_dir,
+            tile_bits=args.dual_line_tile_bits,
+            pairs_per_call=args.dual_line_tile_pairs_per_call,
+        )
+        tile_writer_source = Path(__file__).with_name("h67_dual_line_tile_trace.py")
+        dual_line_tile_writer.bind_run_context({
+            "artifact_identity": artifact_identity,
+            "eval_protocol": eval_protocol,
+            "checkpoint_load_audit": checkpoint_load_audit,
+            "source_sha256": {
+                "profiler": file_sha256(Path(__file__).resolve()),
+                "tile_writer": file_sha256(tile_writer_source.resolve()),
+            },
+        })
+    dual_line_cohort_writer = None
+    if args.dual_line_cohort_census_dir is not None:
+        if not args.dual_line_trace:
+            raise ValueError(
+                "--dual-line-cohort-census-dir requires --dual-line-trace"
+            )
+        from h67_dual_line_cohort_census import StreamingCohortCensusWriter
+
+        dual_line_cohort_writer = StreamingCohortCensusWriter(
+            args.dual_line_cohort_census_dir,
+            temporal_steps=10,
+            source_chunk_size=args.cohort_census_source_chunk_size,
+            requested_row_block_size=args.cohort_census_row_block_size,
+            max_working_set_mib=args.cohort_census_max_working_set_mib,
+        )
+        cohort_writer_source = Path(__file__).with_name(
+            "h67_dual_line_cohort_census.py"
+        )
+        dual_line_reference_source = Path(__file__).with_name(
+            "h67_dual_line_trace.py"
+        )
+        dual_line_cohort_writer.bind_run_context({
+            "artifact_identity": artifact_identity,
+            "eval_protocol": eval_protocol,
+            "checkpoint_load_audit": checkpoint_load_audit,
+            "source_sha256": {
+                "profiler": file_sha256(Path(__file__).resolve()),
+                "cohort_census_writer": file_sha256(cohort_writer_source.resolve()),
+                "dual_line_reference": file_sha256(
+                    dual_line_reference_source.resolve()
+                ),
+            },
+        })
+    shift_residual_writer = None
+    if args.shift_residual_census_dir is not None:
+        if not args.dual_line_trace:
+            raise ValueError(
+                "--shift-residual-census-dir requires --dual-line-trace"
+            )
+        from h67_shift_residual_census import StreamingShiftResidualCensusWriter
+
+        shift_residual_writer = StreamingShiftResidualCensusWriter(
+            args.shift_residual_census_dir,
+            temporal_steps=10,
+            shift_radius=args.shift_residual_radius,
+            output_tile=tuple(args.shift_residual_output_tile),
+            source_chunk_size=args.shift_residual_source_chunk_size,
+            accumulator_bits=args.shift_residual_accumulator_bits,
+            expected_samples=args.samples,
+            expected_operator_calls=args.shift_residual_expected_operator_calls,
+            expected_exact_calls=args.shift_residual_expected_exact_calls,
+        )
+        shift_writer_source = Path(__file__).with_name(
+            "h67_shift_residual_census.py"
+        )
+        shift_eval_protocol = dict(eval_protocol)
+        shift_eval_protocol.update({
+            "temporal_steps": 10,
+            "requested_profile_samples": args.samples,
+            "expected_operator_calls": args.shift_residual_expected_operator_calls,
+            "expected_exact_calls": args.shift_residual_expected_exact_calls,
+            "temporal_axis_contract": "hook_input_dim0_is_T10_and_dim1_is_eval_batch",
+        })
+        shift_residual_writer.bind_run_context({
+            "artifact_identity": artifact_identity,
+            "eval_protocol": shift_eval_protocol,
+            "checkpoint_load_audit": checkpoint_load_audit,
+            "source_sha256": {
+                "profiler": file_sha256(Path(__file__).resolve()),
+                "shift_residual_census_writer": file_sha256(
+                    shift_writer_source.resolve()
+                ),
+            },
+        })
+    full_spatial_c4_writer = None
+    full_spatial_inputs = (
+        args.full_spatial_c4_dir, args.full_spatial_c4_dependency_audit,
+        args.full_spatial_c4_dependency_manifest, args.full_spatial_c4_dependency_events,
+    )
+    if any(value is not None for value in full_spatial_inputs):
+        if any(value is None for value in full_spatial_inputs):
+            raise ValueError(
+                "full-spatial C4 output, audit, manifest, and events must be provided together"
+            )
+        if not args.dual_line_trace or args.samples != 1:
+            raise ValueError("M17 v2 requires --dual-line-trace and exactly one sample")
+        dependency_audit_path = args.full_spatial_c4_dependency_audit.resolve()
+        dependency_manifest_path = args.full_spatial_c4_dependency_manifest.resolve()
+        dependency_events_path = args.full_spatial_c4_dependency_events.resolve()
+        from h67_full_spatial_c4_oracle import (
+            H67FullSpatialC4OracleWriter, validate_dependency_contract,
+        )
+
+        allowed_calls = validate_dependency_contract(
+            dependency_manifest_path, dependency_audit_path, dependency_events_path,
+            artifact_identity=artifact_identity, eval_protocol=eval_protocol,
+            checkpoint_load_audit=checkpoint_load_audit,
+        )
+
+        full_spatial_c4_writer = H67FullSpatialC4OracleWriter(
+            args.full_spatial_c4_dir, allowed_calls=allowed_calls,
+        )
+        full_oracle_source = Path(__file__).with_name("h67_full_spatial_c4_oracle.py")
+        full_spatial_c4_writer.bind_run_context({
+            "artifact_identity": artifact_identity,
+            "eval_protocol": eval_protocol,
+            "checkpoint_load_audit": checkpoint_load_audit,
+            "dependency_audit_path": str(dependency_audit_path),
+            "dependency_audit_sha256": file_sha256(dependency_audit_path),
+            "dependency_manifest_path": str(dependency_manifest_path),
+            "dependency_manifest_sha256": file_sha256(dependency_manifest_path),
+            "dependency_events_path": str(dependency_events_path),
+            "dependency_events_sha256": file_sha256(dependency_events_path),
+            "source_sha256": {
+                "profiler": file_sha256(Path(__file__).resolve()),
+                "full_spatial_c4_writer": file_sha256(full_oracle_source.resolve()),
+            },
+        })
+    dependency_trace_writer = None
+    if args.dependency_trace_dir is not None:
+        from h67_dependency_trace import TensorDependencyTraceWriter
+
+        dependency_trace_writer = TensorDependencyTraceWriter(
+            args.dependency_trace_dir,
+            sample_limit=args.dependency_trace_samples,
+        )
+        dependency_writer_source = Path(__file__).with_name("h67_dependency_trace.py")
+        dependency_trace_writer.bind_run_context({
+            "artifact_identity": artifact_identity,
+            "eval_protocol": eval_protocol,
+            "checkpoint_load_audit": checkpoint_load_audit,
+            "source_sha256": {
+                "profiler": file_sha256(Path(__file__).resolve()),
+                "dependency_writer": file_sha256(dependency_writer_source.resolve()),
+            },
+        })
+        dependency_trace_writer.attach(model)
     profiler = HardwareProfiler(
         model,
         ordered_trace=args.ordered_trace,
+        dual_line_trace=args.dual_line_trace,
         bit_trace_writer=bit_trace_writer,
+        dual_line_tile_writer=dual_line_tile_writer,
+        full_spatial_c4_writer=full_spatial_c4_writer,
+        dual_line_cohort_writer=dual_line_cohort_writer,
+        shift_residual_writer=shift_residual_writer,
     )
     profiler.attach()
     processed = 0
+    profile_completed = False
     try:
         with torch.no_grad():
             for chunk, mask, label in loader:
@@ -1601,10 +1908,24 @@ def main() -> int:
                     sample_key=sample_key,
                     sequence_key=sequence_key,
                 )
+                if dependency_trace_writer is not None:
+                    dependency_trace_writer.begin_sample(
+                        processed,
+                        sample_key=sample_key,
+                        sequence_key=sequence_key,
+                    )
                 x, transformed_label, transformed_mask = preprocess_chunk(
                     config, chunk, label, mask, transform_valid, device
                 )
-                output = model(x)
+                dependency_capture = (
+                    dependency_trace_writer.capture()
+                    if dependency_trace_writer is not None
+                    else contextlib.nullcontext()
+                )
+                with dependency_capture:
+                    output = model(x)
+                if dependency_trace_writer is not None:
+                    dependency_trace_writer.end_sample()
                 prediction = output["flow"][-1]
                 profiler.record_sample(
                     chunk=x,
@@ -1616,8 +1937,35 @@ def main() -> int:
                 processed += 1
                 if processed % 5 == 0:
                     print(f"[profile] processed {processed}/{args.samples}", flush=True)
+        if dual_line_cohort_writer is not None and processed <= 0:
+            raise RuntimeError("M24C cannot admit an empty profile")
+        if shift_residual_writer is not None and processed <= 0:
+            raise RuntimeError("M28A cannot admit an empty profile")
+        profile_completed = True
     finally:
-        profiler.close()
+        close_completed = False
+        try:
+            profiler.close()
+            if dual_line_tile_writer is not None:
+                dual_line_tile_writer.close()
+            if full_spatial_c4_writer is not None:
+                full_spatial_c4_writer.close()
+            if dependency_trace_writer is not None:
+                dependency_trace_writer.close()
+            close_completed = True
+        finally:
+            try:
+                if dual_line_cohort_writer is not None:
+                    if profile_completed and close_completed:
+                        dual_line_cohort_writer.close()
+                    else:
+                        dual_line_cohort_writer.abort("profiler did not complete")
+            finally:
+                if shift_residual_writer is not None:
+                    if profile_completed and close_completed:
+                        shift_residual_writer.close()
+                    else:
+                        shift_residual_writer.abort("profiler did not complete")
 
     try:
         from models.STSwinNet_SNN.atlif_ternary_psn import atlif_ternary_summary
@@ -1630,6 +1978,27 @@ def main() -> int:
         "checkpoint": str(checkpoint_path),
         "samples": processed,
         "ordered_trace": bool(args.ordered_trace),
+        "dual_line_trace": bool(args.dual_line_trace),
+        "dual_line_tile_manifest": (
+            str(dual_line_tile_writer.manifest_path)
+            if dual_line_tile_writer is not None else None
+        ),
+        "dual_line_cohort_census_manifest": (
+            str(dual_line_cohort_writer.manifest_path)
+            if dual_line_cohort_writer is not None else None
+        ),
+        "shift_residual_census_manifest": (
+            str(shift_residual_writer.manifest_path)
+            if shift_residual_writer is not None else None
+        ),
+        "full_spatial_c4_manifest": (
+            str(full_spatial_c4_writer.manifest_path)
+            if full_spatial_c4_writer is not None else None
+        ),
+        "dependency_trace_manifest": (
+            str(dependency_trace_writer.manifest_path)
+            if dependency_trace_writer is not None else None
+        ),
         "bit_trace_manifest": (
             str(bit_trace_writer.manifest_path)
             if bit_trace_writer is not None
@@ -1655,6 +2024,7 @@ def main() -> int:
     write_csv(args.output_dir / "atlif_activity.csv", result["summary"]["atlif_rows"])
     write_csv(args.output_dir / "operator_runtime.csv", result["summary"]["operator_rows"])
     write_csv(args.output_dir / "execution_trace.csv", result["summary"]["execution_records"])
+    write_csv(args.output_dir / "dual_line_operator_trace.csv", result["summary"]["dual_line_records"])
     write_csv(args.output_dir / "operator_by_scope.csv", result["summary"]["operator_by_scope"])
     write_csv(args.output_dir / "sample_workload.csv", result["summary"]["sample_records"])
     write_md(args.output_dir / "nts11_hardware_p0_profile.md", result)

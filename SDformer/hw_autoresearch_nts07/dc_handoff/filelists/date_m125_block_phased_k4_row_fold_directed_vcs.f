@@ -1,0 +1,3 @@
+rtl_m125/m125_block_phased_k4_row_fold.sv
+verif_m125/m125_block_phased_k4_row_fold_assertions.sv
+tb_m125/tb_m125_block_phased_k4_row_fold.sv

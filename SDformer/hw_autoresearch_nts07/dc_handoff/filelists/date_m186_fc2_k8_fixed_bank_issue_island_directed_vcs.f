@@ -1,0 +1,5 @@
+rtl_m184/m184_fc2_dual_window_k8_fixed_bank_frontend.sv
+rtl_m185/m185_fc2_k8_fixed_bank_accumulator.sv
+rtl_m186/m186_fc2_k8_fixed_bank_issue_island.sv
+verif_m186/m186_fc2_k8_fixed_bank_issue_island_assertions.sv
+tb_m186/tb_m186_fc2_k8_fixed_bank_issue_island.sv

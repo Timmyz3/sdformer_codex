@@ -1,0 +1,2 @@
+rtl_m84/hierarchical_pwp_bank_mapper.sv
+reviews/m84_hierarchical_pwp_bank_mapper_vcs_independent_hammer_r1_20260823/tb_m84_independent_directed_random.sv

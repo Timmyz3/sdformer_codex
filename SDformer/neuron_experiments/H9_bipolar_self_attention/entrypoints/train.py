@@ -48,7 +48,7 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
     from models.STSwinNet_SNN.bsa_attention import install_shiftmax_attention, set_shiftmax_attention_step, shiftmax_attention_summary, sync_independent_value_branch_from_k
 
     def _h9_is_overlay_key(key):
-        markers = (".linear_v.", ".bn_v.", ".sn_v.", "._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta", ".spiking_neuron.thresh", ".spiking_neuron.center")
+        markers = (".linear_v.", ".bn_v.", ".sn_v.", "._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta", ".spiking_neuron.thresh", ".spiking_neuron.center", ".temporal_factor_left", ".temporal_factor_right")
         return any(marker in key for marker in markers)
 
     def _h9_is_match_candidate_key(key):
@@ -76,6 +76,11 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
             _dropped_window_keys = []
             for _k in list(pretrained_dict.keys()):
                 if _k in _model_keys and _model_keys[_k].shape != pretrained_dict[_k].shape:
+                    if any(marker in _k for marker in (".temporal_factor_left", ".temporal_factor_right")):
+                        raise RuntimeError(
+                            "[M29] factor checkpoint rank/shape does not match config: "
+                            + _k
+                        )
                     del pretrained_dict[_k]
                     _dropped_window_keys.append(_k)
             if _dropped_window_keys:
@@ -168,6 +173,12 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
         print(f"[H9] installed Shiftmax attention: {len(installed_h9_bsa)} modules")
         print(f"[H9] attention targets: {installed_h9_bsa[:8]}{' ...' if len(installed_h9_bsa) > 8 else ''}")
 
+    from models.STSwinNet_SNN.pattern_paft import install_pattern_paft
+    installed_m71_paft = install_pattern_paft(
+        model, config.get("pattern_paft"), args.prev_runid)
+    if installed_m71_paft:
+        print(f"[M71] installed hardware-weighted PAFT hooks: {installed_m71_paft}")
+
     # ---- SimpleTernaryPSN (PSN+ternary, no ATLIF) ----
     from models.STSwinNet_SNN.simple_ternary_installer import install_simple_ternary_psn
     installed_st = install_simple_ternary_psn(model, config)
@@ -245,6 +256,12 @@ LOSS_PATCH = """                from models.STSwinNet_SNN.atlif_ternary_psn impo
                             f"unweighted_proxy={h9_gate_proxy.item():.9g}, "
                             f"weighted_penalty={h9_gate_cardinality_penalty.detach().item():.9g}"
                         )
+                from models.STSwinNet_SNN.pattern_paft import regularize_pattern_paft
+                m71_pattern_paft_penalty = regularize_pattern_paft(
+                    model, config.get("pattern_paft")
+                )
+                if m71_pattern_paft_penalty is not None:
+                    curr_loss = curr_loss + m71_pattern_paft_penalty / num_acc_steps
                 # print("loss: ", curr_loss.item())
 
                 if np.isnan(curr_loss.item()):
@@ -322,10 +339,14 @@ EPOCH_STATS_PATCH = """        print(
             f"train_samples_per_sec={train_samples_per_sec:.4f}, max_gpu_mem_gib={max_gpu_mem_gib:.3f}"
         )
         if config.get("atlif_ternary_psn", {}).get("enabled", False):
-            from models.STSwinNet_SNN.atlif_ternary_psn import atlif_ternary_summary
+            from models.STSwinNet_SNN.atlif_ternary_psn import atlif_temporal_factor_diagnostics, atlif_ternary_summary
             from models.STSwinNet_SNN.bsa_attention import shiftmax_attention_summary
             print(f"[H9] ATLIFTernaryPSN summary: {atlif_ternary_summary(model)}")
+            print(f"[M29] temporal factor diagnostics: {atlif_temporal_factor_diagnostics(model)}")
             print(f"[H9] Shiftmax attention summary: {shiftmax_attention_summary(model)}")
+        if config.get("pattern_paft", {}).get("enabled", False):
+            from models.STSwinNet_SNN.pattern_paft import pattern_paft_summary
+            print(f"[M71] PAFT summary: {pattern_paft_summary(model)}")
 """
 
 MLFLOW_METRIC_STEP_ANCHOR = """            mlflow.log_metric("train_loss", epoch_loss, step=epoch)
@@ -385,6 +406,19 @@ MLFLOW_MODEL_LOGGING_PATCH = """                if (
                     and use_mlflow_model_logging
                     and bool(config.get("runtime", {}).get("use_mlflow_model_logging", False))
                 ):
+"""
+
+MODEL_CHECKPOINT_SAVE_ANCHOR = """                    torch.save(model, checkpoint_path)
+"""
+
+MODEL_CHECKPOINT_SAVE_PATCH = """                    # Save only tensor state here.  Runtime-installed PAFT hooks may
+                    # contain local Python callables, so pickling the whole module is
+                    # neither portable nor guaranteed to succeed.  load_model()
+                    # explicitly accepts this model_state_dict container.
+                    torch.save(
+                        {"model_state_dict": model.state_dict()},
+                        checkpoint_path,
+                    )
 """
 
 STATE_SAVE_ANCHOR = """                    state_path = checkpoint_path.replace(".pth", "_state_dict.pth")
@@ -532,6 +566,7 @@ def _patch_source(source: str, baseline_entry: Path) -> str:
         (TRAIN_STEP_ANCHOR, TRAIN_STEP_PATCH),
         (SAVE_ANCHOR, SAVE_PATCH),
         (MLFLOW_MODEL_LOGGING_ANCHOR, MLFLOW_MODEL_LOGGING_PATCH),
+        (MODEL_CHECKPOINT_SAVE_ANCHOR, MODEL_CHECKPOINT_SAVE_PATCH),
         (STATE_SAVE_ANCHOR, STATE_SAVE_PATCH),
         (CHECKPOINT_PATH_ANCHOR, CHECKPOINT_PATH_PATCH),
         (LOSS_FUNCTION_ANCHOR, LOSS_FUNCTION_PATCH),

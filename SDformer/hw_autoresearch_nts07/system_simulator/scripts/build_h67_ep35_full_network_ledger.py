@@ -20,17 +20,17 @@ PROFILE = REPO / (
 )
 SAMPLES = 100
 
-LOCKED_INPUTS = {
-    PROFILE / "operator_runtime.csv": (
+LOCKED_INPUT_SHA256 = {
+    "operator_runtime.csv": (
         "9cb5ccfc15b83c680ca8c96a816df1cdd4b5c4d956bd5c2462175b175b1b6c85"
     ),
-    PROFILE / "activation_records.csv": (
+    "activation_records.csv": (
         "ce079fb40737bdf33f7328e919351e7cdb0f8358eef097dc8c4dbb66665063ee"
     ),
-    PROFILE / "atlif_activity.csv": (
+    "atlif_activity.csv": (
         "ba9053080c964d17645d0d21d5cb47bfc85c9e962050895ba05c7bf0ddee344b"
     ),
-    PROFILE / "sample_workload.csv": (
+    "sample_workload.csv": (
         "68da0e8e1e46e6196ecec2bc2467a664d4dad8b6894e3e4f4e95dfe737178cf2"
     ),
 }
@@ -44,8 +44,12 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def audit_inputs() -> None:
-    for path, expected in LOCKED_INPUTS.items():
+def locked_inputs(profile: Path) -> dict[Path, str]:
+    return {profile / name: digest for name, digest in LOCKED_INPUT_SHA256.items()}
+
+
+def audit_inputs(profile: Path) -> None:
+    for path, expected in locked_inputs(profile).items():
         if not path.is_file():
             raise RuntimeError(f"missing profile input: {path}")
         actual = sha256(path)
@@ -213,8 +217,92 @@ def build_activation_rows(rows: list[dict[str, str]], config: dict[str, Any]) ->
     return result
 
 
+def attention_cycles_from_multisample_receipt(
+    receipt: dict[str, Any], windows_per_frame: dict[str, int]
+) -> dict[str, Any]:
+    if (
+        receipt.get("schema") != "h67_attention_multisample_vcs_anchor_v1"
+        or receipt.get("status") != "PASS_FRESH_VCS_RTL"
+        or receipt.get("identity") != "H67 ep35"
+        or receipt.get("sample_count", 0) < 2
+        or receipt.get("rows")
+        != receipt.get("sample_count") * receipt.get("rows_per_sample", 0)
+        or receipt.get("tokens_per_row") != 450
+        or any(
+            receipt.get(key) != 0
+            for key in (
+                "fixed_rqtb_equal_mismatches",
+                "fixed_rqtb_emitted_mismatches",
+                "rtl_index_emitted_mismatches",
+            )
+        )
+    ):
+        raise RuntimeError("multisample VCS attention receipt contract mismatch")
+    sample_count = int(receipt["sample_count"])
+    stage_rows = []
+    fixed = 0
+    rqtb = 0
+    fixed_sum = 0
+    rqtb_sum = 0
+    if [row.get("stage") for row in receipt.get("stages", [])] != [0, 1, 2, 3]:
+        raise RuntimeError("multisample VCS attention stage order mismatch")
+    for row in receipt["stages"]:
+        stage = int(row["stage"])
+        windows = int(windows_per_frame[str(stage)])
+        selected_fixed_sum = int(row["fixed_cycles_sum"])
+        selected_rqtb_sum = int(row["rqtb_cycles_sum"])
+        fixed_numerator = selected_fixed_sum * windows
+        rqtb_numerator = selected_rqtb_sum * windows
+        if fixed_numerator % sample_count or rqtb_numerator % sample_count:
+            raise RuntimeError(
+                f"stage {stage} multisample mean does not scale to integral frame cycles"
+            )
+        frame_fixed = fixed_numerator // sample_count
+        frame_rqtb = rqtb_numerator // sample_count
+        fixed += frame_fixed
+        rqtb += frame_rqtb
+        fixed_sum += selected_fixed_sum
+        rqtb_sum += selected_rqtb_sum
+        stage_rows.append({
+            "stage": stage,
+            "sample_count": sample_count,
+            "selected_fixed_cycles_sum": selected_fixed_sum,
+            "selected_rqtb_cycles_sum": selected_rqtb_sum,
+            "selected_fixed_cycles_mean": selected_fixed_sum / sample_count,
+            "selected_rqtb_cycles_mean": selected_rqtb_sum / sample_count,
+            "windows_per_frame": windows,
+            "frame_fixed_cycles": frame_fixed,
+            "frame_rqtb_cycles": frame_rqtb,
+        })
+    if (
+        fixed_sum != int(receipt["fixed_cycles_total"])
+        or rqtb_sum != int(receipt["rqtb_cycles_total"])
+    ):
+        raise RuntimeError("multisample VCS attention receipt total mismatch")
+    return {
+        "evidence": "fresh_vcs_multisample10_selected_window_mean_by_stage",
+        "claim_boundary": (
+            "ten-sample mean of one selected T450 window per block, expanded by stage; "
+            "not every spatial window or full-frame RTL"
+        ),
+        "sample_count": sample_count,
+        "fixed_cycles_per_frame": fixed,
+        "rqtb_cycles_per_frame": rqtb,
+        "speedup": fixed / rqtb,
+        "stages": stage_rows,
+    }
+
+
 def attention_cycles(config: dict[str, Any]) -> dict[str, Any]:
     source = config["attention_anchor"]
+    if "receipt" in source:
+        receipt_path = REPO / source["receipt"]
+        if sha256(receipt_path) != source["receipt_sha256"]:
+            raise RuntimeError("multisample VCS attention receipt drift")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        return attention_cycles_from_multisample_receipt(
+            receipt, source["windows_per_frame"]
+        )
     source_doc = REPO / source["source_doc"]
     fair_log = REPO / source["fair_log"]
     if sha256(source_doc) != source["source_doc_sha256"]:
@@ -254,15 +342,22 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        default=PROFILE,
+        help="Profile100 directory; hashes remain locked to the frozen ep35 inputs.",
+    )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    audit_inputs()
+    profile = args.profile.resolve()
+    audit_inputs(profile)
     config = json.loads(args.config.read_text(encoding="utf-8"))
-    operators = build_operator_rows(read_csv(PROFILE / "operator_runtime.csv"), config)
-    atlif = build_atlif_rows(read_csv(PROFILE / "atlif_activity.csv"), config)
-    activations = build_activation_rows(read_csv(PROFILE / "activation_records.csv"), config)
-    workloads = read_csv(PROFILE / "sample_workload.csv")
+    operators = build_operator_rows(read_csv(profile / "operator_runtime.csv"), config)
+    atlif = build_atlif_rows(read_csv(profile / "atlif_activity.csv"), config)
+    activations = build_activation_rows(read_csv(profile / "activation_records.csv"), config)
+    workloads = read_csv(profile / "sample_workload.csv")
     if len(workloads) != SAMPLES:
         raise RuntimeError(f"expected {SAMPLES} sample workload rows, got {len(workloads)}")
     attention = attention_cycles(config)
@@ -302,7 +397,10 @@ def main() -> int:
         ],
         "samples": SAMPLES,
         "config": config,
-        "source_sha256": {str(path.relative_to(REPO)): digest for path, digest in LOCKED_INPUTS.items()},
+        "source_sha256": {
+            "profile100/{}".format(path.name): digest
+            for path, digest in locked_inputs(profile).items()
+        },
         "counts": {
             "operators": len(operators),
             "atlif_modules": len(atlif),

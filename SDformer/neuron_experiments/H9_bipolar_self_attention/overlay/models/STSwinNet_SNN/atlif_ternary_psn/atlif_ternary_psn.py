@@ -148,6 +148,8 @@ class ATLIFTernaryPSN(nn.Module):
         importance_momentum: float = 0.9,
         importance_scale: float = 0.0,
         importance_min_guard: float = 0.1,
+        temporal_factor_rank: int = 0,
+        temporal_factor_init: str = "balanced_svd",
     ) -> None:
         super().__init__()
         self.T = int(T)
@@ -225,11 +227,127 @@ class ATLIFTernaryPSN(nn.Module):
             nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
             nn.init.constant_(self.bias, -1.0)
             self.surrogate_function = None
+        self.temporal_factor_requested_rank = int(temporal_factor_rank)
+        self.temporal_factor_init = str(temporal_factor_init)
+        if self.temporal_factor_requested_rank < 0:
+            raise ValueError("temporal_factor_rank must be nonnegative")
+        if self.temporal_factor_init != "balanced_svd":
+            raise ValueError("temporal_factor_init must be balanced_svd")
+        # Match the M26 same-resource contract exactly: matrices for which two
+        # factor stages do not strictly reduce T*T products stay dense.  This is
+        # important for the model's T=2 attention neurons when rank=3 is
+        # requested for the profitable T=10 population.
+        self.temporal_factor_rank = (
+            self.temporal_factor_requested_rank
+            if 2 * self.T * self.temporal_factor_requested_rank < self.T * self.T
+            else 0
+        )
+        self.temporal_factor_load_source = "dense"
+        if self.temporal_factor_rank:
+            self.temporal_factor_left = nn.Parameter(
+                self.weight.detach().new_empty(self.T, self.temporal_factor_rank)
+            )
+            self.temporal_factor_right = nn.Parameter(
+                self.weight.detach().new_empty(self.temporal_factor_rank, self.T)
+            )
+            self._initialize_temporal_factors_from_dense()
+            # Keep the dense tensor as an immutable migration/reference payload so
+            # existing checkpoints still load by their original ``weight`` key.
+            # Only the factors participate in the factorized forward or training.
+            self.weight.requires_grad_(False)
         center = self.bias.detach().clone() if center_mode == "bias" else torch.zeros_like(self.bias.detach())
         self.register_buffer("center", center)
 
+    def _initialize_temporal_factors_from_dense(self) -> None:
+        if not self.temporal_factor_rank:
+            return
+        with torch.no_grad():
+            weight = self.weight.detach().float()
+            u, singular, vh = torch.linalg.svd(weight, full_matrices=False)
+            root = singular[: self.temporal_factor_rank].clamp_min(0).sqrt()
+            left = u[:, : self.temporal_factor_rank] * root.reshape(1, -1)
+            right = root.reshape(-1, 1) * vh[: self.temporal_factor_rank, :]
+            self.temporal_factor_left.copy_(
+                left.to(
+                    device=self.temporal_factor_left.device,
+                    dtype=self.temporal_factor_left.dtype,
+                )
+            )
+            self.temporal_factor_right.copy_(
+                right.to(
+                    device=self.temporal_factor_right.device,
+                    dtype=self.temporal_factor_right.dtype,
+                )
+            )
+        self.temporal_factor_load_source = "balanced_svd_dense"
+
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys,
+        unexpected_keys, error_msgs,
+    ) -> None:
+        left_key = prefix + "temporal_factor_left"
+        right_key = prefix + "temporal_factor_right"
+        dense_key = prefix + "weight"
+        has_left = left_key in state_dict
+        has_right = right_key in state_dict
+        if has_left != has_right:
+            error_msgs.append(
+                "{} contains an incomplete ATLIF temporal factor pair".format(prefix)
+            )
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys,
+            unexpected_keys, error_msgs,
+        )
+        if self.temporal_factor_rank and not has_left and not has_right:
+            if dense_key not in state_dict:
+                error_msgs.append(
+                    "{} factorized ATLIF lacks both dense migration weight and factors".format(
+                        prefix
+                    )
+                )
+                return
+            self._initialize_temporal_factors_from_dense()
+            # Loading an old dense checkpoint into the explicitly requested
+            # factorized model is a supported migration, not an unaudited miss.
+            for key in (left_key, right_key):
+                while key in missing_keys:
+                    missing_keys.remove(key)
+        elif self.temporal_factor_rank and has_left and has_right:
+            with torch.no_grad():
+                effective = self.temporal_effective_weight()
+                if not torch.allclose(
+                    self.weight.detach(), effective.detach(), rtol=1.0e-5, atol=1.0e-6
+                ):
+                    error_msgs.append(
+                        "{} factor checkpoint dense migration weight disagrees with L@R".format(
+                            prefix
+                        )
+                    )
+            self.temporal_factor_load_source = "checkpoint_factors"
+
+    def _save_to_state_dict(self, destination, prefix, keep_vars) -> None:
+        super()._save_to_state_dict(destination, prefix, keep_vars)
+        # Old full-model H67 checkpoints pickle this class before M29 fields
+        # existed.  Their state_dict extraction must retain the legacy dense
+        # behavior instead of failing during migration.
+        if int(getattr(self, "temporal_factor_rank", 0)):
+            effective = self.temporal_effective_weight()
+            destination[prefix + "weight"] = (
+                effective if keep_vars else effective.detach()
+            )
+
+    def temporal_effective_weight(self) -> torch.Tensor:
+        if not self.temporal_factor_rank:
+            return self.weight
+        return torch.mm(self.temporal_factor_left, self.temporal_factor_right)
+
     def forward(self, x_seq: torch.Tensor) -> torch.Tensor:
-        h_seq = torch.addmm(self.bias, self.weight, x_seq.flatten(1))
+        flattened = x_seq.flatten(1)
+        if self.temporal_factor_rank:
+            latent = torch.mm(self.temporal_factor_right, flattened)
+            h_seq = torch.addmm(self.bias, self.temporal_factor_left, latent)
+        else:
+            h_seq = torch.addmm(self.bias, self.weight, flattened)
         if self.center_mode != "zero":
             h_seq = h_seq - self.center.to(device=h_seq.device, dtype=h_seq.dtype)
         observer = getattr(self, "_h9_calibration_observer", None)
@@ -292,5 +410,8 @@ class ATLIFTernaryPSN(nn.Module):
         return (
             f"T={self.T}, thresh={float(self.thresh.detach().cpu()):.4f}, "
             f"sp={self.sp}, neg_scale={self.negative_threshold_scale}, "
-            f"mode={self.output_mode}, threshold_mode={self.threshold_mode}, center_mode={self.center_mode}"
+            f"mode={self.output_mode}, threshold_mode={self.threshold_mode}, center_mode={self.center_mode}, "
+            f"temporal_factor_requested_rank={self.temporal_factor_requested_rank}, "
+            f"temporal_factor_rank={self.temporal_factor_rank}, "
+            f"temporal_factor_init={self.temporal_factor_init}"
         )

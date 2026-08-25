@@ -8,16 +8,19 @@ MACRO_DBS="${MACRO_DBS:-}"
 OPERATING_CONDITION="${OPERATING_CONDITION:-}"
 CORNER_ROLE="${CORNER_ROLE:-power}"
 DC_RUN_DIR="${DC_RUN_DIR:-$ROOT/runs/$DESIGN_NAME}"
+PTPX_RUN_DIR="${PTPX_RUN_DIR:-$DC_RUN_DIR}"
 SAIF_FILE="${SAIF_FILE:-}"
 SAIF_INSTANCE="${SAIF_INSTANCE:-}"
 SAIF_MANIFEST="${SAIF_MANIFEST:-}"
 MIN_SAIF_COVERAGE_PCT="${MIN_SAIF_COVERAGE_PCT:-95.0}"
+PTPX_REQUIRE_PAPER_POWER_ELIGIBLE="${PTPX_REQUIRE_PAPER_POWER_ELIGIBLE:-1}"
 NETLIST_FILE="${NETLIST_FILE:-}"
 SDC_FILE="${SDC_FILE:-}"
 SPEF_FILE="${SPEF_FILE:-}"
+RTL_GATE_MAP_TCL="${RTL_GATE_MAP_TCL:-}"
 
 case "$DESIGN_NAME" in
-  h67_fixed2s_mssb5_dc_top|h67_rqtb2s_mssb5_dc_top|local5_unified_out2_dc_top|local5_unified_out2_1rw_dc_top) ;;
+  h67_fixed2s_mssb5_dc_top|h67_rqtb2s_mssb5_dc_top|local5_unified_out2_dc_top|local5_unified_out2_1rw_dc_top|qfit_local_banked_multisource_p1_top|qfit_local_banked_multisource_p2_top|qfit_local_banked_multisource_p4_top|qfit_local_banked_multisource_p8_top|qfit_local_banked_multisource_p1_l96_top|qfit_local_banked_multisource_p2_l96_top|qfit_local_banked_multisource_p4_l96_top|qfit_local_banked_multisource_p8_l96_top|qfit_dual_line_descriptor_resident_engine|qfit_dual_granularity_temporal_state_engine|hitflow_dptme_paper_top) ;;
   *) echo "PTPX仅接受当前DATE双线冻结顶层: $DESIGN_NAME" >&2; exit 2 ;;
 esac
 
@@ -55,27 +58,49 @@ if [[ -n "$SPEF_FILE" && -z "$NETLIST_FILE" ]]; then
   echo "读取SPEF时必须通过NETLIST_FILE显式提供产生该SPEF的P&R网表。" >&2
   exit 10
 fi
-python3 "$ROOT/scripts/audit_saif_manifest.py" \
-  --design "$DESIGN_NAME" --saif "$SAIF_FILE" \
-  --strip-path "$SAIF_INSTANCE" --manifest "$SAIF_MANIFEST" \
-  --require-paper-power-eligible
+if [[ -n "$RTL_GATE_MAP_TCL" && ! -s "$RTL_GATE_MAP_TCL" ]]; then
+  echo "RTL_GATE_MAP_TCL不是有效的PrimeTime映射文件: $RTL_GATE_MAP_TCL" >&2
+  exit 9
+fi
+audit_args=(
+  --design "$DESIGN_NAME" --saif "$SAIF_FILE"
+  --strip-path "$SAIF_INSTANCE" --manifest "$SAIF_MANIFEST"
+)
+if [[ "$PTPX_REQUIRE_PAPER_POWER_ELIGIBLE" == "1" ]]; then
+  audit_args+=(--require-paper-power-eligible)
+elif [[ "$PTPX_REQUIRE_PAPER_POWER_ELIGIBLE" != "0" ]]; then
+  echo "PTPX_REQUIRE_PAPER_POWER_ELIGIBLE必须是0或1。" >&2
+  exit 11
+fi
+python3 "$ROOT/scripts/audit_saif_manifest.py" "${audit_args[@]}"
 
 export DESIGN_NAME LIB_DB MACRO_DBS OPERATING_CONDITION CORNER_ROLE
+export RTL_GATE_MAP_TCL
 export SAIF_FILE SAIF_INSTANCE SAIF_MANIFEST MIN_SAIF_COVERAGE_PCT
 export MAPPED_NETLIST="${NETLIST_FILE:-$DC_RUN_DIR/netlist/${DESIGN_NAME}_mapped.v}"
-export MAPPED_SDC="${SDC_FILE:-$DC_RUN_DIR/netlist/${DESIGN_NAME}_mapped.sdc}"
-export OUTPUT_DIR="$DC_RUN_DIR"
+export OUTPUT_DIR="$PTPX_RUN_DIR"
+mkdir -p "$PTPX_RUN_DIR/netlist" "$PTPX_RUN_DIR/reports"
 test -s "$MAPPED_NETLIST"
-test -s "$MAPPED_SDC"
+export MAPPED_SDC_SOURCE="${SDC_FILE:-$DC_RUN_DIR/netlist/${DESIGN_NAME}_mapped.sdc}"
+test -s "$MAPPED_SDC_SOURCE"
+export MAPPED_SDC="$PTPX_RUN_DIR/netlist/${DESIGN_NAME}_ptpx_effective.sdc"
+prepare_sdc_args=(
+  --source "$MAPPED_SDC_SOURCE" --output "$MAPPED_SDC"
+  --operating-condition "$OPERATING_CONDITION"
+)
+if [[ -n "$SDC_FILE" ]]; then
+  prepare_sdc_args+=(--allow-corner-neutral-source)
+fi
+python3 "$ROOT/scripts/prepare_pt_sdc.py" "${prepare_sdc_args[@]}"
 if [[ -n "$SPEF_FILE" ]]; then
   test -s "$SPEF_FILE"
   export SPEF_FILE
 fi
-pt_shell -f "$ROOT/scripts/run_ptpx.tcl" | tee "$DC_RUN_DIR/ptpx.log"
+pt_shell -f "$ROOT/scripts/run_ptpx.tcl" | tee "$PTPX_RUN_DIR/ptpx.log"
 python3 "$ROOT/scripts/write_synopsys_run_manifest.py" \
   --mode ptpx --design "$DESIGN_NAME" --root "$ROOT/.." \
-  --output "$DC_RUN_DIR/ptpx_run_manifest.json"
+  --output "$PTPX_RUN_DIR/ptpx_run_manifest.json"
 python3 "$ROOT/scripts/audit_synopsys_postrun.py" \
   --mode ptpx \
-  --run-dir "$DC_RUN_DIR" \
+  --run-dir "$PTPX_RUN_DIR" \
   --min-saif-coverage-pct "$MIN_SAIF_COVERAGE_PCT"

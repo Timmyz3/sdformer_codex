@@ -103,6 +103,9 @@ module qfit_dual_color_relation_frontier_sync #(
     logic [4:0] leaf_candidate_valid;
     logic input_fire;
     logic active_descriptor;
+    logic unused_geometry_ready;
+    logic read_pending_q;
+    logic k_read_data_valid;
 
     assign leaf_plane_start = state_q == ST_START_PLANE && leaf_plane_idle;
     assign leaf_in_valid = state_q == ST_FEED_PLANE && in_valid;
@@ -266,9 +269,6 @@ module qfit_dual_color_relation_frontier_sync #(
         end
     end
 
-    logic unused_geometry_ready;
-    logic read_pending_q;
-    logic k_read_data_valid;
     assign unused_geometry_ready = geometry_ready;
     initial begin
         if (READ_LATENCY != 1)

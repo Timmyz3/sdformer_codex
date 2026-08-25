@@ -1,0 +1,3 @@
+rtl_m30/qfit_atlif_rank3_resident_stream_core.sv
+verif_m30/qfit_atlif_rank3_resident_stream_assertions.sv
+tb_m30/tb_qfit_atlif_rank3_resident_stream_core.sv

@@ -1,0 +1,3 @@
+rtl_m194/m194_fc2_same_token_pair_bank_head_selector.sv
+verif_m194/m194_fc2_same_token_pair_bank_head_selector_assertions.sv
+tb_m194/tb_m194_fc2_same_token_pair_bank_head_selector.sv

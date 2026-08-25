@@ -1,0 +1,4 @@
+rtl_m118/m118_w384_signed19_accumulator_frontend.sv
+rtl_m118/m118_w384_signed19_lane_sliced_accumulator_adapter.sv
+verif_m118/m118_w384_signed19_lane_sliced_accumulator_assertions.sv
+tb_m118/tb_m118_w384_signed19_lane_sliced_accumulator.sv

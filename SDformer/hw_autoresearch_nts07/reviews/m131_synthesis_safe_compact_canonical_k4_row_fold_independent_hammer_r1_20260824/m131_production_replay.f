@@ -1,0 +1,3 @@
+../../rtl_m131/m131_synthesis_safe_compact_canonical_k4_row_fold.sv
+../../verif_m131/m131_synthesis_safe_compact_canonical_k4_row_fold_assertions.sv
+../../tb_m131/tb_m131_synthesis_safe_compact_canonical_k4_row_fold.sv

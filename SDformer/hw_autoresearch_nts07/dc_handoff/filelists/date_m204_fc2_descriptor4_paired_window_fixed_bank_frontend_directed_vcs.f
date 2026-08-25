@@ -1,0 +1,3 @@
+rtl_m204/m204_fc2_descriptor4_paired_window_fixed_bank_frontend.sv
+verif_m204/m204_fc2_descriptor4_paired_window_fixed_bank_frontend_assertions.sv
+tb_m204/tb_m204_fc2_descriptor4_paired_window_fixed_bank_frontend.sv

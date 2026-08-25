@@ -19,6 +19,8 @@ H9_OVERLAY_KEY_MARKERS = (
     "._h9_cf10_beta",
     ".spiking_neuron.thresh",
     ".spiking_neuron.center",
+    ".temporal_factor_left",
+    ".temporal_factor_right",
 )
 
 

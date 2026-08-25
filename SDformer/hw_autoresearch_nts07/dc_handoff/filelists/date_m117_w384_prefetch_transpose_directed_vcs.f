@@ -1,0 +1,3 @@
+rtl_m117/m117_w384_prefetch_transpose_scheduler.sv
+verif_m117/m117_w384_prefetch_transpose_assertions.sv
+tb_m117/tb_m117_w384_prefetch_transpose.sv

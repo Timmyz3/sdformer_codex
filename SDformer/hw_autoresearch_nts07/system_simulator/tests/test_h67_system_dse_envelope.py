@@ -30,6 +30,20 @@ class SystemDseEnvelopeTest(unittest.TestCase):
         )
         self.assertIsNone(scale)
 
+    def test_required_proposed_non_attention_speedup_hits_system_target(self):
+        non_attention = 600_000_000
+        fixed_attention = 4_000_000
+        proposed_attention = 3_400_000
+        target = 2.0
+        speedup = MODULE.minimum_proposed_non_attention_speedup(
+            non_attention, fixed_attention, proposed_attention, target
+        )
+        self.assertIsNotNone(speedup)
+        observed = (non_attention + fixed_attention) / (
+            non_attention / speedup + proposed_attention
+        )
+        self.assertAlmostEqual(observed, target)
+
     def test_object_fit_spills_only_large_objects(self):
         rows = MODULE.object_fit_sweep(
             [("small", 64), ("medium", 128), ("large", 1024)], [128]

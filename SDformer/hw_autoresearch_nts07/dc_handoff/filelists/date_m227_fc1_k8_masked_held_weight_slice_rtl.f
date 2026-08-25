@@ -1,0 +1,1 @@
+rtl_m227/m227_fc1_k8_masked_held_weight_slice.sv

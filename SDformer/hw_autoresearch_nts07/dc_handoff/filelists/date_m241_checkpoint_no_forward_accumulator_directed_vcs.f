@@ -1,0 +1,3 @@
+rtl_m241/m241_four_bank_checkpoint_no_forward_accumulator.sv
+verif_m241/m241_four_bank_checkpoint_no_forward_accumulator_assertions.sv
+tb_m241/tb_m241_four_bank_checkpoint_no_forward_accumulator.sv

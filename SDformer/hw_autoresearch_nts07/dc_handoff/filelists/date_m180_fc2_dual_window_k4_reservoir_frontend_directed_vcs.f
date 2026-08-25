@@ -1,0 +1,3 @@
+rtl_m180/m180_fc2_dual_window_k4_reservoir_frontend.sv
+verif_m180/m180_fc2_dual_window_k4_reservoir_frontend_assertions.sv
+tb_m180/tb_m180_fc2_dual_window_k4_reservoir_frontend.sv

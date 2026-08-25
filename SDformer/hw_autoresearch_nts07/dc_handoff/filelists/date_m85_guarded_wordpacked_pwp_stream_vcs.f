@@ -1,0 +1,4 @@
+rtl_m82/zero_bubble_elastic_pwp_stream.sv
+rtl_m85/guarded_wordpacked_pwp_stream.sv
+verif_m85/guarded_wordpacked_pwp_stream_assertions.sv
+tb_m85/tb_guarded_wordpacked_pwp_stream.sv

@@ -1,0 +1,3 @@
+rtl_m262/m262_fc1_descriptor_lifecycle_wrapper.sv
+verif_m262/m262_fc1_descriptor_lifecycle_assertions.sv
+tb_m262/tb_m262_fc1_descriptor_lifecycle_wrapper.sv

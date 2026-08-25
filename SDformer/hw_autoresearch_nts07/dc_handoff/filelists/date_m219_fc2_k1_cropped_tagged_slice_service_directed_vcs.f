@@ -1,0 +1,3 @@
+rtl_m219/m219_fc2_k1_cropped_tagged_slice_service_island.sv
+verif_m219/m219_fc2_k1_cropped_tagged_slice_service_assertions.sv
+tb_m219/tb_m219_fc2_k1_cropped_tagged_slice_service_island.sv

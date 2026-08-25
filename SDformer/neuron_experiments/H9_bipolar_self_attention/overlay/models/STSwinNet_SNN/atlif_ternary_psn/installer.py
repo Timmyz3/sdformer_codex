@@ -47,6 +47,8 @@ class ATLIFTernaryPSNConfig:
     importance_momentum: float = 0.9
     importance_scale: float = 0.0
     importance_min_guard: float = 0.1
+    temporal_factor_rank: int = 0
+    temporal_factor_init: str = "balanced_svd"
     preserve_loaded_threshold: bool = False
     stage_threshold_eta: Any = None
     stage_threshold_lr_scale: Any = None
@@ -104,6 +106,8 @@ def config_from_dict(raw: dict | None) -> ATLIFTernaryPSNConfig:
         importance_momentum=float(raw.get("importance_momentum", 0.9)),
         importance_scale=float(raw.get("importance_scale", 0.0)),
         importance_min_guard=float(raw.get("importance_min_guard", 0.1)),
+        temporal_factor_rank=int(raw.get("temporal_factor_rank", 0)),
+        temporal_factor_init=str(raw.get("temporal_factor_init", "balanced_svd")),
         preserve_loaded_threshold=bool(raw.get("preserve_loaded_threshold", False)),
         stage_threshold_eta=raw.get("stage_threshold_eta"),
         stage_threshold_lr_scale=raw.get("stage_threshold_lr_scale"),
@@ -241,6 +245,11 @@ def _configure_existing_atlif(module: ATLIFTernaryPSN, cfg: ATLIFTernaryPSNConfi
             "Loaded ATLIFTernaryPSN center_mode does not match config. "
             "Reload from a baseline checkpoint when changing centering semantics."
         )
+    if int(getattr(module, "temporal_factor_requested_rank", 0)) != cfg.temporal_factor_rank:
+        raise RuntimeError(
+            "Loaded ATLIFTernaryPSN temporal_factor_rank does not match config. "
+            "Instantiate the requested factor rank before loading the checkpoint."
+        )
     module.sp = float(_stage_value(cfg.stage_threshold_eta, stage_idx, cfg.threshold_eta))
     module.negative_threshold_scale = float(
         _stage_value(cfg.stage_negative_threshold_scale, stage_idx, cfg.negative_threshold_scale)
@@ -337,6 +346,8 @@ def _install_on_wrapper(
         importance_momentum=cfg.importance_momentum,
         importance_scale=cfg.importance_scale,
         importance_min_guard=cfg.importance_min_guard,
+        temporal_factor_rank=cfg.temporal_factor_rank,
+        temporal_factor_init=cfg.temporal_factor_init,
     ).to(device)
     _apply_threshold_grad_hook(wrapper.spiking_neuron, cfg.threshold_grad_scale)
     return True
@@ -372,6 +383,8 @@ def _config_for_group(base: ATLIFTernaryPSNConfig, group: dict[str, Any]) -> ATL
         "importance_momentum",
         "importance_scale",
         "importance_min_guard",
+        "temporal_factor_rank",
+        "temporal_factor_init",
     ):
         if key in group:
             value = group[key]
@@ -402,6 +415,8 @@ def _config_for_group(base: ATLIFTernaryPSNConfig, group: dict[str, Any]) -> ATL
             }:
                 overrides[key] = float(value)
             elif key == "quantile_sample_size":
+                overrides[key] = int(value)
+            elif key == "temporal_factor_rank":
                 overrides[key] = int(value)
             elif key == "importance_enabled":
                 overrides[key] = bool(value)
@@ -466,8 +481,14 @@ def apply_trainable_mode(model: nn.Module, raw_config: dict | None) -> dict[str,
     mode = str(raw.get("trainable", "all"))
     if mode == "all":
         return {"mode": mode, "trainable_parameters": sum(param.numel() for param in model.parameters() if param.requires_grad)}
-    if mode not in {"atlif_only", "threshold_only"}:
-        raise ValueError("atlif_ternary_psn.trainable must be all, atlif_only, or threshold_only")
+    if mode not in {
+        "atlif_only", "threshold_only", "temporal_factor_only",
+        "temporal_factor_atlif",
+    }:
+        raise ValueError(
+            "atlif_ternary_psn.trainable must be all, atlif_only, threshold_only, "
+            "temporal_factor_only, or temporal_factor_atlif"
+        )
 
     for param in model.parameters():
         param.requires_grad_(False)
@@ -476,8 +497,14 @@ def apply_trainable_mode(model: nn.Module, raw_config: dict | None) -> dict[str,
         if mode == "atlif_only":
             for param in module.parameters():
                 param.requires_grad_(True)
-        else:
+        elif mode == "threshold_only":
             module.thresh.requires_grad_(True)
+        elif int(getattr(module, "temporal_factor_rank", 0)) > 0:
+            module.temporal_factor_left.requires_grad_(True)
+            module.temporal_factor_right.requires_grad_(True)
+            if mode == "temporal_factor_atlif":
+                module.bias.requires_grad_(True)
+                module.thresh.requires_grad_(True)
 
     return {"mode": mode, "trainable_parameters": sum(param.numel() for param in model.parameters() if param.requires_grad)}
 
@@ -486,6 +513,106 @@ def iter_atlif_ternary_psn(model: nn.Module) -> Iterable[tuple[str, ATLIFTernary
     for name, module in model.named_modules():
         if isinstance(module, ATLIFTernaryPSN):
             yield name, module
+
+
+def materialize_temporal_factor_state_dict(model: nn.Module):
+    """Return an explicit dense-only state dict for a factorized ATLIF model.
+
+    ``ATLIFTernaryPSN._save_to_state_dict`` first refreshes every dense
+    migration weight to ``left @ right``.  This helper then strips factor keys
+    so a rank-zero model can load the result deliberately.  Floating-point
+    association (and later fixed-point intermediate requantization) differs
+    between ``L(Rx)`` and ``(LR)x``; callers must evaluate the exported model
+    and must not describe this conversion as bit-exact.
+    """
+    state = model.state_dict()
+    factor_keys = [
+        key
+        for key in state
+        if key.endswith(".temporal_factor_left")
+        or key.endswith(".temporal_factor_right")
+        or key in {"temporal_factor_left", "temporal_factor_right"}
+    ]
+    for key in factor_keys:
+        del state[key]
+    return state
+
+
+def atlif_temporal_factor_diagnostics(model: nn.Module) -> dict[str, float | int]:
+    """Summarize factor scale/conditioning without changing checkpoint state."""
+    modules = [
+        module
+        for _, module in iter_atlif_ternary_psn(model)
+        if int(getattr(module, "temporal_factor_rank", 0)) > 0
+    ]
+    if not modules:
+        return {"temporal_factorized_modules": 0}
+    left_norms = []
+    right_norms = []
+    left_absmax = []
+    right_absmax = []
+    balance_ratios = []
+    latent_component_balance_ratios = []
+    effective_conditions = []
+    reference_relative_errors = []
+    with torch.no_grad():
+        for module in modules:
+            left = module.temporal_factor_left.detach().float()
+            right = module.temporal_factor_right.detach().float()
+            effective = torch.mm(left, right)
+            left_norm = float(torch.linalg.norm(left).cpu())
+            right_norm = float(torch.linalg.norm(right).cpu())
+            left_norms.append(left_norm)
+            right_norms.append(right_norm)
+            left_absmax.append(float(left.abs().max().cpu()))
+            right_absmax.append(float(right.abs().max().cpu()))
+            balance_ratios.append(
+                max(left_norm, right_norm) / max(min(left_norm, right_norm), 1.0e-12)
+            )
+            for component in range(int(module.temporal_factor_rank)):
+                left_component_norm = float(
+                    torch.linalg.norm(left[:, component]).cpu()
+                )
+                right_component_norm = float(
+                    torch.linalg.norm(right[component, :]).cpu()
+                )
+                latent_component_balance_ratios.append(
+                    max(left_component_norm, right_component_norm)
+                    / max(min(left_component_norm, right_component_norm), 1.0e-12)
+                )
+            singular = torch.linalg.svdvals(effective)
+            rank = int(module.temporal_factor_rank)
+            effective_conditions.append(
+                float((singular[0] / singular[rank - 1].clamp_min(1.0e-12)).cpu())
+            )
+            reference = module.weight.detach().float()
+            reference_relative_errors.append(
+                float(
+                    (
+                        torch.linalg.norm(effective - reference)
+                        / torch.linalg.norm(reference).clamp_min(1.0e-12)
+                    ).cpu()
+                )
+            )
+
+    def mean(values):
+        return sum(values) / len(values)
+
+    return {
+        "temporal_factorized_modules": len(modules),
+        "left_fro_norm_mean": mean(left_norms),
+        "right_fro_norm_mean": mean(right_norms),
+        "left_absmax_max": max(left_absmax),
+        "right_absmax_max": max(right_absmax),
+        "left_right_norm_balance_ratio_max": max(balance_ratios),
+        "latent_component_balance_ratio_max": max(
+            latent_component_balance_ratios
+        ),
+        "effective_rank_condition_mean": mean(effective_conditions),
+        "effective_rank_condition_max": max(effective_conditions),
+        "dense_reference_relative_error_mean": mean(reference_relative_errors),
+        "dense_reference_relative_error_max": max(reference_relative_errors),
+    }
 
 
 def regularize_activity(model: nn.Module, raw_config: dict | None) -> torch.Tensor | None:
@@ -676,6 +803,22 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
         for module in importance_modules
         if bool(getattr(module, "_importance_initialized", False))
     ]
+    factorized_modules = [
+        module for _, module in modules
+        if int(getattr(module, "temporal_factor_rank", 0)) > 0
+    ]
+    factor_ranks = [
+        int(getattr(module, "temporal_factor_rank", 0))
+        for module in factorized_modules
+    ]
+    factor_entries = [
+        int(module.temporal_factor_left.numel() + module.temporal_factor_right.numel())
+        for module in factorized_modules
+    ]
+    requested_factor_modules = [
+        module for _, module in modules
+        if int(getattr(module, "temporal_factor_requested_rank", 0)) > 0
+    ]
     return {
         "num_modules": len(modules),
         "threshold_mean": sum(thresholds) / len(thresholds),
@@ -739,4 +882,12 @@ def atlif_ternary_summary(model: nn.Module) -> dict[str, float | int]:
         "quantile_value_mean": sum(quantile_values) / len(quantile_values) if quantile_values else 0.0,
         "importance_modules": len(importance_modules),
         "importance_ema_mean": sum(importance_values) / len(importance_values) if importance_values else 0.0,
+        "temporal_factorized_modules": len(factorized_modules),
+        "temporal_factor_requested_modules": len(requested_factor_modules),
+        "temporal_factor_dense_fallback_modules": (
+            len(requested_factor_modules) - len(factorized_modules)
+        ),
+        "temporal_factor_rank_min": min(factor_ranks) if factor_ranks else 0,
+        "temporal_factor_rank_max": max(factor_ranks) if factor_ranks else 0,
+        "temporal_factor_parameter_entries": sum(factor_entries),
     }

@@ -1,0 +1,3 @@
+rtl_m185/m185_fc2_k8_fixed_bank_accumulator.sv
+verif_m185/m185_fc2_k8_fixed_bank_accumulator_assertions.sv
+tb_m185/tb_m185_fc2_k8_fixed_bank_accumulator.sv

@@ -1,0 +1,3 @@
+rtl_m130/m130_compact_canonical_k4_row_fold.sv
+verif_m130/m130_compact_canonical_k4_row_fold_assertions.sv
+tb_m130/tb_m130_compact_canonical_k4_row_fold.sv

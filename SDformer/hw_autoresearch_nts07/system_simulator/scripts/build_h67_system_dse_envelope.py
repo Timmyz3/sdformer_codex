@@ -52,6 +52,23 @@ def minimum_non_attention_scale(
     return max(1.0, required)
 
 
+def minimum_proposed_non_attention_speedup(
+    non_attention_cycles: int,
+    fixed_attention_cycles: int,
+    proposed_attention_cycles: int,
+    target_speedup: float,
+) -> float | None:
+    """Required acceleration of proposed non-attention work vs fixed baseline."""
+
+    if target_speedup <= 1.0:
+        return 1.0
+    fixed_total = non_attention_cycles + fixed_attention_cycles
+    proposed_non_attention_budget = fixed_total / target_speedup - proposed_attention_cycles
+    if proposed_non_attention_budget <= 0:
+        return None
+    return max(1.0, non_attention_cycles / proposed_non_attention_budget)
+
+
 def resource_sensitivity(
     summary: dict[str, Any], config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -77,9 +94,31 @@ def resource_sensitivity(
                 "fixed_attention_share": fixed_attention / fixed_total,
             }
         )
+    proposed_rows = []
+    fixed_total_v0 = non_attention + fixed_attention
+    for speed in config.get(
+        "proposed_non_attention_speedup", [1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
+    ):
+        proposed_non_attention = math.ceil(non_attention / float(speed))
+        proposed_total = proposed_non_attention + proposed_attention
+        proposed_rows.append(
+            {
+                "proposed_non_attention_speedup": speed,
+                "fixed_cycles": fixed_total_v0,
+                "proposed_non_attention_cycles": proposed_non_attention,
+                "rqtb_cycles": proposed_total,
+                "system_speedup": fixed_total_v0 / proposed_total,
+            }
+        )
     targets = []
     for target in config["target_end_to_end_speedup"]:
-        required = minimum_non_attention_scale(
+        required_shared = minimum_non_attention_scale(
+            non_attention,
+            fixed_attention,
+            proposed_attention,
+            float(target),
+        )
+        required_proposed = minimum_proposed_non_attention_speedup(
             non_attention,
             fixed_attention,
             proposed_attention,
@@ -88,8 +127,10 @@ def resource_sensitivity(
         targets.append(
             {
                 "target_speedup": target,
-                "finite": required is not None,
-                "minimum_non_attention_parallelism_scale": required,
+                "shared_resource_finite": required_shared is not None,
+                "minimum_shared_non_attention_parallelism_scale": required_shared,
+                "proposed_acceleration_finite": required_proposed is not None,
+                "minimum_proposed_non_attention_speedup": required_proposed,
             }
         )
     return {
@@ -101,7 +142,8 @@ def resource_sensitivity(
         "fixed_attention_cycles": fixed_attention,
         "rqtb_attention_cycles": proposed_attention,
         "attention_only_speedup_limit": fixed_attention / proposed_attention,
-        "sweep": rows,
+        "shared_resource_sweep": rows,
+        "proposed_non_attention_sweep": proposed_rows,
         "targets": targets,
     }
 
@@ -287,7 +329,7 @@ def main() -> int:
         "| non-attention scale | Fixed cycles | RQTB cycles | speedup | attention share |",
         "|---:|---:|---:|---:|---:|",
     ]
-    for row in resource["sweep"]:
+    for row in resource["shared_resource_sweep"]:
         report.append(
             f"| {row['non_attention_parallelism_scale']} | {row['fixed_cycles']} | "
             f"{row['rqtb_cycles']} | {row['speedup']:.6f}x | "
@@ -296,17 +338,33 @@ def main() -> int:
     report.extend(
         [
             "",
-            "## Required non-attention scale",
+            "## Proposed full-network acceleration sweep",
             "",
-            "| target system speedup | finite | minimum scale |",
-            "|---:|:---:|---:|",
+            "| proposed non-attention speedup | Fixed cycles | proposed cycles | system speedup |",
+            "|---:|---:|---:|---:|",
+        ]
+    )
+    for row in resource["proposed_non_attention_sweep"]:
+        report.append(
+            f"| {row['proposed_non_attention_speedup']} | {row['fixed_cycles']} | "
+            f"{row['rqtb_cycles']} | {row['system_speedup']:.6f}x |"
+        )
+    report.extend(
+        [
+            "",
+            "## Required non-attention acceleration",
+            "",
+            "| target system speedup | shared-resource scale | proposed non-attention speedup |",
+            "|---:|---:|---:|",
         ]
     )
     for row in resource["targets"]:
-        scale = row["minimum_non_attention_parallelism_scale"]
+        shared = row["minimum_shared_non_attention_parallelism_scale"]
+        proposed = row["minimum_proposed_non_attention_speedup"]
         report.append(
-            f"| {row['target_speedup']:.3f}x | {str(row['finite']).lower()} | "
-            f"{scale if scale is not None else 'unreachable'} |"
+            f"| {row['target_speedup']:.3f}x | "
+            f"{shared if shared is not None else 'unreachable'} | "
+            f"{proposed if proposed is not None else 'unreachable'} |"
         )
     report.extend(
         [

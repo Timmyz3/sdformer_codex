@@ -121,7 +121,8 @@ module tb_h67_motion_dc_activity #(
         end
     end
 
-    always_ff @(posedge clk_core) begin
+    // VCS ICPD: do not mix always_ff with initial assignment of the same integer.
+    always @(posedge clk_core) begin
         if (dump_active)
             measured_cycles <= measured_cycles + 1;
     end
@@ -308,6 +309,16 @@ module tb_h67_motion_dc_activity #(
         repeat (10_000_000) @(posedge clk_core);
         $fatal(1, "Motion activity timeout");
     end
+
+`ifdef SNPS_FSDB
+    string fsdb_file;
+    initial begin
+        if ($value$plusargs("FSDB_FILE=%s", fsdb_file)) begin
+            $fsdbDumpfile(fsdb_file);
+            $fsdbDumpvars(0, tb_h67_motion_dc_activity);
+        end
+    end
+`endif
 endmodule
 
 `default_nettype wire
