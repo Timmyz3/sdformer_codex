@@ -32,6 +32,9 @@ def main():
     assert description["source_capabilities"]["production_cli"] is False
     assert description["source_capabilities"]["external_plane_parameter"] is False
     assert description["source_capabilities"]["opened_fd_hash_binding"] is True
+    assert description["source_capabilities"]["closure_row_snapshot"] is True
+    assert description["source_capabilities"]["mutable_file_backing_during_schedule"] is False
+    assert description["streaming"]["immutable_compact_plane_snapshot"] is True
     assert not hasattr(M, "stream_tensor")
 
     authority = M.validate_authorities(False)
@@ -45,7 +48,7 @@ def main():
 
     synthetic = M.synthetic_self_test()
     assert synthetic["status"] == (
-        "PASS_M1553_FD_BOUND_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION")
+        "PASS_M1556_IMMUTABLE_SNAPSHOT_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION")
     assert synthetic["pilot_execution"] is False
     assert synthetic["production"] is False
     assert synthetic["product_capture"] is False
@@ -73,12 +76,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix="m1543_test.") as directory:
         path = Path(directory) / "short.bitpack"
         path.write_bytes(b"\x01")
-        rejects(lambda: M.MmapLittleBitPlane(path, (10, 1, 8, 2, 2)))
+        rejects(lambda: M.ImmutableLittleBitPlane(path, (10, 1, 8, 2, 2)))
         attacks.append("payload_size")
 
         path = Path(directory) / "plane.bitpack"
         path.write_bytes(bytes((10 * 8 * 2 * 2 + 7) // 8))
-        with M.MmapLittleBitPlane(path, (10, 1, 8, 2, 2)) as plane:
+        with M.ImmutableLittleBitPlane(path, (10, 1, 8, 2, 2)) as plane:
             rejects(lambda: plane.bit(10, 0, 0, 0)); attacks.append("timestep")
             rejects(lambda: plane.bit(0, 8, 0, 0)); attacks.append("channel")
             rejects(lambda: plane.bit(0, 0, 2, 0)); attacks.append("coordinate")
@@ -88,14 +91,24 @@ def main():
         bound_path = Path(directory) / "fd_bound.bitpack"
         moved_path = Path(directory) / "fd_bound.original"
         bound_path.write_bytes(original)
-        with M.MmapLittleBitPlane(bound_path, (10, 1, 8, 2, 2)) as plane:
-            original_sha = M.sha256_open_stream(plane._stream)
+        with M.ImmutableLittleBitPlane(bound_path, (10, 1, 8, 2, 2)) as plane:
+            original_sha = plane.opened_sha256
             bound_path.rename(moved_path)
             bound_path.write_bytes(replacement)
             assert plane.opened_sha256 == original_sha
             assert plane.bit(0, 0, 0, 0) == 0
             assert M.sha256(bound_path) != plane.opened_sha256
             attacks.append("opened_fd_binding")
+
+        inplace = Path(directory) / "inplace.bitpack"
+        inplace.write_bytes(original)
+        with M.ImmutableLittleBitPlane(inplace, (10, 1, 8, 2, 2)) as plane:
+            with inplace.open("r+b") as mutable:
+                mutable.seek(0); mutable.write(replacement); mutable.flush()
+            assert plane.opened_sha256 == original_sha
+            assert plane.bit(0, 0, 0, 0) == 0
+            assert M.sha256(inplace) != plane.opened_sha256
+            attacks.append("inplace_inode_mutation_isolated")
 
         assert list(__import__("inspect").signature(
             M.stream_actual_call).parameters) == ["config"]
@@ -117,8 +130,8 @@ def main():
                            [221184], [0], 48)
     rejects(lambda: scheduler.one(bad_psum)); attacks.append("capacity")
 
-    assert len(attacks) == 15
-    print("PASS M1553 source tests attacks=15 configs=3 fd_bound=1 pilot=0 production=0 product=0")
+    assert len(attacks) == 16
+    print("PASS M1556 source tests attacks=16 configs=3 immutable_snapshot=1 pilot=0 production=0 product=0")
 
 
 if __name__ == "__main__":

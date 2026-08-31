@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M1553 successor source for one ep34 decoder non-product calibration call.
+"""M1556 successor source for one ep34 decoder non-product calibration call.
 
 M1549 is deliberately a *source* gate.  It binds the independently hammered
 M1539 request kernel, fixes the calibration population to call zero (D0,
@@ -11,9 +11,11 @@ The future launch hammer may import :func:`stream_actual_call` after pinning
 this source byte-for-byte.  That is the only executable entry point: it accepts
 only a non-product configuration and opens the canonical call internally.
 There is deliberately no public helper that accepts a plane, module or call
-ordinal.  The implementation hashes and fstat's the actual opened descriptor,
-mmap's that descriptor, emits and schedules requests destination by
-destination, and retires dependency tokens after each destination.  Bank
+ordinal.  At clean import it snapshots call-0's member, shape and SHA directly
+into the entry closure.  The implementation hashes and fstat's the actual
+opened descriptor, copies its compact bit plane into immutable bytes, closes
+the descriptor, emits and schedules requests destination by destination, and
+retires dependency tokens after each destination.  Bank
 calendars, outstanding queues, address digests, the nine-tile weight cache and
 cycle state are never reset inside a call.
 
@@ -23,7 +25,6 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import mmap
 import os
 from pathlib import Path
 import resource
@@ -38,8 +39,8 @@ M1542 = HW / "reviews/m1542_m1539_decoder_nonproduct_address_timed_source_indepe
 M1542_REVIEW_SHA256 = "b85014ca32604b7b2659a7ba962bfb873bdb4c330dc011ff94d263ee6898c970"
 M1542_OUTER_FILE_SHA256 = "3d1f38281d106b040340e56e210698fa245020eff874783702e8901718207a3a"
 
-SCHEMA = "m1553_ep34_decoder_nonproduct_streaming_single_call_pilot_fd_bound_source_r3_v1"
-STATUS = "M1553_SOURCE_ONLY__INTERNAL_CANONICAL_FD_BOUND_ENTRY__EXECUTION_AND_PRODUCTION_BLOCKED"
+SCHEMA = "m1556_ep34_decoder_nonproduct_streaming_single_call_pilot_immutable_snapshot_source_r4_v1"
+STATUS = "M1556_SOURCE_ONLY__CLOSURE_ROW_AND_IMMUTABLE_PLANE_SNAPSHOT__EXECUTION_AND_PRODUCTION_BLOCKED"
 PILOT_CALL_ORDINAL = 0
 PILOT_SAMPLE_ID = 10
 PILOT_MODULE = 0
@@ -152,8 +153,8 @@ def memory_gate():
     return value
 
 
-class MmapLittleBitPlane(object):
-    """Read a canonical little-bit-order T,C,H,W plane without materializing it."""
+class ImmutableLittleBitPlane(object):
+    """Read a verified compact bit plane from an immutable byte snapshot."""
     def __init__(self, path, shape, expected_sha256=None):
         self.path = Path(path)
         self.expected_sha256 = expected_sha256
@@ -194,7 +195,14 @@ class MmapLittleBitPlane(object):
         if expected_sha256 is not None:
             require(self.opened_sha256 == expected_sha256,
                     "opened pilot payload SHA drift")
-        self._map = mmap.mmap(self._stream.fileno(), 0, access=mmap.ACCESS_READ)
+        self._stream.seek(0)
+        payload = self._stream.read()
+        require(len(payload) == self.bytes and
+                hashlib.sha256(payload).hexdigest() == self.opened_sha256,
+                "immutable pilot snapshot drift")
+        self._snapshot = bytes(payload)
+        self._stream.close()
+        self._stream = None
 
     def bit(self, timestep, channel, y, x):
         timestep = int(timestep); channel = int(channel)
@@ -205,11 +213,12 @@ class MmapLittleBitPlane(object):
                 "bit-plane index out of range")
         index = (((timestep * self.channels + channel) * self.height + y) *
                  self.width + x)
-        return (self._map[index >> 3] >> (index & 7)) & 1
+        require(self._snapshot is not None, "pilot snapshot already closed")
+        return (self._snapshot[index >> 3] >> (index & 7)) & 1
 
     def close(self):
-        if self._map is not None:
-            self._map.close(); self._map = None
+        if self._snapshot is not None:
+            self._snapshot = None
         if self._stream is not None:
             self._stream.close(); self._stream = None
 
@@ -293,21 +302,34 @@ def selected_pilot_record():
 def _build_canonical_streamer():
     """Capture the verified types and kernel; expose no injectable plane seam."""
     bound_m = M
-    plane_type = MmapLittleBitPlane
+    plane_type = ImmutableLittleBitPlane
     scheduler_type = StreamingCallScheduler
-    select_record = selected_pilot_record
     canonical_root = M.M1521_ROOT.resolve()
     module = PILOT_MODULE
     call_ordinal = PILOT_CALL_ORDINAL
+    # Freeze values, not a selector function whose globals could be replaced
+    # after import.  No future call consults selected_pilot_record or M1521_ROOT.
+    frozen = selected_pilot_record()
+    payload_member = str(frozen["positive_output"])
+    payload_sha256 = str(frozen["positive_output_sha256"])
+    payload_shape = tuple(int(value) for value in frozen["shape"])
+    sample_id = int(frozen["global_sample_id"])
+    frozen_module = int(frozen["module_ordinal"])
+    frozen_call = int(frozen["global_call_ordinal"])
+    canonical_path = (canonical_root / payload_member).resolve()
+    require(canonical_path.parent == (canonical_root / "payloads").resolve() and
+            sample_id == PILOT_SAMPLE_ID and frozen_module == module and
+            frozen_call == call_ordinal,
+            "clean-import pilot closure snapshot drift")
 
-    def schedule_verified(config, plane, row):
+    def schedule_verified(config, plane):
         require(type(plane) is plane_type,
-                "canonical streamer requires the exact mmap plane type")
-        canonical_path = (canonical_root / row["positive_output"]).resolve()
+                "canonical streamer requires the exact immutable plane type")
         require(plane.path.resolve() == canonical_path and
-                plane.expected_sha256 == row["positive_output_sha256"] and
-                plane.opened_sha256 == row["positive_output_sha256"],
-                "opened pilot fd is not bound to canonical path and SHA")
+                plane.expected_sha256 == payload_sha256 and
+                plane.opened_sha256 == payload_sha256 and
+                plane._stream is None and plane._snapshot is not None,
+                "pilot snapshot is not bound to canonical opened bytes")
         cin, cout, hin, win, hout, wout = bound_m.GEOMETRY[module]
         require((plane.timesteps, plane.channels, plane.height, plane.width) ==
                 (PILOT_TIMESTEPS, cin, hin, win),
@@ -384,14 +406,9 @@ def _build_canonical_streamer():
         bound_m.validate_config(config)
         require(config != FORBIDDEN_CONFIG,
                 "product configuration is forbidden")
-        row = select_record()
-        require(row["global_call_ordinal"] == call_ordinal and
-                row["module_ordinal"] == module,
-                "canonical streamer population drift")
-        path = canonical_root / row["positive_output"]
-        with plane_type(path, row["shape"],
-                        row["positive_output_sha256"]) as plane:
-            return schedule_verified(config, plane, row)
+        with plane_type(canonical_path, payload_shape,
+                        payload_sha256) as plane:
+            return schedule_verified(config, plane)
     return canonical_entry
 
 
@@ -432,7 +449,7 @@ def synthetic_self_test():
     with tempfile.TemporaryDirectory(prefix="m1543_source_test.") as directory:
         path = Path(directory) / "plane.bitpack"
         path.write_bytes(bytes(raw))
-        with MmapLittleBitPlane(path, shape) as plane:
+        with ImmutableLittleBitPlane(path, shape) as plane:
             require(plane.bit(0, 0, 0, 0) == 1 and
                     plane.bit(0, 0, 0, 1) == 1 and
                     plane.bit(0, 7, 1, 1) == 1 and
@@ -460,7 +477,7 @@ def synthetic_self_test():
             len(set(row["commit_sequence_sha256"] for row in results)) == 1,
             "streaming synthetic comparator drift")
     return {"schema": SCHEMA,
-            "status": "PASS_M1553_FD_BOUND_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION",
+            "status": "PASS_M1556_IMMUTABLE_SNAPSHOT_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION",
             "configurations": list(M.CONFIGS), "results": results,
             "pilot_execution": False, "production": False,
             "product_capture": False}
@@ -473,7 +490,8 @@ def describe():
             "pilot": {"call_ordinal": PILOT_CALL_ORDINAL,
                 "sample_id": PILOT_SAMPLE_ID, "module_ordinal": PILOT_MODULE,
                 "timesteps": PILOT_TIMESTEPS, "execution": False},
-            "streaming": {"mmap_one_payload": True,
+            "streaming": {"mmap_one_payload": False,
+                "immutable_compact_plane_snapshot": True,
                 "materialized_transaction_list": False,
                 "retire_dependency_tokens_per_destination": True,
                 "preserve_bank_calendars": True,
@@ -483,7 +501,9 @@ def describe():
                 "synthetic_test": True, "actual_pilot_engine": True,
                 "pilot_cli": False, "production_cli": False,
                 "external_plane_parameter": False,
-                "opened_fd_hash_binding": True},
+                "opened_fd_hash_binding": True,
+                "closure_row_snapshot": True,
+                "mutable_file_backing_during_schedule": False},
             "claim_boundary": {"source_only": True,
                 "pilot_executed": False, "production": False,
                 "transactions": False, "cycles": False, "traffic": False,
@@ -505,7 +525,7 @@ def main(argv=None):
         value = describe()
     elif args.preflight:
         value = {"schema": SCHEMA,
-            "status": "PASS_M1553_FD_BOUND_STREAMING_SOURCE_PREFLIGHT__NO_PILOT_NO_PRODUCTION",
+            "status": "PASS_M1556_IMMUTABLE_SNAPSHOT_STREAMING_SOURCE_PREFLIGHT__NO_PILOT_NO_PRODUCTION",
             "authorities": validate_authorities(args.verify_payload_members),
             "pilot_execution": False, "production": False}
     else:
