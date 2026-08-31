@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Streaming source for one ep34 decoder non-product calibration call.
+"""M1549 successor source for one ep34 decoder non-product calibration call.
 
-M1543 is deliberately a *source* gate.  It binds the independently hammered
+M1549 is deliberately a *source* gate.  It binds the independently hammered
 M1539 request kernel, fixes the calibration population to call zero (D0,
 sample 10, all ten timesteps), and demonstrates a bounded-memory execution
 shape.  It does not expose an actual-payload pilot CLI and cannot launch the
@@ -33,8 +33,8 @@ M1542 = HW / "reviews/m1542_m1539_decoder_nonproduct_address_timed_source_indepe
 M1542_REVIEW_SHA256 = "b85014ca32604b7b2659a7ba962bfb873bdb4c330dc011ff94d263ee6898c970"
 M1542_OUTER_FILE_SHA256 = "3d1f38281d106b040340e56e210698fa245020eff874783702e8901718207a3a"
 
-SCHEMA = "m1543_ep34_decoder_nonproduct_streaming_single_call_pilot_source_r1_v1"
-STATUS = "SOURCE_ONLY__SINGLE_CALL_STREAMING_PILOT__EXECUTION_AND_PRODUCTION_BLOCKED"
+SCHEMA = "m1549_ep34_decoder_nonproduct_streaming_single_call_pilot_successor_source_r2_v1"
+STATUS = "M1549_SOURCE_ONLY__CANONICAL_CALL_AND_PLANE_LOCKED__EXECUTION_AND_PRODUCTION_BLOCKED"
 PILOT_CALL_ORDINAL = 0
 PILOT_SAMPLE_ID = 10
 PILOT_MODULE = 0
@@ -140,6 +140,7 @@ class MmapLittleBitPlane(object):
     """Read a canonical little-bit-order T,C,H,W plane without materializing it."""
     def __init__(self, path, shape, expected_sha256=None):
         self.path = Path(path)
+        self.expected_sha256 = expected_sha256
         require(len(shape) == 5 and int(shape[1]) == 1,
                 "bit-plane shape must be T,1,C,H,W")
         self.timesteps = int(shape[0]); self.channels = int(shape[2])
@@ -243,6 +244,17 @@ def stream_tensor(config, plane, module, call_ordinal):
     M.validate_config(config)
     require(config != FORBIDDEN_CONFIG, "product configuration is forbidden")
     module = int(module); call_ordinal = int(call_ordinal)
+    require(module == PILOT_MODULE and call_ordinal == PILOT_CALL_ORDINAL,
+            "streaming source is locked to canonical call0 D0")
+    row = selected_pilot_record()
+    canonical_path = (M.M1521_ROOT / row["positive_output"]).resolve()
+    require(isinstance(plane, MmapLittleBitPlane),
+            "custom or unverified pilot plane is forbidden")
+    require(plane.path.resolve() == canonical_path and
+            plane.expected_sha256 == row["positive_output_sha256"],
+            "pilot plane is not bound to the canonical path and SHA")
+    regular_exact(plane.path, row["positive_output_sha256"],
+                  "canonical pilot payload")
     cin, cout, hin, win, hout, wout = M.GEOMETRY[module]
     require((plane.timesteps, plane.channels, plane.height, plane.width) ==
             (PILOT_TIMESTEPS, cin, hin, win), "pilot tensor geometry drift")

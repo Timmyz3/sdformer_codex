@@ -80,6 +80,30 @@ def main():
             rejects(lambda: plane.bit(0, 8, 0, 0)); attacks.append("channel")
             rejects(lambda: plane.bit(0, 0, 2, 0)); attacks.append("coordinate")
 
+        class CustomPlane(object):
+            timesteps = 10
+            channels = M.M.GEOMETRY[0][0]
+            height = M.M.GEOMETRY[0][2]
+            width = M.M.GEOMETRY[0][3]
+
+            @staticmethod
+            def bit(_timestep, _channel, _y, _x):
+                return 0
+
+        rejects(lambda: M.stream_tensor("BIT_TYPED_K8", CustomPlane(), 0, 0))
+        attacks.append("custom_plane")
+        rejects(lambda: M.stream_tensor("BIT_TYPED_K8", CustomPlane(), 2, 7))
+        attacks.append("module_call_scope")
+
+        canonical_shape = M.M.INPUT_SHAPES[0]
+        foreign = Path(directory) / "foreign_d0.bitpack"
+        foreign.write_bytes(bytes((int(canonical_shape[0]) *
+            int(canonical_shape[2]) * int(canonical_shape[3]) *
+            int(canonical_shape[4]) + 7) // 8))
+        with M.MmapLittleBitPlane(foreign, canonical_shape) as plane:
+            rejects(lambda: M.stream_tensor("BIT_TYPED_K8", plane, 0, 0))
+            attacks.append("foreign_plane")
+
     scheduler = M.StreamingCallScheduler("BIT_TYPED_K8")
     unresolved = M.M.request("bad", "BIT_TYPED_K8", "compute", [0], [0],
                              288, ["absent"], "done")
@@ -96,8 +120,8 @@ def main():
                            [221184], [0], 48)
     rejects(lambda: scheduler.one(bad_psum)); attacks.append("capacity")
 
-    assert len(attacks) == 13
-    print("PASS M1543 source tests attacks=13 configs=3 pilot=0 production=0 product=0")
+    assert len(attacks) == 16
+    print("PASS M1549 source tests attacks=16 configs=3 pilot=0 production=0 product=0")
 
 
 if __name__ == "__main__":
