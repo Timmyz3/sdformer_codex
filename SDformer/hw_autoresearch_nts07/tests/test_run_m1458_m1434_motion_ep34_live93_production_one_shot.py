@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import copy
+import contextlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = ROOT / "hw_autoresearch_nts07/scripts/run_m1458_m1434_motion_ep34_live93_production_one_shot.py"
+spec = importlib.util.spec_from_file_location("test_m1458_source", SOURCE)
+M = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = M
+spec.loader.exec_module(M)
+
+
+def completed(stdout="", returncode=0, stderr=""):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
+
+
+class Tests(unittest.TestCase):
+    def controller_fixture(self, root: Path, state="T", ppid=1, count=1):
+        roots = []
+        for offset in range(count):
+            pid = root / str(M.CONTROLLER_PID + offset)
+            pid.mkdir()
+            (pid / "cmdline").write_bytes(b"\0".join(x.encode() for x in M.CONTROLLER_ARGV) + b"\0")
+            fields = [state, str(ppid)] + ["0"] * 17 + [
+                str(M.CONTROLLER_START_TICKS + offset)]
+            (pid / "stat").write_text(f"{pid.name} (python) " + " ".join(fields) + "\n")
+            (pid / "cwd").touch(); (pid / "exe").touch(); roots.append(pid)
+        return roots
+
+    def readlink(self, path):
+        return M.CONTROLLER_EXE if Path(path).name == "exe" else str(M.REMOTE_ROOT)
+
+    def gpu_runner(self, command, **_kwargs):
+        if "--query-gpu=index,uuid,name,memory.used,memory.total" in command:
+            return completed(f"0, {M.GPU_UUID}, {M.GPU_NAME}, 0, {M.GPU_TOTAL_MIB}\n")
+        return completed("")
+
+    def test_01_prerequisite_author_and_blind_seals(self):
+        M.verify_prerequisites()
+
+    def test_02_source_contract_and_command_self_proof(self):
+        policy = M.validate_source_contract()
+        self.assertFalse(policy["launch_authorized"])
+        self.assertEqual(policy["commands"], M.source_commands())
+
+    def test_03_source_absent_positive_no_attempt(self):
+        with mock.patch.object(M, "future_paths", return_value=(ROOT / ".m1458_abs1",)), \
+             mock.patch.object(M, "inspect_gpu") as gpu, \
+             mock.patch.object(M, "consume_attempt") as consume:
+            M.source_absent_self_check()
+        gpu.assert_not_called(); consume.assert_not_called()
+
+    def test_04_source_absent_rejects_future_residue(self):
+        with tempfile.TemporaryDirectory() as raw:
+            residue = Path(raw) / "blind"; residue.write_text("x")
+            with mock.patch.object(M, "future_paths", return_value=(residue,)), \
+                 self.assertRaisesRegex(M.M1458Error, "future"):
+                M.source_absent_self_check()
+
+    def test_05_strict_json_rejects_duplicate(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "x.json"; path.write_text('{"a":1,"a":2}')
+            with self.assertRaisesRegex(M.M1458Error, "duplicate"):
+                M.strict_json(path)
+
+    def test_06_external_sha_absence_fails(self):
+        with self.assertRaisesRegex(M.M1458Error, "external SHA"):
+            M.external_bindings({})
+
+    def test_07_exact_controller_passes(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); self.controller_fixture(root)
+            with mock.patch.object(M.os, "readlink", side_effect=self.readlink):
+                value = M.inspect_controller(root)
+            self.assertEqual(value["state"], "T"); self.assertEqual(value["ppid"], 1)
+
+    def test_08_running_controller_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); self.controller_fixture(root, state="S")
+            with mock.patch.object(M.os, "readlink", side_effect=self.readlink), \
+                 self.assertRaisesRegex(M.M1458Error, "identity"):
+                M.inspect_controller(root)
+
+    def test_09_duplicate_controller_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); self.controller_fixture(root, count=2)
+            with mock.patch.object(M.os, "readlink", side_effect=self.readlink), \
+                 self.assertRaisesRegex(M.M1458Error, "exactly one"):
+                M.inspect_controller(root)
+
+    def test_10_wrong_controller_ppid_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); self.controller_fixture(root, ppid=2)
+            with mock.patch.object(M.os, "readlink", side_effect=self.readlink), \
+                 self.assertRaisesRegex(M.M1458Error, "identity"):
+                M.inspect_controller(root)
+
+    def test_11_gpu_idle_passes(self):
+        value = M.inspect_gpu(self.gpu_runner)
+        self.assertEqual(value["compute_apps"], []); self.assertEqual(value["memory_used_mib"], 0)
+
+    def test_12_gpu_app_rejected(self):
+        def runner(command, **kwargs):
+            if "--query-gpu=index,uuid,name,memory.used,memory.total" in command:
+                return self.gpu_runner(command, **kwargs)
+            return completed(f"123, {M.GPU_UUID}\n")
+        with self.assertRaisesRegex(M.M1458Error, "compute"):
+            M.inspect_gpu(runner)
+
+    def test_13_gpu_query_failure_rejected(self):
+        with self.assertRaisesRegex(M.M1458Error, "query failed"):
+            M.inspect_gpu(lambda *a, **k: completed(returncode=1))
+
+    def test_14_gpu_memory_busy_rejected(self):
+        def runner(command, **_kwargs):
+            if "--query-gpu=index,uuid,name,memory.used,memory.total" in command:
+                return completed(f"0, {M.GPU_UUID}, {M.GPU_NAME}, 65, {M.GPU_TOTAL_MIB}\n")
+            return completed("")
+        with self.assertRaisesRegex(M.M1458Error, "idleness"):
+            M.inspect_gpu(runner)
+
+    def test_15_attempt_is_structured_O_EXCL_no_retry(self):
+        controller = {"pid": 1, "state": "T"}
+        values = {"M1458_EXPECTED_RUNNER_SHA256": "a" * 64}
+        with tempfile.TemporaryDirectory() as raw:
+            marker = Path(raw) / "attempt"
+            with mock.patch.object(M, "CANONICAL_ATTEMPT", marker):
+                M.consume_attempt(controller, values)
+                data = M.strict_json(marker)
+                self.assertFalse(data["automatic_retry"])
+                self.assertFalse(data["controller_restore_permitted"])
+                with self.assertRaises(FileExistsError): M.consume_attempt(controller, values)
+
+    def test_16_failure_and_success_restore_boundary(self):
+        controller = {"pid": 1, "state": "T"}
+        failed = json.loads(M.log_payload("FAIL", controller, "x"))
+        passed = json.loads(M.log_payload("PASS", controller, "x"))
+        self.assertFalse(failed["controller_restore_permitted"])
+        self.assertTrue(passed["controller_restore_permitted_after_success"])
+        self.assertFalse(passed["controller_restored_by_runner"])
+
+    def test_17_atomic_log_no_replace(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); canonical = root / "p.log"; temp = root / "p.log.tmp.x"
+            with mock.patch.object(M, "CANONICAL_LOG", canonical):
+                M.publish_log(temp, b"one")
+                self.assertEqual(canonical.read_bytes(), b"one")
+                with self.assertRaises(M.M1458Error): M.publish_log(root / "p.log.tmp.y", b"two")
+            self.assertEqual(canonical.read_bytes(), b"one")
+
+    def test_18_namespaces_collision_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); result = root / "result"; result.mkdir()
+            with mock.patch.object(M, "CANONICAL_RESULT", result), \
+                 mock.patch.object(M, "CANONICAL_ATTEMPT", root / "a"), \
+                 mock.patch.object(M, "CANONICAL_LOG", root / "l"), \
+                 self.assertRaisesRegex(M.M1458Error, "not fresh"):
+                M.namespaces_fresh()
+
+    def test_19_remote_preflight_rechecks_controller_and_gpu(self):
+        runtime, binding = {"x": 1}, {"checkpoint_path": "x", "config_path": "y"}
+        controller = {"pid": 1, "state": "T"}; values = {"x": "y"}
+        with mock.patch.object(M.os, "geteuid", return_value=0), \
+             mock.patch.object(M, "ROOT", M.REMOTE_ROOT), mock.patch.object(M.Path, "cwd", return_value=M.REMOTE_ROOT), \
+             mock.patch.object(M, "verify_prerequisites"), mock.patch.object(M, "validate_source_contract"), \
+             mock.patch.object(M, "external_bindings", return_value=values), mock.patch.object(M, "validate_future_authorities"), \
+             mock.patch.object(M, "namespaces_fresh") as fresh, mock.patch.object(M, "inspect_controller", return_value=controller) as ctl, \
+             mock.patch.object(M, "inspect_gpu", return_value={}) as gpu, mock.patch.object(M, "build_runtime", return_value=(runtime, binding)), \
+             mock.patch.object(M, "validate_bound_capture_files"):
+            observed = M.remote_preflight({})
+        self.assertEqual(observed, (runtime, binding, controller, values))
+        self.assertEqual(fresh.call_count, 2); self.assertEqual(ctl.call_count, 2); self.assertEqual(gpu.call_count, 2)
+
+    def test_20_no_controller_signal_or_restore_primitive(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        for forbidden in ("os.kill", "SIGCONT", "send_signal", "kill("):
+            self.assertNotIn(forbidden, source)
+        self.assertIn("controller_restored_by_runner", source)
+
+    def test_21_execute_failure_before_attempt_writes_no_log(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); log = root / "p.log"; temp = root / "p.log.tmp.x"
+            with mock.patch.object(M, "CANONICAL_LOG", log), \
+                 mock.patch.object(M, "remote_preflight", side_effect=M.M1458Error("pre")), \
+                 self.assertRaises(M.M1458Error):
+                M.execute_once(temp)
+            self.assertFalse(log.exists())
+
+    def test_22_m1434_exact_population_binding(self):
+        self.assertEqual(M.M1434.EXPECTED_STATIC_ATLIF, 105)
+        self.assertEqual(M.M1434.EXPECTED_LIVE_ATLIF, 93)
+        self.assertEqual(M.M1434.EXPECTED_LIVE_MODULES, 247)
+        self.assertEqual(M.M1434.EXPECTED_ORDERED_RECORDS, 9880)
+        self.assertEqual(M.M1434.EXPECTED_PAYLOAD, 640)
+
+    def test_23_wrong_controller_pid_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); roots = self.controller_fixture(root)
+            roots[0].rename(root / str(M.CONTROLLER_PID + 99))
+            with mock.patch.object(M.os, "readlink", side_effect=self.readlink), \
+                 self.assertRaisesRegex(M.M1458Error, "identity"):
+                M.inspect_controller(root)
+
+    def test_24_wrong_controller_start_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); roots = self.controller_fixture(root)
+            pid = roots[0]
+            fields = ["T", "1"] + ["0"] * 17 + [str(M.CONTROLLER_START_TICKS + 1)]
+            (pid / "stat").write_text(f"{pid.name} (python) " + " ".join(fields) + "\n")
+            with mock.patch.object(M.os, "readlink", side_effect=self.readlink), \
+                 self.assertRaisesRegex(M.M1458Error, "identity"):
+                M.inspect_controller(root)
+
+    def test_25_preflight_requires_uid0_before_other_actions(self):
+        with mock.patch.object(M.os, "geteuid", return_value=1000), \
+             mock.patch.object(M, "verify_prerequisites") as prerequisites, \
+             self.assertRaisesRegex(M.M1458Error, "uid0"):
+            M.remote_preflight({})
+        prerequisites.assert_not_called()
+
+    def test_26_fresh_future_chain_numbers(self):
+        paths = [str(path) for path in M.future_paths()]
+        self.assertIn("m1461_", paths[0])
+        self.assertIn("m1462_", paths[1])
+        self.assertIn("m1463_", paths[2])
+        self.assertEqual(len(paths), 3)
+
+    def test_27_gpu_used_rejects_negative_decimal(self):
+        def runner(command, **_kwargs):
+            if "--query-gpu=index,uuid,name,memory.used,memory.total" in command:
+                return completed(
+                    f"0, {M.GPU_UUID}, {M.GPU_NAME}, -1, {M.GPU_TOTAL_MIB}\n")
+            return completed("")
+        with self.assertRaisesRegex(M.M1458Error, "unsigned decimal"):
+            M.inspect_gpu(runner)
+
+    def test_28_gpu_used_exact_int_helper_rejects_coercions(self):
+        for value in (-1.0, True, False, 1.0, "1"):
+            with self.subTest(value=repr(value)), \
+                 self.assertRaisesRegex(M.M1458Error, "exact int"):
+                M.exact_int(value, "memory.used")
+        self.assertEqual(M.exact_int(0, "memory.used"), 0)
+        self.assertEqual(M.exact_int(64, "memory.used"), 64)
+
+    def test_29_gpu_used_rejects_negative_int_and_65(self):
+        for value in (-2, -1, True, 1.0, "1", 65):
+            with self.subTest(value=repr(value)), \
+                 self.assertRaises(M.M1458Error):
+                M.validate_used_mib(value)
+        self.assertEqual(M.validate_used_mib(0), 0)
+        self.assertEqual(M.validate_used_mib(64), 64)
+
+    def test_30_gpu_used_text_rejects_float_bool_string_forms(self):
+        for value in ("1.0", "True", "False", "+1", "-0", " 1", "1 ", "00"):
+            with self.subTest(value=value), \
+                 self.assertRaisesRegex(M.M1458Error,
+                                        "unsigned decimal|canonical decimal"):
+                M.parse_decimal_int(value, "memory.used")
+
+    def test_31_gpu_total_and_identity_guards_do_not_regress(self):
+        attacks = [
+            f"1, {M.GPU_UUID}, {M.GPU_NAME}, 0, {M.GPU_TOTAL_MIB}\n",
+            f"0, bad, {M.GPU_NAME}, 0, {M.GPU_TOTAL_MIB}\n",
+            f"0, {M.GPU_UUID}, bad, 0, {M.GPU_TOTAL_MIB}\n",
+            f"0, {M.GPU_UUID}, {M.GPU_NAME}, 0, {M.GPU_TOTAL_MIB - 1}\n",
+        ]
+        for row in attacks:
+            def runner(command, **_kwargs):
+                if "--query-gpu=index,uuid,name,memory.used,memory.total" in command:
+                    return completed(row)
+                return completed("")
+            with self.subTest(row=row), \
+                 self.assertRaisesRegex(M.M1458Error, "identity/idleness"):
+                M.inspect_gpu(runner)
+
+    def test_32_fresh_m1458_namespace_projection_restores_m1434(self):
+        original = M.M1434.CANONICAL_RESULT
+        with M.m1458_capture_namespace():
+            self.assertEqual(M.M1434.CANONICAL_RESULT, M.CANONICAL_RESULT)
+            self.assertIn("m1458_m1434_", M.M1434.CANONICAL_RESULT.name)
+        self.assertEqual(M.M1434.CANONICAL_RESULT, original)
+
+    def test_33_attempt_precedes_capture_under_exclusive_lease(self):
+        events = []
+
+        class Substrate:
+            @contextlib.contextmanager
+            def exclusive_gpu_lease(self, _path):
+                events.append("lease_enter")
+                yield
+                events.append("lease_exit")
+
+        runtime = {"contract_path": "x", "capture": {}, "cohort": {}, "output": {}}
+        binding = {"checkpoint_path": "x", "config_path": "y"}
+        controller = {"pid": M.CONTROLLER_PID, "state": "T"}
+        values = {"M1458_EXPECTED_RUNNER_SHA256": "a" * 64}
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); canonical = root / "production.log"
+            temp = root / "production.log.tmp.test"
+            with mock.patch.object(M.os, "geteuid", return_value=0), \
+                 mock.patch.object(M, "CANONICAL_LOG", canonical), \
+                 mock.patch.object(M, "remote_preflight",
+                                   return_value=(runtime, binding, controller, values)), \
+                 mock.patch.object(M.M1434.R1, "load_substrate", return_value=Substrate()), \
+                 mock.patch.object(M, "namespaces_fresh"), \
+                 mock.patch.object(M, "inspect_controller", return_value=controller), \
+                 mock.patch.object(M, "inspect_gpu", return_value={}), \
+                 mock.patch.object(M, "build_runtime", return_value=(runtime, binding)), \
+                 mock.patch.object(M, "validate_bound_capture_files"), \
+                 mock.patch.object(M, "consume_attempt", side_effect=lambda *_: events.append("attempt")), \
+                 mock.patch.object(M, "delegate_capture",
+                                   side_effect=lambda *_a, **_k: events.append("capture") or root / "result"), \
+                 mock.patch.object(M.M1434.M1249.R1, "verify_double_seal",
+                                   side_effect=lambda *_: events.append("seal")), \
+                 mock.patch.object(M, "publish_log", side_effect=lambda *_: events.append("log")):
+                M.execute_once(temp)
+        self.assertLess(events.index("lease_enter"), events.index("attempt"))
+        self.assertLess(events.index("attempt"), events.index("capture"))
+        self.assertLess(events.index("capture"), events.index("lease_exit"))
+        self.assertLess(events.index("lease_exit"), events.index("seal"))
+        self.assertLess(events.index("seal"), events.index("log"))
+
+    def test_34_failure_log_marks_quarantine_and_forbids_restore(self):
+        failed = json.loads(M.log_payload("FAIL", {"pid": 1}, "failure"))
+        self.assertTrue(failed["failure_quarantine_required"])
+        self.assertFalse(failed["canonical_result_promotion_permitted"])
+        self.assertFalse(failed["controller_restore_permitted"])
+        self.assertFalse(failed["automatic_retry"])
+
+    def test_35_post_attempt_capture_failure_publishes_fail_log(self):
+        class Substrate:
+            @contextlib.contextmanager
+            def exclusive_gpu_lease(self, _path):
+                yield
+
+        runtime = {"contract_path": "x", "capture": {}, "cohort": {}, "output": {}}
+        binding = {"checkpoint_path": "x", "config_path": "y"}
+        controller = {"pid": M.CONTROLLER_PID, "state": "T"}
+        values = {"M1458_EXPECTED_RUNNER_SHA256": "a" * 64}
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); canonical = root / "production.log"
+            temp = root / "production.log.tmp.test"
+            with mock.patch.object(M.os, "geteuid", return_value=0), \
+                 mock.patch.object(M, "CANONICAL_LOG", canonical), \
+                 mock.patch.object(M, "remote_preflight",
+                                   return_value=(runtime, binding, controller, values)), \
+                 mock.patch.object(M.M1434.R1, "load_substrate", return_value=Substrate()), \
+                 mock.patch.object(M, "namespaces_fresh"), \
+                 mock.patch.object(M, "inspect_controller", return_value=controller), \
+                 mock.patch.object(M, "inspect_gpu", return_value={}), \
+                 mock.patch.object(M, "build_runtime", return_value=(runtime, binding)), \
+                 mock.patch.object(M, "validate_bound_capture_files"), \
+                 mock.patch.object(M, "consume_attempt"), \
+                 mock.patch.object(M, "delegate_capture",
+                                   side_effect=RuntimeError("capture attack")), \
+                 self.assertRaisesRegex(RuntimeError, "capture attack"):
+                M.execute_once(temp)
+            failed = M.strict_json(canonical)
+        self.assertEqual(failed["status"], "FAIL")
+        self.assertTrue(failed["failure_quarantine_required"])
+        self.assertFalse(failed["controller_restore_permitted"])
+        self.assertFalse(failed["automatic_retry"])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
