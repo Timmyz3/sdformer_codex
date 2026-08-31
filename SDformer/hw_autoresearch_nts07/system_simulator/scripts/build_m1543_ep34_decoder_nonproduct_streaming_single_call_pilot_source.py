@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M1549 successor source for one ep34 decoder non-product calibration call.
+"""M1553 successor source for one ep34 decoder non-product calibration call.
 
 M1549 is deliberately a *source* gate.  It binds the independently hammered
 M1539 request kernel, fixes the calibration population to call zero (D0,
@@ -8,10 +8,14 @@ shape.  It does not expose an actual-payload pilot CLI and cannot launch the
 120-call production population.
 
 The future launch hammer may import :func:`stream_actual_call` after pinning
-this source byte-for-byte.  The implementation mmap's one bit plane, emits and
-schedules requests destination by destination, and retires dependency tokens
-after each destination.  Bank calendars, outstanding queues, address digests,
-the nine-tile weight cache and cycle state are never reset inside a call.
+this source byte-for-byte.  That is the only executable entry point: it accepts
+only a non-product configuration and opens the canonical call internally.
+There is deliberately no public helper that accepts a plane, module or call
+ordinal.  The implementation hashes and fstat's the actual opened descriptor,
+mmap's that descriptor, emits and schedules requests destination by
+destination, and retires dependency tokens after each destination.  Bank
+calendars, outstanding queues, address digests, the nine-tile weight cache and
+cycle state are never reset inside a call.
 
 Python syntax is compatible with CPython 3.6.
 """
@@ -20,6 +24,7 @@ import hashlib
 import importlib.util
 import json
 import mmap
+import os
 from pathlib import Path
 import resource
 import stat
@@ -33,8 +38,8 @@ M1542 = HW / "reviews/m1542_m1539_decoder_nonproduct_address_timed_source_indepe
 M1542_REVIEW_SHA256 = "b85014ca32604b7b2659a7ba962bfb873bdb4c330dc011ff94d263ee6898c970"
 M1542_OUTER_FILE_SHA256 = "3d1f38281d106b040340e56e210698fa245020eff874783702e8901718207a3a"
 
-SCHEMA = "m1549_ep34_decoder_nonproduct_streaming_single_call_pilot_successor_source_r2_v1"
-STATUS = "M1549_SOURCE_ONLY__CANONICAL_CALL_AND_PLANE_LOCKED__EXECUTION_AND_PRODUCTION_BLOCKED"
+SCHEMA = "m1553_ep34_decoder_nonproduct_streaming_single_call_pilot_fd_bound_source_r3_v1"
+STATUS = "M1553_SOURCE_ONLY__INTERNAL_CANONICAL_FD_BOUND_ENTRY__EXECUTION_AND_PRODUCTION_BLOCKED"
 PILOT_CALL_ORDINAL = 0
 PILOT_SAMPLE_ID = 10
 PILOT_MODULE = 0
@@ -57,6 +62,17 @@ def sha256(path):
     with Path(path).open("rb") as stream:
         for block in iter(lambda: stream.read(1 << 20), b""):
             digest.update(block)
+    return digest.hexdigest()
+
+
+def sha256_open_stream(stream):
+    """Hash the opened object which will back mmap, never a second pathname."""
+    position = stream.tell()
+    stream.seek(0)
+    digest = hashlib.sha256()
+    for block in iter(lambda: stream.read(1 << 20), b""):
+        digest.update(block)
+    stream.seek(position)
     return digest.hexdigest()
 
 
@@ -147,14 +163,37 @@ class MmapLittleBitPlane(object):
         self.height = int(shape[3]); self.width = int(shape[4])
         self.elements = (self.timesteps * self.channels * self.height * self.width)
         self.bytes = (self.elements + 7) // 8
-        if expected_sha256 is not None:
-            regular_exact(self.path, expected_sha256, "pilot payload")
-        else:
-            require(self.path.is_file() and not self.path.is_symlink(),
-                    "bad pilot payload file")
-        require(self.path.stat().st_size == self.bytes,
+        try:
+            path_stat = self.path.lstat()
+        except FileNotFoundError as error:
+            raise M1543Error("missing pilot payload") from error
+        require(stat.S_ISREG(path_stat.st_mode) and not self.path.is_symlink(),
+                "bad pilot payload file")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(str(self.path), flags)
+        except OSError as error:
+            raise M1543Error("cannot safely open pilot payload") from error
+        self._stream = os.fdopen(descriptor, "rb")
+        opened_stat = os.fstat(self._stream.fileno())
+        require(stat.S_ISREG(opened_stat.st_mode),
+                "opened pilot payload is not regular")
+        require((opened_stat.st_dev, opened_stat.st_ino, opened_stat.st_size) ==
+                (path_stat.st_dev, path_stat.st_ino, path_stat.st_size),
+                "pilot payload changed while opening")
+        require(opened_stat.st_size == self.bytes,
                 "pilot payload byte count drift")
-        self._stream = self.path.open("rb")
+        self.opened_device = int(opened_stat.st_dev)
+        self.opened_inode = int(opened_stat.st_ino)
+        self.opened_size = int(opened_stat.st_size)
+        self.opened_sha256 = sha256_open_stream(self._stream)
+        if expected_sha256 is not None:
+            require(self.opened_sha256 == expected_sha256,
+                    "opened pilot payload SHA drift")
         self._map = mmap.mmap(self._stream.fileno(), 0, access=mmap.ACCESS_READ)
 
     def bit(self, timestep, channel, y, x):
@@ -239,87 +278,6 @@ class StreamingCallScheduler(object):
                     "peak_rss_limit_kib": PEAK_RSS_LIMIT_KIB}}
 
 
-def stream_tensor(config, plane, module, call_ordinal):
-    """Schedule one complete T10 call while retaining only bounded live state."""
-    M.validate_config(config)
-    require(config != FORBIDDEN_CONFIG, "product configuration is forbidden")
-    module = int(module); call_ordinal = int(call_ordinal)
-    require(module == PILOT_MODULE and call_ordinal == PILOT_CALL_ORDINAL,
-            "streaming source is locked to canonical call0 D0")
-    row = selected_pilot_record()
-    canonical_path = (M.M1521_ROOT / row["positive_output"]).resolve()
-    require(isinstance(plane, MmapLittleBitPlane),
-            "custom or unverified pilot plane is forbidden")
-    require(plane.path.resolve() == canonical_path and
-            plane.expected_sha256 == row["positive_output_sha256"],
-            "pilot plane is not bound to the canonical path and SHA")
-    regular_exact(plane.path, row["positive_output_sha256"],
-                  "canonical pilot payload")
-    cin, cout, hin, win, hout, wout = M.GEOMETRY[module]
-    require((plane.timesteps, plane.channels, plane.height, plane.width) ==
-            (PILOT_TIMESTEPS, cin, hin, win), "pilot tensor geometry drift")
-    runner = StreamingCallScheduler(config)
-    cache = M.WeightTileCache()
-    output_blocks = (cout + 95) // 96
-    persistent_control = "{}:c{}:control_done".format(config, call_ordinal)
-    first_source = "{}:c{}:t0:source_done".format(config, call_ordinal)
-    source_bytes = (cin * hin * win + 7) // 8
-    runner.one(M.request("{}:c{}:t0:source".format(config, call_ordinal),
-                         config, "external_read",
-                         [(1 << 60) | (call_ordinal << 28)], [0], source_bytes,
-                         produces=first_source))
-    control_read = "{}:c{}:control_read_done".format(config, call_ordinal)
-    runner.one(M.request("{}:c{}:control_read".format(config, call_ordinal),
-                         config, "external_read",
-                         [(5 << 60) | (call_ordinal << 12)], [0], 144,
-                         [first_source], control_read))
-    runner.one(M.request("{}:c{}:control_write".format(config, call_ordinal),
-                         config, "external_write",
-                         [(5 << 60) | (call_ordinal << 12)], [0], 144,
-                         [control_read], persistent_control))
-    barrier = persistent_control
-    for timestep in range(PILOT_TIMESTEPS):
-        if timestep:
-            barrier = "{}:c{}:t{}:source_done".format(
-                config, call_ordinal, timestep)
-            runner.one(M.request("{}:c{}:t{}:source".format(
-                config, call_ordinal, timestep), config, "external_read",
-                [(1 << 60) | (call_ordinal << 28) | (timestep << 20)], [0],
-                source_bytes, produces=barrier))
-        getter = lambda channel, y, x, t=timestep: plane.bit(t, channel, y, x)
-        for oy in range(hout):
-            for ox in range(wout):
-                destination = oy * wout + ox
-                contributors = M.contributors_for_destination(
-                    getter, config, cin, hin, win, oy, ox)
-                for output_block in range(output_blocks):
-                    last = ""
-                    rows = M.destination_transactions(
-                        config, module, timestep, destination, output_block,
-                        contributors, barrier, cache)
-                    for row in rows:
-                        runner.one(row)
-                        if row["kind"] == "psum_write":
-                            last = row["produces"]
-                    commit_id = "{}:c{}:t{}:commit:{}:{}".format(
-                        config, call_ordinal, timestep, destination, output_block)
-                    commit_address = ((4 << 60) | (module << 52) |
-                                      (timestep << 44) |
-                                      ((destination * output_blocks + output_block) *
-                                       M.OUTPUT_COMMIT_BYTES))
-                    runner.one(M.request(commit_id, config, "commit",
-                        [commit_address], [0], M.OUTPUT_COMMIT_BYTES,
-                        [last] if last else [barrier]))
-                runner.retire_destination((barrier, persistent_control))
-        runner.timesteps += 1
-    result = runner.finish()
-    result.update({"schema": SCHEMA, "pilot_call_ordinal": call_ordinal,
-                   "module_ordinal": module, "timesteps": PILOT_TIMESTEPS,
-                   "diagnostic_only": True, "paper_result": False,
-                   "product_capture": False, "production": False})
-    return result
-
-
 def selected_pilot_record():
     manifest = M.strict_json(M.M1521_MANIFEST)
     M.validate_population_manifest(manifest)
@@ -332,15 +290,112 @@ def selected_pilot_record():
     return row
 
 
-def stream_actual_call(config):
-    """Internal one-call engine for a future independently pinned launcher."""
-    M.validate_config(config)
-    require(config != FORBIDDEN_CONFIG, "product configuration is forbidden")
-    row = selected_pilot_record()
-    path = M.M1521_ROOT / row["positive_output"]
-    with MmapLittleBitPlane(path, row["shape"],
-                            row["positive_output_sha256"]) as plane:
-        return stream_tensor(config, plane, PILOT_MODULE, PILOT_CALL_ORDINAL)
+def _build_canonical_streamer():
+    """Capture the verified types and kernel; expose no injectable plane seam."""
+    bound_m = M
+    plane_type = MmapLittleBitPlane
+    scheduler_type = StreamingCallScheduler
+    select_record = selected_pilot_record
+    canonical_root = M.M1521_ROOT.resolve()
+    module = PILOT_MODULE
+    call_ordinal = PILOT_CALL_ORDINAL
+
+    def schedule_verified(config, plane, row):
+        require(type(plane) is plane_type,
+                "canonical streamer requires the exact mmap plane type")
+        canonical_path = (canonical_root / row["positive_output"]).resolve()
+        require(plane.path.resolve() == canonical_path and
+                plane.expected_sha256 == row["positive_output_sha256"] and
+                plane.opened_sha256 == row["positive_output_sha256"],
+                "opened pilot fd is not bound to canonical path and SHA")
+        cin, cout, hin, win, hout, wout = bound_m.GEOMETRY[module]
+        require((plane.timesteps, plane.channels, plane.height, plane.width) ==
+                (PILOT_TIMESTEPS, cin, hin, win),
+                "pilot tensor geometry drift")
+        runner = scheduler_type(config)
+        cache = bound_m.WeightTileCache()
+        output_blocks = (cout + 95) // 96
+        persistent_control = "{}:c{}:control_done".format(config, call_ordinal)
+        first_source = "{}:c{}:t0:source_done".format(config, call_ordinal)
+        source_bytes = (cin * hin * win + 7) // 8
+        runner.one(bound_m.request(
+            "{}:c{}:t0:source".format(config, call_ordinal), config,
+            "external_read", [(1 << 60) | (call_ordinal << 28)], [0],
+            source_bytes, produces=first_source))
+        control_read = "{}:c{}:control_read_done".format(config, call_ordinal)
+        runner.one(bound_m.request(
+            "{}:c{}:control_read".format(config, call_ordinal), config,
+            "external_read", [(5 << 60) | (call_ordinal << 12)], [0], 144,
+            [first_source], control_read))
+        runner.one(bound_m.request(
+            "{}:c{}:control_write".format(config, call_ordinal), config,
+            "external_write", [(5 << 60) | (call_ordinal << 12)], [0], 144,
+            [control_read], persistent_control))
+        barrier = persistent_control
+        for timestep in range(PILOT_TIMESTEPS):
+            if timestep:
+                barrier = "{}:c{}:t{}:source_done".format(
+                    config, call_ordinal, timestep)
+                runner.one(bound_m.request(
+                    "{}:c{}:t{}:source".format(config, call_ordinal, timestep),
+                    config, "external_read",
+                    [(1 << 60) | (call_ordinal << 28) | (timestep << 20)],
+                    [0], source_bytes, produces=barrier))
+            getter = lambda channel, y, x, t=timestep: plane.bit(
+                t, channel, y, x)
+            for oy in range(hout):
+                for ox in range(wout):
+                    destination = oy * wout + ox
+                    contributors = bound_m.contributors_for_destination(
+                        getter, config, cin, hin, win, oy, ox)
+                    for output_block in range(output_blocks):
+                        last = ""
+                        rows = bound_m.destination_transactions(
+                            config, module, timestep, destination,
+                            output_block, contributors, barrier, cache)
+                        for request_row in rows:
+                            runner.one(request_row)
+                            if request_row["kind"] == "psum_write":
+                                last = request_row["produces"]
+                        commit_id = "{}:c{}:t{}:commit:{}:{}".format(
+                            config, call_ordinal, timestep, destination,
+                            output_block)
+                        commit_address = (
+                            (4 << 60) | (module << 52) | (timestep << 44) |
+                            ((destination * output_blocks + output_block) *
+                             bound_m.OUTPUT_COMMIT_BYTES))
+                        runner.one(bound_m.request(
+                            commit_id, config, "commit", [commit_address],
+                            [0], bound_m.OUTPUT_COMMIT_BYTES,
+                            [last] if last else [barrier]))
+                    runner.retire_destination((barrier, persistent_control))
+            runner.timesteps += 1
+        result = runner.finish()
+        result.update({"schema": SCHEMA,
+            "pilot_call_ordinal": call_ordinal,
+            "module_ordinal": module, "timesteps": PILOT_TIMESTEPS,
+            "diagnostic_only": True, "paper_result": False,
+            "product_capture": False, "production": False,
+            "payload_fd_sha256": plane.opened_sha256,
+            "payload_fd_size": plane.opened_size})
+        return result
+
+    def canonical_entry(config):
+        bound_m.validate_config(config)
+        require(config != FORBIDDEN_CONFIG,
+                "product configuration is forbidden")
+        row = select_record()
+        require(row["global_call_ordinal"] == call_ordinal and
+                row["module_ordinal"] == module,
+                "canonical streamer population drift")
+        path = canonical_root / row["positive_output"]
+        with plane_type(path, row["shape"],
+                        row["positive_output_sha256"]) as plane:
+            return schedule_verified(config, plane, row)
+    return canonical_entry
+
+
+stream_actual_call = _build_canonical_streamer()
 
 
 def validate_authorities(full_payload=False):
@@ -405,7 +460,7 @@ def synthetic_self_test():
             len(set(row["commit_sequence_sha256"] for row in results)) == 1,
             "streaming synthetic comparator drift")
     return {"schema": SCHEMA,
-            "status": "PASS_M1543_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION",
+            "status": "PASS_M1553_FD_BOUND_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION",
             "configurations": list(M.CONFIGS), "results": results,
             "pilot_execution": False, "production": False,
             "product_capture": False}
@@ -426,7 +481,9 @@ def describe():
                 "peak_rss_limit_kib": PEAK_RSS_LIMIT_KIB},
             "source_capabilities": {"fast_preflight": True,
                 "synthetic_test": True, "actual_pilot_engine": True,
-                "pilot_cli": False, "production_cli": False},
+                "pilot_cli": False, "production_cli": False,
+                "external_plane_parameter": False,
+                "opened_fd_hash_binding": True},
             "claim_boundary": {"source_only": True,
                 "pilot_executed": False, "production": False,
                 "transactions": False, "cycles": False, "traffic": False,
@@ -448,7 +505,7 @@ def main(argv=None):
         value = describe()
     elif args.preflight:
         value = {"schema": SCHEMA,
-            "status": "PASS_M1543_STREAMING_SOURCE_PREFLIGHT__NO_PILOT_NO_PRODUCTION",
+            "status": "PASS_M1553_FD_BOUND_STREAMING_SOURCE_PREFLIGHT__NO_PILOT_NO_PRODUCTION",
             "authorities": validate_authorities(args.verify_payload_members),
             "pilot_execution": False, "production": False}
     else:

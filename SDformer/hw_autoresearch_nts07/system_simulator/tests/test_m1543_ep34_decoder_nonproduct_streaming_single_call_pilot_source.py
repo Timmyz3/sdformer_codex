@@ -30,6 +30,9 @@ def main():
     assert description["streaming"]["preserve_weight_cache"] is True
     assert description["source_capabilities"]["pilot_cli"] is False
     assert description["source_capabilities"]["production_cli"] is False
+    assert description["source_capabilities"]["external_plane_parameter"] is False
+    assert description["source_capabilities"]["opened_fd_hash_binding"] is True
+    assert not hasattr(M, "stream_tensor")
 
     authority = M.validate_authorities(False)
     assert authority["pilot_execution"] is False
@@ -42,7 +45,7 @@ def main():
 
     synthetic = M.synthetic_self_test()
     assert synthetic["status"] == (
-        "PASS_M1543_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION")
+        "PASS_M1553_FD_BOUND_STREAMING_SOURCE_SYNTHETIC_TEST__NO_PILOT_NO_PRODUCTION")
     assert synthetic["pilot_execution"] is False
     assert synthetic["production"] is False
     assert synthetic["product_capture"] is False
@@ -80,29 +83,23 @@ def main():
             rejects(lambda: plane.bit(0, 8, 0, 0)); attacks.append("channel")
             rejects(lambda: plane.bit(0, 0, 2, 0)); attacks.append("coordinate")
 
-        class CustomPlane(object):
-            timesteps = 10
-            channels = M.M.GEOMETRY[0][0]
-            height = M.M.GEOMETRY[0][2]
-            width = M.M.GEOMETRY[0][3]
+        original = bytes((10 * 8 * 2 * 2 + 7) // 8)
+        replacement = bytes([0xff]) * len(original)
+        bound_path = Path(directory) / "fd_bound.bitpack"
+        moved_path = Path(directory) / "fd_bound.original"
+        bound_path.write_bytes(original)
+        with M.MmapLittleBitPlane(bound_path, (10, 1, 8, 2, 2)) as plane:
+            original_sha = M.sha256_open_stream(plane._stream)
+            bound_path.rename(moved_path)
+            bound_path.write_bytes(replacement)
+            assert plane.opened_sha256 == original_sha
+            assert plane.bit(0, 0, 0, 0) == 0
+            assert M.sha256(bound_path) != plane.opened_sha256
+            attacks.append("opened_fd_binding")
 
-            @staticmethod
-            def bit(_timestep, _channel, _y, _x):
-                return 0
-
-        rejects(lambda: M.stream_tensor("BIT_TYPED_K8", CustomPlane(), 0, 0))
-        attacks.append("custom_plane")
-        rejects(lambda: M.stream_tensor("BIT_TYPED_K8", CustomPlane(), 2, 7))
-        attacks.append("module_call_scope")
-
-        canonical_shape = M.M.INPUT_SHAPES[0]
-        foreign = Path(directory) / "foreign_d0.bitpack"
-        foreign.write_bytes(bytes((int(canonical_shape[0]) *
-            int(canonical_shape[2]) * int(canonical_shape[3]) *
-            int(canonical_shape[4]) + 7) // 8))
-        with M.MmapLittleBitPlane(foreign, canonical_shape) as plane:
-            rejects(lambda: M.stream_tensor("BIT_TYPED_K8", plane, 0, 0))
-            attacks.append("foreign_plane")
+        assert list(__import__("inspect").signature(
+            M.stream_actual_call).parameters) == ["config"]
+        attacks.append("no_plane_module_call_seam")
 
     scheduler = M.StreamingCallScheduler("BIT_TYPED_K8")
     unresolved = M.M.request("bad", "BIT_TYPED_K8", "compute", [0], [0],
@@ -120,8 +117,8 @@ def main():
                            [221184], [0], 48)
     rejects(lambda: scheduler.one(bad_psum)); attacks.append("capacity")
 
-    assert len(attacks) == 16
-    print("PASS M1549 source tests attacks=16 configs=3 pilot=0 production=0 product=0")
+    assert len(attacks) == 15
+    print("PASS M1553 source tests attacks=15 configs=3 fd_bound=1 pilot=0 production=0 product=0")
 
 
 if __name__ == "__main__":
