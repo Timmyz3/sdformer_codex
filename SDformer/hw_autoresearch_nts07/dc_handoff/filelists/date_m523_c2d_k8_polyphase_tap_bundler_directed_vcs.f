@@ -1,0 +1,3 @@
+rtl_m523/m523_c2d_k8_polyphase_tap_bundler.sv
+verif_m523/m523_c2d_k8_polyphase_tap_bundler_assertions.sv
+tb_m523/tb_m523_c2d_k8_polyphase_tap_bundler.sv

@@ -1,0 +1,5 @@
+rtl_m476/m476_dual_slot_parent_queue_pipeline.sv
+rtl_m476r2/m476r2_backpressure_safe_parent_queue_pipeline.sv
+verif_m476/m476_dual_slot_parent_queue_assertions.sv
+verif_m476r2/m476r2_backpressure_safe_assertions.sv
+tb_m476r2/tb_m476r2_backpressure_safe_parent_queue.sv

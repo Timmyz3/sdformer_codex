@@ -1,0 +1,2 @@
+printf '%s\n' 'M641_BASH_ENV_EXECUTED_BEFORE_BODY'
+unset BASH_ENV ENV

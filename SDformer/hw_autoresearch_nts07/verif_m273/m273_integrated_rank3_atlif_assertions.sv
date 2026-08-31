@@ -57,7 +57,16 @@ module m273_integrated_rank3_atlif_assertions #(
             ||stage1_issue||stage2_issue||product_push||fifo_pop));
     ap_release_requires_drain:assert property(@(posedge clk_core)disable iff(rst_core)
         release_ready|->config_loaded&&!busy&&result_fifo_occupancy==0
-            &&raw_bank_occupancy==0&&intermediate_bank_occupancy==0);
+            &&raw_bank_occupancy==0&&intermediate_bank_occupancy==0
+            &&debug_tiles_loaded>0);
+    ap_zero_tile_release_never_accepts:assert property(
+        @(posedge clk_core)disable iff(rst_core)
+        config_loaded&&debug_tiles_loaded==0&&release_valid
+            |->!release_ready&&!release_accept);
+    ap_zero_tile_release_faults_registered:assert property(
+        @(posedge clk_core)disable iff(rst_core)
+        config_loaded&&debug_tiles_loaded==0&&release_valid&&!busy
+            |=>protocol_error);
     ap_retire_minimum:assert property(@(posedge clk_core)disable iff(rst_core)
         context_retire_valid|->context_retire_cycles>=24);
     ap_fifo_bound:assert property(@(posedge clk_core)disable iff(rst_core)
@@ -85,8 +94,12 @@ module m273_integrated_rank3_atlif_assertions #(
     cp_release:cover property(@(posedge clk_core)release_accept);
     cp_context_retire:cover property(@(posedge clk_core)context_retire_valid);
     cp_config_fault:cover property(@(posedge clk_core)
-        config_accept&&protocol_error);
-    cp_raw_fault:cover property(@(posedge clk_core)raw_accept&&protocol_error);
+        $past(config_accept)&&protocol_error);
+    cp_raw_fault:cover property(@(posedge clk_core)
+        $past(raw_accept)&&protocol_error);
+    cp_zero_tile_release_fault:cover property(@(posedge clk_core)
+        $past(config_loaded&&debug_tiles_loaded==0&&release_valid&&!busy)
+            &&protocol_error);
     cp_beat4:cover property(@(posedge clk_core)result_accept&&result_beat==4);
 endmodule
 `default_nettype wire

@@ -1,0 +1,3 @@
+rtl_m405/m405_exact_elastic_pwp_issue_adapter.sv
+verif_m405/m405_exact_elastic_pwp_issue_adapter_assertions.sv
+tb_m405/tb_m408_h67_q32_static_codec_full_vcs.sv

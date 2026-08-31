@@ -1,0 +1,5 @@
+rtl_m214/m214_fc2_raw4_to_descriptor4_terminal_hint_compactor.sv
+rtl_m216/m216_fc2_descriptor4_source_cap_frontend.sv
+rtl_m216/m216_fc2_raw4_to_source_cap_frontend.sv
+rtl_m219/m219_fc2_k1_cropped_tagged_slice_service_island.sv
+rtl_m349/m349_fc2_k1x8_raw4_acc24.sv

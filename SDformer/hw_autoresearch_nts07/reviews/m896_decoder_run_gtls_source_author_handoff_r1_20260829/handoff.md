@@ -1,0 +1,9 @@
+# M896 decoder RUN-GTLS source-author handoff
+
+M896 is an additive, bounded source-only successor to M890. It preserves the frozen M785/M768 scheduling recurrence and every endpoint, expanded-address hash, commit hash, terminal-readiness hash, port calendar, request count and six-class priority result. It changes only resident host representation: active and waiting cycles are kept as maximal half-open run unions, closed-form issue sequences are evaluated as counted arithmetic progressions without allocating issue lists, and dependency/liveness state uses packed transaction-run indices.
+
+The directed suite passed synthetic 1K/10K and real D0/A1/t0 1K/10K/100K exact miters. At real 100K, 100,000 requests collapsed to 1,436 active-service runs plus one run in each nonempty wait class. The candidate measured 1,274,626 bytes of combined in-process compact dependency, live terminal, event-run and port-calendar state. A conservative linear projection to 38,672,612 requests is 492,931,168 bytes (470.096 MiB), below the 512 MiB state gate by 41.904 MiB. This is measured object/container state; no compressed or serialized file size is used.
+
+The process RSS is also reported honestly: 901,864 KiB for the candidate-only state measurement and 904,996 KiB for the exact 100K miter. These processes retain bounded input transactions and, for the miter, reference endpoint populations. RSS is not substituted for the explicitly requested combined live+event-state metric, and it does not authorize a full row.
+
+The full-row 100x runtime gate remains unmeasured. No sealed full row, full population, result publication, VCS, DC, PT, Formality, PTPX, GPU, remote or training action was performed. The only next authority after a fresh independent hammer PASS is for a different author to create one inert full-row runtime-gate release. `docs/359` remains frozen.

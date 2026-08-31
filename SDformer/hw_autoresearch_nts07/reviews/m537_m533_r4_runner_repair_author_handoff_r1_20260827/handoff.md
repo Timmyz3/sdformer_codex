@@ -1,0 +1,11 @@
+# M537 M533 r4 fail-closed runner repair handoff
+
+M536's three launch blockers and two secondary binding gaps are repaired in a new r4 runner identity. The sealed r3 runner, TB r3, core r2, SVA r2, SRAM macro/binding, source contract, `docs/524`, and frozen `docs/359` were not modified. No VCS, simv, other HDL/EDA tool, CPU/GPU experiment, or remote job ran, and no result directory was created.
+
+The r4 runner is deliberately unusable today. It requires four fixed future paths: an independent r4 runner-static review, a `launch_now=false` release candidate, an independent candidate hammer, and a root-authored final `launch_now=true` release. Missing any one fails before even the temporary preflight stage. Both static prerequisites and the candidate hammer must be exact 100/100 PASS records with P0/P1/P2 all zero. The non-circular digest chain is candidate → independent hammer → final release; the final release binds exact candidate and hammer SHA values, the runner, repair contract, source-static review, and failed M536 predecessor. Its authorization is a closed ten-key object—one VCS attempt and explicit zero for every other class.
+
+After release, the runner still performs two same-UID `/proc` collision scans. Direct Synopsys shells, `common_shell_exec` for DC/Formality/PrimeTime/PTPX, VCS front ends, and simv are forbidden. Classification uses executable basenames and shell arguments, so the r4 filename's `vcs` substring cannot self-match; only the scanner PID and its direct parent runner PID are excluded.
+
+The frozen resource policy resolves the local cgroup-v1 memory session from `/proc/self/cgroup` and also requires `user.slice` counters. Missing `memory.failcnt`, `memory.oom_control`, or `memory.usage_in_bytes` is fatal. Three two-second samples require at least 128 GiB MemAvailable, 32 GiB SwapFree, and 32 GiB commit headroom; both cgroup scopes must retain baseline failcnt and zero OOM. A one-second runtime monitor keeps the same invariants after the result path consumes the attempt.
+
+The next action is the fresh independent read-only static hammer requested in the sealed request directory. Static PASS still does not authorize VCS: root must separately create the fixed candidate, obtain its fresh independent hammer, then create the final release after all collisions clear.

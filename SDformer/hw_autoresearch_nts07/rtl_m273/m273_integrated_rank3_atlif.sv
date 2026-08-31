@@ -4,8 +4,11 @@
 // M273 integrates the complete rank-3 T10 ATLIF module boundary used by M265:
 // six 256-bit configuration beats, five 256-bit raw beats per tile, a 96-way
 // INT8 stage1, an M37-class CSD stage2, one elastic product register and one
-// registered 48-bit result FIFO.  Fixed is deliberately not instantiated here;
-// the M31/M265 exact96 baseline is not yet area matched.
+// registered 48-bit result FIFO.  M285/M273r2 registers fault observation at
+// the offending handshake edge: legal sustained-valid traffic cannot create a
+// post-edge combinational fault pulse or transiently retract issue/result_valid.
+// Fixed is deliberately not instantiated here; the M31/M265 exact96 baseline
+// is not yet area matched.
 module m273_integrated_rank3_atlif #(
     parameter int TAG_W = 48,
     parameter int FIFO_DEPTH = 16,
@@ -91,6 +94,7 @@ module m273_integrated_rank3_atlif #(
     logic config_loaded_q,protocol_error_q;
     logic candidate_descriptor_legal,candidate_padding_legal;
     logic candidate_requant_legal,config_frame_error,raw_frame_error;
+    logic zero_tile_release_error;
     logic fault_event;
 
     logic [239:0] right_factor_q;
@@ -287,7 +291,7 @@ module m273_integrated_rank3_atlif #(
     always_comb begin:stage1_select_and_compute
         stage1_source_valid=1'b0;stage1_selected_raw_bank=1'b0;
         stage1_selected_inter_bank=1'b0;stage1_selected_phase='0;
-        if(!protocol_error_q&&!fault_event)begin
+        if(!protocol_error_q)begin
             if(stage1_active_q)begin
                 stage1_source_valid=1'b1;
                 stage1_selected_raw_bank=stage1_raw_bank_q;
@@ -335,7 +339,7 @@ module m273_integrated_rank3_atlif #(
     always_comb begin:stage2_select_and_compute
         stage2_source_valid=1'b0;stage2_selected_bank=1'b0;
         stage2_selected_phase='0;
-        if(!protocol_error_q&&!fault_event)begin
+        if(!protocol_error_q)begin
             if(stage2_active_q)begin
                 stage2_source_valid=1'b1;stage2_selected_bank=stage2_bank_q;
                 stage2_selected_phase=stage2_phase_q;
@@ -397,9 +401,17 @@ module m273_integrated_rank3_atlif #(
         raw_frame_error=raw_accept&&(
             raw_last!=raw_expected_last
             ||(fill_active_q&&raw_tag!=fill_tag_q));
-        fault_event=config_frame_error||raw_frame_error;
+        // Fault causes are evaluated from the transaction presented to the
+        // current handshake state and sampled only by integrated_state.  They
+        // are deliberately not exposed as combinational output qualifiers.
+        // Releasing an empty configured context is an illegal N=0 operation;
+        // release never handshakes and the attempt enters sticky quarantine.
+        zero_tile_release_error=release_valid&&config_loaded_q
+            &&tiles_loaded_q==0&&work_empty&&!raw_valid;
+        fault_event=config_frame_error||raw_frame_error
+            ||zero_tile_release_error;
 
-        result_valid=fifo_count_q!=0&&!protocol_error_q&&!fault_event;
+        result_valid=fifo_count_q!=0&&!protocol_error_q;
         result_tag=fifo_tag_q[fifo_read_pointer_q];
         result_beat=fifo_beat_q[fifo_read_pointer_q];
         result_valid_bits=fifo_valid_bits_q[fifo_read_pointer_q];
@@ -407,8 +419,7 @@ module m273_integrated_rank3_atlif #(
         result_accept=result_valid&&result_ready;
         result_fire=result_accept;
         fifo_credit=fifo_count_q<FIFO_DEPTH||result_fire;
-        product_push=product_valid_q&&fifo_credit
-            &&!protocol_error_q&&!fault_event;
+        product_push=product_valid_q&&fifo_credit&&!protocol_error_q;
         product_stage_ready=!product_valid_q||fifo_credit;
         stage1_issue=stage1_source_valid;
         stage2_issue=stage2_source_valid&&product_stage_ready;
@@ -416,9 +427,9 @@ module m273_integrated_rank3_atlif #(
         fifo_push=product_push;fifo_pop=result_fire;
 
         release_ready=!rst_core&&config_loaded_q&&!protocol_error_q
-            &&!fault_event&&work_empty&&!raw_valid;
+            &&tiles_loaded_q!=0&&work_empty&&!raw_valid;
         release_accept=release_valid&&release_ready;
-        protocol_error=protocol_error_q||fault_event;
+        protocol_error=protocol_error_q;
         config_loaded=config_loaded_q;
         busy=!work_empty;
         tile_done_valid=tile_done_valid_q;tile_done_tag=tile_done_tag_q;
@@ -466,9 +477,8 @@ module m273_integrated_rank3_atlif #(
             tile_done_valid_q<=1'b0;tile_done_tag_q<='0;
         end else begin
             context_retire_valid_q<=1'b0;tile_done_valid_q<=1'b0;
-            if(fault_event)begin
-                protocol_error_q<=1'b1;
-            end else begin
+            if(fault_event)protocol_error_q<=1'b1;
+            if(!protocol_error_q)begin
                 if(context_counting_q)begin
                     if(release_accept)begin
                         context_retire_valid_q<=1'b1;
@@ -477,7 +487,7 @@ module m273_integrated_rank3_atlif #(
                     end else context_cycles_q<=context_cycles_q+1'b1;
                 end
 
-                if(config_accept)begin
+                if(config_accept&&!config_frame_error)begin
                     if(config_beat_q==0)begin
                         context_counting_q<=1'b1;context_cycles_q<=1;
                         config_beats_q<=1;raw_beats_q<='0;tiles_loaded_q<='0;
@@ -499,7 +509,7 @@ module m273_integrated_rank3_atlif #(
                     end else config_beat_q<=config_beat_q+1'b1;
                 end
 
-                if(raw_accept)begin
+                if(raw_accept&&!raw_frame_error)begin
                     raw_beats_q<=raw_beats_q+1'b1;
                     if(!fill_active_q)begin
                         raw_owned_q[raw_target_bank]<=1'b1;

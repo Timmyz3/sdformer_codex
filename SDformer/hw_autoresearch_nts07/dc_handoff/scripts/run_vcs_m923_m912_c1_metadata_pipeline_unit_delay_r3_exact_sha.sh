@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 002
+
+# M923 additive one-shot functional VCS runner for M912.  This is foundry
+# UNIT_DELAY functional evidence only; it cannot establish timing, cycles,
+# speedup, PPA, energy, trace recurrence or a paper headline.
+
+[[ $# -eq 0 ]] || { echo "ERROR: no arguments accepted" >&2; exit 2; }
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+HW_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
+RUNNER="$(readlink -f -- "${BASH_SOURCE[0]}")"
+RTL="${HW_ROOT}/rtl_m912_c1_pipeline/m912_m528_metadata_pipelined_product_capture_island.sv"
+MACRO_RTL="${HW_ROOT}/rtl_m528_dw1rw/m528_dw1rw_parent_scratch_9x128_macro.sv"
+SVA="${HW_ROOT}/verif_m912_c1_pipeline/m919_m912_metadata_pipeline_assertions_r2.sv"
+TB="${HW_ROOT}/verif_m912_c1_pipeline/tb_m923_m912_metadata_pipeline_unit_delay_r2.sv"
+M919_TB="${HW_ROOT}/verif_m912_c1_pipeline/tb_m912_metadata_pipeline_unit_delay_r1.sv"
+STATIC_CHECK="${HW_ROOT}/verif_m912_c1_pipeline/static_check_m923_m912_tb_phase_repair.py"
+CONTRACT="${HW_ROOT}/contracts/m923_m912_c1_metadata_pipeline_unit_delay_vcs_tb_phase_repair_contract_r1_20260829.json"
+HAMMER_DIR="${HW_ROOT}/reviews/m924_m923_m912_c1_metadata_pipeline_vcs_source_hammer_r1_20260829"
+HAMMER_REVIEW="${HAMMER_DIR}/review.json"
+RELEASE="${HW_ROOT}/contracts/m925_m924_m923_m912_c1_metadata_pipeline_vcs_launch_release_r1_20260829.json"
+M922_DIR="${HW_ROOT}/reviews/m922_m919_c1_metadata_pipeline_vcs_failure_forensic_r1_20260829"
+M919_QUARANTINE="${HW_ROOT}/results/m919_m912_c1_metadata_pipeline_unit_delay_vcs_r2_20260829.failed_or_incomplete.3540947.quarantine"
+FOUNDRY_V="/home/zhumd/work/synopsys_date_dual/hw_autoresearch_nts07/macro_assets/tsmc28_128x128_1rw_20260821/ts1n28hpcphvtb128x128m4s_180a_ssg0p9v125c.v"
+VCS_BIN="/opt/synopsys/vcs/V-2023.12-SP1/bin/vcs"
+RESULT="${HW_ROOT}/results/m923_m912_c1_metadata_pipeline_unit_delay_vcs_r3_20260829"
+ATTEMPT="${HW_ROOT}/results/.m923_m912_c1_metadata_pipeline_unit_delay_vcs_r3_attempt_consumed"
+WORK="${HW_ROOT}/results/.m923_m912_c1_metadata_pipeline_unit_delay_vcs_r3_work.$$"
+PASS_TOKEN="PASS_M912_C1_METADATA_PIPELINE_UNIT_DELAY_DIRECTED_RANDOM_AND_ATTACKS"
+TOP="tb_m912_metadata_pipeline_unit_delay_r1"
+
+sha_exact() {
+  local expected="$1" path="$2" got
+  [[ -f "${path}" && ! -L "${path}" ]] || {
+    echo "ERROR: missing/nonregular ${path}" >&2; exit 3; }
+  got="$(sha256sum -- "${path}" | awk '{print $1}')"
+  [[ "${got}" == "${expected}" ]] || {
+    echo "ERROR: SHA mismatch ${path}: ${got}" >&2; exit 3; }
+}
+
+seal_dir() {
+  local dir="$1"
+  (cd -- "${dir}" &&
+    find -P . -type f ! -name SHA256SUMS ! -name SHA256SUMS.seal.sha256 \
+      -printf '%P\0' | sort -z | xargs -0 -r sha256sum -- >SHA256SUMS &&
+    sha256sum -- SHA256SUMS >SHA256SUMS.seal.sha256 &&
+    sha256sum -c SHA256SUMS >/dev/null &&
+    sha256sum -c SHA256SUMS.seal.sha256 >/dev/null)
+}
+
+verify_recursive_seal() {
+  local dir="$1"
+  [[ -d "${dir}" && ! -L "${dir}"
+      && -f "${dir}/SHA256SUMS"
+      && -f "${dir}/SHA256SUMS.seal.sha256" ]] || {
+    echo "ERROR: recursive seal absent ${dir}" >&2; exit 3; }
+  (cd -- "${dir}" &&
+    sha256sum -c SHA256SUMS >/dev/null &&
+    sha256sum -c SHA256SUMS.seal.sha256 >/dev/null)
+  python3 -I - "${dir}" <<'PY'
+import sys
+from pathlib import Path
+d=Path(sys.argv[1])
+listed=set()
+for line in (d/'SHA256SUMS').read_text().splitlines():
+    if line.strip(): listed.add(line.split(None,1)[1].lstrip('*'))
+actual={str(p.relative_to(d)) for p in d.rglob('*') if p.is_file()
+        and p.name not in {'SHA256SUMS','SHA256SUMS.seal.sha256'}}
+assert listed == actual, (listed-actual, actual-listed)
+PY
+}
+
+WORK_ACTIVE=0
+on_exit() {
+  local rc=$?
+  if [[ ${rc} -ne 0 && ${WORK_ACTIVE} -eq 1 && -d "${WORK}" ]]; then
+    printf 'status=FAILED_OR_INCOMPLETE\nexit_code=%s\nfunctional_vcs_verified=false\n' \
+      "${rc}" >"${WORK}/RUN_FAILED_OR_INCOMPLETE.txt"
+    seal_dir "${WORK}" || true
+    local q="${RESULT}.failed_or_incomplete.$$.quarantine"
+    [[ ! -e "${q}" ]] && mv -- "${WORK}" "${q}" || true
+  fi
+}
+trap on_exit EXIT
+
+# Exact source identity.  These literals are deliberately fail closed.
+sha_exact eef2f8d3344620cfbf518bf4ac382a2f0be5b46084d56308a660e4c172c65e53 "${RTL}"
+sha_exact 8fd008a321a7167f407025b6c5bebe29155860b464d3846203b81e43f458d783 "${MACRO_RTL}"
+sha_exact 7dfb91f6d11aa2be8f8c9472ba3784145f290215b67a826fd9f53e32c22b7837 "${SVA}"
+sha_exact 040da58093c8338e21970462f3c82f4b46bb391146e7b2c714c32be3f93ec47d "${TB}"
+sha_exact de19e962c1ffb16d74f6505e425843f3fbe399ef47d746bf3329770d48daa78d "${M919_TB}"
+sha_exact 73f38ec26d35b9cbe59b7059a39c496ca5d3fd426861a066fdcd9a89e8c7340a "${STATIC_CHECK}"
+sha_exact 8343acf01604cf0c6ac4757fd268a8f409401e0b80964ff671b030281ebb444d "${FOUNDRY_V}"
+sha_exact 0735e4b82ff98dd957d5839ea15dc9fcfd9466b84e6f4ccc30d76bc2c1b96287 "${VCS_BIN}"
+sha_exact dedde7ce44c3e595098f25ce6550dc0f6dfd66ce7227bcffd3dab0426a7bdfc4 \
+  "${HW_ROOT}/docs/359_DATE终局冻结_20260813.md"
+
+# Freeze the failed predecessor and the independent forensic that authorized
+# this TB-only repair.  Neither directory may drift after M923 authoring.
+verify_recursive_seal "${M922_DIR}"
+verify_recursive_seal "${M919_QUARANTINE}"
+sha_exact cc9bac913dcdc18967c983655ad01711183834739f874ce1f517da4a8981b168 "${M922_DIR}/review.json"
+sha_exact be32731fedbdc307b7335f222b90f821ac9add69875a222a789dcc8cb8c430ee "${M922_DIR}/SHA256SUMS"
+sha_exact 49ad29db815cd54bd7b8a3f5e58dee33f80bf39ee4768c775ebb6936fbc3eee1 "${M922_DIR}/SHA256SUMS.seal.sha256"
+sha_exact e93b464a0e7435f1d625c5e5dbdc9f20aeafb20baf37a2cc0920d4265ab31d88 "${M919_QUARANTINE}/SHA256SUMS"
+sha_exact f5a991d0e26c9db58cea237b42634034d141a3199cf04de8a4070ebed1fc694b "${M919_QUARANTINE}/SHA256SUMS.seal.sha256"
+
+[[ -f "${CONTRACT}.sha256" && -f "${CONTRACT}.sha256.seal.sha256" ]] || {
+  echo "ERROR: contract seals absent" >&2; exit 3; }
+(cd -- "$(dirname -- "${CONTRACT}")" &&
+  sha256sum -c "$(basename -- "${CONTRACT}.sha256")" >/dev/null &&
+  sha256sum -c "$(basename -- "${CONTRACT}.sha256.seal.sha256")" >/dev/null)
+
+python3 -I "${STATIC_CHECK}"
+python3 -I - "${CONTRACT}" "${RUNNER}" "${RTL}" "${SVA}" "${TB}" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+
+contract, runner, rtl, sva, tb = map(Path, sys.argv[1:])
+d = json.loads(contract.read_text())
+def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+assert d["status"] == "TB_PHASE_REPAIR_READY_FOR_FRESH_HAMMER_AND_RELEASE"
+assert d["authorization"] == {"vcs_compiles": 1, "simv_runs": 1,
+                               "dc_runs": 0, "pt_runs": 0,
+                               "formality_runs": 0}
+i = d["identity"]
+assert i["runner_sha256"] == sha(runner)
+assert i["rtl_sha256"] == sha(rtl)
+assert i["sva_sha256"] == sha(sva)
+assert i["tb_sha256"] == sha(tb)
+assert d["claim_boundary"]["functional_vcs_only"] is True
+for key in ("timing_verified", "cycles_measured", "speedup",
+            "ppa", "energy", "paper_citable"):
+    assert d["claim_boundary"][key] is False
+PY
+
+# The source author cannot self-authorize launch.  A fixed-path fresh hammer
+# and a separately double-sealed release must bind this exact identity before
+# the attempt marker can be created.
+verify_recursive_seal "${HAMMER_DIR}"
+[[ -f "${RELEASE}" && ! -L "${RELEASE}"
+    && -f "${RELEASE}.sha256"
+    && -f "${RELEASE}.sha256.seal.sha256" ]] || {
+  echo "ERROR: fresh M925 release absent" >&2; exit 3; }
+(cd -- "$(dirname -- "${RELEASE}")" &&
+  sha256sum -c "$(basename -- "${RELEASE}.sha256")" >/dev/null &&
+  sha256sum -c "$(basename -- "${RELEASE}.sha256.seal.sha256")" >/dev/null)
+python3 -I - "${HAMMER_REVIEW}" "${HAMMER_DIR}/SHA256SUMS" \
+  "${HAMMER_DIR}/SHA256SUMS.seal.sha256" "${RELEASE}" \
+  "${RUNNER}" "${CONTRACT}" "${RTL}" "${SVA}" "${TB}" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+review, manifest, outer, release, runner, contract, rtl, sva, tb = map(Path,sys.argv[1:])
+sha=lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+h=json.loads(review.read_text()); r=json.loads(release.read_text())
+assert h['status'] == 'PASS_M924_M923_M912_SOURCE_HAMMER'
+assert h['score'] == 100 and h['p0_count'] == h['p1_count'] == 0
+hi=h['identity']
+assert hi['runner_sha256']==sha(runner) and hi['contract_sha256']==sha(contract)
+assert hi['rtl_sha256']==sha(rtl) and hi['sva_sha256']==sha(sva) and hi['tb_sha256']==sha(tb)
+assert r['status'] == 'AUTHORIZE_ONE_M923_M912_FUNCTIONAL_VCS_ATTEMPT'
+ri=r['identity']
+assert ri['runner_sha256']==sha(runner) and ri['contract_sha256']==sha(contract)
+assert ri['hammer_review_sha256']==sha(review)
+assert ri['hammer_manifest_sha256']==sha(manifest)
+assert ri['hammer_outer_seal_sha256']==sha(outer)
+assert r['authorization']=={'vcs_compiles':1,'simv_runs':1,'all_other_eda_runs':0}
+PY
+
+[[ ! -e "${RESULT}" && ! -e "${ATTEMPT}" && ! -e "${WORK}" ]] || {
+  echo "ERROR: result/attempt/work identity already exists" >&2; exit 4; }
+
+# No concurrent commercial EDA process under this uid.
+python3 -I - <<'PY'
+import os
+from pathlib import Path
+blocked = {"vcs", "vcs1", "simv", "dc_shell", "pt_shell", "fm_shell",
+           "icc2_shell", "common_shell_exec", "common_shell_exe"}
+# Exclude the collision scanner and every exact ancestor PID.  Do not exclude
+# by substring: the runner filename itself contains "vcs".
+ancestry=set(); pid=os.getpid()
+while pid > 1 and pid not in ancestry:
+    ancestry.add(pid)
+    try:
+        fields=(Path('/proc')/str(pid)/'stat').read_text().split()
+        pid=int(fields[3])
+    except (FileNotFoundError,PermissionError,ProcessLookupError,ValueError,IndexError):
+        break
+hits=[]
+for p in Path('/proc').iterdir():
+    if not p.name.isdigit() or int(p.name) in ancestry:
+        continue
+    try:
+        if p.stat().st_uid != os.getuid(): continue
+        comm=(p/'comm').read_text().strip()
+        raw=(p/'cmdline').read_bytes()
+        argv=[x.decode(errors='replace') for x in raw.split(b'\0') if x]
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        continue
+    argv_bases={Path(x).name for x in argv}
+    semantic=bool(blocked & argv_bases)
+    # Synopsys wrappers frequently retain common_shell_exec as comm while the
+    # actual shell name appears only as an exact argv token/path basename.
+    if comm in blocked or semantic:
+        hits.append((p.name,comm,argv[:4]))
+if hits: raise SystemExit("EDA collision: %r" % hits)
+PY
+
+mem_kib="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
+[[ "${mem_kib}" =~ ^[0-9]+$ && "${mem_kib}" -ge 67108864 ]] || {
+  echo "ERROR: MemAvailable below 64 GiB" >&2; exit 5; }
+
+mkdir -- "${ATTEMPT}"
+printf 'runner_sha256=%s\ncreated_utc=%s\n' \
+  "$(sha256sum -- "${RUNNER}" | awk '{print $1}')" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${ATTEMPT}/identity.txt"
+mkdir -- "${WORK}"
+WORK_ACTIVE=1
+cd -- "${WORK}"
+
+export VCS_HOME="/opt/synopsys/vcs/V-2023.12-SP1"
+export VCS_ARCH_OVERRIDE="linux"
+export SNPSLMD_LICENSE_FILE="27030@ic.ismd-nemo"
+export LM_LICENSE_FILE="/opt/synopsys/Synopsys.dat"
+
+"${VCS_BIN}" -full64 -sverilog -timescale=1ns/1ps -assert svaext \
+  -debug_access+pp +define+UNIT_DELAY +vcs+lic+wait \
+  "${FOUNDRY_V}" "${MACRO_RTL}" "${RTL}" "${SVA}" "${TB}" \
+  -top "${TOP}" -o simv 2>&1 | tee compile.log
+compile_rc=("${PIPESTATUS[@]}")
+[[ "${compile_rc[0]}" -eq 0 && "${compile_rc[1]}" -eq 0 ]] || exit 20
+
+/usr/bin/timeout --signal=TERM --kill-after=30s 600s ./simv -no_save \
+  2>&1 | tee sim.log
+sim_rc=("${PIPESTATUS[@]}")
+[[ "${sim_rc[0]}" -eq 0 && "${sim_rc[1]}" -eq 0 ]] || exit 21
+
+[[ "$(rg -c "^${PASS_TOKEN} " sim.log)" -eq 1 ]] || exit 22
+[[ "$(rg -c '^COVERAGE_M912_C1_METADATA_PIPELINE ' sim.log)" -eq 1 ]] || exit 23
+[[ "$(rg -c '^HELD_FINAL_RECOVERY_M533_M528_DW1RW_R10 ' sim.log)" -eq 1 ]] || exit 24
+[[ "$(rg -c '^M923_WRONG_PARENT_PHASE_CORRECT ' sim.log)" -eq 1 ]] || exit 25
+rg -q '^PASS_M912_C1_METADATA_PIPELINE_UNIT_DELAY_DIRECTED_RANDOM_AND_ATTACKS .*attacks=6 .*two_cycle_fill=[1-9][0-9]* .*timing_verified=false .*speedup=false .*ppa=false .*headline=false$' sim.log || exit 26
+
+python3 -I - "${RUNNER}" "${CONTRACT}" "${RTL}" "${SVA}" "${TB}" <<'PY'
+import hashlib, json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+runner, contract, rtl, sva, tb = map(Path, sys.argv[1:])
+def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+d={
+  "schema":"m923_m912_c1_metadata_pipeline_unit_delay_vcs_receipt_v3",
+  "status":"PASS_FUNCTIONAL_VCS_ONLY",
+  "created_utc":datetime.now(timezone.utc).isoformat(),
+  "identity":{"runner_sha256":sha(runner),"contract_sha256":sha(contract),
+              "rtl_sha256":sha(rtl),"sva_sha256":sha(sva),"tb_sha256":sha(tb)},
+  "macro_model":"foundry_UNIT_DELAY_functional",
+  "attack_count":6,
+  "claim_boundary":{"functional_vcs_verified":True,"timing_verified":False,
+                    "cycles_measured":False,"speedup":False,"ppa":False,
+                    "energy":False,"paper_citable":False}}
+Path("m923_m912_c1_metadata_pipeline_unit_delay_vcs_receipt_r3.json").write_text(
+    json.dumps(d,indent=2,sort_keys=True)+"\n")
+PY
+printf 'PASS_FUNCTIONAL_VCS_ONLY\n' >RUN_COMPLETE.txt
+seal_dir "${WORK}"
+mv -- "${WORK}" "${RESULT}"
+WORK_ACTIVE=0
+printf 'PASS M923/M912 functional VCS result=%s\n' "${RESULT}"

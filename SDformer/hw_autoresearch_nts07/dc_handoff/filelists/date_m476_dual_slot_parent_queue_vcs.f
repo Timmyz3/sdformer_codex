@@ -1,0 +1,3 @@
+rtl_m476/m476_dual_slot_parent_queue_pipeline.sv
+verif_m476/m476_dual_slot_parent_queue_assertions.sv
+tb_m476/tb_m476_dual_slot_parent_queue_pipeline.sv

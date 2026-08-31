@@ -1,0 +1,5 @@
+rtl_m414/m414_q32_balanced16_zero_stop_controller.sv
+rtl_m433/m433_exact_dualbank_coread_pwp_adapter.sv
+rtl_m467/m467_conv3x3_execution_island.sv
+verif_m467/m467_conv3x3_execution_island_assertions.sv
+tb_m467/tb_m467_conv3x3_execution_island.sv

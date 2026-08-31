@@ -1,0 +1,13 @@
+# M1215 forensic: M1210 outer consumed, M1208 inner untouched
+
+Status: **PASS_FORENSIC__LOCAL_M1210_CONSUMED__REMOTE_M1208_UNCONSUMED__STATUS_MISMATCH_REPRODUCED**. Score: **99/100**.
+
+The first secure launch crossed the outer no-retry boundary but did not cross the inner GPU/capture boundary.  The local M1210 marker is a mode-0400, 72-byte regular file with the exact token `M1210_TRANSFER_COMPLETE__M1208_REMOTE_LAUNCH_ATTEMPT_CONSUMED__NO_RETRY`.  The outer source creates this marker after exact remote transfer/preflight and before its sole remote-launch call, so M1210 is consumed and must never be reused.
+
+Read-only remote inspection proved all three M1208 paths—attempt, result, and production log—were absent.  There were no capture-related processes and `nvidia-smi` returned no compute applications.  A controlled invocation of only `run_m1208...preflight` reproduced `ReleaseError: M1211 release hammer semantic admission mismatch`; before and after namespaces were identical and absent.  `main`, `execute_once`, and the child capture were never called, and no remote write or GPU launch occurred.
+
+The fault is exact and deterministic.  The remote launcher requires `review.status == "PASS"`, while the recursively sealed M1211 review and the launch contract both use `PASS_M1210_SECURE_TRANSFER_AND_ONE_M1208_REMOTE_LAUNCH_AUTHORIZED`.  This check occurs before capture-contract validation, exact40 selection, GPU inspection, or construction of the child capture command.  Python module import occurred; model loading and capture execution did not.
+
+There is also a distinct latent preflight mismatch.  It was not reached dynamically because the status check failed first.  Even after a status-only repair, the old launcher expects `launcher_sha256`, `capture_source_sha256`, `source_test_sha256`, and both source-hammer seal identities; the sealed M1211 outer-release review has none of those five fields.  Its same-named `source_contract_sha256` also binds the outer M1210 secure publisher (`b6bea670...`), not the inner M1208 capture-source contract (`dad36c0a...`).  Only `launch_contract_sha256` is shared and matching.  Therefore a successor needs a new inner-launch authority with both the exact status and exact binding schema; changing only the status literal would hit the next fail-closed gate.
+
+A successor may repair only this status comparison, use a fresh outer local attempt namespace, and consume already published remote files only when byte-exact.  The still-fresh M1208 remote namespace may then be used once after new source and release hammers.  This forensic is not a capture, checkpoint rebind, hardware, speedup, energy, PPA, or paper result.

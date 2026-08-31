@@ -1,0 +1,185 @@
+{
+  "schema": "m232_independent_hammer_review_v1",
+  "status": "PASS_CONDITIONAL_RATE_SCREEN_REQUIRES_STORAGE_OVERLAY_AND_EXECUTABLE_ENGINE",
+  "score": 76,
+  "severity_counts": {
+    "P0": 2,
+    "P1": 6,
+    "P2": 2
+  },
+  "verdict": "M232的冻结身份、12块几何和II16递推算术可复现：BN1/BN2有17664/4416个通道系数对，不重叠服务353280 cycles，在隐含首结果延迟Lfirst=II=16、channel-major且无存储器stall的双tile递推下暴露21504 cycles，II31通过而II32首次失配。但20x系数存储降低不是公平物理基线：BN1和BN2是互斥顺序phase，基线也可复用一块buffer，公平上界为147456/9216=16x。同时II16系数引擎、rsqrt/乘加、M167 PREFOLD、moment/rank/raw SRAM、BN2 residual都未组成可执行时序，因此只接纳条件性coefficient-service screen，不接纳BN/FFN/system性能或PPA。",
+  "score_breakdown": {
+    "identity_and_reproducibility": {
+      "score": 20,
+      "max": 20
+    },
+    "geometry_and_arithmetic": {
+      "score": 24,
+      "max": 25
+    },
+    "cycle_recurrence_semantics": {
+      "score": 13,
+      "max": 20
+    },
+    "hardware_and_resource_completeness": {
+      "score": 6,
+      "max": 20
+    },
+    "fairness_and_claim_discipline": {
+      "score": 13,
+      "max": 15
+    }
+  },
+  "independent_recompute": {
+    "all_exact_sha_checks_pass": true,
+    "m232_result_manifest_verified": true,
+    "ffn_blocks": 12,
+    "stage_counts": {
+      "0": 2,
+      "1": 2,
+      "2": 6,
+      "3": 2
+    },
+    "bn_phases": 24,
+    "bn1_channel_coefficient_pairs": 17664,
+    "bn2_channel_coefficient_pairs": 4416,
+    "total_channel_coefficient_pairs": 22080,
+    "individual_alpha_offset_scalars": 44160,
+    "serial_no_overlap_cycles_at_ii16": 353280,
+    "conditional_pingpong_exposed_cycles_at_ii16_lfirst16": 21504,
+    "ii31_all_phases_rate_matched": true,
+    "ii32_all_phases_rate_matched": false,
+    "reported_bn1_plus_bn2_payload_bits": 184320,
+    "fair_largest_single_phase_payload_bits": 147456,
+    "two_by_96_tile_payload_bits": 9216,
+    "reported_unfair_payload_reduction": 20.0,
+    "fair_phase_reused_payload_reduction": 16.0,
+    "bn1_tiles": 1104,
+    "bn2_tiles": 46,
+    "m167_prefold_issue_floor_excluded_from_coefficient_screen": 7728
+  },
+  "findings": [
+    {
+      "id": "P0-1",
+      "severity": "P0",
+      "title": "20x系数存储降低使用了不公平的BN1+BN2同时物化基线",
+      "evidence": "M232对stage3计算(3072+768)*48=184320 bits，但BN1系数在sn2/fc2之前消费，BN2系数只能在fc2 moment barrier后生成，两者不能同时live。公平baseline也能在phase间复用一块系数buffer，最大为max(3072,768)*48=147456 bits；相对2*96*48=9216 bits仅为16x。",
+      "required_fix": "发布fail-closed overlay，将paper-safe storage口径从20x改为16x的单phase、系数payload-only机会；禁止把184320 bits当成必需物理baseline。"
+    },
+    {
+      "id": "P0-2",
+      "severity": "P0",
+      "title": "II16和21504 cycles依赖一个未实现且未定义首结果延迟的系数引擎",
+      "evidence": "递推用channels*II作为tile fill，这只在Lfirst=II时等价于Lfirst+(channels-1)*II。M232没有rsqrt/divide、alpha=gamma*invstd、offset=beta-mean*alpha的RTL/VCS/DC或资源计数。Lfirst从16增至64时，24 phase的暴露从21504增至22656 cycles；II31/32仅是steady-state消费边界。",
+      "required_fix": "在A800冻结数据上绑定mean/variance/epsilon/gamma/beta范围，实现带valid/ready的系数对引擎，用VCS固化Lfirst、II、RNE/饱和与误差，再用DC确认II16是可实现而非参数。"
+    },
+    {
+      "id": "P1-1",
+      "severity": "P1",
+      "title": "channel-major双tile消费顺序没有address-bearing生产者或有限buffer证明",
+      "evidence": "M232指定按16/96 channel tile重放，但ordered operator trace不固化fc1/fc2的row-to-channel发射。没有rank/raw buffer地址、bank端口、load-to-use、满/空stall和epoch tag。",
+      "required_fix": "建一个两系数bank+有限rank/raw-state bank的本地cycle model或wrapper，对每个stage经历fill/full/replay/drain和反压。"
+    },
+    {
+      "id": "P1-2",
+      "severity": "P1",
+      "title": "M167 PREFOLD复用可行方向没有进入递推",
+      "evidence": "17664/16=1104个BN1 channel tile，每tile需M167合同的7个PREFOLD issue，下界为7728 issues/frame。PREFOLD与BACK共用同一96-product pool，连续BACK replay时无法预折下一tile；折叠结果payload存储也不在9216 bits中。",
+      "required_fix": "在完整BN1 tile recurrence中加入每tile至少7拍的互斥PREFOLD、结果写入咎RNE/饱和；若要隐藏它，必须明确付费第二资源。"
+    },
+    {
+      "id": "P1-3",
+      "severity": "P1",
+      "title": "moment barrier咎长寿命state SRAM仍是未建模的主边界",
+      "evidence": "系数只能在每模块全局current-batch moments完成后生成。M232没有sum/sumsq归约、variance形成、moment state SRAM、原始/rank数据写读或barrier drain/fill cycles。",
+      "required_fix": "在同资源dense与rank3基线下加入moment、state write/read、端口冲突咎barrier，系数流只能作其中一个service component。"
+    },
+    {
+      "id": "P1-4",
+      "severity": "P1",
+      "title": "BN2的96-lane消费者是理想issue下界，不是匹配硬件baseline",
+      "evidence": "BN2尚无能处理fc2 raw位宽与Q24 alpha/offset的96-lane affine datapath。residual source read、BN2 raw buffer replay、add/SEW顺序咎output commit也未计入；较慢的未建模消费会让系数生产更容易被隐藏，但不会证明BN2性能。",
+      "required_fix": "建立带相同SRAM端口、数值位宽咎residual commit的Fixed与candidate BN2模块cycle baseline。"
+    },
+    {
+      "id": "P1-5",
+      "severity": "P1",
+      "title": "Q24 alpha+offset仅是插图式payload",
+      "evidence": "没有冻结checkpoint的variance下界、invstd/alpha/offset上界、epsilon次序、binary point、RNE咎饱和miter，也没有valid825。",
+      "required_fix": "完成真实范围capture咎hardware-order数值miter，再决定Q24、更宽格式或PAFT。"
+    },
+    {
+      "id": "P1-6",
+      "severity": "P1",
+      "title": "无VCS/DC/宏与匹配周期基线",
+      "evidence": "M232是Python recurrence screen，admission正确保持coefficient_numeric_rtl/vcs/dc/PPA/system=false。当前无法评估rsqrt面积、功耗、关键路径或系数bank宏。",
+      "required_fix": "数值咎接口稳定后跑exact-SHA VCS/SVA咎新思logic-only DC；最终独立模块再加宏感知STA/功耗。"
+    },
+    {
+      "id": "P2-1",
+      "severity": "P2",
+      "title": "22080的命名应明确为通道系数对",
+      "evidence": "每通道payload同时包含alpha咎offset，因此22080是pair数，独立scalar总数是44160。含混的'coefficient count'容易与标量rsqrt/乘法工作量混淆。",
+      "required_fix": "后续合同统一写channel coefficient pairs=22080, scalar fields=44160，并分列rsqrt/multiply/add数。"
+    },
+    {
+      "id": "P2-2",
+      "severity": "P2",
+      "title": "9216 bits只是系数payload，不是完整buffer footprint",
+      "evidence": "该数不含valid/epoch/channel tag、ECC/银行化、PREFOLD结果、读写端口咎控制。M232 qualification已排除其中一部分，但表格咎图中必须保留payload-only。",
+      "required_fix": "将coefficient payload与macro/control footprint分列，在物理结果前不报SRAM area/energy saving。"
+    }
+  ],
+  "allowed_claims": [
+    "精确SHA复核通过，M161 CSV独立复算确认12个FFN、24个BN phase咎BN1/BN2的17664/4416个通道系数对。",
+    "在每通道alpha+offset对的II=16、首结果延迟=16、channel-major咎无stall的明示条件下，不重叠服务为353280 cycles，双tile recurrence的coefficient-only暴露为21504 cycles。",
+    "在同一条件递推中，II31仍对24 phase稳态匹配，II32首次在stage3 BN2失配。",
+    "两个96-channel、48-bit系数tile的纯payload是9216 bits；相对可phase复用的公平最大单phase payload 147456 bits，条件性local payload机会为16x。",
+    "M167 PREFOLD资源复用是架构上相容的下一步方向，但尚未证明其schedule、数值或面积。",
+    "若真实系数引擎能以II<=31运行，则扩展为大型rsqrt farm不是当前首要性能优化；这是由条件性service screen得出的设计指引。"
+  ],
+  "forbidden_claims": [
+    "184320/9216=20x是公平的物理系数存储降低",
+    "M232已实现或证明一个II16的rsqrt/alpha/offset引擎",
+    "21504 cycles是不依赖首结果延迟、SRAM stall咎PREFOLD的完整BN周期",
+    "M167 PREFOLD与BACK已被无气泡地组成",
+    "BN2的96-lane affine+residual已实现或有匹配基线",
+    "channel-major双tile已消除moment/rank/raw state的barrier或搬移",
+    "Q24数值等价、valid825、VCS、DC、PPA、energy、FFN/network/system speedup已完成"
+  ],
+  "next_milestone": {
+    "name": "M233 checkpoint-bound coefficient engine plus finite two-bank service wrapper",
+    "must_include": [
+      "A800导出12块BN1/BN2的mean/variance/epsilon/gamma/beta咎激活范围，严格绑定checkpoint/sample manifest",
+      "固定rsqrt算法、alpha/offset位宽、RNE/饱和，证明首结果延迟咎steady II",
+      "两个96-channel系数bank的valid/ready/epoch协议咎满/空/反压SVA",
+      "BN1递推中显式计入1104 tile的7728 PREFOLD issue与折叠payload存储",
+      "BN2使用匹配数值位宽的96-lane affine+residual消费者或诚实的lane-serial schedule",
+      "exact-SHA VCS/SVA、logic-only DC咎与同端口/同存储假设baseline的module cycles"
+    ]
+  },
+  "admission": {
+    "exact_identity": true,
+    "exact_geometry_and_count": true,
+    "conditional_cycle_recurrence": true,
+    "fair_20x_storage_claim": false,
+    "fair_16x_payload_opportunity": true,
+    "coefficient_engine_ii16": false,
+    "coefficient_numeric_equivalence": false,
+    "m167_prefold_composition": false,
+    "moment_and_state_address_schedule": false,
+    "bn2_residual_module_cycles": false,
+    "vcs": false,
+    "synopsys_dc": false,
+    "physical_speedup": false,
+    "system_speedup": false,
+    "paper_ppa_ready": false,
+    "headline": false
+  },
+  "evidence": {
+    "independent_recompute": "independent_recompute.json",
+    "independent_per_ffn_recompute": "independent_per_ffn_recompute.csv",
+    "source_manifest": "source_manifest.sha256"
+  },
+  "docs359_sha256_unchanged": "dedde7ce44c3e595098f25ce6550dc0f6dfd66ce7227bcffd3dab0426a7bdfc4"
+}

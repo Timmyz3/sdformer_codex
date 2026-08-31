@@ -1,0 +1,3 @@
+# M1164 / M1161CA different-author source hammer
+
+PASS. The sealed live M1137C producer, M1135C validator, M1141CA schedule metadata, and M1148CA/M1157CA digest authority chain were independently rechecked. Reorder, drop, duplicate, provenance/coordinate tamper, four authority mutations, namespace collision, bad argv, and a downstream sink exception were rejected. The exception path retried without partial producer, validator, or row-receipt commit. The 836 MB production JSONL was never opened. Exactly one zero-argument production replay may now launch after its own fresh resource/same-UID preflight; automatic retry is forbidden and a fresh result hammer is mandatory. Any cycle field remains a 1RW weight-service schedule coordinate, never an RTL cycle or system speedup.

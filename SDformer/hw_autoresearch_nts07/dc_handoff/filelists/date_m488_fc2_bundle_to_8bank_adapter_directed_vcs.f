@@ -1,0 +1,3 @@
+rtl_m488/m488_fc2_bundle_to_8bank_adapter.sv
+verif_m488/m488_fc2_bundle_to_8bank_adapter_assertions.sv
+tb_m488/tb_m488_fc2_bundle_to_8bank_adapter.sv

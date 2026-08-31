@@ -1,0 +1,135 @@
+{
+  "schema": "m470_h67_partition_window_payload_stationary_preflight_contract_v1",
+  "status": "FROZEN_PREFLIGHT_WAITING_FOR_SEALED_M468R3_M469_SIDECAR",
+  "milestone": "M470_EXACT_PARTITION_WINDOW_PAYLOAD_STATIONARY_PSUM_SPILL_DSE",
+  "date": "2026-08-26",
+  "objective": "Evaluate an exact partition-window payload-stationary schedule for the four frozen H67 ep35 bottleneck Conv3x3 operators. Cache P consecutive partitions of config, INT8 weights and referenced exact PWP payload, traverse all output-row tiles while that window is resident, and spill/reload the complete operator partial-sum state only between partition windows.",
+  "upstream_boundary": {
+    "preferred_statistics_source": "sealed M468R3/M469 phase CSV plus typed per-task NPZ compact sidecars",
+    "allowed_supplement": "Only when a capacity-selected integer row tile is absent from the sealed task NPZ, M410R2 contract-visible original16 derivative may be traversed once to count exact empty/nonempty tasks for only those missing tile sizes",
+    "forbidden_source": "M40 one-shot payload and manifest",
+    "relationship_to_m468": "M470 is an orthogonal schedule DSE. M468/M468R3 tile-major scheduling remains a valid measured axis and must not be described as omitted or erroneous."
+  },
+  "paper_identity": {
+    "model": "H67 ep35 full-resolution Motion",
+    "checkpoint_sha256": "4f33e086070bb92524d94727c6e39cdb7296441c2660e70f1d7be29467645158",
+    "bn_policy": "no_running",
+    "samples": 10,
+    "operators": 4,
+    "partitions_per_operator": 432,
+    "rows_per_operator": 3000,
+    "output_blocks": 8,
+    "output_lanes_per_block": 96,
+    "accumulator_bits": 19,
+    "paft_checkpoint_used": false
+  },
+  "schedule_contract": {
+    "order": "sample -> operator -> consecutive partition window -> block half/pass -> every output-row tile -> partition in window",
+    "payload_residency": "The current window's config, weights and referenced PWP payload remain resident and are reused across every row tile. Stored PWP is the primary mode. Lazy exact PWP is emitted only when the sealed M469 sidecar exposes the required per-phase generator ledger.",
+    "window_boundary": "For each of ceil(432/P)-1 boundaries per sample/operator, write then reload the complete 3000-row by 8-block partial-sum image.",
+    "psum_bytes_per_direction_per_boundary": 5472000,
+    "psum_bytes_formula": "3000 * 8 * 228",
+    "boundary_directions": ["spill_write", "reload_read"],
+    "final_commit": "The final window commits 3000*8 accumulator vectors once per sample/operator; it is not an additional intermediate spill.",
+    "resident_block_banks": {
+      "8": "Both four-block payload halves are resident; source/config/matcher traversal occurs once per row tile and partition.",
+      "4": "One four-block payload half is resident at a time; two complete passes are charged. Config select, source, descriptor, matcher, task fill and drain are repeated twice. Weight/PWP traffic is the natural sum of two distinct halves, not duplicated copies of the same half."
+    },
+    "overlap_credit": "none; payload DMA, exact lazy generation, execution, spill/reload and final commit are serial in the headline CPU model"
+  },
+  "candidate_modes": {
+    "strong_zero": "Same partition-window schedule, exact empty gate, payload reuse and complete psum spill/reload. It caches resident INT8 weights and uses exact bit-sparse source issue.",
+    "stored_pwp": "Primary exact M430 mode. It caches config, INT8 weights and only referenced stored exact PWP centers for the full partition window.",
+    "lazy_pwp": "Secondary diagnostic only when supported by M469. It caches config and INT8 weights, generates each referenced exact PWP center once per output half, stores it in the bounded window payload buffer, and reuses it across all row tiles. K points are not same-resource."
+  },
+  "cycle_and_traffic_contract": {
+    "dram_bytes_per_cycle": [32, 128, "infinite"],
+    "dma_command_setup_cycles": 32,
+    "elastic_config_bytes_per_partition": 96,
+    "weight_bytes_per_partition_per_four_blocks": 6144,
+    "stored_pwp_stride_bytes_per_center_per_four_blocks": 640,
+    "lazy_pwp_logical_bytes_per_center_per_four_blocks": 576,
+    "source_bytes_per_row": 2,
+    "descriptor_bytes_per_active_row": 6,
+    "descriptor_sram_latency_cycles_per_nonempty_task": 8,
+    "popcount_filter_pipeline_cycles_per_task": 5,
+    "config_select_cycles_per_task": 1,
+    "matcher_cycles_per_task": "rows_in_tile + early_extra + 2",
+    "task_drain_cycles": 2,
+    "psum_vector_bytes": 228,
+    "final_commit_cycles_per_sample_operator": 24000,
+    "must_report": [
+      "source_sram_bytes",
+      "descriptor_sram_read_bytes",
+      "descriptor_sram_write_bytes",
+      "matcher_or_popcount_cycles",
+      "payload_fill_bytes",
+      "config_dram_bytes",
+      "weight_dram_bytes",
+      "pwp_dram_bytes",
+      "psum_spill_write_bytes",
+      "psum_reload_read_bytes",
+      "internal_psum_sram_read_bytes",
+      "internal_psum_sram_write_bytes",
+      "spill_reload_sram_bytes",
+      "dma_commands",
+      "payload_fill_cycles",
+      "spill_reload_cycles",
+      "task_fill_cycles",
+      "task_drain_cycles",
+      "final_commit_cycles",
+      "total_cycles"
+    ]
+  },
+  "dse": {
+    "partition_window_sizes": [1, 2, 3, 4, 5, 6, 7, 8],
+    "required_report_landmarks": [1, 2, 3, 4, 6, 8],
+    "resident_block_banks": [4, 8],
+    "dram_bytes_per_cycle": [32, 128, "infinite"],
+    "row_tile_policy": "For every mode/P/block-bank point, compute the largest integer row_tile in [1,3000] that passes both capacity gates after reserving its worst frozen consecutive partition window payload. No upstream tile aggregate is interpolated: the M410R2 contract-visible derivative is then traversed exactly once to reconstruct empty/nonempty counts at only this small set of capacity-selected row tiles.",
+    "sram_budget_bytes": 245760,
+    "stored_pwp_is_primary": true,
+    "lazy_generator_source_lanes_k": [1, 2, 4, 8]
+  },
+  "capacity_contract": {
+    "logical_gate": "All bit-packed psum, active/valid metadata, ping-pong source/descriptor buffers, window config, window weights, window stored/generated PWP payload and fixed reserve sum to <=240 KiB.",
+    "macro_gate": "Every modeled SRAM is conservatively sliced at 144 bits and its depth rounded upward to a 64-row quantum. Both logical and macro-rounded totals must be <=240 KiB.",
+    "fixed_fifo_control_reserve_bytes": 16384,
+    "psum_macro": "resident_block_banks * 13 slices * 18 bytes * depth64(row_tile)",
+    "weight_macro": "one bank per resident four-block half, 6 slices of 144 bits for each 96-lane INT8 source vector, depth64(16 sources * 4 blocks * maximum_active_partitions_in_window) = depth64(64P_active)",
+    "stored_pwp_macro": "one bank per resident four-block half, 9 slices of 144 bits for each padded 160-byte/block stored center (ceil(1280/144)=9), depth64(4 blocks * maximum_referenced_centers_in_window)",
+    "lazy_pwp_macro": "one bank per resident four-block half, 8 slices of 144 bits for each exact 144-byte/block generated center, depth64(4 blocks * maximum_referenced_centers_in_window)",
+    "config_macro": "6 slices of 144 bits, depth64(maximum_active_partitions_in_window)",
+    "both_gates_required": true
+  },
+  "fairness_and_decision": {
+    "same_schedule_baseline": "For every candidate P/block-bank/bandwidth point, strong-zero uses the same window boundaries, exact empty gate, full psum spill/reload and serial overlap policy.",
+    "same_tile_diagnostic": "Report candidate against strong-zero at exactly the candidate row_tile.",
+    "same_resource_headline": "At 128 B/cycle compare against strong-zero independently using the largest row_tile it can fit under the same 240 KiB dual capacity gate, while retaining the same P and block-bank count.",
+    "nominate_threshold": 1.15,
+    "kill_threshold": 1.10,
+    "nominate_semantics": "A >=1.15x stored-PWP point only nominates one schedule for independent hammer and later RTL/Synopsys work; this CPU DSE does not admit performance.",
+    "kill_semantics": "If the fastest feasible stored-PWP point at 128 B/cycle is <1.10x versus its same-resource strong-zero baseline, kill M470 as a hardware-performance axis."
+  },
+  "claim_boundary": {
+    "exact_arithmetic": true,
+    "checkpoint_or_accuracy_changed": false,
+    "four_frozen_h67_bottleneck_conv3x3_only": true,
+    "cycle_simulator_estimate": true,
+    "rtl_measured_speedup": false,
+    "synopsys": false,
+    "physical_macro_compiled": false,
+    "energy": false,
+    "full_network_speedup": false,
+    "system_speedup": false,
+    "date_headline": false,
+    "m468_missing_axis_claim": false
+  },
+  "failure_policy": [
+    "Strict JSON, exact-SHA execution inputs, no overwrite, no M40 one-shot read and no modification of docs/359.",
+    "Do not silently drop infeasible requested P values; report their minimum dual-gate capacity and explicit reason.",
+    "Do not count only a row tile at a window boundary: charge the complete 3000*8*228 bytes in both write and reload directions.",
+    "Do not give stored/lazy PWP an empty gate, spill policy, bandwidth, DMA setup or overlap credit unavailable to strong-zero.",
+    "Do not call logical capacity a macro fit, and do not call the CPU schedule simulator RTL, PPA or system speedup."
+  ]
+}

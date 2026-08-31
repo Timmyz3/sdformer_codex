@@ -1,0 +1,1 @@
+rtl_m476/m476_dual_slot_parent_queue_pipeline.sv

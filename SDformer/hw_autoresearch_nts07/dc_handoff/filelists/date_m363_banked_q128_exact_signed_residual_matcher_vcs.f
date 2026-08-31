@@ -1,0 +1,3 @@
+rtl_m363/m363_banked_q128_exact_signed_residual_matcher.sv
+verif_m363/m363_banked_q128_exact_signed_residual_matcher_assertions.sv
+tb_m363/tb_m363_banked_q128_exact_signed_residual_matcher.sv

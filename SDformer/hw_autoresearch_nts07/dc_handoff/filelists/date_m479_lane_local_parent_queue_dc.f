@@ -1,0 +1,2 @@
+rtl_m479_lane_local/m479_lane_local_parent_queue_pipeline.sv
+rtl_m479_lane_local/m479_lane_local_backpressure_safe_parent_queue_pipeline.sv

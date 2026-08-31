@@ -37,6 +37,10 @@ module tb_m273_integrated_rank3_atlif;
     integer observed_fifo_peak,observed_raw_stalls,observed_result_stalls;
     integer observed_overlap,observed_replacements,observed_full_pop_push;
     integer observed_tile_done;
+    integer legal_halfcycle_checks,legal_protocol_error_pulses;
+    integer legal_intra_half_signal_changes;
+    integer legal_config_accepts,legal_raw_accepts;
+    logic legal_monitor_enable;
 
     m273_integrated_rank3_atlif u_dut(.*);
     m273_integrated_rank3_atlif_assertions u_sva(.*);
@@ -146,6 +150,35 @@ module tb_m273_integrated_rank3_atlif;
             observed_tile_done=0;ready_phase=0;
         end
     endtask
+
+    // Sample twice inside the post-posedge half-cycle.  Inputs are held until
+    // the following negedge, so protocol_error and the three issue/valid
+    // controls must neither pulse nor retract between these samples.
+    always @(posedge clk_core)begin:half_cycle_glitch_monitor
+        logic sampled_result_valid,sampled_stage1_issue,sampled_stage2_issue;
+        if(!rst_core&&legal_monitor_enable)begin
+            #0.1;
+            sampled_result_valid=result_valid;
+            sampled_stage1_issue=stage1_issue;
+            sampled_stage2_issue=stage2_issue;
+            if(protocol_error)legal_protocol_error_pulses=
+                legal_protocol_error_pulses+1;
+            #4.7;
+            legal_halfcycle_checks=legal_halfcycle_checks+1;
+            if(protocol_error)legal_protocol_error_pulses=
+                legal_protocol_error_pulses+1;
+            if(result_valid!==sampled_result_valid
+                    ||stage1_issue!==sampled_stage1_issue
+                    ||stage2_issue!==sampled_stage2_issue)
+                legal_intra_half_signal_changes=
+                    legal_intra_half_signal_changes+1;
+            if(protocol_error||legal_protocol_error_pulses!=0
+                    ||legal_intra_half_signal_changes!=0)
+                $fatal(1,"M285 legal half-cycle control glitch protocol=%0b pulses=%0d changes=%0d",
+                    protocol_error,legal_protocol_error_pulses,
+                    legal_intra_half_signal_changes);
+        end
+    end
 
     task automatic reset_dut;
         begin
@@ -286,10 +319,11 @@ module tb_m273_integrated_rank3_atlif;
         output integer cycles);
         time first_accept_time;
         begin
-            clear_observation();ready_mode=0;
+            clear_observation();ready_mode=0;legal_monitor_enable=1'b1;
             send_config(0,legal_config,1'b0,first_accept_time);
             send_tiles(tiles,seed,tag_base);
             finish_context(tiles,first_accept_time,1'b1,cycles);
+            legal_monitor_enable=1'b0;
             if(numerical_mismatches!=0)$fatal(1,"clean numerical mismatch");
         end
     endtask
@@ -297,10 +331,11 @@ module tb_m273_integrated_rank3_atlif;
     task automatic run_pressure_context(output integer cycles);
         time first_accept_time;
         begin
-            clear_observation();ready_mode=1;
+            clear_observation();ready_mode=1;legal_monitor_enable=1'b1;
             send_config(0,legal_config,1'b0,first_accept_time);
             send_tiles(40,40,48'h2730_3000_0000);
             finish_context(40,first_accept_time,1'b0,cycles);
+            legal_monitor_enable=1'b0;
             if(cycles<=219)$fatal(1,"pressure context did not extend clean bound");
             if(observed_fifo_peak!=16||observed_result_stalls==0
                     ||observed_raw_stalls==0||observed_full_pop_push==0)
@@ -308,6 +343,26 @@ module tb_m273_integrated_rank3_atlif;
                     observed_fifo_peak,observed_result_stalls,
                     observed_raw_stalls,observed_full_pop_push);
             ready_mode=0;
+        end
+    endtask
+
+    task automatic zero_tile_release_attack;
+        time ignored_time;
+        begin
+            reset_dut();
+            send_config(0,legal_config,1'b0,ignored_time);
+            if(debug_tiles_loaded!=0||busy)
+                $fatal(1,"M285 zero-tile attack setup drift");
+            @(negedge clk_core);release_valid=1'b1;
+            #0.1;
+            if(release_ready||release_accept||protocol_error)
+                $fatal(1,"M285 zero-tile release was not registered fail-closed");
+            @(posedge clk_core);#0.1;
+            if(!protocol_error||release_ready||release_accept
+                    ||context_retire_valid||!config_loaded)
+                $fatal(1,"M285 zero-tile release did not enter quarantine");
+            check_sticky_fault(1'b1);
+            @(negedge clk_core);release_valid=1'b0;
         end
     endtask
 
@@ -345,6 +400,10 @@ module tb_m273_integrated_rank3_atlif;
             if(result_fifo_occupancy==16&&fifo_pop&&fifo_push)
                 observed_full_pop_push=observed_full_pop_push+1;
             if(tile_done_valid)observed_tile_done=observed_tile_done+1;
+            if(legal_monitor_enable&&config_accept)
+                legal_config_accepts=legal_config_accepts+1;
+            if(legal_monitor_enable&&raw_accept)
+                legal_raw_accepts=legal_raw_accepts+1;
             if(result_accept)begin
                 if(expected_read>=expected_write)begin
                     numerical_mismatches=numerical_mismatches+1;
@@ -374,6 +433,9 @@ module tb_m273_integrated_rank3_atlif;
         raw_tag='0;result_ready=1'b1;release_valid=1'b0;ready_mode=0;
         expected_read=0;expected_write=0;numerical_mismatches=0;
         ready_phase=0;make_legal_config();
+        legal_monitor_enable=1'b0;legal_halfcycle_checks=0;
+        legal_protocol_error_pulses=0;legal_intra_half_signal_changes=0;
+        legal_config_accepts=0;legal_raw_accepts=0;
 
         reset_dut();
         run_clean_context(1,1,48'h2730_1000_0000,clean1_cycles);
@@ -392,9 +454,19 @@ module tb_m273_integrated_rank3_atlif;
             send_config(0,legal_config,1'b0,ignored_time);
             send_raw_attack(attack);check_sticky_fault(1'b1);
         end
+        zero_tile_release_attack();
 
-        $display("PASS M273 integrated rank3 ATLIF directed clean_contexts=2 pressure_contexts=1 attacks=7 numerical_mismatches=0 clean_cycles_N1=%0d clean_cycles_N4=%0d pressure_cycles=%0d fifo_peak=16 overlap=1 product_replace=1 full_pop_push=1",
-            clean1_cycles,clean4_cycles,pressure_cycles);
+        if(legal_protocol_error_pulses!=0
+                ||legal_intra_half_signal_changes!=0
+                ||legal_halfcycle_checks==0||legal_config_accepts!=18
+                ||legal_raw_accepts!=225)
+            $fatal(1,"M285 glitch/accept coverage drift half=%0d pulse=%0d change=%0d cfg=%0d raw=%0d",
+                legal_halfcycle_checks,legal_protocol_error_pulses,
+                legal_intra_half_signal_changes,legal_config_accepts,
+                legal_raw_accepts);
+
+        $display("PASS M285 M273r2 integrated rank3 ATLIF directed clean_contexts=2 pressure_contexts=1 attacks=8 numerical_mismatches=0 clean_cycles_N1=%0d clean_cycles_N4=%0d pressure_cycles=%0d fifo_peak=16 overlap=1 product_replace=1 full_pop_push=1 legal_halfcycle_checks=%0d legal_protocol_error_pulses=0 intra_half_signal_changes=0 legal_config_accepts=18 legal_raw_accepts=225 zero_tile_release_fault=1 formula_domain_N_ge_1=true registered_fault_reporting=true new_speedup=false dc=false system_speedup=false headline=false",
+            clean1_cycles,clean4_cycles,pressure_cycles,legal_halfcycle_checks);
         $finish;
     end
 

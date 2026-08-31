@@ -1,0 +1,3 @@
+# M1196 / M1161CA production replay result hammer
+
+PASS (99/100). The exact sealed 2,436,480-record, 836,268,740-byte schedule was independently streamed and its SHA, task-major/axis-minor ordering, ordinals, coordinates, source triplets and record provenance all closed. The real M1137C producer to M1135C validator terminals close all three axes at 812,160 tasks, 70,853,184 rows and 566,825,472 native activations per axis, with no retained event output. Candidate/bit/zero 1RW weight-service makespans are 434,146,781 / 752,971,318 / 752,971,318, giving independently recomputed 1.734370381x. This admits a production real-producer replay and weight-service schedule-coordinate comparison only; it is not RTL or system speedup, traffic/energy, PPA, or paper headline evidence.

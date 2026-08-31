@@ -1,0 +1,5 @@
+rtl_m405/m405_q32_serial16_zero_stop_controller.sv
+rtl_m405/m405_exact_elastic_pwp_issue_adapter.sv
+rtl_m405/m405_q32_elastic_selected_slice.sv
+verif_m405/m405_q32_elastic_selected_slice_assertions.sv
+tb_m405/tb_m405r3_q32_elastic_integration_repair.sv
