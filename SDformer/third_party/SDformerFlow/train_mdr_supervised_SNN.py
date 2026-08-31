@@ -7,7 +7,18 @@ if os.path.isdir(h9_overlay_path):
     sys.path.insert(0, h9_overlay_path)
 sys.path.append(prjt_path)
 import argparse
-import mlflow
+use_ml_flow = os.environ.get("SDFORMER_MDR_USE_MLFLOW", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+try:
+    import mlflow
+except ModuleNotFoundError:
+    if use_ml_flow:
+        raise
+    mlflow = None
 import torch
 import torch.nn as nn
 from torch.optim import *
@@ -22,7 +33,8 @@ from utils.runtime_backend import configure_snn_backend
 from utils.utils import load_model, save_csv, save_model, save_state_dict, resume_model, count_parameters,print_parameters
 from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.data_augmentation import downsample_data,Compose,CenterCrop,RandomCrop,RandomRotationFlip,Random_event_drop,Random_horizontal_flip,Random_vertical_flip
-from utils.mlflow import log_config, log_results
+if use_ml_flow:
+    from utils.mlflow import log_config, log_results
 import torch.nn.functional as F
 import cv2
 import random
@@ -31,14 +43,6 @@ from spikingjelly.activation_based import functional,neuron
 from models.STSwinNet_SNN.Spiking_submodules import *
 from MDR_dataloader.MDR import MDREventFlow
 from MDR_dataloader.mvsec_protocol import event_activity_mask
-
-
-use_ml_flow = os.environ.get("SDFORMER_MDR_USE_MLFLOW", "1").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
 
 
 def _env_flag(name, default=False):
