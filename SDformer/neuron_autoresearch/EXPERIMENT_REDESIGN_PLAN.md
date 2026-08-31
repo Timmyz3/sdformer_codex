@@ -12549,3 +12549,218 @@ MLflow 关闭且同一时间只允许一个 GPU 工作负载。五格最终汇�
   smoke -> full30 -> rank-1 -> fixed800 -> full-sequence。
 - 完成后权威收据写入
   `neuron_autoresearch/MVSEC_TWO_CONTRIBUTION_ABLATION_20260825.{json,md}`，并自动把最终三行表追加到本文档。
+
+<!-- MVSEC_ATLIF_ONLY_ABLATION_RESULT_20260825 -->
+
+### MVSEC 全量 ATLIF-only 两贡献消融结果（2026-08-25）
+
+三条路线均为全网定义，不含部分 stage 或混合注意力。
+
+| route | macro AEE | weighted AEE | macro Fl (%) | spikes (G) |
+|---|---:|---:|---:|---:|
+| nb0 | 1.827258 | 2.343471 | 18.3537 | 251.4680 |
+| atlif_only | 1.799195 | 2.259916 | 17.9547 | 125.1181 |
+| atlif_ttx | 1.767113 | 2.230047 | 17.1276 | 140.6647 |
+
+权威收据：`neuron_autoresearch/MVSEC_TWO_CONTRIBUTION_ABLATION_20260825.{json,md}`。
+
+- ATLIF-only validation rank-1 为 ep5（validation loss `7.917063`）。四序列 fixed800 与
+  full-sequence 均无 skipped sequence；所有八次标准加载均为 ATLIF=`105`、Shiftmax=`0`、
+  checkpoint/model overlay=`210/210`、missing/unexpected=`0/0`。
+- full-sequence 的 `NB0 -> ATLIF-only`：macro AEE 改善 `1.54%`、macro Fl 改善 `2.17%`、
+  spikes 下降 `50.24%`、spike-energy proxy 下降 `49.75%`。这说明全网 binary ATLIF 不只是
+  稀疏化，在 MVSEC 同协议下宏观精度也没有损失。
+- full-sequence 的 `ATLIF-only -> ATLIF+TTX`：macro AEE 再改善 `1.78%`、macro Fl 改善
+  `4.61%`，但 spikes 增加 `12.43%`、energy proxy 增加 `12.95%`。相对 NB0，最终 TTX 仍为
+  AEE `-3.29%`、Fl `-6.68%`、spikes `-44.06%`、energy proxy `-43.24%`。
+- TTX 相对 ATLIF-only 在 IF1/IF2/IF3 改善，但 OD1 AEE 从 `0.7927` 退到 `0.8201`；因此正文
+  只能声称 macro/三室内序列收益，不能声称四测试序列逐项全胜。正确的协同表述是：ATLIF 提供
+  主要稀疏收益，TTX 用有限活动率回升换取更好的整体匹配精度和 Fl。
+
+<!-- DATE_DSEC_FULL30_AND_MVSEC_TTX_ALPHA_PREREG_20260826 -->
+
+### DATE DSEC full30 与 MVSEC Complete-TTX 参数优化预注册（2026-08-26）
+
+**DSEC 三行 full30。** 既有同父 short10 的 C00/C10/C12 在 ep9 均仍达到各自最低 AEE，不能把
+它们当作收敛后的论文终表。新增三行从同一个冻结
+`dsec_fullres_w15_NB0_equal_plus10_ep40_20260805/checkpoint_epoch29.pth` 重新开始，均使用 fresh
+optimizer、seed0、`480x640`、crop=None、window `2x15x15`、no-running BN、batch2、30 epoch、
+milestones=`[20,25]`，并只在预注册 epoch `[9,14,19,24,29]` 上做 local valid825 AEE 排名：
+
+| cell | neuron | attention | motion alpha |
+|---|---|---|---:|
+| C00 | original PSN | original SDSA | 0 |
+| C10 | all105 one-sided binary ATLIF | original SDSA | 0 |
+| C12 | all105 one-sided binary ATLIF | all12 Complete TTX | 1/4 |
+
+- 该 full30 是干净同父重训，不从 short10 接续；这样保留严格的模块因果和相同 scheduler 预算。
+- 配置 manifest：`configs/generated/date_two_contribution_full30_20260826.json`；runner：
+  `entrypoints/run_date_two_contribution_full30_20260826.py`；结果目录：
+  `results/date_two_contribution_full30_20260826/`。
+- 加载合同：C00 为 ATLIF/Shiftmax=`0/0`、overlay/missing/unexpected=`0/0/0`；C10 初始加载为
+  ATLIF/Shiftmax=`105/0`、overlay/missing/unexpected=`0/210/0`；C12 为 `105/12`、
+  `0/210/0`。各自 checkpoint 标准推理必须 missing/unexpected=`0/0`。
+- 结果仍是 local valid825，不得冒充 DSEC official hidden test。
+
+**MVSEC Complete-TTX dyadic-alpha 优化。** 当前 `alpha=1/4` 相对 ATLIF-only 的 macro AEE/Fl
+更好，但 OD1 和 spikes/energy 不占优。为了在不改数据流的前提下改善 TTX，使用 DSEC 冻结敏感性
+给出的先验只测试 dyadic `alpha=1/2`，必要时回退测试 `alpha=1/8`：两者都只改变 shift/add 常数，
+不改变 ATLIF105、Shiftmax12、gated-K、window 或输出 shape。
+
+- 两个候选均从同一 MVSEC NB0 ep11 parent 重新 full30，沿用 H67 的 day2-only train/held-out
+  validation manifest、seed0、crop256、window `2x8x8`、batch8、LR 和 scheduler。
+- 先跑 `alpha=1/2`；只有其 held-out day2 validation loss 未相对现有 `alpha=1/4` rank1
+  (`8.0027529`) 改善至少 `0.25%`，才跑 `alpha=1/8`。只有通过该门且 validation 最优的新候选
+  才做一次 OD1/IF1/IF2/IF3 fixed800 与 full-sequence；禁止按测试序列选择 alpha/checkpoint。
+- 生成 manifest：`configs/generated/mvsec_ttx_alpha_screen_20260826.json`；runner：
+  `entrypoints/run_mvsec_ttx_alpha_screen_20260826.py`；结果目录：
+  `results/mvsec_ttx_alpha_screen_20260826/`。
+- 总队列入口：`entrypoints/run_date_algorithm_queue_20260826.sh`，顺序为 MVSEC 验证门控 alpha
+  screen -> DSEC C00/C10/C12 full30，MLflow 关闭且同一时间仅运行一个 GPU workload。
+
+**AE-3D 与外部网络表的 claim 边界。** 当前代码中的 `AAE_Benchmark` 是经典
+Barron/Middlebury `(u,v,1)` 三维夹角误差；本文仅将列名澄清为 `AE-3D` 以区别内部 legacy
+AAE-2D，**不是本文新提出的指标**。DATE 论文应报告 AEE、AE-3D 和 Fl，但外部网络只能采用同一
+公开 split/protocol 的数字：local valid825 不与 E-RAFT/TMA 等官方 DSEC hidden-test 数字混表。
+不需要下载并重训所有光流网络；优先整理公开官方结果，若需要 local 对照，只复现 2--3 个有开源
+代码且最接近的代表模型，并显式标注 local reproduction。论文表骨架与复现预算见
+`neuron_autoresearch/DATE_EXTERNAL_OPTICAL_FLOW_COMPARISON_20260826.md`。
+
+<!-- DATE_PUBLIC_BENCHMARK_AUDIT_20260826 -->
+
+### DATE 公开光流数据对比审计（2026-08-26）
+
+公开数字、协议来源和本地结果已集中整理到
+`neuron_autoresearch/DATE_PUBLIC_BENCHMARK_COMPARISON_20260826.md`。论文必须将下面两类表分开：
+
+1. DSEC 官方 hidden test：BAT `0.655`、IDNet `0.719`、EDCFlow `0.720`、TMA `0.743`、
+   E-RAFT `0.788`、SDformerFlow-v2 `1.602`、OF_EV_SNN `1.707`（均为 EPE）。本项目只有完成
+   官方提交后才能填写 proposed 行；不得把 local valid825 的 C00/C10/C12 填入该表。
+2. MVSEC `dt1` 论文表：公开 SDformerFlow-v2 的 OD1/IF1/IF2/IF3 为
+   `0.61/0.54/0.81/0.69`（macro `0.66`，MDR 训练）。当前 direct-day2 Complete-TTX 为
+   `0.8181/1.5850/2.6212/2.0352`（macro `1.7649`）；它相对同协议 NB0 改善 `3.20%`，但没有
+   复现公开 MDR 跨域水平，只能作为模块消融。现有本地 MDR-TTX ep20 的 macro `1.2019` 明显好于
+   direct-day2 路线，仍比公开 SDformerFlow-v2 差 `82.1%`。
+
+因此，公开数据支持的 DATE 算法定位是“相对匹配 SNN 父模型保持精度并显著降低活动/能耗”，而不是
+光流精度 SOTA。MVSEC 若要进入正文外部比较，后续优先审计并复现 MDR -> MVSEC 的数据预处理、监督、
+checkpoint 和评估协议；继续做小范围 Motion alpha 扫描只可能改善内部消融，不能解释当前跨域差距。
+
+<!-- DATE_DSEC_TWO_CONTRIBUTION_FULL30_FINAL_20260830 -->
+
+### DATE DSEC 同父 full30 两贡献最终结果（2026-08-30）
+
+预注册队列已完整结束并生成
+`neuron_experiments/H9_bipolar_self_attention/results/date_two_contribution_full30_20260826/{summary.md,summary.json}`。
+三行均从同一个冻结 NB0 ep29 parent 开始，fresh optimizer、seed0、30 个 `480x640` full-resolution
+epoch，并仅从预注册 `[9,14,19,24,29]` 中按 local valid825 AEE 选 rank-1：
+
+| cell | ATLIF | Complete TTX | alpha | rank-1 | AEE | AAE-2D | AE-3D | Fl (%) | spikes (G) | energy proxy (uJ) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| C00 PSN + original SDSA | 0 | 0 | 0 | ep29 | 1.260341 | 5.951858 | 5.552478 | 5.8376 | 138.4041 | 117260.96 |
+| C10 binary ATLIF + original SDSA | 1 | 0 | 0 | ep29 | **1.206569** | 5.459142 | 5.198405 | 5.4074 | 72.2082 | **62711.96** |
+| C12 binary ATLIF + Complete TTX | 1 | 1 | 1/4 | ep29 | 1.209877 | **5.406798** | **5.148612** | **5.4029** | **72.0363** | 63130.12 |
+
+- `C00 -> C10`：AEE `-4.27%`、AE-3D `-6.38%`、Fl `-7.37%`、spikes `-47.83%`、
+  spike-energy proxy `-46.52%`。全网 one-sided binary ATLIF 是独立且强的精度/稀疏贡献。
+- `C00 -> C12`：AEE `-4.00%`、AE-3D `-7.27%`、Fl `-7.45%`、spikes `-47.95%`、
+  spike-energy proxy `-46.16%`，同时满足原定 baseline 5% 精度窗和至少 20% spikes 降幅。
+- `C10 -> C12`：AEE `+0.27%`，但 AAE-2D/AE-3D 分别改善约 `0.96%`，Fl 改善 `0.08%`，
+  spikes 再降 `0.24%`。因此 C12 可作为统一 DATE 主线，C10 是神经元贡献消融；不能声称 TTX 显著
+  改善 AEE，应将其增量价值表述为角度/异常值质量保持与硬件友好统一 attention 数据流。
+- C12 ep29 标准加载为 ATLIF/Shiftmax=`105/12`、checkpoint/model overlay=`210/210`、
+  missing/unexpected=`0/0`。energy 列仍是 spike-activity proxy，不包含 Complete-TTX 的控制、
+  score/reduction 开销，不能单独充当 attention 硬件能耗结论。
+- 以上仍为 local valid825，不是 DSEC official hidden test。
+<!-- DSEC_C12_ALPHA_AND_MVSEC_STRICT_PREREG_20260830 -->
+
+### DSEC C12 alpha 恢复与 MVSEC strict-C00 预注册（2026-08-30）
+
+- **先做 DSEC C12 ep29 冻结 alpha 敏感性。** 固定
+  `date_two_contribution_full30_20260826/c12_binary_motion_ttx/checkpoint_epoch29.pth`，只测试
+  dyadic `binary_motion_xor_alpha={1/8,1/4,1/2}`，采用标准 local valid825。`1/4` 复用既有
+  profile，`1/8`、`1/2` 分别新建配置和结果目录。模块/加载合同必须为 ATLIF=`105`、
+  Shiftmax=`12`、overlay=`210/210`、missing/unexpected=`0/0`。promotion gate 为：AEE 低于
+  C10 ep29，AE-3D 相对 C12 alpha=`1/4` 退化不超过 `0.2%`，spikes 增幅不超过 `1%`。
+  该步骤不训练，只决定是否值得为最佳 alpha 做短微调；alpha 仍为 shift/add 常数，不改变硬件数据流。
+- **随后补 MVSEC strict-C00。** 从与 C10/C12 相同的
+  `mvsec_cicc_nb0_w8_seed0_v4_20260811/checkpoint_epoch11.pth` 初始化原 PSN+原 SDSA，使用相同
+  day2-only dt1 manifest、seed0、crop=`256x256`、window=`2x8x8`、fresh AdamW、参数组、
+  milestones 和 full30 预算。按 held-out day2 validation loss 选择一次 rank-1，再执行
+  OD1/IF1/IF2/IF3 fixed800 与 full-sequence 标准推理。初始化加载必须为 overlay=`0`、
+  missing/unexpected=`0/0`，ATLIF/Shiftmax=`0/0`。
+- 生成器/runner：
+  `make_dsec_c12_ep29_alpha_sensitivity_20260830.py`、
+  `run_dsec_c12_ep29_alpha_sensitivity_20260830.py`、
+  `make_mvsec_strict_c00_continuation_20260830.py`、
+  `run_mvsec_strict_c00_continuation_20260830.py`。串行入口为
+  `run_c12_alpha_then_mvsec_strict_20260830.sh`；先 alpha，后 strict MVSEC，不并发占用 GPU。
+- claim 边界：DSEC alpha 是冻结 checkpoint 部署常数敏感性；MVSEC strict-C00 是内部
+  same-parent 消融，均不冒充 DSEC official hidden test 或 MDR cross-dataset 协议。
+
+<!-- DSEC_C12_ALPHA_AND_MVSEC_STRICT_LAUNCH_20260830 -->
+
+### DSEC C12 alpha -> MVSEC strict-C00 启动记录（2026-08-30）
+
+- 串行队列已启动，launch PID=`3772017`；总日志：
+  `results/c12_alpha_then_mvsec_strict_20260830.log`。
+- 当前第一项为 C12 ep29 `alpha=1/8` standard valid825；实际加载已确认
+  ATLIF=`105`、Shiftmax=`12`、overlay=`210/210`、missing/unexpected=`0/0`。
+- `alpha=1/8 -> alpha=1/2` 完成并生成冻结敏感性 summary 后，队列自动进入 MVSEC strict-C00
+  smoke、full30、held-out validation rank-1、fixed800 与 full-sequence 推理。
+
+<!-- DSEC_C12_ALPHA0125_RESUME5_PREREG_20260830 -->
+
+### DSEC C12 alpha=1/8 resume5 恢复预注册（2026-08-30）
+
+- C12 ep29 冻结敏感性已选中 `alpha=1/8`：AEE=`1.205595`，低于 strict C10 ep29
+  `1.206569`；相对 C12 `alpha=1/4` 的 AEE/AE-3D 分别改善 `0.354%/0.598%`，spikes 基本不变。
+- 因其通过预注册门控，新增 optimized C12 恢复线：从 ep29 同时恢复 model、optimizer、scheduler、
+  scaler，训练 global ep30--34，只把 dyadic Motion alpha 改为 `1/8`。保存并标准评估
+  ep30/32/34；该 optimized 行不替代 strict same-parent full30 的 C12 因果行。
+- 新串行队列顺序为：等待硬件 capture 释放 GPU -> C12 alpha=`1/8` resume5 -> MVSEC strict-C00。
+  不与硬件侧 GPU 任务并发，也不修改硬件代码。
+
+<!-- DSEC_C12_ALPHA0125_RESUME5_AND_MVSEC_SMOKE_PROGRESS_20260830 -->
+
+### C12 alpha=1/8 resume5 与 MVSEC strict-C00 进度（2026-08-30）
+
+- C12 alpha=`1/8` true-resume5 已进入 global ep30；训练日志确认 ATLIF=`105`、Shiftmax=`12`、
+  checkpoint overlay=`210`、missing/unexpected=`0/0`，并从 ep29 state 恢复 optimizer、scheduler、
+  scaler。保存/评估点为 ep30/32/34。
+- MVSEC strict-C00 smoke 本身 exit 0。原 runner 误要求 baseline `load_model` 分支输出 H9 overlay
+  audit 字符串，导致在训练前 fail-closed；已改为独立比较 parent 与 smoke checkpoint 的 key/shape。
+  审计结果为 `711/711` keys、missing=`0`、unexpected=`0`、shape mismatch=`0`、ATLIF/Shiftmax=`0/0`，
+  `load_audit.json` 状态为 PASS。该修复只修改新增 runner，不修改 baseline trainer。
+- 新队列增加 GPU PID 与 `memory.used<=1024 MiB` 双重空闲门控，以覆盖不同 PID namespace 下
+  `nvidia-smi` 偶尔无法映射进程名的情况，避免与硬件 capture 并发。
+
+<!-- DSEC_C12_EP29_ALPHA_SENSITIVITY_RESULT_20260830 -->
+
+### DSEC C12 ep29 dyadic-alpha 冻结敏感性结果（2026-08-30）
+
+| alpha | AEE | AAE-2D | AE-3D | Fl (%) | spikes (G) |
+|---:|---:|---:|---:|---:|---:|
+| 0.125 | 1.205595 | 5.379035 | 5.117846 | 5.3761 | 72.0355 |
+| 0.250 | 1.209877 | 5.406798 | 5.148612 | 5.4029 | 72.0363 |
+| 0.500 | 1.206061 | 5.384223 | 5.118100 | 5.3506 | 72.0420 |
+
+Decision: `{"ae3d_increase_vs_alpha025_percent": -0.5975588022817465, "aee_improvement_vs_alpha025_percent": 0.35389243542744725, "beats_c10": true, "best_aee": 1.2055951715960647, "best_alpha": 0.125, "best_id": "alpha0125", "c10_aee": 1.206569338422833, "promotion_gate_passed": true, "spikes_increase_vs_alpha025_percent": -0.0011421637697685207}`
+
+
+以上仅为同一 C12 ep29 checkpoint 的部署常数敏感性，不是训练因果消融。
+
+<!-- DSEC_C12_ALPHA0125_RESUME5_RESULT_20260830 -->
+
+### DSEC optimized C12 alpha=1/8 resume5 结果（2026-08-30）
+
+| epoch | AEE | AAE-2D | AE-3D | Fl (%) | spikes (G) |
+|---:|---:|---:|---:|---:|---:|
+| 30 | 1.207285 | 5.405067 | 5.139178 | 5.3887 | 72.3407 |
+| 32 | 1.217259 | 5.399178 | 5.126907 | 5.6212 | 72.6276 |
+| 34 | 1.199514 | 5.400641 | 5.106363 | 5.3138 | 72.8912 |
+
+Best epoch: `34`; beats strict C10: `True`.
+
+
+该行是优化部署主线，不替代 strict same-parent full30 因果消融。
