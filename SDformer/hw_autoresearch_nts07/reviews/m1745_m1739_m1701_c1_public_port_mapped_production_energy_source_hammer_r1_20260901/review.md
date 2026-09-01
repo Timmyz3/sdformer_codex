@@ -1,0 +1,9 @@
+# M1745 independent review: FAIL (P0)
+
+M1739 correctly pins the M1743/M1740 timing authority, uses a public-port-only mapped testbench, and preserves a strict directed-component—not frame or system—claim boundary. The full M1590 ledger was independently re-read: 51,840,000 rows, 25,304,213 active rows, and active-only support p25/p50/p75 = 1/2/4. Python 3.6 and 3.10 each pass the five author source/runtime tests. Runner authority ordering, queue/lock use, HOME preservation, proxy omission, one-shot counts and no-retry behavior are statically sound.
+
+The release is nevertheless blocked by one P0. The PTPX Tcl generates the alleged nine-macro diagnostic with `report_power $macro_cells` but does not request `-cell_power`, `-net_power`, or `-hierarchy`. The installed PrimeTime W-2024.09-SP3 command reference (SHA256 `507ec6...c4ec40`) states that this combination generates a summary for the current instance/design; `object_list` selects displayed objects only in cell-/net-based reports. The existing checker then accepts identical top and alleged-macro summaries and reports zero logic power. Thus the central top-minus-macro operand is neither tool-defined nor provenance-checked.
+
+Two P1 issues reinforce the block. A real selected-cell report assigns the switching of nets driven by a cell to that cell, so subtracting all macro switching and adding only SRAM read/write/leakage terms can lose macro-output interconnect energy. Also, the synthetic parser tests do not enforce component-sum consistency or bind the alleged macro report to nine exact instances.
+
+M1745 therefore issues no PASS status and does not authorize M1746, VCS, SAIF or PTPX. The repair must be additive: derive a documented exact nine-instance macro aggregate, define boundary-net switching ownership, reject top==macro and inconsistent totals, then obtain a fresh different-author review.

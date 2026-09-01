@@ -1,0 +1,424 @@
+#!/usr/bin/env python3
+"""Fail-closed M1739 source/runtime checker; this file never launches EDA."""
+from __future__ import print_function
+
+import argparse
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+
+
+HERE = Path(__file__).resolve().parent
+HW = HERE.parent.parent
+M1701 = HW / "dc_handoff/runs/m1701_m1695_c1_tool_entity_repair_dc_r1_20260901.failed_or_incomplete.2502881.quarantine"
+M1722 = HW / "dc_handoff/runs/m1722_m1701_c1_salvage_formality_pt_r1_20260901.failed_or_incomplete.quarantine"
+M1733 = HW / "dc_handoff/runs/m1733_m1722_m1701_c1_formality_reuse_pt_only_r1_20260901.failed_or_incomplete.quarantine"
+M1590 = HW / "results/m1590_ep34_c1_same_ledger_cycle_model_r1_20260901"
+M1590_LEDGER = M1590 / "ep34_c1_support16_rows.memh"
+M1590_RESULT = M1590 / "m1579_ep34_c1_same_ledger_cycle_model_result_r1.json"
+M1743 = HW / "contracts/m1743_m1742_m1740_m1733_m1722_m1701_c1_readonly_formality_pt_salvage_release_r1_20260901.json"
+TIMING_RESULT = HW / "dc_handoff/runs/m1740_c1_readonly_formality_pt_salvage_r1_20260901"
+TIMING_RECEIPT = TIMING_RESULT / "receipt.json"
+DESIGN = "m935_m912_three_stage_exact_parent_match_product_capture_island"
+NET = M1701 / ("netlist/" + DESIGN + "_m1695_fastmin_hold_closed_mapped.v")
+SDC = M1701 / ("netlist/" + DESIGN + "_m1695_fastmin_hold_closed_mapped.sdc")
+TB = HW / "dc_handoff/tb/tb_m1739_c1_m1701_public_port_mapped_production_energy.sv"
+FILELIST = HW / "dc_handoff/filelists/date_m1739_c1_m1701_public_port_mapped_production_energy.f"
+UCLI = HW / "dc_handoff/scripts/m1739_c1_m1701_public_port_mapped_production_energy.ucli.tcl"
+PT_TCL = HW / "dc_handoff/scripts/run_ptpx_m1739_c1_m1701_public_port_mapped_production_energy.tcl"
+RUNNER = HW / "dc_handoff/scripts/run_m1739_m1701_c1_public_port_mapped_production_energy_one_shot.py"
+CHECKER = Path(__file__).resolve()
+TEST = HW / "system_simulator/tests/test_m1739_c1_m1701_public_port_mapped_production_energy_source.py"
+CONTRACT = HW / "contracts/m1739_m1701_c1_public_port_mapped_production_energy_source_contract_r1_20260901.json"
+DOC359 = HW / "docs/359_DATE终局冻结_20260813.md"
+CELL_V = Path("/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/verilog/tcbn28hpcplusbwp35p140_110a/tcbn28hpcplusbwp35p140.v")
+STD_TT = Path("/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/timing_power_noise/NLDM/tcbn28hpcplusbwp35p140_180a/tcbn28hpcplusbwp35p140tt0p9v25c.db")
+STD_SS = Path("/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/timing_power_noise/NLDM/tcbn28hpcplusbwp35p140_180a/tcbn28hpcplusbwp35p140ssg0p9v125c.db")
+MACRO_ROOT = Path("/home/zhumd/work/synopsys_date_dual/hw_autoresearch_nts07/macro_assets/tsmc28_128x128_1rw_20260821")
+MACRO_V = MACRO_ROOT / "ts1n28hpcphvtb128x128m4s_180a_ssg0p9v125c.v"
+MACRO_DB = MACRO_ROOT / "ts1n28hpcphvtb128x128m4s_180a_ssg0p9v125c.db"
+TOP = "tb_m1739_c1_m1701_public_port_mapped_production_energy"
+SAIF_SCOPE = TOP + ".dut"
+
+CLAIMS = dict((key, False) for key in (
+    "launch_authorized", "launch_executed", "mapped_vcs", "production_saif",
+    "ptpx", "logic_power", "component_energy", "total_c1_energy",
+    "energy_per_frame", "performance", "system_speedup", "paper_ppa_ready",
+    "headline"))
+
+FIXED = {
+    DOC359: "dedde7ce44c3e595098f25ce6550dc0f6dfd66ce7227bcffd3dab0426a7bdfc4",
+    NET: "d990bb416370fd07a1c241849e2fa494b94a179b47687a1a3ff2b1ab92c255e8",
+    SDC: "04cb67affcfd629cd9540d789110107888d9ae956168dae37c34aa44c15e2d62",
+    M1701 / "SHA256SUMS": "f132ca694a747e2da51708fb03f2ba6c84360606b4d38d2cc2e97998f9f3a022",
+    M1701 / "SHA256SUMS.seal.sha256": "a65f2901b4ab4339a94bb032b9412b652a77afc50d1c72b403c8bd44d15f55a6",
+    M1722 / "SHA256SUMS": "415521aee26a6c4da176bd2d22d36e0bed8af458fc491dbf73c02b7d52a378fc",
+    M1722 / "SHA256SUMS.seal.sha256": "8beb486ec43dd855548a76ae10103b4d84339e11b47f3d672860c18164b6deca",
+    M1722 / "formality/FORMALITY_INTERNAL_COMPLETE.txt": "c3a1837201846cb13e9e45dce3ff36b33e1c319b7136c3479c62677fdcb41f6c",
+    M1722 / "formality/reports/formality_status.rpt": "1ce8c6c17a4890be8a54c86b63b8e36c958398f6b7a92fb9881df2b3b73ba19d",
+    M1733 / "SHA256SUMS": "9093eb197b4a837471f5edda6893e8b9806cb734c0995e299fee3aa4909aa614",
+    M1733 / "SHA256SUMS.seal.sha256": "d7b93e1b15e96ca1b3d3a86064931c52a770a59ef62934b72834e8104f9bde3e",
+    M1733 / "ptsta/PTSTA_INTERNAL_COMPLETE.txt": "fcdf45d03c8b1c6cee84bf627f27cca01847a0a6547d68f320d28ac2263d1a09",
+    M1733 / "ptsta/reports/timing_summary_machine.txt": "9e5160a8381fb839aac7e8df409667a5d9486ee6a280d5a8e808d1b40b6d3947",
+    M1590 / "SHA256SUMS": "50881cd508bec486e6527ec483e451a1f03b7aba1fea7a047d54f1c1f5f08707",
+    M1590 / "SHA256SUMS.seal.sha256": "9e7de8638deb0875ba7e2bd27c20859905fdbf441e8cce9759b32bb06b8b3127",
+    M1590_LEDGER: "daa6265115df9c0bae5d96e5a133a4b5fbc9786de75598e53ab2e5812bfdb835",
+    M1590_RESULT: "facfecaf3b25a4c79299517de31283ed3815af26a5dd87c91a6985f6fc68516f",
+    M1743: "3c623618115c4ecf2e4bfec6efe167c90296825428ce87e16e6d52bd79216921",
+    Path(str(M1743) + ".sha256"): "7d481d605bffd1386b8926e709424a2c78b3f78eff340caf1727dbe7ec84cfe1",
+    Path(str(M1743) + ".sha256.seal.sha256"): "7a52c2e7692b62857dfe1d2b1bd9e2825372a0fc839822abf086d4837bbcf112",
+    TIMING_RESULT / "SHA256SUMS": "d3f2e14a6f6c0600abce2f5af2479402d41986736e3d9c32c6044e4225f64c75",
+    TIMING_RESULT / "SHA256SUMS.seal.sha256": "6f2b17f7016665cd663b9694a1ccbd29fa551ecf75ba29aa52c4bb56c5769b38",
+    TIMING_RECEIPT: "0b3ee22f9369a38eb83f674a4f1eb73fac39757ee85a3e1aeebe032bd0c76a1e",
+    CELL_V: "3ed0796ffa8a0eb1406860e07913b8457969bcec492c3cb15599ee8db964707a",
+    STD_TT: "d8975a427b9f5f6b6667ee5dbc7ff33eac15ab480a871d756af48cd9afa18070",
+    STD_SS: "79fb5fb651492e43de58fbbb03a8094029f288e7e9850a60bd1e2015e1f951af",
+    MACRO_V: "8343acf01604cf0c6ac4757fd268a8f409401e0b80964ff671b030281ebb444d",
+    MACRO_DB: "cd8c20508a7ea374eab09563f526944843c3e302f50986dfda4e00fa1b6aecbf",
+}
+
+
+def need(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def sha(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def strict_json(path):
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            need(key not in value, "duplicate JSON key")
+            value[key] = item
+        return value
+    path = Path(path)
+    need(path.is_file() and not path.is_symlink(), "JSON not regular")
+    value = json.loads(path.read_text(), object_pairs_hook=pairs,
+                       parse_constant=lambda token: (_ for _ in ()).throw(
+                           RuntimeError("nonfinite JSON " + token)))
+    need(type(value) is dict, "JSON root")
+    return value
+
+
+def active_lines(path):
+    return [raw.split("#", 1)[0].strip()
+            for raw in Path(path).read_text().splitlines()
+            if raw.split("#", 1)[0].strip()]
+
+
+def verify_seal(root):
+    manifest = root / "SHA256SUMS"
+    outer = root / "SHA256SUMS.seal.sha256"
+    need(outer.read_text().split() == [sha(manifest), "SHA256SUMS"],
+         "outer seal content")
+    listed = set()
+    for row in manifest.read_text().splitlines():
+        fields = row.split(maxsplit=1)
+        need(len(fields) == 2, "manifest syntax")
+        digest, name = fields[0], fields[1].lstrip("*")
+        rel = Path(name)
+        need(not rel.is_absolute() and ".." not in rel.parts and name not in listed,
+             "unsafe manifest")
+        need(sha(root / rel) == digest, "manifest member drift " + name)
+        listed.add(name)
+
+
+def strip_sv_comments(text):
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def validate_sources():
+    for path, digest in FIXED.items():
+        need(path.is_file() and not path.is_symlink() and sha(path) == digest,
+             "fixed identity drift " + str(path))
+    for root in (M1701, M1722, M1733, M1590, TIMING_RESULT):
+        verify_seal(root)
+    formal = (M1722 / "formality/reports/formality_status.rpt").read_text()
+    need("Verification SUCCEEDED" in formal
+         and "16549 Passing compare points" in formal
+         and re.search(r"Failing \(not equivalent\)\s+0\s+0\s+0\s+0\s+0\s+0\s+0\s+0", formal),
+         "M1722 Formality subproof drift")
+    timing = (M1733 / "ptsta/reports/timing_summary_machine.txt").read_text()
+    for token in ("setup_wns_ns=0.027871", "hold_wns_ns=0.001827",
+                  "setup_violating_paths=0", "hold_violating_paths=0"):
+        need(token in timing, "M1733 timing subproof drift " + token)
+    m1590 = strict_json(M1590_RESULT)
+    need(m1590.get("ledger", {}).get("rows") == 51840000
+         and m1590.get("conservation", {}).get("active_rows_per_output_block")
+             == 25304213,
+         "M1590 support denominator drift")
+    timing = strict_json(TIMING_RECEIPT)
+    need(timing.get("schema") ==
+         "m1740_m1733_m1722_m1701_c1_readonly_formality_pt_salvage_receipt_r1_v1"
+         and timing.get("status") ==
+         "PASS_CANONICAL_C1_FORMALITY_AND_INDEPENDENT_PT_PRELAYOUT",
+         "M1743 timing receipt schema/status drift")
+    need(timing.get("prime_time") == {
+        "clock_period_ns": "3.000", "hold_tns_ns": "0.0",
+        "hold_uncertainty_ns": "0.050", "hold_violating_paths": "0",
+        "hold_wns_ns": "0.001827", "macro_count": "9",
+        "setup_tns_ns": "0.0", "setup_uncertainty_ns": "0.200",
+        "setup_violating_paths": "0", "setup_wns_ns": "0.027871"},
+        "M1743 PrimeTime values drift")
+    formality = timing.get("formality", {})
+    need(formality.get("verification_succeeded") is True
+         and formality.get("passing_compare_points") == 16549
+         and [formality.get(key) for key in
+              ("failing", "aborted", "unverified", "unmatched")]
+             == [0, 0, 0, 0]
+         and formality.get("macro_instances_per_side") == 9,
+         "M1743 Formality values drift")
+    need(timing.get("scope") == {"ideal_clock": True, "macro_count": 9,
+        "parasitics": False, "power_or_energy": False, "prelayout": True,
+        "wireload": "ZeroWireload"}
+        and timing.get("claim_boundary") == {
+            "cycle_speedup": False, "dc": False, "energy": False,
+            "formality": True, "headline": False, "independent_pt": True,
+            "paper_citable": True, "paper_ppa_ready": False,
+            "power": False, "system_speedup": False},
+         "M1743 scope/claim boundary drift")
+
+    expected_filelist = [str(CELL_V), str(MACRO_V), str(NET), str(TB)]
+    need(active_lines(FILELIST) == expected_filelist, "filelist/order drift")
+    tb_text = TB.read_text()
+    active_tb = strip_sv_comments(tb_text).lower()
+    need("force " not in active_tb and "release " not in active_tb,
+         "TB drives internal state")
+    need("dut." not in active_tb, "TB reads hierarchical DUT state")
+    for token in ("load_public_task", "issue_request_source_valid",
+                  "psum_write_data", "PASS_M1739_C1_M1701_PUBLIC_PORT",
+                  "count_macro_reads", "count_macro_writes"):
+        need(token in tb_text, "TB omits " + token)
+    need(active_lines(UCLI) == [
+        "power -gate_level all mda sv", "power " + SAIF_SCOPE, "run",
+        "power -enable", "run", "power -disable",
+        "power -report $::env(M1739_SAIF_FILE) 1e-9 " + SAIF_SCOPE, "quit"],
+        "UCLI exact scope/order drift")
+    pt = PT_TCL.read_text()
+    for token in ("expected_macro_count 9", "read_saif -strip_path",
+                  "M1739_FAIL_EXACT_NET_ANNOTATION_GATE",
+                  "M1739_FAIL_EXACT_LEAF_ANNOTATION_GATE",
+                  "report_power $macro_cells", "top_report_includes_macro_liberty=true",
+                  "must_not_be_double_counted=true", "not_energy_per_frame=true"):
+        need(token in pt, "PTPX Tcl omits " + token)
+    for path in (TB, FILELIST, UCLI, PT_TCL, RUNNER, CHECKER, TEST):
+        forbidden_initializer = "init" + "reg"
+        need(forbidden_initializer not in path.read_text().lower(),
+             "forbidden gate initializer " + str(path))
+    contract = strict_json(CONTRACT)
+    need(contract.get("schema") ==
+         "m1739_m1701_c1_public_port_mapped_production_energy_source_contract_r1_v1",
+         "contract schema")
+    need(contract.get("status") ==
+         "SOURCE_ONLY__M1743_TIMING_PINNED__M1745_REVIEW_AND_M1746_RELEASE_REQUIRED__NO_EDA",
+         "contract status")
+    need(contract.get("claim_boundary") == CLAIMS, "source claim promotion")
+    rows = contract.get("source_files")
+    need(isinstance(rows, list), "source inventory")
+    mapping = dict((row.get("path"), row.get("sha256")) for row in rows)
+    expected = (TB, FILELIST, UCLI, PT_TCL, RUNNER, CHECKER, TEST)
+    need(len(mapping) == len(rows) and set(mapping) == set(
+        path.relative_to(HW).as_posix() for path in expected),
+        "source inventory paths")
+    for path in expected:
+        need(mapping[path.relative_to(HW).as_posix()] == sha(path),
+             "source inventory SHA " + str(path))
+    return {"schema": "m1739_c1_energy_source_check_r1_v1",
+            "status": "PASS_M1739_SOURCE_ONLY_NO_EDA",
+            "mapped_netlist_sha256": sha(NET), "mapped_sdc_sha256": sha(SDC),
+            "public_port_only": True, "new_rtl_wrapper": False,
+            "claim_boundary": CLAIMS}
+
+
+COUNTER_PATTERN = re.compile(
+    r"M1739_PUBLIC_COUNTERS cycles=([1-9][0-9]*) issue_accepts=([1-9][0-9]*)"
+    r" parent_edges=([1-9][0-9]*) macro_reads=([0-9]+) macro_writes=([0-9]+)"
+    r" forwards=([0-9]+) dead_write_elisions=([0-9]+)"
+    r" psum_commits=64 row_completions=64")
+
+
+def validate_runtime(log_path):
+    text = Path(log_path).read_text(errors="strict")
+    need(text.count("PASS_M1739_C1_M1701_PUBLIC_PORT_MAPPED_DIRECTED_COMPONENT_ACTIVITY") == 1,
+         "runtime PASS absent/duplicated")
+    need(not any(token in text for token in ("$fatal", "Assertion failed", "Error-[")),
+         "runtime failure token")
+    hits = COUNTER_PATTERN.findall(text)
+    need(len(hits) == 1, "public counters absent/duplicated")
+    values = [int(item) for item in hits[0]]
+    cycles, issue, parents, reads, writes, forwards, dead = values
+    need(reads + forwards == parents, "parent conservation")
+    need(writes + dead == 64, "write/elision conservation")
+    return {"status": "PASS_M1739_PUBLIC_PORT_RUNTIME",
+            "measurement_cycles": cycles, "issue_accepts": issue,
+            "parent_edges": parents, "macro_reads": reads,
+            "macro_writes": writes, "forwards": forwards,
+            "dead_write_elisions": dead, "log_sha256": sha(log_path)}
+
+
+def sexpr_tokens(text):
+    return re.findall(r'\(|\)|"(?:\\.|[^"\\])*"|[^\s()]+', text)
+
+
+def parse_saif(text):
+    tokens = sexpr_tokens(text)
+    pos = [0]
+    def parse_one():
+        need(pos[0] < len(tokens) and tokens[pos[0]] == "(", "malformed SAIF")
+        pos[0] += 1
+        node = []
+        while pos[0] < len(tokens) and tokens[pos[0]] != ")":
+            if tokens[pos[0]] == "(":
+                node.append(parse_one())
+            else:
+                node.append(tokens[pos[0]])
+                pos[0] += 1
+        need(pos[0] < len(tokens), "unterminated SAIF")
+        pos[0] += 1
+        return node
+    root = parse_one()
+    need(pos[0] == len(tokens) and root and root[0] == "SAIFILE", "SAIF root")
+    return root
+
+
+def forms(node, tag):
+    return [item for item in node[1:]
+            if isinstance(item, list) and item and item[0] == tag]
+
+
+def all_forms(node, tag):
+    found = []
+    if isinstance(node, list):
+        if node and node[0] == tag:
+            found.append(node)
+        for item in node:
+            if isinstance(item, list):
+                found.extend(all_forms(item, tag))
+    return found
+
+
+def direct_instance(node, name):
+    hits = [item for item in forms(node, "INSTANCE")
+            if len(item) >= 2 and item[1].lstrip("\\") == name]
+    need(len(hits) == 1, "SAIF instance absent/duplicated " + name)
+    return hits[0]
+
+
+def validate_saif(path, cycles):
+    path = Path(path)
+    need(path.is_file() and not path.is_symlink() and cycles > 0,
+         "SAIF input invalid")
+    root = parse_saif(path.read_text(errors="strict"))
+    duration = forms(root, "DURATION")
+    need(len(duration) == 1 and len(duration[0]) == 2, "SAIF duration")
+    duration_ns = float(duration[0][1])
+    need(math.isfinite(duration_ns)
+         and abs(duration_ns - cycles * 3.0) <= 1e-6,
+         "SAIF duration/cycle mismatch")
+    tx = all_forms(root, "TX")
+    need(tx and all(len(item) == 2 and float(item[1]) == 0.0 for item in tx),
+         "SAIF contains unknown activity")
+    top = direct_instance(root, TOP)
+    dut = direct_instance(top, "dut")
+    tc = all_forms(dut, "TC")
+    need(tc and any(len(item) == 2 and float(item[1]) > 0.0 for item in tc),
+         "mapped DUT SAIF has no toggles")
+    return {"status": "PASS_M1739_EXACT_WINDOW_DUT_ONLY_SAIF",
+            "cycles": cycles, "duration_ns": duration_ns,
+            "tx_nonzero": 0, "saif_scope": SAIF_SCOPE,
+            "saif_sha256": sha(path)}
+
+
+POWER_FIELDS = ("Net Switching Power", "Cell Internal Power",
+                "Cell Leakage Power", "Total Power")
+
+
+def parse_power(path):
+    text = Path(path).read_text(errors="strict")
+    need("Report : Averaged Power" in text and "-unit mW" in text,
+         "power report mode/unit")
+    values = {}
+    for field in POWER_FIELDS:
+        hits = re.findall(re.escape(field) + r"\s*=\s*([0-9.eE+-]+)", text)
+        need(len(hits) == 1, "power field " + field)
+        values[field] = float(hits[0])
+        need(math.isfinite(values[field]) and values[field] >= 0.0,
+             "invalid power field")
+    return values
+
+
+def combine_power(top_path, macro_path, cycles, reads, writes):
+    need(cycles > 0 and reads >= 0 and writes >= 0, "metric domain")
+    top = parse_power(top_path)
+    macro = parse_power(macro_path)
+    logic = {}
+    for field in POWER_FIELDS:
+        logic[field] = top[field] - macro[field]
+        need(logic[field] >= -1e-8, "negative top-minus-macro " + field)
+        logic[field] = max(0.0, logic[field])
+    duration_ns = cycles * 3.0
+    logic_energy_pj = logic["Total Power"] * duration_ns
+    read_energy_pj = reads * 94.57074
+    write_energy_pj = writes * 90.65763
+    leakage_energy_pj = 0.54009423 * duration_ns
+    return {
+        "status": "PASS_M1739_COMPONENT_WORKLOAD_ENERGY_PENDING_RESULT_HAMMER",
+        "cycles": cycles, "duration_ns": duration_ns,
+        "logic_only_total_power_mw_top_minus_macro_liberty": logic["Total Power"],
+        "logic_only_energy_pj": logic_energy_pj,
+        "parent_sram_model": {"macro_count": 9, "reads": reads, "writes": writes,
+            "read_pj_per_1152b_access": 94.57074,
+            "write_pj_per_1152b_access": 90.65763,
+            "leakage_power_mw": 0.54009423,
+            "dynamic_energy_pj": read_energy_pj + write_energy_pj,
+            "leakage_energy_pj": leakage_energy_pj},
+        "known_component_workload_energy_pj":
+            logic_energy_pj + read_energy_pj + write_energy_pj + leakage_energy_pj,
+        "claim_boundary": {"directed_component_workload": True,
+            "logic_ptpx": True, "parent_sram_datasheet_model": True,
+            "macro_liberty_diagnostic_double_counted": False,
+            "total_c1_energy": False, "energy_per_frame": False,
+            "system_energy": False, "silicon_measurement": False}}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("source", "runtime", "saif", "power"), required=True)
+    parser.add_argument("--log", type=Path)
+    parser.add_argument("--top-power", type=Path)
+    parser.add_argument("--macro-power", type=Path)
+    parser.add_argument("--cycles", type=int)
+    parser.add_argument("--reads", type=int)
+    parser.add_argument("--writes", type=int)
+    args = parser.parse_args()
+    if args.mode == "source":
+        value = validate_sources()
+    elif args.mode == "runtime":
+        need(args.log is not None, "runtime log absent")
+        value = validate_runtime(args.log)
+    elif args.mode == "saif":
+        need(args.log is not None and args.cycles is not None,
+             "SAIF path/cycles absent")
+        value = validate_saif(args.log, args.cycles)
+    else:
+        need(None not in (args.top_power, args.macro_power, args.cycles,
+                          args.reads, args.writes), "power inputs absent")
+        value = combine_power(args.top_power, args.macro_power, args.cycles,
+                              args.reads, args.writes)
+    print(json.dumps(value, indent=2, sort_keys=True, allow_nan=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
