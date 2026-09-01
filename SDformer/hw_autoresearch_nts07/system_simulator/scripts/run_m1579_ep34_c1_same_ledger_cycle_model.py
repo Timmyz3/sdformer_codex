@@ -84,6 +84,10 @@ def sha256(path: Path) -> str:
 
 
 def strict_json(path: Path) -> dict[str, Any]:
+    return strict_json_bytes(Path(path).read_bytes())
+
+
+def strict_json_bytes(payload: bytes) -> dict[str, Any]:
     def pairs(items: Iterable[tuple[str, Any]]) -> dict[str, Any]:
         output: dict[str, Any] = {}
         for key, value in items:
@@ -92,7 +96,7 @@ def strict_json(path: Path) -> dict[str, Any]:
         return output
 
     value = json.loads(
-        Path(path).read_text(encoding="utf-8"),
+        payload.decode("utf-8"),
         object_pairs_hook=pairs,
         parse_constant=lambda token: (_ for _ in ()).throw(
             RuntimeError("nonfinite JSON token: " + token)),
@@ -126,8 +130,33 @@ def load_modules() -> tuple[Any, Any]:
     return M1524, M528
 
 
-def verify_release(path: Path, output: Path, ledger: Path, workers: int) -> dict[str, Any]:
-    value = strict_json(path)
+def read_release_snapshot(path: Path) -> tuple[dict[str, Any], str]:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(str(path), flags)
+    try:
+        opened = os.fstat(descriptor)
+        named = path.lstat()
+        require((opened.st_dev, opened.st_ino, opened.st_size) ==
+                (named.st_dev, named.st_ino, named.st_size),
+                "release changed while opening")
+        chunks = []
+        while True:
+            block = os.read(descriptor, 1 << 20)
+            if not block:
+                break
+            chunks.append(block)
+    finally:
+        os.close(descriptor)
+    payload = b"".join(chunks)
+    return strict_json_bytes(payload), hashlib.sha256(payload).hexdigest()
+
+
+def verify_release_value(value: dict[str, Any], output: Path, ledger: Path,
+                         workers: int) -> dict[str, Any]:
     require(value.get("schema") == RELEASE_SCHEMA and
             value.get("status") == RELEASE_STATUS,
             "release schema/status drift")
@@ -152,6 +181,32 @@ def verify_release(path: Path, output: Path, ledger: Path, workers: int) -> dict
         "docs359": DOCS359_SHA256,
     }, "release frozen-input map drift")
     return value
+
+
+def consume_attempt(value: dict[str, Any], release_sha256: str,
+                    output: Path) -> Path:
+    marker = Path(value.get("attempt_marker", "")).resolve()
+    require(marker.parent.is_dir() and not marker.is_symlink(),
+            "attempt-marker parent unavailable")
+    payload = json.dumps({
+        "schema": "m1579_ep34_c1_same_ledger_attempt_r1_v1",
+        "status": "ATTEMPT_CONSUMED_BEFORE_LEDGER_MATERIALIZATION",
+        "release_sha256": release_sha256,
+        "source_sha256": sha256(SOURCE),
+        "output": str(output.resolve()),
+    }, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    descriptor = os.open(str(marker), flags, 0o444)
+    try:
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return marker
 
 
 def materialize_ledger(path: Path) -> dict[str, Any]:
@@ -355,7 +410,9 @@ def seal(directory: Path, members: list[Path]) -> dict[str, Any]:
 def execute(release: Path, output: Path, ledger: Path, workers: int) -> dict[str, Any]:
     require(not output.exists() and not ledger.exists(),
             "refuse to overwrite output or ledger")
-    verify_release(release, output, ledger, workers)
+    release_value, release_sha256 = read_release_snapshot(release)
+    verify_release_value(release_value, output, ledger, workers)
+    consume_attempt(release_value, release_sha256, output)
     output.parent.mkdir(parents=True, exist_ok=True)
     require(ledger.parent.resolve() == output.resolve(),
             "ledger must be a member of the canonical result directory")
@@ -376,7 +433,7 @@ def execute(release: Path, output: Path, ledger: Path, workers: int) -> dict[str
                 "capture_manifest_sha256": M1524.CAPTURE_MANIFEST_SHA256,
                 "ordered_records_sha256": M1524.ORDERED_SHA256,
                 "source_sha256": sha256(SOURCE),
-                "release_sha256": sha256(release),
+                "release_sha256": release_sha256,
                 "frozen_m1524_sha256": M1524_SHA256,
                 "frozen_m528_sha256": M528_SHA256,
                 "frozen_m505_sha256": M505_SHA256,

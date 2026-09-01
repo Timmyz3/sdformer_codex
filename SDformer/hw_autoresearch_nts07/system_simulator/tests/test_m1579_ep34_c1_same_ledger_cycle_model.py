@@ -57,6 +57,7 @@ class M1579Tests(unittest.TestCase):
                 "gpu_runs": 0,
                 "eda_runs": 0,
                 "maximum_workers": 3,
+                "attempt_marker": str(base / "attempt.json"),
                 "frozen_inputs": {
                     "m1524": M.M1524_SHA256,
                     "m528": M.M528_SHA256,
@@ -66,13 +67,29 @@ class M1579Tests(unittest.TestCase):
                 },
             }
             release.write_text(json.dumps(value), encoding="utf-8")
-            M.verify_release(release, output, ledger, 3)
+            parsed, digest = M.read_release_snapshot(release)
+            self.assertEqual(digest, M.sha256(release))
+            M.verify_release_value(parsed, output, ledger, 3)
             value["cpu_runs"] = 2
             release.write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaises(RuntimeError):
-                M.verify_release(release, output, ledger, 3)
+                parsed, _ = M.read_release_snapshot(release)
+                M.verify_release_value(parsed, output, ledger, 3)
 
-    def test_03_all_baselines_share_one_array_recurrence(self):
+    def test_03_attempt_marker_is_exclusive_and_binds_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            output = base / "result"
+            marker = base / "attempt.json"
+            value = {"attempt_marker": str(marker)}
+            M.consume_attempt(value, "a" * 64, output)
+            receipt = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["release_sha256"], "a" * 64)
+            self.assertEqual(receipt["output"], str(output.resolve()))
+            with self.assertRaises(FileExistsError):
+                M.consume_attempt(value, "a" * 64, output)
+
+    def test_04_all_baselines_share_one_array_recurrence(self):
         _, m528 = M.load_modules()
         shape = (M.SAMPLES, M.OPERATORS, M.CHUNKS, M.PARTITIONS)
         arrays = {name: np.zeros(shape, dtype=np.int32)
@@ -101,7 +118,7 @@ class M1579Tests(unittest.TestCase):
                          row["m505_dead_write_only_1rw_cycles"])
         self.assertGreater(ratio, 0.0)
 
-    def test_04_claim_boundary_is_explicit_in_source(self):
+    def test_05_claim_boundary_is_explicit_in_source(self):
         text = SOURCE.read_text(encoding="utf-8")
         for token in ("cycle_model", "rtl_cycle", "full_network",
                       "system_speedup", "wall_clock", "multi_sequence"):
@@ -109,7 +126,7 @@ class M1579Tests(unittest.TestCase):
         self.assertNotIn("time.time(", text)
         self.assertNotIn("perf_counter(", text)
 
-    def test_05_no_network_gpu_or_eda_action(self):
+    def test_06_no_network_gpu_or_eda_action(self):
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
         imported = {alias.name.split(".")[0]
                     for node in ast.walk(tree)
@@ -121,7 +138,7 @@ class M1579Tests(unittest.TestCase):
         self.assertNotIn("vcs ", text)
         self.assertNotIn("ssh ", text)
 
-    def test_06_protected_document_identity(self):
+    def test_07_protected_document_identity(self):
         self.assertEqual(M.sha256(M.DOCS359), M.DOCS359_SHA256)
 
 
