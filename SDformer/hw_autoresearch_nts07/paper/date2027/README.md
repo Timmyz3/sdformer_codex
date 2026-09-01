@@ -1,4 +1,4 @@
-# DATE 2027 claim-safe paper skeleton
+# ISCAS 2027 claim-safe paper skeleton
 
 This directory contains a deliberately conservative six-page writing skeleton.
 It is not a submitted manuscript and does not promote component evidence into a
@@ -32,26 +32,27 @@ packages (`geometry`, `booktabs`, `graphicx`, `hyperref`, and `xcolor`).
 
 ## Evidence admitted in this draft
 
-- C1 CPU same-ledger opportunity: `1.7591725402x` `[model]`, explicitly non-RTL.
-- C1 macro-aware slice: `147246.39209 um2`, setup `+0.001795 ns`; hold and
-  full-storage energy remain open.
-- C2 equal-bandwidth point: `1.01672765x` cycles, `4.541077998x`
-  throughput/mm2, and `-77.6104%` logic area; logic-only pre-macro.
-- C3 fixed-T10 DC: `62433.503388 um2`, setup `+0.0003 ns`; a later
-  prelayout PT diagnostic failed the strict gate at setup `-0.001154 ns` and
-  hold `-0.022628 ns`, so no timing-closed speedup is claimed.
+- C1 ep34 CPU same-ledger opportunity: `1.694510x` `[model]`, explicitly
+  non-RTL.  The nine-macro mapped component is `166514.312 um2`, with PT
+  setup/hold `+0.027871/+0.001827 ns`, Formality `16549/16549`, and a bounded
+  mapped-energy point of `29.0763 mW` / `22.0689 nJ` per 64-row window.
+- C2 equal-bandwidth point: `1.016728x` cycles, `4.562720x`
+  throughput/mm2, and `-77.7166%` logic area; logic-only pre-macro.
+- C3 fixed-T10: `63756.125879 um2`; DC setup/hold
+  `+0.000300/+0.034585 ns`, PT `+0.000299/+0.030474 ns`, and gate-to-gate
+  Formality `11180/11180`.
 - final checkpoint selection: ep34, AEE `1.199514`, activity `72.891G`; the
-  selection is independently sealed, while E2--E8 hardware recapture/replay
-  remains pending.
+  selection and 40-sample activation capture are independently sealed, while
+  decoder-complete address-timed replay remains pending.
 - Production Table A: zero admitted rows.
 
 ## Unclosed placeholders
 
-1. Execute and independently seal the already-authorized ep34 one-shot
-   hardware-trace rebind; checkpoint selection itself is closed.
-2. Decoder-complete, memory-inclusive cycle/traffic row.
-3. C1 full-storage and hold closure; C2/C3 hold closure.
-4. Component SAIF/PTPX and memory-inclusive energy.
+1. Decoder-complete, memory-inclusive cycle/traffic row.
+2. Re-establish C2 mapped functionality/area/power after the registered-fault
+   repair; close C3 mapped energy.
+3. Admit TSBG only if true-protocol VCS and same-resource DC/energy pass.
+4. Memory-inclusive system energy.
 5. Multi-sequence, same-resource whole-network comparison.
 6. Final figures, Table A, normalized comparison table, and complete bibliography.
 
