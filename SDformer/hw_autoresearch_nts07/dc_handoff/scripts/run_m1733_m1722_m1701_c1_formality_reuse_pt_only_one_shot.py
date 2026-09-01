@@ -69,6 +69,13 @@ AREA_CEILING = 168188.4885824
 GUI_ALLOW = "Error: Error during sourcing of /opt/synopsys/syn/V-2023.12-SP3/auxx/gui/dv/.synopsys_dv.tcl"
 MATCHED_HEADER_ALLOW = "Matched Compare Points     BBPin    Loop   BBNet     Cut    Port     DFF     LAT   TOTAL"
 FORMALITY_TCL_ECHO_ALLOW = '    error "M1722 M1665-reference to M1701-hold-fixed gate equivalence failed"'
+PT_TCL_ECHO_ALLOW = (
+    '    error "M1733 expected exactly nine physical SRAM macro instances"',
+    '    error "M1733 expected exactly one core_clk"',
+    '    error "M1733 3 ns clock contract failed"',
+    '    error "M1733 missing max/min timing path"',
+    '    error "M1733 independent PrimeTime setup/hold gate failed"',
+)
 CLAIMS = dict((key, False) for key in (
     "formality", "independent_pt", "dc", "power", "energy",
     "cycle_speedup", "system_speedup", "paper_ppa_ready", "paper_citable",
@@ -363,8 +370,8 @@ def verify_m1722_formality_reuse():
         raise Failure("M1722 Formality nine-macro population drift")
     allowed = scan_tool_log(M1722_FORMALITY / "formality.raw.log",
                             allow_matched_header=True,
-                            allow_formality_echo=True)
-    if allowed != {"gui": 0, "matched_header": 1, "formality_tcl_echo": 1}:
+                            exact_source_echo_allow=(FORMALITY_TCL_ECHO_ALLOW,))
+    if allowed != {"gui": 0, "matched_header": 1, "source_echo": 1}:
         raise Failure("M1722 frozen Formality log allowlist drift")
     return {"passing_compare_points": 16549, "macro_instances_per_side": 9,
             "log_allowlist": allowed}
@@ -452,15 +459,19 @@ def clean_env(extra):
     return value
 
 
-def scan_tool_log(path, allow_matched_header=False, allow_formality_echo=False):
+def scan_tool_log(path, allow_matched_header=False, exact_source_echo_allow=()):
     gui_allowed = 0
     matched_header_allowed = 0
-    formality_echo_allowed = 0
+    source_echo_counts = dict((line, 0) for line in exact_source_echo_allow)
+    if len(source_echo_counts) != len(tuple(exact_source_echo_allow)):
+        raise Failure("duplicate source-echo allow entry")
     fatal = re.compile(
-        r"^\s*(?:\*+\s*)?(?:(?:info|warning)\s*:\s*)?(?:errors?|fatal)(?:\b|\s*[:-])|"
-        r"LINK-[0-9]+|\bunresolved\b|"
+        r"\b(?:errors?|fatal)\b|LINK-[0-9]+|\bunresolved\b|"
         r"\bloop\b|\bunable\s+to\s+resolve\b|\((?:TIM-209|OPT-150)\)",
         re.I)
+    benign_zero_error = re.compile(
+        r"^\s*(?:no\s+errors?(?:\s+detected)?|(?:summary\s*:\s*)?0\s+errors?|"
+        r"(?:summary\s*:\s*)?0\s+fatal(?:\s+diagnostics?)?)\s*$", re.I)
     for number, line in enumerate(Path(path).read_text(errors="replace").splitlines(), 1):
         # splitlines() removes only the line terminator.  No other prefix,
         # suffix, or whitespace normalization is permitted for the sole
@@ -471,19 +482,21 @@ def scan_tool_log(path, allow_matched_header=False, allow_formality_echo=False):
         if allow_matched_header and line == MATCHED_HEADER_ALLOW:
             matched_header_allowed += 1
             continue
-        if allow_formality_echo and line == FORMALITY_TCL_ECHO_ALLOW:
-            formality_echo_allowed += 1
+        if line in source_echo_counts:
+            source_echo_counts[line] += 1
+            continue
+        if benign_zero_error.fullmatch(line):
             continue
         if GUI_ALLOW in line or fatal.search(line):
             raise Failure("non-allowlisted fatal log line %d: %s" % (number, line))
     if (gui_allowed > 1 or matched_header_allowed > 1
-            or formality_echo_allowed > 1):
+            or any(value > 1 for value in source_echo_counts.values())):
         raise Failure("log allowlist cardinality")
     return {"gui": gui_allowed, "matched_header": matched_header_allowed,
-            "formality_tcl_echo": formality_echo_allowed}
+            "source_echo": sum(source_echo_counts.values())}
 
 
-def run_tool(command, cwd, env, timeout, output):
+def run_tool(command, cwd, env, timeout, output, exact_source_echo_allow=()):
     collision_gate()
     with Path(output).open("wb") as stream:
         completed = subprocess.run(command, cwd=str(cwd), env=env,
@@ -491,7 +504,7 @@ def run_tool(command, cwd, env, timeout, output):
                                    timeout=timeout, check=False)
     if completed.returncode != 0:
         raise Failure("tool failure: " + str(command[0]))
-    return scan_tool_log(output)
+    return scan_tool_log(output, exact_source_echo_allow=exact_source_echo_allow)
 
 
 def read_machine(path):
@@ -572,7 +585,8 @@ def main():
         pt_dir = WORK / "ptsta"
         pt_gui = run_tool([str(PT), "-f", str(PT_TCL)], pt_dir / "work",
                           clean_env(dict(common, M1733_PT_OUTPUT_DIR=str(pt_dir))),
-                          7200, pt_dir / "pt.raw.log")
+                          7200, pt_dir / "pt.raw.log",
+                          exact_source_echo_allow=PT_TCL_ECHO_ALLOW)
         if ((pt_dir / "PTSTA_INTERNAL_COMPLETE.txt").read_text().splitlines()[0]
                 != "M1733_C1_M1701_PRELAYOUT_PTSTA_INTERNAL_COMPLETE=PASS"):
             raise Failure("PT marker")

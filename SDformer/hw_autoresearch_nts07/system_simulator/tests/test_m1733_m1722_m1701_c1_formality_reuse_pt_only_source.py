@@ -44,7 +44,7 @@ class M1733Tests(unittest.TestCase):
         self.assertEqual(proof["macro_instances_per_side"], 9)
         self.assertEqual(proof["log_allowlist"],
                          {"gui": 0, "matched_header": 1,
-                          "formality_tcl_echo": 1})
+                          "source_echo": 1})
 
     def test_04_prime_time_is_independent_slowmax_fastmin(self):
         text = PT_TCL.read_text()
@@ -62,19 +62,20 @@ class M1733Tests(unittest.TestCase):
             log.write_text("normal\n" + M.GUI_ALLOW + "\nnormal\n")
             self.assertEqual(M.scan_tool_log(log),
                              {"gui": 1, "matched_header": 0,
-                              "formality_tcl_echo": 0})
+                              "source_echo": 0})
             log.write_text(M.MATCHED_HEADER_ALLOW + "\n")
             with self.assertRaises(M.Failure):
                 M.scan_tool_log(log)
             self.assertEqual(M.scan_tool_log(log, allow_matched_header=True),
                              {"gui": 0, "matched_header": 1,
-                              "formality_tcl_echo": 0})
+                              "source_echo": 0})
             log.write_text(M.FORMALITY_TCL_ECHO_ALLOW + "\n")
             with self.assertRaises(M.Failure):
                 M.scan_tool_log(log, allow_matched_header=True)
             self.assertEqual(M.scan_tool_log(
-                log, allow_matched_header=True, allow_formality_echo=True),
-                {"gui": 0, "matched_header": 0, "formality_tcl_echo": 1})
+                log, allow_matched_header=True,
+                exact_source_echo_allow=(M.FORMALITY_TCL_ECHO_ALLOW,)),
+                {"gui": 0, "matched_header": 0, "source_echo": 1})
             variants = (
                 " " + M.MATCHED_HEADER_ALLOW, "\t" + M.MATCHED_HEADER_ALLOW,
                 M.MATCHED_HEADER_ALLOW + " ", M.MATCHED_HEADER_ALLOW + "\t",
@@ -106,35 +107,60 @@ class M1733Tests(unittest.TestCase):
                     M.scan_tool_log(log, allow_matched_header=allow_header)
             for echo_attack in (M.FORMALITY_TCL_ECHO_ALLOW + " ",
                                 " " + M.FORMALITY_TCL_ECHO_ALLOW,
+                                "prefix " + M.FORMALITY_TCL_ECHO_ALLOW,
+                                M.FORMALITY_TCL_ECHO_ALLOW + " suffix",
                                 M.FORMALITY_TCL_ECHO_ALLOW.replace("M1722", "M1723")):
                 log.write_text(echo_attack + "\n")
                 with self.assertRaises(M.Failure):
                     M.scan_tool_log(log, allow_matched_header=True,
-                                    allow_formality_echo=True)
+                                    exact_source_echo_allow=(M.FORMALITY_TCL_ECHO_ALLOW,))
             log.write_text(M.FORMALITY_TCL_ECHO_ALLOW + "\n" +
                            M.FORMALITY_TCL_ECHO_ALLOW + "\n")
             with self.assertRaises(M.Failure):
                 M.scan_tool_log(log, allow_matched_header=True,
-                                allow_formality_echo=True)
+                                exact_source_echo_allow=(M.FORMALITY_TCL_ECHO_ALLOW,))
             accepted_non_diagnostics = (
                 "0 errors", "No error", "No errors detected",
-                "if {$bad} { error \"Tcl assertion\" }",
-                "set command {fatal \"Tcl source echo\"}",
                 "Summary: 0 fatal diagnostics",
             )
             log.write_text("\n".join(accepted_non_diagnostics) + "\n")
             self.assertEqual(M.scan_tool_log(log, allow_matched_header=True),
                              {"gui": 0, "matched_header": 0,
-                              "formality_tcl_echo": 0})
+                              "source_echo": 0})
 
-    def test_06_constraints_area_and_macro_gate(self):
+    def test_06_pt_error_echoes_are_exact_tcl_source_and_pt_scope_only(self):
+        tcl_lines = set(PT_TCL.read_text().splitlines())
+        self.assertEqual(len(M.PT_TCL_ECHO_ALLOW), 5)
+        self.assertTrue(set(M.PT_TCL_ECHO_ALLOW).issubset(tcl_lines))
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "pt.log"
+            log.write_text("\n".join(M.PT_TCL_ECHO_ALLOW) + "\n")
+            with self.assertRaises(M.Failure):
+                M.scan_tool_log(log)
+            self.assertEqual(M.scan_tool_log(
+                log, exact_source_echo_allow=M.PT_TCL_ECHO_ALLOW),
+                {"gui": 0, "matched_header": 0, "source_echo": 5})
+            for line in M.PT_TCL_ECHO_ALLOW:
+                for attack in (line + " ", " " + line,
+                               "prefix " + line, line + " suffix",
+                               line.replace("M1733", "M1732")):
+                    log.write_text(attack + "\n")
+                    with self.assertRaises(M.Failure):
+                        M.scan_tool_log(
+                            log, exact_source_echo_allow=M.PT_TCL_ECHO_ALLOW)
+            log.write_text(M.PT_TCL_ECHO_ALLOW[0] + "\n" +
+                           M.PT_TCL_ECHO_ALLOW[0] + "\n")
+            with self.assertRaises(M.Failure):
+                M.scan_tool_log(log, exact_source_echo_allow=M.PT_TCL_ECHO_ALLOW)
+
+    def test_07_constraints_area_and_macro_gate(self):
         area = M.verify_inputs()
         self.assertAlmostEqual(area, 166514.312080)
         self.assertLessEqual(area, M.AREA_CEILING)
         self.assertEqual(M.M1701_NETLIST.read_text(errors="replace").count(
             "TS1N28HPCPHVTB128X128M4S"), 9)
 
-    def test_07_execution_order_is_pt_only_and_budget_is_zero_one_zero(self):
+    def test_08_execution_order_is_pt_only_and_budget_is_zero_one_zero(self):
         text = RUNNER.read_text()
         main = text[text.index("def main()") :]
         tokens = ('verify_m1722_formality_reuse()',
@@ -153,7 +179,7 @@ class M1733Tests(unittest.TestCase):
         self.assertIn('"formality_runs": 0, "pt_runs": 1, "dc_runs": 0', text)
         self.assertNotIn("dc_shell", main)
 
-    def test_08_shared_lock_collision_and_no_formality_license_query(self):
+    def test_09_shared_lock_collision_and_no_formality_license_query(self):
         text = RUNNER.read_text()
         self.assertEqual(str(M.LOCK), "/tmp/date_dual_synopsys_same_uid_eda_queue.lock")
         self.assertIn("fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)", text)
@@ -162,7 +188,7 @@ class M1733Tests(unittest.TestCase):
         run_body = text[text.index("def run_tool(") : text.index("def read_machine")]
         self.assertLess(run_body.index("collision_gate()"), run_body.index("subprocess.run("))
 
-    def test_09_fresh_authority_and_namespaces_are_absent(self):
+    def test_10_fresh_authority_and_namespaces_are_absent(self):
         for path in (M.M1734, M.M1735, Path(str(M.M1735) + ".sha256"),
                      Path(str(M.M1735) + ".sha256.seal.sha256"),
                      M.RESULT, M.ATTEMPT, M.FAILURE):
@@ -170,7 +196,7 @@ class M1733Tests(unittest.TestCase):
         with self.assertRaisesRegex(M.Failure, "authority absent"):
             M.verify_authority()
 
-    def test_10_source_contract_identity_claims_and_reuse_boundary(self):
+    def test_11_source_contract_identity_claims_and_reuse_boundary(self):
         contract = M.strict_json(CONTRACT)
         M.verify_contract_sources(contract)
         self.assertEqual(contract["claim_boundary"], M.CLAIMS)
@@ -179,14 +205,14 @@ class M1733Tests(unittest.TestCase):
         self.assertEqual(contract["future_execution"]["pt_runs"], 1)
         self.assertFalse(contract["m1722_formality_reuse"]["rerun_formality"])
 
-    def test_11_no_retry_no_promotion_and_candidate_boundary(self):
+    def test_12_no_retry_no_promotion_and_candidate_boundary(self):
         text = RUNNER.read_text()
         self.assertIn('"automatic_retry": False', text)
         self.assertIn("PT_ONLY_CANDIDATE_PENDING", text)
         self.assertIn('"m1701_quarantine_modified_or_promoted": False', text)
         self.assertNotIn("paper_citable_now", text)
 
-    def test_12_source_only_author_executed_nothing(self):
+    def test_13_source_only_author_executed_nothing(self):
         execution = M.strict_json(CONTRACT)["author_execution"]
         self.assertTrue(execution["source_only"])
         for key in ("license_queries", "formality_runs", "pt_runs", "dc_runs",
