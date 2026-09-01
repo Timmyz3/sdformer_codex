@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -89,7 +90,14 @@ class M1579Tests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 M.consume_attempt(value, "a" * 64, output)
 
-    def test_04_all_baselines_share_one_array_recurrence(self):
+    def test_04_nonregular_release_rejected_before_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fifo = Path(temporary) / "release.fifo"
+            os.mkfifo(fifo)
+            with self.assertRaises(RuntimeError):
+                M.read_release_snapshot(fifo)
+
+    def test_05_all_baselines_share_one_array_recurrence(self):
         _, m528 = M.load_modules()
         shape = (M.SAMPLES, M.OPERATORS, M.CHUNKS, M.PARTITIONS)
         arrays = {name: np.zeros(shape, dtype=np.int32)
@@ -118,7 +126,7 @@ class M1579Tests(unittest.TestCase):
                          row["m505_dead_write_only_1rw_cycles"])
         self.assertGreater(ratio, 0.0)
 
-    def test_05_claim_boundary_is_explicit_in_source(self):
+    def test_06_claim_boundary_is_explicit_in_source(self):
         text = SOURCE.read_text(encoding="utf-8")
         for token in ("cycle_model", "rtl_cycle", "full_network",
                       "system_speedup", "wall_clock", "multi_sequence"):
@@ -126,7 +134,7 @@ class M1579Tests(unittest.TestCase):
         self.assertNotIn("time.time(", text)
         self.assertNotIn("perf_counter(", text)
 
-    def test_06_no_network_gpu_or_eda_action(self):
+    def test_07_no_network_gpu_or_eda_action(self):
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
         imported = {alias.name.split(".")[0]
                     for node in ast.walk(tree)
@@ -138,7 +146,7 @@ class M1579Tests(unittest.TestCase):
         self.assertNotIn("vcs ", text)
         self.assertNotIn("ssh ", text)
 
-    def test_07_protected_document_identity(self):
+    def test_08_protected_document_identity(self):
         self.assertEqual(M.sha256(M.DOCS359), M.DOCS359_SHA256)
 
 

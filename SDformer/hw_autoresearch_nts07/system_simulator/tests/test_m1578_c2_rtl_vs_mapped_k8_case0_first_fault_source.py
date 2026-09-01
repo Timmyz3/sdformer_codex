@@ -45,7 +45,8 @@ class M1578SourceTests(unittest.TestCase):
         self.rejects(lambda: M.verify_tb_text(attacked))
 
     def test_x_to_zero_coercion_rejected(self):
-        attacked = self.tb.replace('else tri = "X"', 'else tri = "0"')
+        attacked = self.tb.replace('else tri_state_char = "X"',
+                                   'else tri_state_char = "0"')
         self.rejects(lambda: M.verify_tb_text(attacked))
 
     def test_single_dut_rejected(self):

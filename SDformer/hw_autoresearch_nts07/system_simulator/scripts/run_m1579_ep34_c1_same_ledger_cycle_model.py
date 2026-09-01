@@ -24,6 +24,7 @@ import multiprocessing as mp
 import os
 from pathlib import Path
 import shutil
+import stat
 import statistics
 import sys
 import tempfile
@@ -131,6 +132,9 @@ def load_modules() -> tuple[Any, Any]:
 
 
 def read_release_snapshot(path: Path) -> tuple[dict[str, Any], str]:
+    named = path.lstat()
+    require(stat.S_ISREG(named.st_mode) and not path.is_symlink(),
+            "release must be a regular non-symlink")
     flags = os.O_RDONLY
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -139,8 +143,11 @@ def read_release_snapshot(path: Path) -> tuple[dict[str, Any], str]:
     descriptor = os.open(str(path), flags)
     try:
         opened = os.fstat(descriptor)
-        named = path.lstat()
-        require((opened.st_dev, opened.st_ino, opened.st_size) ==
+        require(stat.S_ISREG(opened.st_mode), "opened release is not regular")
+        current = path.lstat()
+        require(stat.S_ISREG(current.st_mode) and not path.is_symlink() and
+                (opened.st_dev, opened.st_ino, opened.st_size) ==
+                (current.st_dev, current.st_ino, current.st_size) ==
                 (named.st_dev, named.st_ino, named.st_size),
                 "release changed while opening")
         chunks = []

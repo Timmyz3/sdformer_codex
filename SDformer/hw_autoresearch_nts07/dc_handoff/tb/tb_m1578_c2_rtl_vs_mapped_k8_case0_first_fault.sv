@@ -347,10 +347,10 @@ module tb_m1578_c2_rtl_vs_mapped_k8_case0_first_fault;
     logic control_unknown_now;
     logic [95:0] payload [0:3];
 
-    function automatic [7:0] tri(input logic value);
-        if (value === 1'b0) tri = "0";
-        else if (value === 1'b1) tri = "1";
-        else tri = "X";
+    function automatic [7:0] tri_state_char(input logic value);
+        if (value === 1'b0) tri_state_char = "0";
+        else if (value === 1'b1) tri_state_char = "1";
+        else tri_state_char = "X";
     endfunction
 
     function automatic [7:0] event8(input logic [7:0] value);
@@ -397,15 +397,15 @@ module tb_m1578_c2_rtl_vs_mapped_k8_case0_first_fault;
         begin
             $display("M1578_TRACE cycle=%0d header=%s/%s source=%s/%s endpoint=%s/%s mem=%s/%s commit=%s/%s done=%s/%s top_pns=%s%s%s/%s%s%s endpoint_fault=%b/%b taps_csfamS=%b/%b",
                 cycle_ordinal,
-                tri(rtl_header_accept), tri(mapped_header_accept),
-                tri(rtl_raw_accept), tri(mapped_raw_accept),
+                tri_state_char(rtl_header_accept), tri_state_char(mapped_header_accept),
+                tri_state_char(rtl_raw_accept), tri_state_char(mapped_raw_accept),
                 event8(rtl_mem_req_accept), event8(mapped_mem_req_accept),
                 event8(rtl_mem_rsp_accept), event8(mapped_mem_rsp_accept),
-                tri(rtl_result_accept), tri(mapped_result_accept),
-                tri(rtl_done_accept), tri(mapped_done_accept),
-                tri(rtl_protocol_error), tri(rtl_numeric_overflow),
-                tri(rtl_stale_response_seen), tri(mapped_protocol_error),
-                tri(mapped_numeric_overflow), tri(mapped_stale_response_seen),
+                tri_state_char(rtl_result_accept), tri_state_char(mapped_result_accept),
+                tri_state_char(rtl_done_accept), tri_state_char(mapped_done_accept),
+                tri_state_char(rtl_protocol_error), tri_state_char(rtl_numeric_overflow),
+                tri_state_char(rtl_stale_response_seen), tri_state_char(mapped_protocol_error),
+                tri_state_char(mapped_numeric_overflow), tri_state_char(mapped_stale_response_seen),
                 rtl_endpoint_fault, mapped_endpoint_fault,
                 rtl_internal_fault_taps, mapped_internal_fault_taps);
         end
@@ -415,10 +415,10 @@ module tb_m1578_c2_rtl_vs_mapped_k8_case0_first_fault;
         begin
             $display("M1578_FIRST_STOP reason=%s cycle=%0d first_difference_cycle=%0d first_fault_cycle=%0d rtl_top_pns=%s%s%s mapped_top_pns=%s%s%s rtl_endpoint_fault=%b mapped_endpoint_fault=%b rtl_taps=%b mapped_taps=%b",
                 reason, cycle_ordinal, first_difference_cycle,
-                first_fault_cycle, tri(rtl_protocol_error),
-                tri(rtl_numeric_overflow), tri(rtl_stale_response_seen),
-                tri(mapped_protocol_error), tri(mapped_numeric_overflow),
-                tri(mapped_stale_response_seen), rtl_endpoint_fault,
+                first_fault_cycle, tri_state_char(rtl_protocol_error),
+                tri_state_char(rtl_numeric_overflow), tri_state_char(rtl_stale_response_seen),
+                tri_state_char(mapped_protocol_error), tri_state_char(mapped_numeric_overflow),
+                tri_state_char(mapped_stale_response_seen), rtl_endpoint_fault,
                 mapped_endpoint_fault, rtl_internal_fault_taps,
                 mapped_internal_fault_taps);
         end

@@ -18,7 +18,7 @@ from typing import Any
 
 SOURCE = Path(__file__).resolve()
 HW = SOURCE.parents[2]
-CONTRACT = HW / "contracts/m1578_c2_rtl_vs_mapped_k8_case0_first_fault_source_contract_r1_20260901.json"
+CONTRACT = HW / "contracts/m1587_m1578_c2_reserved_word_repair_source_contract_r1_20260901.json"
 TB = HW / "dc_handoff/tb/tb_m1578_c2_rtl_vs_mapped_k8_case0_first_fault.sv"
 FILELIST = HW / "dc_handoff/filelists/date_m1578_c2_rtl_vs_mapped_k8_case0_first_fault_source.f"
 TEST = HW / "system_simulator/tests/test_m1578_c2_rtl_vs_mapped_k8_case0_first_fault_source.py"
@@ -187,7 +187,7 @@ def verify_tb_text(text: str) -> dict[str, int]:
         "BOTH_CLEAN_TO_DONE",
         "value === 1'b0",
         "value === 1'b1",
-        "else tri = \"X\"",
+        "else tri_state_char = \"X\"",
         "$isunknown(value)",
         "rtl_protocol_error !== 1'b0",
         "mapped_protocol_error !== 1'b0",
@@ -210,7 +210,7 @@ def verify_tb_text(text: str) -> dict[str, int]:
     require(re.search(r"\bforce\b", active) is None and
             re.search(r"\brelease\b", active) is None,
             "force/release prohibited")
-    require("else tri = \"0\"" not in active,
+    require("else tri_state_char = \"0\"" not in active,
             "X-to-zero coercion prohibited")
     return {"dut_instances": 2, "memory_instances": 2,
             "named_internal_taps_per_dut": 6, "top_fault_bits_per_dut": 3,
@@ -219,7 +219,7 @@ def verify_tb_text(text: str) -> dict[str, int]:
 
 def validate_contract_obj(contract: dict[str, Any]) -> None:
     require(contract.get("schema") ==
-            "m1578_c2_rtl_vs_mapped_k8_case0_first_fault_source_contract_r1_v1",
+            "m1587_m1578_c2_reserved_word_repair_source_contract_r1_v1",
             "contract schema")
     execution = contract.get("execution", {})
     require(execution == {"vcs_compiles": 0, "simv_runs": 0,
