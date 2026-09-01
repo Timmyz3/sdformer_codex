@@ -1,0 +1,3 @@
+/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/verilog/tcbn28hpcplusbwp35p140_110a/tcbn28hpcplusbwp35p140.v
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/runs/m1454_c3_fixed_t10_hold_repair_singlepass_exploratory_r1_20260831/netlist/_sel1_hold_repaired_mapped.v
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/tb/tb_m1790_c3_m1454_fixed_t10_mapped_energy.sv
