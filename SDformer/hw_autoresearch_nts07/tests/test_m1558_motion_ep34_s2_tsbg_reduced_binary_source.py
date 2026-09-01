@@ -122,6 +122,18 @@ def permit_for(root, specs, samples):
     return M.issue_synthetic_permit(root, specs, len(samples["samples"]), free)
 
 
+def forge_without_constructor(cls, output, inventory, estimate, free_bytes):
+    """Populate every writable slot without invoking the private constructor."""
+    permit = object.__new__(cls)
+    prefix = "_{}__".format(cls.__name__)
+    object.__setattr__(permit, prefix + "output", str(Path(output).resolve()))
+    object.__setattr__(permit, prefix + "inventory", str(inventory))
+    object.__setattr__(permit, prefix + "estimate", dict(estimate))
+    object.__setattr__(permit, prefix + "free", int(free_bytes))
+    object.__setattr__(permit, prefix + "consumed", False)
+    return permit
+
+
 def run_valid(root):
     specs = fake_specs(); samples = sample_order(); model = fake_model()
     permit = permit_for(root, specs, samples)
@@ -181,6 +193,10 @@ def main():
     assert M._ProductionPreloadPermit is not M._SyntheticPreloadPermit
     assert list(inspect.signature(M.issue_preload_permit).parameters) == ["output"]
     assert list(inspect.signature(M._issue_production_permit).parameters) == ["output"]
+    assert "production_minted = {}" in text
+    assert "synthetic_minted = {}" in text
+    assert "production_minted.pop(self)" in text
+    assert "synthetic_minted.pop(self)" in text
 
     with tempfile.TemporaryDirectory(prefix="m1558_test.") as directory:
         base = Path(directory)
@@ -298,6 +314,51 @@ def main():
             strict_free + 1, object()))
         attacks.append("synthetic_constructor_private")
 
+        forged_production_root = base / "forged_production_object_new"
+        forged_production = forge_without_constructor(
+            M._ProductionPreloadPermit, forged_production_root,
+            M.canonical_sha(production_specs), production_estimate,
+            production_required)
+        rejects(lambda: forged_production.consume(
+            forged_production_root, M.canonical_sha(production_specs)))
+        attacks.append("object_new_slot_filled_production_not_minted")
+
+        forged_synthetic_root = base / "forged_synthetic_object_new"
+        forged_synthetic = forge_without_constructor(
+            M._SyntheticPreloadPermit, forged_synthetic_root,
+            M.canonical_sha(specs), estimate, strict_free + 1)
+        rejects(lambda: forged_synthetic.consume(
+            forged_synthetic_root, M.canonical_sha(specs)))
+        attacks.append("object_new_slot_filled_synthetic_not_minted")
+
+        # A real production issuer query remains the source of the receipt.
+        # Caller-writable handle slots are deliberately not trusted after mint.
+        actual_queries = []
+
+        def actual_spy(path):
+            value = original_disk_usage(path)
+            actual_queries.append(value)
+            return value
+
+        M.shutil.disk_usage = actual_spy
+        try:
+            actual_root = base / "actual_disk_registry_receipt"
+            actual_permit = M.issue_preload_permit(actual_root)
+        finally:
+            M.shutil.disk_usage = original_disk_usage
+        prefix = "_{}__".format(type(actual_permit).__name__)
+        object.__setattr__(actual_permit, prefix + "free", 1 << 62)
+        object.__setattr__(actual_permit, prefix + "output",
+                           str((base / "caller_slot_rewrite").resolve()))
+        actual_receipt = actual_permit.consume(
+            actual_root, M.canonical_sha(production_specs))
+        assert len(actual_queries) == 1
+        assert actual_receipt["free_bytes_before"] == int(actual_queries[0].free)
+        assert actual_receipt["output"] == str(actual_root.resolve())
+        rejects(lambda: actual_permit.consume(
+            actual_root, M.canonical_sha(production_specs)))
+        attacks.append("registry_record_preserves_real_disk_receipt_and_one_shot")
+
         huge = [dict(row) for row in specs]
         huge[1]["input_active_s40"] = M.MAX_RUNTIME_BYTES
         rejects(lambda: M.estimate_from_specs(huge, 3))
@@ -397,10 +458,13 @@ def main():
         attacks.append("runtime_hard_cap")
 
     rejects(M.production_release); attacks.append("production_release")
-    assert len(attacks) == 30
-    print("PASS M1574 permit-provenance successor attacks=30 frames=6 "
+    assert len(attacks) == 33
+    print("PASS M1582 minted-registry successor attacks=33 frames=6 "
           "fc_tokens=18 patch_rows=3 production_real_disk=1 "
-          "distinct_permit_types=1 no_gpu=1 no_capture=1")
+          "real_free={} receipt_free={} ".format(
+              int(actual_queries[0].free), actual_receipt["free_bytes_before"]) +
+          "object_new_rejected=2 duplicate_consume_rejected=2 "
+          "distinct_permit_registries=1 no_gpu=1 no_capture=1")
 
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@ EXPECTED = {
 
 SOURCE_SCHEMA = "m1558_motion_ep34_s2_tsbg_reduced_binary_source_r1_v1"
 SOURCE_STATUS = "SOURCE_ONLY__REDUCED_BINARY_PRODUCER__NO_GPU_NO_CAPTURE_NO_RELEASE"
-PERMIT_SCHEMA = "m1574_m1565_preload_permit_provenance_successor_r1_v1"
+PERMIT_SCHEMA = "m1582_m1576_minted_instance_registry_successor_r1_v1"
 PRODUCTION_PROVENANCE = "PRODUCTION_REAL_DISK"
 SYNTHETIC_PROVENANCE = "SYNTHETIC_CALLER_BUDGET"
 TARGET_COUNTS = {"FC1": 12, "FC2": 12, "PATCH": 8}
@@ -267,6 +267,12 @@ def estimate_from_specs(specs, sample_count=40):
 def _permit_authority():
     production_secret = object()
     synthetic_secret = object()
+    # These closure-owned dictionaries are the capability authority.  The
+    # permit objects deliberately remain opaque handles; their writable slots
+    # are never trusted by consume().  Production and synthetic namespaces are
+    # distinct so membership in one can never authorize the other provenance.
+    production_minted = {}
+    synthetic_minted = {}
 
     class ProductionPreloadPermit(object):
         __slots__ = ("__output", "__inventory", "__estimate", "__free", "__consumed")
@@ -281,22 +287,28 @@ def _permit_authority():
             self.__consumed = False
 
         def consume(self, output, inventory):
-            require(type(self) is ProductionPreloadPermit and not self.__consumed,
-                    "production permit invalid, forged or already consumed")
-            require(str(Path(output).resolve()) == self.__output and
-                    str(inventory) == self.__inventory,
-                    "permit output/inventory mismatch")
-            require(not os.path.lexists(self.__output),
-                    "permit output namespace no longer fresh")
+            require(type(self) is ProductionPreloadPermit,
+                    "production permit exact type invalid")
+            try:
+                bound_output, bound_inventory, bound_estimate, bound_free = (
+                    production_minted.pop(self))
+            except KeyError:
+                raise M1558Error(
+                    "production permit was not minted or was already consumed")
             self.__consumed = True
+            require(str(Path(output).resolve()) == bound_output and
+                    str(inventory) == bound_inventory,
+                    "permit output/inventory mismatch")
+            require(not os.path.lexists(bound_output),
+                    "permit output namespace no longer fresh")
             return {"schema": PERMIT_SCHEMA,
                     "provenance": PRODUCTION_PROVENANCE,
-                    "output": self.__output,
-                    "inventory_sha256": self.__inventory,
-                    "estimate": dict(self.__estimate),
-                    "free_bytes_before": self.__free,
+                    "output": bound_output,
+                    "inventory_sha256": bound_inventory,
+                    "estimate": dict(bound_estimate),
+                    "free_bytes_before": bound_free,
                     "free_bytes_after_upper":
-                        self.__free - int(self.__estimate["result_upper_bytes"]),
+                        bound_free - int(bound_estimate["result_upper_bytes"]),
                     "consumed": True, "checkpoint_loaded": False}
 
     class SyntheticPreloadPermit(object):
@@ -312,26 +324,32 @@ def _permit_authority():
             self.__consumed = False
 
         def consume(self, output, inventory):
-            require(type(self) is SyntheticPreloadPermit and not self.__consumed,
-                    "synthetic permit invalid, forged or already consumed")
-            require(str(Path(output).resolve()) == self.__output and
-                    str(inventory) == self.__inventory,
-                    "permit output/inventory mismatch")
-            require(not os.path.lexists(self.__output),
-                    "permit output namespace no longer fresh")
+            require(type(self) is SyntheticPreloadPermit,
+                    "synthetic permit exact type invalid")
+            try:
+                bound_output, bound_inventory, bound_estimate, bound_free = (
+                    synthetic_minted.pop(self))
+            except KeyError:
+                raise M1558Error(
+                    "synthetic permit was not minted or was already consumed")
             self.__consumed = True
+            require(str(Path(output).resolve()) == bound_output and
+                    str(inventory) == bound_inventory,
+                    "permit output/inventory mismatch")
+            require(not os.path.lexists(bound_output),
+                    "permit output namespace no longer fresh")
             return {"schema": PERMIT_SCHEMA,
                     "provenance": SYNTHETIC_PROVENANCE,
-                    "output": self.__output,
-                    "inventory_sha256": self.__inventory,
-                    "estimate": dict(self.__estimate),
-                    "free_bytes_before": self.__free,
+                    "output": bound_output,
+                    "inventory_sha256": bound_inventory,
+                    "estimate": dict(bound_estimate),
+                    "free_bytes_before": bound_free,
                     "free_bytes_after_upper":
-                        self.__free - int(self.__estimate["result_upper_bytes"]),
+                        bound_free - int(bound_estimate["result_upper_bytes"]),
                     "consumed": True, "checkpoint_loaded": False}
 
     def checked_common(output, specs, sample_count, available, permit_type,
-                       permit_secret):
+                       permit_secret, minted_registry):
         output = Path(output).resolve()
         require(not os.path.lexists(str(output)),
                 "fresh output namespace required")
@@ -343,8 +361,13 @@ def _permit_authority():
         require(available - int(estimate["result_upper_bytes"]) >
                 MIN_FREE_AFTER_BYTES,
                 "capture would not leave strictly more than 16 GiB free")
-        return permit_type(output, canonical_sha(specs), estimate,
-                           available, permit_secret)
+        inventory = canonical_sha(specs)
+        permit = permit_type(output, inventory, estimate, available,
+                             permit_secret)
+        require(permit not in minted_registry, "permit registry collision")
+        minted_registry[permit] = (str(output), inventory, dict(estimate),
+                                   available)
+        return permit
 
     def issue_production(output):
         # Deliberately no caller-controlled inventory, sample count or free-space
@@ -358,13 +381,15 @@ def _permit_authority():
                 "output parent invalid")
         available = shutil.disk_usage(str(parent)).free
         return checked_common(resolved, specs, 40, available,
-                              ProductionPreloadPermit, production_secret)
+                              ProductionPreloadPermit, production_secret,
+                              production_minted)
 
     def issue_synthetic(output, specs, sample_count, free_bytes):
         require(int(sample_count) > 0 and int(sample_count) <= 40,
                 "synthetic sample count invalid")
         return checked_common(output, specs, int(sample_count), int(free_bytes),
-                              SyntheticPreloadPermit, synthetic_secret)
+                              SyntheticPreloadPermit, synthetic_secret,
+                              synthetic_minted)
 
     return (ProductionPreloadPermit, SyntheticPreloadPermit,
             issue_production, issue_synthetic)
