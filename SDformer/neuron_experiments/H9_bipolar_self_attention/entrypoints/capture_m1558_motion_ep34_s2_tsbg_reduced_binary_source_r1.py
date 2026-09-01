@@ -258,7 +258,7 @@ def estimate_from_specs(specs, sample_count=40):
     return estimate
 
 
-def _permit_type():
+def _permit_authority():
     secret = object()
 
     class PreloadPermit(object):
@@ -290,27 +290,31 @@ def _permit_type():
                         self.__free - int(self.__estimate["result_upper_bytes"]),
                     "consumed": True, "checkpoint_loaded": False}
 
-    def mint(output, inventory, estimate, free_bytes):
-        return PreloadPermit(output, inventory, estimate, free_bytes, secret)
+    def checked_issue(output, specs, sample_count, free_bytes=None):
+        output = Path(output).resolve()
+        require(not os.path.lexists(str(output)),
+                "fresh output namespace required")
+        parent = output.parent
+        require(parent.is_dir() and not parent.is_symlink(),
+                "output parent invalid")
+        estimate = estimate_from_specs(specs, sample_count)
+        available = (shutil.disk_usage(str(parent)).free if free_bytes is None
+                     else int(free_bytes))
+        require(available - int(estimate["result_upper_bytes"]) >
+                MIN_FREE_AFTER_BYTES,
+                "capture would not leave strictly more than 16 GiB free")
+        return PreloadPermit(output, canonical_sha(specs), estimate,
+                             available, secret)
 
-    return PreloadPermit, mint
+    return PreloadPermit, checked_issue
 
 
-_PreloadPermit, _mint_permit = _permit_type()
-del _permit_type
+_PreloadPermit, _checked_issue_permit = _permit_authority()
+del _permit_authority
 
 
 def _issue_permit(output, specs, sample_count, free_bytes=None):
-    output = Path(output).resolve()
-    require(not os.path.lexists(str(output)), "fresh output namespace required")
-    parent = output.parent
-    require(parent.is_dir() and not parent.is_symlink(), "output parent invalid")
-    estimate = estimate_from_specs(specs, sample_count)
-    available = (shutil.disk_usage(str(parent)).free if free_bytes is None
-                 else int(free_bytes))
-    require(available - int(estimate["result_upper_bytes"]) > MIN_FREE_AFTER_BYTES,
-            "capture would not leave strictly more than 16 GiB free")
-    return _mint_permit(output, canonical_sha(specs), estimate, available)
+    return _checked_issue_permit(output, specs, sample_count, free_bytes)
 
 
 def issue_preload_permit(output, free_bytes=None):

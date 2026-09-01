@@ -173,6 +173,8 @@ def main():
     text = SOURCE.read_text()
     assert "token_source_groups" not in text and ".tolist()" not in text
     assert "production_release" in text
+    assert not hasattr(M, "_mint_permit")
+    assert "def mint(" not in text
 
     with tempfile.TemporaryDirectory(prefix="m1558_test.") as directory:
         base = Path(directory)
@@ -201,6 +203,9 @@ def main():
         rejects(lambda: M.issue_synthetic_permit(
             base / "free_equal", specs, 3, strict_free))
         attacks.append("free_after_strict_gt_16gib")
+        rejects(lambda: M._checked_issue_permit(
+            base / "checked_low_free", specs, 3, 0))
+        attacks.append("checked_authority_cannot_bypass_free_gate")
         huge = [dict(row) for row in specs]
         huge[1]["input_active_s40"] = M.MAX_RUNTIME_BYTES
         rejects(lambda: M.estimate_from_specs(huge, 3))
@@ -299,8 +304,8 @@ def main():
         attacks.append("runtime_hard_cap")
 
     rejects(M.production_release); attacks.append("production_release")
-    assert len(attacks) == 21
-    print("PASS M1558 reduced-binary source attacks=21 frames=6 fc_tokens=18 "
+    assert len(attacks) == 22
+    print("PASS M1558 reduced-binary successor attacks=22 frames=6 fc_tokens=18 "
           "patch_rows=3 no_gpu=1 no_capture=1")
 
 
