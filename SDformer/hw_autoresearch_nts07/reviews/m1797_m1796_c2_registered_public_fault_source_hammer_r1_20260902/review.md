@@ -1,0 +1,15 @@
+# M1797 independent source hammer of M1796 C2 registered public fault
+
+Verdict: **FAIL-CLOSED, 91/100, P0=0, P1=1, P2=1. No VCS or later EDA is authorized.**
+
+The exact RTL repair is technically plausible and tightly scoped. Against the frozen M803 top, the only executable change is the module identity and public fault-export cone. `protocol_error` is now a resettable sticky register; request and response accept mismatches are valid-qualified; no data, ready/valid, issue, Acc24, result, completion, memory-port, or debug wiring changed. The current source owner qualifiers cover `header_valid`, `raw_valid`, core state, request/response state, result/done state, adapter state, and any bank response. The child illegal predicates are themselves valid/state-qualified. No force, initreg, ignore-X, assertion suppression, case-equality repair, or constant-zero public output was found.
+
+The directed source is also broad. Its unit test attacks the two child-fault event inputs and the request/response accept mismatches, checks invalid X payload under `valid=0`, samples both clock phases, proves sticky behavior, and resets for multiple cycles. The full successor test blocks illegal K8 header/raw/response accepts, observes sticky fault, performs later clean legal work, and retains the five exact equal-bandwidth K8/K1x8 cycle pairs plus numeric, tuple, weight, Acc24, completion, conservation, backpressure, and out-of-order checks.
+
+The launch blocker is the evidence checker. The architectural safety claim depends on the exact owner-enable equations in top lines 144-148, yet `audit_top` never checks either equation. I independently changed the complete core enable to constant zero and then the complete adapter enable to constant zero; both mutants were accepted. Thus the package can silently hide real header/raw/internal-request or bank-response faults and still report a passing source check and 19/19 mutations. Exact source hashes make the present snapshot inspectable, but they do not make the advertised fail-closed checker sound enough to release the next EDA attempt.
+
+There is also a machine-receipt defect: the full test hard-gates five attacks but its sole PASS token prints `protocol_attacks=4`. The author checker accepts arbitrary corruption of that field.
+
+Required repair is small and additive: bind the exact core and adapter owner-enable sets in `audit_top`; add mutations that remove/zero each full equation and each owner term; bind multi-cycle reset followed by a clean transaction and the three K8 accept-zero/sticky attacks; correct and mutation-protect the PASS count. Then rerun CPython 3.6/3.12 and obtain a fresh different-author review. Only after P0=0/P1=0 may one fresh VCS attempt run the boundary and full equal-bandwidth campaigns.
+
+I independently verified the M1796 contract and author-receipt double seals, all eight recorded source hashes, `docs/359` SHA `dedde7ce...bdfc4`, absence of M1796 attempt/result namespaces, CPython 3.6 and 3.12 live checks, and all 19 author mutations. No EDA, simulator, synthesis, license, GPU, remote, commit, or push action was performed.

@@ -1,0 +1,3 @@
++define+SVA_RUNTIME_ENABLED
+rtl_m1796/m1796_c2_registered_public_fault_export.sv
+tb_m1796/tb_m1796_c2_registered_public_fault_export_directed.sv
