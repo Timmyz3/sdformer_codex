@@ -36,8 +36,11 @@ packages (`geometry`, `booktabs`, `graphicx`, `hyperref`, and `xcolor`).
   non-RTL.  The nine-macro mapped component is `166514.312 um2`, with PT
   setup/hold `+0.027871/+0.001827 ns`, Formality `16549/16549`, and a bounded
   mapped-energy point of `29.0763 mW` / `22.0689 nJ` per 64-row window.
-- C2 equal-bandwidth point: `1.016728x` cycles, `4.562720x`
-  throughput/mm2, and `-77.7166%` logic area; logic-only pre-macro.
+- C2 fresh registered-fault-matched equal-bandwidth point: `1.016728x` cycles,
+  `4.550657x` throughput/mm2, and `-77.6576%` logic area; K8/K1x8 logic areas
+  are `130822.775/585534.972 um2`.  Logic-only pre-macro setup is
+  `+0.0018/+0.0014 ns`; diagnostic hold remains open at
+  `-0.0190/-0.0177 ns`.
 - C3 fixed-T10: `63756.125879 um2`; DC setup/hold
   `+0.000300/+0.034585 ns`, PT `+0.000299/+0.030474 ns`, and gate-to-gate
   Formality `11180/11180`.
@@ -49,8 +52,8 @@ packages (`geometry`, `booktabs`, `graphicx`, `hyperref`, and `xcolor`).
 ## Unclosed placeholders
 
 1. Decoder-complete, memory-inclusive cycle/traffic row.
-2. Re-establish C2 mapped functionality/area/power after the registered-fault
-   repair; close C3 mapped energy.
+2. Complete C2 Formality, dual-corner timing/hold repair, and mapped power after
+   the registered-fault repair; close C3 mapped energy.
 3. Admit TSBG only if true-protocol VCS and same-resource DC/energy pass.
 4. Memory-inclusive system energy.
 5. Multi-sequence, same-resource whole-network comparison.
