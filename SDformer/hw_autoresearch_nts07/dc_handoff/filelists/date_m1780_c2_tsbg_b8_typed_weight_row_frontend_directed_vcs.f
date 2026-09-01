@@ -1,0 +1,3 @@
+hw_autoresearch_nts07/rtl_m1780/m1780_c2_tsbg_b8_typed_weight_row_frontend.sv
+hw_autoresearch_nts07/verif_m1780/m1780_c2_tsbg_b8_typed_weight_row_frontend_assertions.sv
+hw_autoresearch_nts07/tb_m1780/tb_m1780_c2_tsbg_b8_typed_weight_row_frontend.sv
