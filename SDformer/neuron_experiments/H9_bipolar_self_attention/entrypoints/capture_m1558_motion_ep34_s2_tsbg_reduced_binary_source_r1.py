@@ -10,6 +10,9 @@ estimate.
 This module is source-only.  It has no checkpoint/model loader, CUDA path,
 capture CLI, remote integration or release capability.  Captured int8 values
 are diagnostic coordinates only and are not a hardware quantization authority.
+Production and synthetic pre-load permits have distinct exact types.  Only the
+production issuer may create production provenance, and it always obtains free
+space from ``shutil.disk_usage`` rather than a caller-supplied value.
 """
 
 from __future__ import print_function
@@ -52,6 +55,9 @@ EXPECTED = {
 
 SOURCE_SCHEMA = "m1558_motion_ep34_s2_tsbg_reduced_binary_source_r1_v1"
 SOURCE_STATUS = "SOURCE_ONLY__REDUCED_BINARY_PRODUCER__NO_GPU_NO_CAPTURE_NO_RELEASE"
+PERMIT_SCHEMA = "m1574_m1565_preload_permit_provenance_successor_r1_v1"
+PRODUCTION_PROVENANCE = "PRODUCTION_REAL_DISK"
+SYNTHETIC_PROVENANCE = "SYNTHETIC_CALLER_BUDGET"
 TARGET_COUNTS = {"FC1": 12, "FC2": 12, "PATCH": 8}
 GROUP_WIDTH = 16
 OUTPUT_TILE_WIDTH = 96
@@ -259,13 +265,15 @@ def estimate_from_specs(specs, sample_count=40):
 
 
 def _permit_authority():
-    secret = object()
+    production_secret = object()
+    synthetic_secret = object()
 
-    class PreloadPermit(object):
+    class ProductionPreloadPermit(object):
         __slots__ = ("__output", "__inventory", "__estimate", "__free", "__consumed")
 
         def __init__(self, output, inventory, estimate, free_bytes, token):
-            require(token is secret, "permit constructor is private")
+            require(token is production_secret,
+                    "production permit constructor is private")
             self.__output = str(output)
             self.__inventory = str(inventory)
             self.__estimate = dict(estimate)
@@ -273,15 +281,16 @@ def _permit_authority():
             self.__consumed = False
 
         def consume(self, output, inventory):
-            require(type(self) is PreloadPermit and not self.__consumed,
-                    "permit invalid, forged or already consumed")
+            require(type(self) is ProductionPreloadPermit and not self.__consumed,
+                    "production permit invalid, forged or already consumed")
             require(str(Path(output).resolve()) == self.__output and
                     str(inventory) == self.__inventory,
                     "permit output/inventory mismatch")
             require(not os.path.lexists(self.__output),
                     "permit output namespace no longer fresh")
             self.__consumed = True
-            return {"schema": "m1558_consumed_preload_permit_r1_v1",
+            return {"schema": PERMIT_SCHEMA,
+                    "provenance": PRODUCTION_PROVENANCE,
                     "output": self.__output,
                     "inventory_sha256": self.__inventory,
                     "estimate": dict(self.__estimate),
@@ -290,7 +299,39 @@ def _permit_authority():
                         self.__free - int(self.__estimate["result_upper_bytes"]),
                     "consumed": True, "checkpoint_loaded": False}
 
-    def checked_issue(output, specs, sample_count, free_bytes=None):
+    class SyntheticPreloadPermit(object):
+        __slots__ = ("__output", "__inventory", "__estimate", "__free", "__consumed")
+
+        def __init__(self, output, inventory, estimate, free_bytes, token):
+            require(token is synthetic_secret,
+                    "synthetic permit constructor is private")
+            self.__output = str(output)
+            self.__inventory = str(inventory)
+            self.__estimate = dict(estimate)
+            self.__free = int(free_bytes)
+            self.__consumed = False
+
+        def consume(self, output, inventory):
+            require(type(self) is SyntheticPreloadPermit and not self.__consumed,
+                    "synthetic permit invalid, forged or already consumed")
+            require(str(Path(output).resolve()) == self.__output and
+                    str(inventory) == self.__inventory,
+                    "permit output/inventory mismatch")
+            require(not os.path.lexists(self.__output),
+                    "permit output namespace no longer fresh")
+            self.__consumed = True
+            return {"schema": PERMIT_SCHEMA,
+                    "provenance": SYNTHETIC_PROVENANCE,
+                    "output": self.__output,
+                    "inventory_sha256": self.__inventory,
+                    "estimate": dict(self.__estimate),
+                    "free_bytes_before": self.__free,
+                    "free_bytes_after_upper":
+                        self.__free - int(self.__estimate["result_upper_bytes"]),
+                    "consumed": True, "checkpoint_loaded": False}
+
+    def checked_common(output, specs, sample_count, available, permit_type,
+                       permit_secret):
         output = Path(output).resolve()
         require(not os.path.lexists(str(output)),
                 "fresh output namespace required")
@@ -298,36 +339,50 @@ def _permit_authority():
         require(parent.is_dir() and not parent.is_symlink(),
                 "output parent invalid")
         estimate = estimate_from_specs(specs, sample_count)
-        available = (shutil.disk_usage(str(parent)).free if free_bytes is None
-                     else int(free_bytes))
+        available = int(available)
         require(available - int(estimate["result_upper_bytes"]) >
                 MIN_FREE_AFTER_BYTES,
                 "capture would not leave strictly more than 16 GiB free")
-        return PreloadPermit(output, canonical_sha(specs), estimate,
-                             available, secret)
+        return permit_type(output, canonical_sha(specs), estimate,
+                           available, permit_secret)
 
-    return PreloadPermit, checked_issue
+    def issue_production(output):
+        # Deliberately no caller-controlled inventory, sample count or free-space
+        # argument exists on this production authority.
+        specs = frozen_layer_specs()
+        resolved = Path(output).resolve()
+        require(not os.path.lexists(str(resolved)),
+                "fresh output namespace required")
+        parent = resolved.parent
+        require(parent.is_dir() and not parent.is_symlink(),
+                "output parent invalid")
+        available = shutil.disk_usage(str(parent)).free
+        return checked_common(resolved, specs, 40, available,
+                              ProductionPreloadPermit, production_secret)
+
+    def issue_synthetic(output, specs, sample_count, free_bytes):
+        require(int(sample_count) > 0 and int(sample_count) <= 40,
+                "synthetic sample count invalid")
+        return checked_common(output, specs, int(sample_count), int(free_bytes),
+                              SyntheticPreloadPermit, synthetic_secret)
+
+    return (ProductionPreloadPermit, SyntheticPreloadPermit,
+            issue_production, issue_synthetic)
 
 
-_PreloadPermit, _checked_issue_permit = _permit_authority()
+(_ProductionPreloadPermit, _SyntheticPreloadPermit,
+ _issue_production_permit, _issue_synthetic_permit) = _permit_authority()
 del _permit_authority
 
 
-def _issue_permit(output, specs, sample_count, free_bytes=None):
-    return _checked_issue_permit(output, specs, sample_count, free_bytes)
-
-
-def issue_preload_permit(output, free_bytes=None):
+def issue_preload_permit(output):
     """The only future production permit factory; no model/torch is loaded."""
-    specs = frozen_layer_specs()
-    return _issue_permit(output, specs, 40, free_bytes)
+    return _issue_production_permit(output)
 
 
 def issue_synthetic_permit(output, specs, sample_count, free_bytes):
-    """Test-only permit; synthetic status is carried into the result."""
-    require(int(sample_count) > 0 and int(sample_count) <= 40,
-            "synthetic sample count invalid")
-    return _issue_permit(output, specs, int(sample_count), free_bytes)
+    """Test-only issuer; it can never create production provenance."""
+    return _issue_synthetic_permit(output, specs, sample_count, free_bytes)
 
 
 class RuntimeBudget(object):
@@ -545,18 +600,25 @@ def build_static_layers(model, specs):
 class ReducedBinaryProducer(object):
     def __init__(self, model, adapter, root, specs, sample_order, permit,
                  production_inventory=False):
-        require(type(permit) is _PreloadPermit, "exact M1558 preload permit required")
+        self.production_inventory = bool(production_inventory)
+        expected_type = (_ProductionPreloadPermit if self.production_inventory
+                         else _SyntheticPreloadPermit)
+        expected_provenance = (PRODUCTION_PROVENANCE if self.production_inventory
+                               else SYNTHETIC_PROVENANCE)
+        require(type(permit) is expected_type,
+                "permit exact type/provenance does not match producer mode")
         self.root = Path(root).resolve()
         self.specs = [dict(row) for row in specs]
         self.inventory_sha256 = canonical_sha(self.specs)
-        self.permit_receipt = permit.consume(self.root, self.inventory_sha256)
-        require(not os.path.lexists(str(self.root)), "producer output must be fresh")
-        self.root.mkdir()
-        self.production_inventory = bool(production_inventory)
         if self.production_inventory:
             require(len(self.specs) == 32 and self.inventory_sha256 ==
                     canonical_sha(frozen_layer_specs()),
                     "production inventory is not exact M1458")
+        self.permit_receipt = permit.consume(self.root, self.inventory_sha256)
+        require(self.permit_receipt.get("provenance") == expected_provenance,
+                "consumed permit provenance drift")
+        require(not os.path.lexists(str(self.root)), "producer output must be fresh")
+        self.root.mkdir()
         self.samples = list(sample_order["samples"])
         expected_count = int(self.permit_receipt["estimate"]["sample_count"])
         require(len(self.samples) == expected_count and
@@ -791,7 +853,13 @@ def validate_binary_result(root, specs, sample_order):
     require(strict_json(root / "sample_order.json") == sample_order,
             "sample-order file drift")
     permit = strict_json(root / "preload_permit_receipt.json")
+    expected_provenance = (PRODUCTION_PROVENANCE if
+                           manifest["status"] ==
+                           "PRODUCTION_PAYLOAD_REQUIRES_INDEPENDENT_RELEASE_AND_HAMMER"
+                           else SYNTHETIC_PROVENANCE)
     require(permit["consumed"] is True and
+            permit.get("schema") == PERMIT_SCHEMA and
+            permit.get("provenance") == expected_provenance and
             permit["inventory_sha256"] == canonical_sha(specs) and
             permit["estimate"] == estimate_from_specs(specs, len(sample_order["samples"])),
             "preload permit receipt drift")
@@ -918,6 +986,10 @@ def describe():
                        "fc": "chunked independent zlib binary frames",
                        "patch": "vectorized histogram/debt only"},
             "preload": {"permit_required": True,
+                        "production_provenance": PRODUCTION_PROVENANCE,
+                        "synthetic_provenance": SYNTHETIC_PROVENANCE,
+                        "production_free_space": "shutil.disk_usage_only",
+                        "production_caller_free_override": False,
                         "raw_upper_source": "M1458 input_elements/input_active",
                         "raw_upper_bytes": 7528535874,
                         "strict_max_bytes": MAX_RUNTIME_BYTES,

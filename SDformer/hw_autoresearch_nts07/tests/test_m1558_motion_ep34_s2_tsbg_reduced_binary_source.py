@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Synthetic binary roundtrip and fail-closed attacks for M1558."""
+"""Synthetic roundtrip and M1574 permit-provenance attacks for M1558 source."""
 
 from __future__ import print_function
 
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import shutil
@@ -63,7 +64,8 @@ class FakeTensor(object):
 def rejects(function):
     try:
         function()
-    except (M.M1558Error, AssertionError, ValueError, zlib.error):
+    except (M.M1558Error, AssertionError, AttributeError, TypeError,
+            ValueError, zlib.error):
         return
     raise AssertionError("attack accepted")
 
@@ -174,7 +176,11 @@ def main():
     assert "token_source_groups" not in text and ".tolist()" not in text
     assert "production_release" in text
     assert not hasattr(M, "_mint_permit")
+    assert not hasattr(M, "_checked_issue_permit")
     assert "def mint(" not in text
+    assert M._ProductionPreloadPermit is not M._SyntheticPreloadPermit
+    assert list(inspect.signature(M.issue_preload_permit).parameters) == ["output"]
+    assert list(inspect.signature(M._issue_production_permit).parameters) == ["output"]
 
     with tempfile.TemporaryDirectory(prefix="m1558_test.") as directory:
         base = Path(directory)
@@ -203,9 +209,95 @@ def main():
         rejects(lambda: M.issue_synthetic_permit(
             base / "free_equal", specs, 3, strict_free))
         attacks.append("free_after_strict_gt_16gib")
-        rejects(lambda: M._checked_issue_permit(
-            base / "checked_low_free", specs, 3, 0))
-        attacks.append("checked_authority_cannot_bypass_free_gate")
+
+        # Production has no caller-controlled free-space/inventory/sample seam.
+        rejects(lambda: M.issue_preload_permit(
+            base / "public_override", strict_free + 1))
+        attacks.append("production_public_signature_no_free_override")
+        rejects(lambda: M._issue_production_permit(
+            base / "private_override", strict_free + 1))
+        attacks.append("production_private_signature_no_free_override")
+
+        production_specs = M.frozen_layer_specs()
+        production_estimate = M.estimate_from_specs(production_specs, 40)
+        production_equal = (production_estimate["result_upper_bytes"] +
+                            M.MIN_FREE_AFTER_BYTES)
+        disk_calls = []
+        original_disk_usage = M.shutil.disk_usage
+
+        class DiskResult(object):
+            def __init__(self, free):
+                self.free = int(free)
+
+        def equal_disk(path):
+            disk_calls.append(str(Path(path).resolve()))
+            return DiskResult(production_equal)
+
+        M.shutil.disk_usage = equal_disk
+        try:
+            rejects(lambda: M.issue_preload_permit(base / "production_equal"))
+        finally:
+            M.shutil.disk_usage = original_disk_usage
+        assert disk_calls == [str(base.resolve())]
+        attacks.append("production_real_disk_equal_free_rejected")
+
+        disk_calls = []
+        production_required = production_equal + 1
+
+        def sufficient_disk(path):
+            disk_calls.append(str(Path(path).resolve()))
+            return DiskResult(production_required)
+
+        M.shutil.disk_usage = sufficient_disk
+        try:
+            production_root = base / "production_real_disk"
+            production_permit = M.issue_preload_permit(production_root)
+        finally:
+            M.shutil.disk_usage = original_disk_usage
+        assert disk_calls == [str(base.resolve())]
+        assert type(production_permit) is M._ProductionPreloadPermit
+        production_receipt = production_permit.consume(
+            production_root, M.canonical_sha(production_specs))
+        assert production_receipt["provenance"] == M.PRODUCTION_PROVENANCE
+        assert production_receipt["free_bytes_before"] == production_required
+        assert production_receipt["free_bytes_after_upper"] == (
+            M.MIN_FREE_AFTER_BYTES + 1)
+        attacks.append("production_real_disk_only_and_provenance")
+
+        exact_synthetic_root = base / "exact_synthetic"
+        exact_synthetic = M.issue_synthetic_permit(
+            exact_synthetic_root, production_specs, 40, production_required)
+        assert type(exact_synthetic) is M._SyntheticPreloadPermit
+        rejects(lambda: M.ReducedBinaryProducer(
+            object(), object(), exact_synthetic_root, production_specs,
+            {"samples": []}, exact_synthetic, production_inventory=True))
+        attacks.append("production_rejects_exact_inventory_synthetic_permit")
+
+        production_for_synthetic_root = base / "production_for_synthetic"
+        M.shutil.disk_usage = sufficient_disk
+        try:
+            production_for_synthetic = M.issue_preload_permit(
+                production_for_synthetic_root)
+        finally:
+            M.shutil.disk_usage = original_disk_usage
+        rejects(lambda: M.ReducedBinaryProducer(
+            object(), object(), production_for_synthetic_root, production_specs,
+            {"samples": []}, production_for_synthetic,
+            production_inventory=False))
+        attacks.append("synthetic_rejects_production_permit")
+
+        rejects(lambda: setattr(exact_synthetic, "provenance",
+                                M.PRODUCTION_PROVENANCE))
+        attacks.append("permit_provenance_not_caller_mutable")
+        rejects(lambda: M._ProductionPreloadPermit(
+            base / "direct_production", M.canonical_sha(production_specs),
+            production_estimate, production_required, object()))
+        attacks.append("production_constructor_private")
+        rejects(lambda: M._SyntheticPreloadPermit(
+            base / "direct_synthetic", M.canonical_sha(specs), estimate,
+            strict_free + 1, object()))
+        attacks.append("synthetic_constructor_private")
+
         huge = [dict(row) for row in specs]
         huge[1]["input_active_s40"] = M.MAX_RUNTIME_BYTES
         rejects(lambda: M.estimate_from_specs(huge, 3))
@@ -221,6 +313,7 @@ def main():
             fake_model(), M.SyntheticBinaryAdapter(), base / "permit_b",
             specs, samples, permit))
         attacks.append("permit_path_binding")
+        assert type(permit) is M._SyntheticPreloadPermit
         permit = permit_for(base / "reuse", specs, samples)
         permit.consume(base / "reuse", M.canonical_sha(specs))
         rejects(lambda: permit.consume(base / "reuse", M.canonical_sha(specs)))
@@ -304,9 +397,10 @@ def main():
         attacks.append("runtime_hard_cap")
 
     rejects(M.production_release); attacks.append("production_release")
-    assert len(attacks) == 22
-    print("PASS M1558 reduced-binary successor attacks=22 frames=6 fc_tokens=18 "
-          "patch_rows=3 no_gpu=1 no_capture=1")
+    assert len(attacks) == 30
+    print("PASS M1574 permit-provenance successor attacks=30 frames=6 "
+          "fc_tokens=18 patch_rows=3 production_real_disk=1 "
+          "distinct_permit_types=1 no_gpu=1 no_capture=1")
 
 
 if __name__ == "__main__":
