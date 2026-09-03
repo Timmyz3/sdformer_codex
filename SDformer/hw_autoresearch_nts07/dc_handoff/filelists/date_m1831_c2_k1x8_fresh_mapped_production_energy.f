@@ -1,0 +1,9 @@
++define+M1831_AXIS_K1X8
++define+SVA_RUNTIME_ENABLED
++incdir+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/tb
+/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/verilog/tcbn28hpcplusbwp35p140_110a/tcbn28hpcplusbwp35p140.v
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/tb/m1334_c2_production_activity_reset_safe_memory_model.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/tb/tb_m1831_c2_fresh_mapped_gate_case_core.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/tb/m1334_c2_production_activity_assertions.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/tb/m1831_c2_registered_public_fault_production_assertions.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/dc_handoff/tb/tb_m1831_c2_fresh_mapped_production_energy.sv

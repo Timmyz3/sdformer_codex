@@ -1,0 +1,14 @@
+# M1888 independent hammer: M1887 TSBG-B4 VCS campaign successor source
+
+Verdict: **FAIL CLOSED (82/100, P0/P1/P2 = 0/2/0).** M1887 must not produce M1889, M1890, a license query, an attempt, VCS/simv execution, EDA evidence, or a paper claim.
+
+M1887 materially fixes the three M1884 findings in the checked source. The durable `ATTEMPT` is created before the first explicit `lmstat`; a license failure occurs after the attempt and enters the sealed no-retry failure path; all seven M1884 helper early-return mutations, the extra-license/fake-license/extra-simv mutations, and the attempt-terminal early return are rejected. The sole literal `subprocess.run` is inside `run_external_once`, `main` has exactly the ordered `license`, `vcs_compile`, and `simv` calls, the compile retains `-assert svaext`, namespaces are fresh, and all paper/performance flags remain false. Both CPython 3.6 and 3.12 produce byte-identical checker output and pass 83/83 official tests. The M1882/M1884/M1880/M1881/M1866/M1871/M1875/docs359 identities and M1887 author seals re-hash correctly.
+
+Those improvements are not yet sufficient for release. The independent closed-world hammer finds two P1 classes:
+
+1. The external-call inventory is syntactic rather than closed-world. Six variants are accepted on both interpreters: a pre-attempt `subprocess.run` alias, pre-attempt `subprocess.getoutput`, a second post-query alias call, a second post-query `getoutput`, an extra `os.spawnv` simv, and monkey-patching `subprocess.run` to return fabricated successes. Thus the checker can still accept zero, extra, or pre-attempt external executions while seeing one literal `subprocess.run` and three accounted wrapper calls.
+2. Helper bodies are protected against inserted `return`, but their live bindings are not protected. Seven local rebindings of `verify_authority`, `namespaces_fresh`, `collision_gate`, `resource_gate`, `seal_dir`, `publish_no_replace`, or `attempt_terminal_gate` to no-op lambdas are accepted on both interpreters. Call-site order and pristine top-level helper bodies therefore do not prove that those bodies are the callees used by `main`.
+
+The independent hammer observes 13/13 escapes on both interpreters. It performs no license query, attempt, VCS, simv, or EDA execution and creates no result or release namespace.
+
+Required next action: preserve M1887 as failed source-review evidence. Author another additive successor. Its checker must reject assignment/rebinding of governance helpers and execution modules, build a closed-world call inventory for `main` and all reachable helpers, reject aliases/dynamic callees and every subprocess/os-spawn API except the single exact accounted primitive, and add the 13 independent mutations. Only after a new different-author source review may a release/audit chain be created.

@@ -316,6 +316,19 @@ def valid_test(args, config_parser):
         config = YAMLParser.combine_entries(config)
         path_results = args.path_results or "results_inference/"
         eval_id = "local"
+
+    runtime_cfg = config.get("runtime", {})
+    if "allow_tf32" in runtime_cfg:
+        allow_tf32 = bool(runtime_cfg["allow_tf32"])
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
+    if "cudnn_benchmark" in runtime_cfg:
+        torch.backends.cudnn.benchmark = bool(runtime_cfg["cudnn_benchmark"])
+    runtime_backend_audit = {
+        "cuda_matmul_allow_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
+        "cudnn_allow_tf32": bool(torch.backends.cudnn.allow_tf32),
+        "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+    }
     device = config_parser.device
 
     # ── H9 overlay ──
@@ -426,6 +439,42 @@ def valid_test(args, config_parser):
         )
     else:
         model = load_model(model_source, model, device, remap = remap, test = True) # delete the relative positioning bias and index
+
+    # Optional deployment-only audit: prove that a frozen list of transformed
+    # operators is actually reached during the evaluated population.  It is a
+    # no-op unless the config explicitly supplies the target list.
+    operator_forward_targets = list(
+        config.get("runtime", {}).get("deployment_operator_forward_audit_targets", [])
+        or []
+    )
+    operator_forward_counts = {str(name): 0 for name in operator_forward_targets}
+    operator_forward_output_elements = {str(name): 0 for name in operator_forward_targets}
+    operator_forward_handles = []
+    if operator_forward_targets:
+        if len(operator_forward_counts) != len(operator_forward_targets):
+            raise RuntimeError("duplicate deployment operator forward-audit target")
+        named_modules = dict(model.named_modules())
+        missing_targets = sorted(set(operator_forward_targets) - set(named_modules))
+        if missing_targets:
+            raise RuntimeError(
+                "missing deployment operator forward-audit targets: "
+                + ", ".join(missing_targets)
+            )
+
+        def _operator_forward_hook(name):
+            def hook(_module, _inputs, output):
+                operator_forward_counts[name] += 1
+                operator_forward_output_elements[name] += sum(
+                    int(tensor.numel()) for tensor in _iter_tensors(output)
+                )
+            return hook
+
+        for target in operator_forward_targets:
+            operator_forward_handles.append(
+                named_modules[target].register_forward_hook(
+                    _operator_forward_hook(target)
+                )
+            )
 
     functional.reset_net(model)
     functional.set_step_mode(model, config['data']['step_mode'])
@@ -760,6 +809,20 @@ def valid_test(args, config_parser):
     )
 
     # ── Spike & SOPs profiling summary ─────────────────────────────
+    for handle in operator_forward_handles:
+        handle.remove()
+    operator_forward_audit = None
+    if operator_forward_targets:
+        operator_forward_audit = {
+            "targets": operator_forward_targets,
+            "calls": operator_forward_counts,
+            "output_elements": operator_forward_output_elements,
+            "all_targets_reached": all(
+                operator_forward_counts[name] > 0
+                and operator_forward_output_elements[name] > 0
+                for name in operator_forward_targets
+            ),
+        }
     spike_profiler.close()
     sp = spike_profiler.summary()
 
@@ -850,6 +913,7 @@ def valid_test(args, config_parser):
             },
             "checkpoint_load_audit": getattr(model, "_h9_load_audit", None),
             "module_counts": _h9_module_counts(model),
+            "deployment_operator_forward_audit": operator_forward_audit,
             "artifact_identity": {
                 "config_path": config_path,
                 "config_sha256": hashlib.sha256(
@@ -863,6 +927,7 @@ def valid_test(args, config_parser):
             "deployment_contract": config.get("runtime", {}).get(
                 "deployment_contract"
             ),
+            "runtime_backend_audit": runtime_backend_audit,
         }
         spike_path = os.path.join(path_results, "spike_profile.json")
         os.makedirs(path_results, exist_ok=True)

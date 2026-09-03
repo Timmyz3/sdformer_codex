@@ -1,0 +1,103 @@
+`timescale 1ns/1ps
+`default_nettype none
+
+// VCS-only name adapter.  The frozen M1984/M1998 directed environment names
+// the predecessor public module.  M2018 has a byte-identical parameter/port
+// header, so this wrapper changes no signal, state, timing, or behavior and
+// lets that exact environment exercise the additive M2018 implementation.
+module m1880_c2_tsbg_b4_real_channel_signed_frontend #(
+    parameter int SCHEDULE_MODE = 1,
+    parameter int BUNDLE = 4,
+    parameter int SOURCE_GROUPS = 48,
+    parameter int SOURCES_PER_GROUP = 16,
+    parameter int OUTPUT_SLICES = 6,
+    parameter int CACHE_ROWS = 4,
+    parameter int TAG_BITS = 24,
+    parameter int CHANNEL_BITS = 12,
+    parameter int EPOCH_BITS = 16,
+    parameter int GENERATION_BITS = 32,
+    parameter int LANES = 16
+) (
+    input  logic                         clk_core,
+    input  logic                         rst_core,
+    input  logic                         load_valid,
+    output logic                         load_ready,
+    input  logic [2:0]                   load_context,
+    input  logic [TAG_BITS-1:0]          load_tag,
+    input  logic [5:0]                   load_group,
+    input  logic [SOURCES_PER_GROUP-1:0] load_source_active,
+    input  logic [SOURCES_PER_GROUP-1:0] load_source_sign,
+    input  logic                         load_last,
+    output logic                         load_accept,
+    output logic [7:0]                   mem_req_valid,
+    input  logic [7:0]                   mem_req_ready,
+    output logic [EPOCH_BITS-1:0]        mem_req_epoch [0:7],
+    output logic [2:0]                   mem_req_slot [0:7],
+    output logic [GENERATION_BITS-1:0]   mem_req_generation [0:7],
+    output logic [TAG_BITS-1:0]          mem_req_tag [0:7],
+    output logic [2:0]                   mem_req_output_block [0:7],
+    output logic [2:0]                   mem_req_slice [0:7],
+    output logic [CHANNEL_BITS-1:0]      mem_req_source_channel [0:7],
+    output logic [7:0]                   mem_req_accept,
+    input  logic [7:0]                   mem_rsp_valid,
+    output logic [7:0]                   mem_rsp_ready,
+    input  logic [EPOCH_BITS-1:0]        mem_rsp_epoch [0:7],
+    input  logic [2:0]                   mem_rsp_slot [0:7],
+    input  logic [GENERATION_BITS-1:0]   mem_rsp_generation [0:7],
+    input  logic [TAG_BITS-1:0]          mem_rsp_tag [0:7],
+    input  logic signed [7:0]            mem_rsp_weight [0:7][0:LANES-1],
+    output logic [7:0]                   mem_rsp_accept,
+    output logic                         bridge_valid,
+    input  logic                         bridge_ready,
+    output logic [2:0]                   bridge_context,
+    output logic [5:0]                   bridge_group,
+    output logic                         bridge_half,
+    output logic [2:0]                   bridge_slice,
+    output logic [7:0]                   bridge_bank_valid,
+    output logic [CHANNEL_BITS-1:0]      bridge_source_channel [0:7],
+    output logic signed [1:0]            bridge_source_value [0:7],
+    output logic signed [8:0]            bridge_effective_weight
+                                                   [0:7][0:LANES-1],
+    output logic                         bridge_accept,
+    output logic                         commit_valid,
+    input  logic                         commit_ready,
+    output logic [2:0]                   commit_context,
+    output logic [TAG_BITS-1:0]          commit_tag,
+    output logic [2:0]                   commit_slice,
+    output logic signed [23:0]           commit_accumulator [0:LANES-1],
+    output logic                         commit_terminal,
+    output logic                         commit_accept,
+    output logic                         bundle_done_valid,
+    input  logic                         bundle_done_ready,
+    output logic                         protocol_error,
+    output logic                         stale_response_seen,
+    output logic                         numeric_overflow,
+    output logic                         busy,
+    output logic [31:0]                  debug_cycle_count,
+    output logic [31:0]                  debug_row_access_count,
+    output logic [31:0]                  debug_cache_hit_count,
+    output logic [31:0]                  debug_cache_miss_count,
+    output logic [31:0]                  debug_cache_eviction_count,
+    output logic [31:0]                  debug_weight_bundle_beat_count,
+    output logic [31:0]                  debug_scalar_bank_request_count,
+    output logic [31:0]                  debug_scalar_bank_response_count,
+    output logic [31:0]                  debug_issue_count,
+    output logic [31:0]                  debug_signed_product_count,
+    output logic [31:0]                  debug_commit_count
+);
+    m2018_c2_tsbg_b4_divfree_fair_scheduler_frontend #(
+        .SCHEDULE_MODE(SCHEDULE_MODE),
+        .BUNDLE(BUNDLE),
+        .SOURCE_GROUPS(SOURCE_GROUPS),
+        .SOURCES_PER_GROUP(SOURCES_PER_GROUP),
+        .OUTPUT_SLICES(OUTPUT_SLICES),
+        .CACHE_ROWS(CACHE_ROWS),
+        .TAG_BITS(TAG_BITS),
+        .CHANNEL_BITS(CHANNEL_BITS),
+        .EPOCH_BITS(EPOCH_BITS),
+        .GENERATION_BITS(GENERATION_BITS),
+        .LANES(LANES)
+    ) implementation (.*);
+endmodule
+
+`default_nettype wire
