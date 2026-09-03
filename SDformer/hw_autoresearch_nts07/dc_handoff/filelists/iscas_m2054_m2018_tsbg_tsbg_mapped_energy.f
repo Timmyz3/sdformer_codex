@@ -1,0 +1,9 @@
++define+M2054_AXIS_TSBG
++define+SVA_RUNTIME_ENABLED
+/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/verilog/tcbn28hpcplusbwp35p140_110a/tcbn28hpcplusbwp35p140.v
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/rtl_m803/m803_fc2_bundle_to_8bank_channel_split_cutthrough_adapter.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/rtl_m2018/m2018_c2_tsbg_b4_divfree_fair_scheduler_frontend.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/rtl_m2018/m2054_m2018_matched_mapped_axis_adapter.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/verif_m1880/m1880_c2_tsbg_b4_real_channel_signed_frontend_assertions.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/tb_m2018/tb_m2051_ep34_tsbg_full40_cycle.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/tb_m2018/tb_m2054_m2018_tsbg_matched_mapped_energy.sv
