@@ -45,18 +45,20 @@ below 250 words by the claim linter.  The deployment-accuracy row is referenced
 to a historical baseline with different GPU backend flags, so it is presented
 only as a compatibility gate.  A fresh artifact-open review reopened the PDF,
 claim linter, paper seal, and five key evidence families and scored the paper
-3.9/5 (Weak Accept, estimated 65--75% acceptance tendency), with P0=0.  The
-earlier 4.1/5 self-assessment is superseded.  The review initially identified
-Git provenance as P1; the scoped paper/review commit made by this closure pass
-closes that repository issue.  After that review, M2047 added a narrow but real
-same-parametric-RTL closure for TSBG: four preselected ep34 G48 activity groups
-from four DSEC sequences take 86,713 ordinary-LRU4 versus 30,775 TSBG-B4
-post-load VCS execute cycles (2.8176x), with 69.92% fewer weight requests.  Its
-M2018/M803 source SHA matches the M2030 schedule-mode DC ablation, where TSBG
-adds 0.0118% logic area and both axes meet setup.  The M2047 independent hammer
-scores 97/100 with P0=0.  This remains a four-group component microbenchmark,
-not full FC1 or system speedup; real weights, hold closure, macros, and power are
-still open and are disclosed in the paper.
+ 4.2/5 (Accept, estimated 85--90% acceptance tendency), with P0=0.  The
+earlier 3.9/5 and 4.1/5 assessments are superseded.  The review initially
+identified this README's stale four-group scope as P1; this revision closes
+that documentation issue.  M2050 expands the exact same-parametric-RTL TSBG
+closure to 192 performance-independent ep34 workloads spanning four DSEC
+sequences, all 12 FC1 layers, four G48-supported FC2 layers, and fixed
+first/middle/last B4 token quartets.  Post-load VCS execute cycles fall from
+1,381,704 to 551,343 (2.5061x; 60.10% less time), and scalar weight-bank
+requests fall from 968,064 to 335,328 (65.36% fewer).  Nineteen empty workloads
+and the 0.9983x worst nonempty case remain in the aggregate.  The M2018/M803
+source SHA matches the M2030 schedule-mode DC ablation, where TSBG adds 0.0118%
+logic area and both axes meet setup.  This is a sampled component distribution,
+not full-FC or system speedup; eight FC2 layers above G48, real weights, hold
+closure, macros, power, and energy remain open and are disclosed in the paper.
 Compress prose rather than restore weak mechanisms if later edits approach the
 page limit.
 
