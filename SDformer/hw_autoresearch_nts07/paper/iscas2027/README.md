@@ -18,7 +18,8 @@ Frozen paper identity:
   as a separate algorithm contribution in this hardware paper;
 - ATLIF accounting: 105 installed = 12 runtime-bypassed `sn2_q` + 93 invoked;
   among the 93 invoked, a separate graph audit finds 12 `attn_sn` return values
-  without consumers, leaving 81 functionally live services;
+  without consumers, leaving 81 graph-live services under the fixed normal
+  inference call graph;
 - contribution structure: C1; C2 with TSBG embedded; C3 as exact-service
   completeness, not an independent speedup claim.
 
@@ -37,7 +38,7 @@ Four-page narrative budget:
 - evaluation, fair baselines and limitations: about 1.1 pages;
 - related work and conclusion: about 0.4 page.
 
-The 2026-09-03 revision was compiled with Tectonic 0.15.0 and `IEEEtran`.
+The 2026-09-03 revision was compiled with Tectonic and `IEEEtran`.
 It produces four letter-size pages including eight references, with no
 overfull boxes; NewTX/TeX Gyre Termes fonts are embedded.  The abstract is kept
 below 250 words by the claim linter.  The deployment-accuracy row is referenced
@@ -47,9 +48,15 @@ claim linter, paper seal, and five key evidence families and scored the paper
 3.9/5 (Weak Accept, estimated 65--75% acceptance tendency), with P0=0.  The
 earlier 4.1/5 self-assessment is superseded.  The review initially identified
 Git provenance as P1; the scoped paper/review commit made by this closure pass
-closes that repository issue.  The substantive remaining P1 is a
-single-implementation model/RTL/physical closure; physical gaps such as
-C2/TSBG hold/power are already disclosed in the paper.
+closes that repository issue.  After that review, M2047 added a narrow but real
+same-parametric-RTL closure for TSBG: four preselected ep34 G48 activity groups
+from four DSEC sequences take 86,713 ordinary-LRU4 versus 30,775 TSBG-B4
+post-load VCS execute cycles (2.8176x), with 69.92% fewer weight requests.  Its
+M2018/M803 source SHA matches the M2030 schedule-mode DC ablation, where TSBG
+adds 0.0118% logic area and both axes meet setup.  The M2047 independent hammer
+scores 97/100 with P0=0.  This remains a four-group component microbenchmark,
+not full FC1 or system speedup; real weights, hold closure, macros, and power are
+still open and are disclosed in the paper.
 Compress prose rather than restore weak mechanisms if later edits approach the
 page limit.
 

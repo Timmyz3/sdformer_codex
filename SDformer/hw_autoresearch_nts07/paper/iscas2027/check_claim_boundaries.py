@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed when the ISCAS draft promotes a model result to RTL evidence."""
+"""Fail closed when the ISCAS draft promotes a scoped result beyond evidence."""
 
 from pathlib import Path
 import re
@@ -25,11 +25,20 @@ def main() -> None:
     for forbidden in ("2.5338", "29.41", "11.61", "65.20"):
         assert forbidden not in abstract, ("TSBG model fact in abstract", forbidden)
         assert forbidden not in main_table, ("TSBG model fact in main table", forbidden)
-    assert "TSBG &" not in main_table
-    assert "directed bundle and scalar-bank requests" in abstract
+    for required in ("86,713", "30,775", "2.8176", "64.51", "69.92"):
+        assert required in abstract, ("missing TSBG G48 RTL fact in abstract", required)
+        assert required in main_table, ("missing TSBG G48 RTL fact in main table", required)
     for required in ("matched", "logic-only", "0.0118", "hold and power remain open"):
         assert required in abstract, ("missing TSBG DC boundary in abstract", required)
-    assert "0.0118" not in main_table
+    for required in ("C2/TSBG", "Four fixed ep34 real-activity groups",
+                     "identical 383-cycle preloads excluded",
+                     "no full-FC/system claim", "0.0118"):
+        assert required in main_table, ("missing TSBG G48 boundary", required)
+    assert "full-FC or system speedup" in text
+    assert "all nonzero codes in the measured groups are $+1$" in text
+    assert "synthetic recovery phase checks signed products" in text
+    assert "Deterministic INT8 weights" in text
+    assert "do not affect scheduling" in text
 
     # The C1 cycle ratio must remain visibly tagged as a model result.
     assert r"1.6945$\times$" in main_table
