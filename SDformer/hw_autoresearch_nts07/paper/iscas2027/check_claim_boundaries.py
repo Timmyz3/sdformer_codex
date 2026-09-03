@@ -48,7 +48,8 @@ def main() -> None:
     assert "failed parent attempt remains non-citable" in text
     assert "combines 1,917 inherited logs with three successor logs" in text
     assert "same compiled simulation image" in text
-    assert "failed parent attempt is not cited" in text
+    assert "M2053 is not promoted as a successful" in text
+    assert "individually valid logs are inherited with explicit lineage" in text
     assert "synthetic recovery phase checks signed products" in text
     assert "Deterministic INT8 weights" in text
     assert "do not affect scheduling" in text
@@ -58,7 +59,7 @@ def main() -> None:
     assert r"\modeltag" in main_table
 
     # C2's modest cycle result must travel with the equal-bandwidth area result.
-    for required in ("1,913", "1,945", "1.0167", "4.5507", "77.66"):
+    for required in ("1,913", "1,945", "1.0167", "4.5411", "77.61"):
         assert required in abstract, ("missing C2 denominator in abstract", required)
         assert required in main_table, ("missing C2 denominator in main table", required)
     assert r"K1$\times$8" in main_table
@@ -68,6 +69,13 @@ def main() -> None:
     assert "five directed" in abstract
     assert "logic-only" in abstract
     assert "directed-throughput/logic-area" in abstract
+    assert r"ten \texttt{zurich\_city\_09\_a} samples" in abstract
+    assert r"ten \texttt{zurich\_city\_09\_a} ep34 samples" in text
+    assert "mapped-to-mapped Formality compare points" in abstract
+    assert "one admitted campaign" in main_table
+    assert "131,086" in main_table and "585,479" in main_table
+    assert "separately evaluated mixed-precision deployment" in abstract
+    assert "not a full" in text and "common-charge ledger" in text
 
     # Freeze the selected evaluation identity and the no-system-speedup boundary.
     for required in ("Motion C12 ep34", "1.199514", "5.6709"):
@@ -103,7 +111,7 @@ def main() -> None:
                      "four decoder", "Other operators remain at checkpoint precision",
                      "enabled TF32/cuDNN benchmarking", "not a causal accuracy"):
         assert required in text, ("missing M2045 claim boundary", required)
-    assert "825-frame local DSEC validation set" in abstract
+    assert re.search(r"825-frame local DSEC\s+validation set", abstract)
     assert "AEE compatibility gate" in abstract
     assert "10 of 18 sequences regress" in text
     for forbidden in ("quantization improves", "full-network INT8 speedup",
