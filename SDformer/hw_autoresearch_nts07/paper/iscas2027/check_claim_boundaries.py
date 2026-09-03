@@ -25,24 +25,30 @@ def main() -> None:
     for forbidden in ("2.5338", "29.41", "11.61", "65.20"):
         assert forbidden not in abstract, ("TSBG model fact in abstract", forbidden)
         assert forbidden not in main_table, ("TSBG model fact in main table", forbidden)
-    for required in ("1,381,704", "551,343", "2.5061", "60.10", "65.36"):
+    for required in ("12,522,876", "5,124,365", "2.4438", "59.08", "64.25"):
         assert required in abstract, ("missing TSBG G48 RTL fact in abstract", required)
         assert required in main_table, ("missing TSBG G48 RTL fact in main table", required)
     for required in ("matched", "logic-only", "0.0118", "hold and power remain open"):
         assert required in abstract, ("missing TSBG DC boundary in abstract", required)
-    for required in ("C2/TSBG", "192 fixed ep34 real-activity workloads",
+    for required in ("C2/TSBG", "1,920 fixed ep34 real-activity workloads",
                      "same G48 engine",
                      "identical 383-cycle preloads excluded",
                      "no full-FC/system claim", "0.0118"):
         assert required in main_table, ("missing TSBG G48 boundary", required)
     assert "full-FC or system speedup" in text
-    for required in ("all 12 FC1 layers", "four FC2 layers",
-                     "first/middle/last aligned B4", "Nineteen all-zero workloads",
-                     "2.315--2.601", "968,064", "335,328"):
+    for required in ("all 40 captured samples", "all 12 FC1 layers", "four FC2 layers",
+                     "first/middle/last aligned B4", "286 all-zero workloads",
+                     "2.3814--2.5458", "8,774,304", "3,136,608",
+                     "1,343 workloads improve", "seven are slower", "0.9935"):
         assert required in text, ("missing TSBG distribution boundary", required)
     assert "excludes eight FC2 layers above G48" in text
-    assert r"marginally slower at 0.9983$\times$" in text
-    assert "all nonzero codes in the measured groups are $+1$" in text
+    assert re.search(r"seven\s+nonempty microbenchmarks are marginally slower", text)
+    assert re.search(r"all naturally\s+nonzero codes in this measured population are \$\+1\$", text)
+    assert "1,917+3 same-simulation-image" in text
+    assert "failed parent attempt remains non-citable" in text
+    assert "combines 1,917 inherited logs with three successor logs" in text
+    assert "same compiled simulation image" in text
+    assert "failed parent attempt is not cited" in text
     assert "synthetic recovery phase checks signed products" in text
     assert "Deterministic INT8 weights" in text
     assert "do not affect scheduling" in text

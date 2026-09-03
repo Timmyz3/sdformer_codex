@@ -48,15 +48,17 @@ claim linter, paper seal, and five key evidence families and scored the paper
  4.2/5 (Accept, estimated 85--90% acceptance tendency), with P0=0.  The
 earlier 3.9/5 and 4.1/5 assessments are superseded.  The review initially
 identified this README's stale four-group scope as P1; this revision closes
-that documentation issue.  M2050 expands the exact same-parametric-RTL TSBG
-closure to 192 performance-independent ep34 workloads spanning four DSEC
-sequences, all 12 FC1 layers, four G48-supported FC2 layers, and fixed
-first/middle/last B4 token quartets.  Post-load VCS execute cycles fall from
-1,381,704 to 551,343 (2.5061x; 60.10% less time), and scalar weight-bank
-requests fall from 968,064 to 335,328 (65.36% fewer).  Nineteen empty workloads
-and the 0.9983x worst nonempty case remain in the aggregate.  The M2018/M803
+that documentation issue.  M2057 expands the exact same-parametric-RTL TSBG
+closure to 1,920 performance-independent ep34 workloads spanning all 40 samples
+from four DSEC sequences, all 12 FC1 layers, four G48-supported FC2 layers, and
+fixed first/middle/last B4 token quartets.  Post-load VCS execute cycles fall
+from 12,522,876 to 5,124,365 (2.4438x; 59.08% less time), and scalar weight-bank
+requests fall from 8,774,304 to 3,136,608 (64.25% fewer).  The distribution
+retains 286 empty workloads and seven slightly slower workloads; its worst
+nonempty result is 0.9935x.  It is a double-sealed 1,917+3 same-simv
+cross-attempt population; M2053 remains failed and non-citable.  The M2018/M803
 source SHA matches the M2030 schedule-mode DC ablation, where TSBG adds 0.0118%
-logic area and both axes meet setup.  This is a sampled component distribution,
+logic area and both axes meet setup.  This is a component distribution,
 not full-FC or system speedup; eight FC2 layers above G48, real weights, hold
 closure, macros, power, and energy remain open and are disclosed in the paper.
 Compress prose rather than restore weak mechanisms if later edits approach the
