@@ -66,6 +66,15 @@ def main() -> None:
     assert "Naturally nonzero descriptors" in text
     assert "all 12 FC1 and 12 FC2 layer identities" in text
     assert "not full FC" in text
+    for required in (
+        "11.16 million", "313.604", "150.234", "2.0874", "52.09",
+        "64.68", "2.0807--2.0968", "2.1766", "1.9005", "0.99755",
+        "VCS-calibrated FC component model", "observed-envelope sensitivity",
+    ):
+        assert required in text, ("missing full-population boundary", required)
+    assert "2.0874" not in abstract
+    assert "whole-network execution" in text
+    assert "not a formal bound" in text
     assert "Prosperity already discovers subset/prefix parents" in text
     assert "FireFly-T already broadcasts" in text
 

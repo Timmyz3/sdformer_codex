@@ -29,6 +29,13 @@ Official constraints (verify before upload):
   continuation is 1.7657×; neither is full-token/full-FC wall time.  C2
   4.541× is directed-throughput/logic-area against equal-bandwidth K1×8.
   None of these is a full-network or silicon result.
+- A separately labeled VCS-calibrated CPU model now replays every aligned B4
+  quartet in the same frozen 40-sample/four-sequence capture: 11.16M quartets,
+  313.604G/150.234G modeled cycles (2.0874×), and 64.68% fewer scheduled
+  scalar weight reads.  G≤48 has zero fitted residual; G96/G192 uses a median
+  residual with an observed min/max sensitivity of 2.0870×.  This robustness
+  result is not RTL, same-area, full-network, energy, FPS, or an abstract
+  headline.
 - Adding the identical 288-KiB foundry-QRT capacity to both K8 and K1×8 gives
   a separately labeled logic-plus-memory area model: 39.72% less area and
   1.687× directed-throughput/area.  It is not integrated macro P&R.
