@@ -54,8 +54,10 @@ python3.12 check_submission_pdf.py --draft-underfill-ok
 Current compile (2026-09-04, musl tectonic): **5 Letter pages**, with page 5
 column 2 containing references only.  It remains an intermediate working
 draft rather than upload-ready because page 5 column 1 is underfilled relative
-to the strict 4.5-page content target.  Legitimate remaining content is the
-continuation-safe FC2 result, matched TSBG logic/SRAM energy and hold closure,
-and final author/thanks/funding/ORCID metadata.  No result may be invented
-merely to fill the page.  Tune `\IEEEtriggeratref{N}` only after the
-matched-power campaign and independent paper review are complete.
+to the strict 4.5-page content target.  The FC2 continuation is now complete:
+the fixed-region VCS population covers all 12 FC1 and all 12 FC2 layer
+identities.  Legitimate remaining content is matched TSBG logic/SRAM energy,
+post-route timing/hold, and final author/thanks/funding/ORCID metadata.  No
+result may be invented merely to fill the page.  Tune `\IEEEtriggeratref{N}`
+only after the matched-power/P&R campaigns and independent paper review are
+complete.
