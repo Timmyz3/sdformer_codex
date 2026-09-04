@@ -33,7 +33,7 @@ def main() -> None:
 
     for required in (
         "1.6945", "40.99", "51.84", "166", "514", "setup/hold",
-        "2.4438", "59.08", "64.25", "0.0118", "4.541", "77.61",
+        "2,880", "1.8345", "45.49", "58.13", "0.0118", "4.541", "77.61",
         "prelayout", "whole-network",
     ):
         assert required in abstract, ("missing admitted component fact in abstract", required)
@@ -52,6 +52,9 @@ def main() -> None:
     assert "hold and power remain open" in text.replace("\n", " ")
     assert "logic-only" in text
     assert "not deployed SRAM area" in text
+    assert "39.72\\% area reduction" in text
+    assert "1.687$\\times$" in text
+    assert "not an integrated macro placement" in text
     assert "152,898" not in text
     assert "M1665" not in text
     assert "M2063" not in text
@@ -61,6 +64,8 @@ def main() -> None:
     assert "parent-product scratch" in text
     assert "deterministic directed INT8 verification weights" in text
     assert "Naturally nonzero descriptors" in text
+    assert "all 12 FC1 and 12 FC2 layer identities" in text
+    assert "not full FC" in text
     assert "Prosperity already discovers subset/prefix parents" in text
     assert "FireFly-T already broadcasts" in text
 

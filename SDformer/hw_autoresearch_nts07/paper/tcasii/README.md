@@ -23,9 +23,15 @@ Official constraints (verify before upload):
 - Contribution cut: **two exact reuse objects**.  C1 captures products under a
   finite single-1RW parent lifetime; C2 combines typed K8 with context-safe
   TSBG weight delivery.  C3 is coverage, not a speedup, and is dropped.
-- TSBG 2.4438× is a 1,920-workload component VCS result.  C2 4.541× is
-  directed-throughput/logic-area against equal-bandwidth K1×8.  Neither is a
-  full-network or silicon result.
+- TSBG 1.8345× is the ratio of sums over 2,880 fixed-region component VCS
+  workloads covering all 12 FC1 and 12 FC2 layer identities.  The earlier
+  G48-only 1,920-workload subset is 2.4438×, and the eight-layer FC2
+  continuation is 1.7657×; neither is full-token/full-FC wall time.  C2
+  4.541× is directed-throughput/logic-area against equal-bandwidth K1×8.
+  None of these is a full-network or silicon result.
+- Adding the identical 288-KiB foundry-QRT capacity to both K8 and K1×8 gives
+  a separately labeled logic-plus-memory area model: 39.72% less area and
+  1.687× directed-throughput/area.  It is not integrated macro P&R.
 - Added TCAS-II / TBioCAS citations (Taylor PIM tutorial, Qiao DS-CIM, Frenkel ODIN).
 - No M-numbers, no system FPS, no multiplied component ratios.
 
@@ -42,6 +48,7 @@ abstract is a submission-portal file, not a sixth manuscript page.
 python3.12 check_claim_boundaries.py
 /tmp/tectonic-musl/tectonic main.tex --outdir build
 pdfinfo build/main.pdf
+python3.12 check_submission_pdf.py --draft-underfill-ok
 ```
 
 Current compile (2026-09-04, musl tectonic): **5 Letter pages**, with page 5
