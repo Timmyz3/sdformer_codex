@@ -21,6 +21,9 @@ def abstract_words(abstract: str) -> int:
 def main() -> None:
     text = PAPER.read_text(encoding="utf-8")
     abstract = between(text, r"\begin{abstract}", r"\end{abstract}")
+    evaluation = between(text, r"\section{Evaluation}", r"\section{Related Work}")
+    before_evaluation = text.split(r"\section{Evaluation}", 1)[0]
+    after_evaluation = text.split(r"\section{Related Work}", 1)[1]
     nwords = abstract_words(abstract)
     assert 100 <= nwords <= 250, ("abstract word count", nwords)
 
@@ -70,9 +73,13 @@ def main() -> None:
         "11.16 million", "313.604", "150.234", "2.0874", "52.09",
         "64.68", "2.0807--2.0968", "2.1766", "1.9005", "0.99755",
         "VCS-calibrated FC component model", "observed-envelope sensitivity",
+        "2.0874$\\times$ ratio of sums", "same-area", "779,040", "780,000",
+        "99.877", "3.10\\%",
     ):
-        assert required in text, ("missing full-population boundary", required)
+        assert required in evaluation, ("missing full-population boundary", required)
     assert "2.0874" not in abstract
+    assert "2.0874" not in before_evaluation
+    assert "2.0874" not in after_evaluation
     assert "whole-network execution" in text
     assert "not a formal bound" in text
     assert "Prosperity already discovers subset/prefix parents" in text
