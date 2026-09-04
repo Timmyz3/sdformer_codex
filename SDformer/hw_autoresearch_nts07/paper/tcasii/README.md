@@ -1,4 +1,4 @@
-# TCAS-II Express Brief draft (C1-only)
+# TCAS-II Express Brief draft (C1 + C2/TSBG)
 
 This directory is a **journal retarget** of the ISCAS component paper.  It does
 not replace `paper/iscas2027/`.  IEEE forbids simultaneous submission: if this
@@ -20,10 +20,12 @@ Official constraints (verify before upload):
 
 - Class: `IEEEtran` journal, not conference; anonymous line replaced by a
   fill-in author block.
-- Contribution cut: **C1 only**.  C1 is the only island with area, setup/hold,
-  Formality, and a bounded energy window.  C2/TSBG hold and power remain open
-  and are therefore not claimed.  C3 is coverage, not a speedup, and is dropped.
-- TSBG 2.4438× / C2 4.5411× stay out of the abstract and the admitted table.
+- Contribution cut: **two exact reuse objects**.  C1 captures products under a
+  finite single-1RW parent lifetime; C2 combines typed K8 with context-safe
+  TSBG weight delivery.  C3 is coverage, not a speedup, and is dropped.
+- TSBG 2.4438× is a 1,920-workload component VCS result.  C2 4.541× is
+  directed-throughput/logic-area against equal-bandwidth K1×8.  Neither is a
+  full-network or silicon result.
 - Added TCAS-II / TBioCAS citations (Taylor PIM tutorial, Qiao DS-CIM, Frenkel ODIN).
 - No M-numbers, no system FPS, no multiplied component ratios.
 
@@ -42,10 +44,11 @@ python3.12 check_claim_boundaries.py
 pdfinfo build/main.pdf
 ```
 
-Current compile (2026-09-04, musl tectonic): **4 Letter pages**, last page is
-discussion/limitations | references.  TCAS-II wants **exactly 5 pages** with
-the last column references only.  Do not pad with C2/TSBG claims.  Legitimate
-fill before 9.20: real author/thanks/funding/ORCID block, a slightly larger
-overview figure, and one more column of 28-nm flow detail (library, corner,
-Formality mapped-to-mapped).  Then tune `\IEEEtriggeratref{N}` so page 5
-column 2 is references and nothing else.
+Current compile (2026-09-04, musl tectonic): **4 Letter pages**.  This is an
+intermediate working draft, not upload-ready: TCAS-II requires exactly 5 pages
+with content ending after page 5 column 1 and references occupying page 5
+column 2 only.  Legitimate remaining content is the continuation-safe FC2
+result, a TSBG sequence/energy ablation, the ordinary-vs-broadcast timing
+diagram, and final author/thanks/funding/ORCID metadata.  No result may be
+invented merely to fill the page.  Tune `\IEEEtriggeratref{N}` only after the
+matched-power campaign and independent paper review are complete.

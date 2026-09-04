@@ -2,7 +2,7 @@
 
 **To:** Editor-in-Chief, IEEE Transactions on Circuits and Systems II: Express Briefs
 
-**Manuscript:** Exact Product Capture under a Finite Single-Port Parent Store for Event-Driven Spiking Optical Flow
+**Manuscript:** Exact Product Capture and Context-Safe Weight Broadcast for Event-Driven Spiking Optical Flow
 
 **Article type:** Express Brief (regular)
 
@@ -10,11 +10,11 @@
 
 Dear Editor,
 
-Please consider this Express Brief on a digital 28-nm execution island for a frozen binary-event optical-flow network.  Sparse firing does not by itself reduce parent-state traffic when the working set is finite and the store is single-ported.  The brief’s sole circuit contribution, C1, captures exact repeated products under that contract: a child row reuses only a still-resident exact-subset parent, issues the XOR residual, reconstructs the signed product by addition, elides dead writes, and commits atomically.
+Please consider this Express Brief on two exact digital 28-nm execution islands for a frozen binary-event optical-flow network.  Sparse firing does not by itself reduce parent-state or weight-delivery traffic under finite capacity and port constraints.  C1 captures repeated products only while an exact-subset parent remains resident in a single-1RW store; C2 combines an equal-bandwidth typed-K8 datapath with context-safe token-set broadcast (TSBG), sharing a weight delivery while preserving private signed products, destinations, and Acc24 state.
 
-On 51.84 million same-ledger source rows the cycle model reduces component time by 40.99% (1.6945×) versus strongest-zero skipping, while same-coordinate bit skipping is 1.003×.  The mapped nine-SRAM island occupies 166,514 µm², meets 3-ns setup/hold, reports a 64-row/253-cycle mixed-corner energy of 29.08 mW / 22.07 nJ, and passes 16,549 mapped-to-mapped Formality compare points.  These are prelayout, pre-macro-extracted component results; we do not claim silicon measurements or whole-network FPS.
+On 51.84 million same-ledger source rows C1's cycle model reduces component time by 40.99% (1.6945×) versus strongest-zero skipping.  Its mapped nine-SRAM island occupies 166,514 µm² and meets 3-ns setup/hold.  Across 1,920 fixed real-activity workloads, same-port/cache TSBG VCS reduces post-load execution by 59.08% (2.4438×) and bank requests by 64.25%; the matched logic-area increment is 0.0118%.  K8 provides 4.541× directed-throughput/logic-area versus equal-bandwidth K1×8.  These are component-level, prelayout results; we do not claim silicon measurements, whole-network speedup, or FPS.
 
-The manuscript is 5 pages in the required 4.5+0.5 format, has not been submitted elsewhere, and is not a simultaneous conference submission.  Related weight-broadcast work is omitted because its hold and power are not closed.
+Before submission, the manuscript will be exactly 5 pages in the required 4.5+0.5 format.  It has not been submitted elsewhere and will not be a simultaneous conference submission.  C2/TSBG hold and matched power are disclosed as open unless the final independently reviewed campaign closes them.
 
 Sincerely,
 [Corresponding author, ORCID, e-mail]
