@@ -1,0 +1,406 @@
+# M2121: one axis of the matched macro-free M2018 ICC2 P&R experiment.
+# Source-only at creation.  Execution is authorized only through the exact-SHA
+# M2121 one-shot runner after an independent M2122 source hammer.
+
+proc m2121_require_env {name} {
+    if {![info exists ::env($name)] || $::env($name) eq ""} {
+        error "M2121 missing environment variable $name"
+    }
+    return $::env($name)
+}
+
+proc m2121_require_nonempty {collection label} {
+    set count [sizeof_collection $collection]
+    if {$count <= 0} { error "M2121 empty collection: $label" }
+    return $count
+}
+
+proc m2121_sum_cell_area {cells} {
+    set total 0.0
+    foreach_in_collection cell $cells {
+        set value [get_attribute -quiet $cell area]
+        if {$value ne ""} { set total [expr {$total + double($value)}] }
+    }
+    return $total
+}
+
+proc m2121_ref_prefix_count {cells prefixes} {
+    set count 0
+    foreach_in_collection cell $cells {
+        set ref [get_attribute -quiet $cell ref_name]
+        foreach prefix $prefixes {
+            if {[string match "${prefix}*" $ref]} {
+                incr count
+                break
+            }
+        }
+    }
+    return $count
+}
+
+proc m2121_parse_route_report {path} {
+    set fh [open $path r]
+    set text [read $fh]
+    close $fh
+    set open_values {}
+    set drc_values {}
+    foreach line [split $text "\n"] {
+        if {[regexp -nocase {^\s*Total number of open nets\s*=\s*([0-9]+)\s*\.?\s*$} $line -> value] ||
+            [regexp -nocase {^\s*TOTAL OPEN NETS\s*[:=]\s*([0-9]+)\s*$} $line -> value] ||
+            [regexp -nocase {^\s*Total\s+([0-9]+)\s+nets have their routing open([[:space:]]|\().*$} $line -> value] ||
+            [regexp -nocase {^\s*Total open nets\s*[:=]\s*([0-9]+)\s*$} $line -> value]} {
+            lappend open_values $value
+        }
+        if {[regexp -nocase {^\s*Total number of DRC(s| violations)\s*=\s*([0-9]+)\s*\.?\s*$} $line -> ignored value] ||
+            [regexp -nocase {^\s*TOTAL (DRC )?VIOLATIONS\s*[:=]\s*([0-9]+)\s*$} $line -> ignored value]} {
+            lappend drc_values $value
+        }
+    }
+    if {[llength $open_values] == 0 || [llength $drc_values] == 0} {
+        error "M2121 missing anchored check_routes numeric summaries"
+    }
+    foreach value [concat $open_values $drc_values] {
+        if {$value != 0} { error "M2121 nonzero routed open/DRC count $value" }
+    }
+    return [list 0 0]
+}
+
+proc m2121_single_lib_name {pattern label} {
+    set libs [get_libs -quiet $pattern]
+    if {[sizeof_collection $libs] != 1} {
+        error "M2121 expected one $label library for $pattern"
+    }
+    return [lindex [get_object_name $libs] 0]
+}
+
+proc m2121_pin_floorplan {} {
+    set ports [lsort [get_object_name [get_ports *]]]
+    set n [llength $ports]
+    if {$n != 4551} { error "M2121 expected 4551 ports, got $n" }
+    set per_side [expr {int(ceil(double($n) / 4.0))}]
+    set pitch [expr {720.0 / double($per_side + 1)}]
+    set fh [open "$::env(M2121_AXIS_DIR)/reports/ports_sorted.txt" w]
+    foreach name $ports { puts $fh $name }
+    close $fh
+    for {set i 0} {$i < $n} {incr i} {
+        set name [lindex $ports $i]
+        set side [expr {$i % 4}]
+        set slot [expr {int($i / 4) + 1}]
+        set delta [expr {$pitch * double($slot)}]
+        if {$side == 0} {
+            set location [list [expr {40.0 + $delta}] 40.0]
+            set layer M3
+        } elseif {$side == 1} {
+            set location [list 760.0 [expr {40.0 + $delta}]]
+            set layer M4
+        } elseif {$side == 2} {
+            set location [list [expr {760.0 - $delta}] 760.0]
+            set layer M3
+        } else {
+            set location [list 40.0 [expr {760.0 - $delta}]]
+            set layer M4
+        }
+        set_individual_pin_constraints -ports [get_ports -exact $name] \
+            -allowed_layers [list $layer] -location $location
+    }
+    place_pins -ports [get_ports *]
+}
+
+proc m2121_main {} {
+    set axis [m2121_require_env M2121_AXIS]
+    if {$axis ni {ordinary_lru4 tsbg_b4}} { error "M2121 invalid axis $axis" }
+    set top [m2121_require_env M2121_TOP]
+    set axis_dir [m2121_require_env M2121_AXIS_DIR]
+    set netlist [m2121_require_env M2121_MAPPED_V]
+    set physical_sdc [m2121_require_env M2121_PHYSICAL_SDC]
+    set design_lib [m2121_require_env M2121_DESIGN_LIB]
+    set mw_ref [m2121_require_env M2121_MW_REF_LIB]
+    set tt_db [m2121_require_env M2121_TT_DB]
+    set ss_db [m2121_require_env M2121_SS_DB]
+    set ff_db [m2121_require_env M2121_FF_DB]
+    set nxtgrd [m2121_require_env M2121_NXTGRD]
+    set layer_map [m2121_require_env M2121_LAYER_MAP]
+    set physical_sdc_sha [m2121_require_env M2121_PHYSICAL_SDC_SHA256]
+    set flow_tcl_sha [m2121_require_env M2121_FLOW_TCL_SHA256]
+
+    file mkdir "$axis_dir/reports" "$axis_dir/output" "$axis_dir/library_cache"
+    set_app_var sh_continue_on_error false
+    set_app_var link_library [list $tt_db $ss_db $ff_db]
+    set_app_var lib.configuration.local_output_dir "$axis_dir/library_cache"
+
+    # Gate 1: the first tool action is the legacy-Milkyway plus TT/SS/FF import.
+    # Any unsupported conversion, missing view, or link mismatch raises a Tcl
+    # error and the one-shot shell quarantines the entire attempt.
+    create_lib -ref_libs [list $mw_ref] $design_lib
+    read_verilog -top $top $netlist
+    current_block $top
+    link_block -force -verbose
+    redirect -file "$axis_dir/reports/reference_libraries.rpt" { report_ref_libs }
+    redirect -file "$axis_dir/reports/design_library.rpt" { report_design -library -nosplit }
+    redirect -file "$axis_dir/reports/design_mismatch.rpt" { report_design_mismatch -verbose -nosplit }
+
+    set unresolved_count [sizeof_collection [get_mismatch_objects -repair_status not_repaired -quiet]]
+    set accepted_mismatch_count [sizeof_collection [get_mismatch_objects -repair_status accepted -quiet]]
+    set mismatch_count [sizeof_collection [get_mismatch_objects -repair_status {not_repaired repaired deleted ignored} -quiet]]
+    if {$unresolved_count != 0 || $accepted_mismatch_count != 0 || $mismatch_count != 0} {
+        error "M2121 mismatch gate failed unresolved=$unresolved_count accepted=$accepted_mismatch_count all_nonaccepted=$mismatch_count"
+    }
+    set input_leaf [get_cells -hierarchical -quiet -filter "is_hierarchical == false"]
+    set input_refs [lsort -unique [get_attribute $input_leaf ref_name]]
+    set input_master_count [llength $input_refs]
+    if {$input_master_count != 94} { error "M2121 mapped master count $input_master_count" }
+    set tt_lib_name [m2121_single_lib_name *tt0p9v25c* TT]
+    set ss_lib_name [m2121_single_lib_name *ssg0p9v125c* SS]
+    set ff_lib_name [m2121_single_lib_name *ffg1p05vm40c* FF]
+    set physical_lib_name [m2121_single_lib_name tcbn28hpcplusbwp35p140 physical]
+    set tt_covered 0
+    set ss_covered 0
+    set ff_covered 0
+    set physical_covered 0
+    foreach ref $input_refs {
+        m2121_require_nonempty [get_lib_cells -quiet "${tt_lib_name}/$ref"] "TT master $ref"
+        incr tt_covered
+        m2121_require_nonempty [get_lib_cells -quiet "${ss_lib_name}/$ref"] "SS master $ref"
+        incr ss_covered
+        m2121_require_nonempty [get_lib_cells -quiet "${ff_lib_name}/$ref"] "FF master $ref"
+        incr ff_covered
+        m2121_require_nonempty [get_lib_cells -quiet "${physical_lib_name}/$ref"] "physical master $ref"
+        incr physical_covered
+    }
+    if {$tt_covered != 94 || $ss_covered != 94 || $ff_covered != 94 || $physical_covered != 94} {
+        error "M2121 per-view master coverage failed TT=$tt_covered SS=$ss_covered FF=$ff_covered physical=$physical_covered"
+    }
+    m2121_require_nonempty [get_site_defs -quiet *core*] "core site"
+    set routing_layer_gate_count 0
+    foreach layer {M1 M2 M3 M4 M5 M6 M7 M8 M9} {
+        m2121_require_nonempty [get_layers -quiet $layer] "routing layer $layer"
+        incr routing_layer_gate_count
+    }
+    set via_layer_gate_count 0
+    foreach layer {VIA1 VIA2 VIA3 VIA4 VIA5 VIA6 VIA7 VIA8} {
+        m2121_require_nonempty [get_layers -quiet $layer] "via layer $layer"
+        incr via_layer_gate_count
+    }
+    puts "M2121_GATE1_IMPORT_AND_LIBRARY_CHECK_PASS axis=$axis masters=$input_master_count TT=$tt_covered SS=$ss_covered FF=$ff_covered physical=$physical_covered"
+
+    # Gate 2: common foundry NXTGRD, with the strongest documented sanity mode.
+    read_parasitic_tech -tlup $nxtgrd -layermap $layer_map \
+        -name n28_1p9m_6x1z1u_typ -sanity_check advanced
+    puts "M2121_GATE2_NXTGRD_ADVANCED_SANITY_PASS axis=$axis"
+
+    # Matched MCMM: one functional mode, slow setup, fast hold, TT power.  The
+    # same typical RC model is intentionally used on all three corners because
+    # the selected source audit admitted only that NXTGRD for this feasibility
+    # run; this is not max/min-RC signoff.
+    read_sdc $physical_sdc
+    set setup_scenario [current_scenario]
+    set setup_corner [current_corner]
+    set_operating_conditions -library [get_libs *ssg0p9v125c*] ssg0p9v125c
+    set_parasitic_parameters -corners $setup_corner \
+        -early_spec n28_1p9m_6x1z1u_typ -early_temperature 125 \
+        -late_spec n28_1p9m_6x1z1u_typ -late_temperature 125
+    set_scenario_status $setup_scenario -none
+    set_scenario_status $setup_scenario -setup true -max_transition true -max_capacitance true
+
+    create_corner ff_hold
+    set ff_corner [current_corner]
+    set hold_scenario [create_scenario -mode [current_mode] -corner $ff_corner -name func_ff_hold]
+    current_scenario $hold_scenario
+    set_operating_conditions -library [get_libs *ffg1p05vm40c*] ffg1p05vm40c
+    set_parasitic_parameters -corners $ff_corner \
+        -early_spec n28_1p9m_6x1z1u_typ -early_temperature -40 \
+        -late_spec n28_1p9m_6x1z1u_typ -late_temperature -40
+    set_scenario_status $hold_scenario -none
+    set_scenario_status $hold_scenario -hold true -min_capacitance true
+
+    create_corner tt_power
+    set tt_corner [current_corner]
+    set power_scenario [create_scenario -mode [current_mode] -corner $tt_corner -name func_tt_power]
+    current_scenario $power_scenario
+    set_operating_conditions -library [get_libs *tt0p9v25c*] tt0p9v25c
+    set_parasitic_parameters -corners $tt_corner \
+        -early_spec n28_1p9m_6x1z1u_typ -early_temperature 25 \
+        -late_spec n28_1p9m_6x1z1u_typ -late_temperature 25
+    set_scenario_status $power_scenario -none
+    set_scenario_status $power_scenario -dynamic_power true -leakage_power true
+    current_scenario $setup_scenario
+
+    # Fixed and identical physical envelope.  The 288-KiB SRAM is not placed;
+    # its interface remains on the boundary and its area/leakage are common.
+    initialize_floorplan -control_type die -shape R \
+        -boundary {{0 0} {800 0} {800 800} {0 800}} \
+        -core_offset {40 40 40 40}
+    set_ignored_layers -min_routing_layer M2 -max_routing_layer M8
+    m2121_pin_floorplan
+    set die_boundary_actual [get_attribute [current_block] boundary]
+    set core_bbox_actual [get_attribute [get_core_area] bbox]
+    set actual_floorplan [open "$axis_dir/reports/actual_floorplan.txt" w]
+    puts $actual_floorplan "die_boundary=$die_boundary_actual"
+    puts $actual_floorplan "core_bbox=$core_bbox_actual"
+    close $actual_floorplan
+    redirect -file "$axis_dir/reports/actual_routing_layers.rpt" { report_ignored_layers }
+    redirect -file "$axis_dir/reports/actual_scenarios.rpt" { report_scenarios }
+
+    # Freeze the same CTS and hold-repair candidate sets on both axes.
+    set all_lib_cells [get_lib_cells -quiet */*]
+    set_lib_cell_purpose -exclude cts $all_lib_cells
+    set cts_cells [get_lib_cells -quiet */CKBD*]
+    set cts_cells [add_to_collection $cts_cells [get_lib_cells -quiet */CKND*]]
+    m2121_require_nonempty $cts_cells "CTS CKBD/CKND whitelist"
+    set_lib_cell_purpose -include cts $cts_cells
+    set_lib_cell_purpose -exclude hold $all_lib_cells
+    set hold_cells [get_lib_cells -quiet */DEL*]
+    set hold_cells [add_to_collection $hold_cells [get_lib_cells -quiet */BUFF*]]
+    set hold_cells [add_to_collection $hold_cells [get_lib_cells -quiet */INV*]]
+    m2121_require_nonempty $hold_cells "hold DEL/BUFF/INV whitelist"
+    set_lib_cell_purpose -include hold $hold_cells
+    set_clock_tree_options -clocks [get_clocks core_clk] -target_skew 0.080
+    set cts_inventory [open "$axis_dir/reports/actual_cts_cells.txt" w]
+    foreach name [lsort [get_object_name $cts_cells]] { puts $cts_inventory $name }
+    close $cts_inventory
+    set hold_inventory [open "$axis_dir/reports/actual_hold_cells.txt" w]
+    foreach name [lsort [get_object_name $hold_cells]] { puts $hold_inventory $name }
+    close $hold_inventory
+
+    set pre_place_rc [check_design -checks pre_placement_stage \
+        -ems_database "$axis_dir/reports/pre_placement.ems" \
+        -log_file "$axis_dir/reports/pre_placement_check.rpt"]
+    if {!$pre_place_rc} { error "M2121 pre-placement check failed" }
+    place_opt
+    set pre_clock_rc [check_design -checks pre_clock_tree_stage \
+        -ems_database "$axis_dir/reports/pre_clock.ems" \
+        -log_file "$axis_dir/reports/pre_clock_check.rpt"]
+    if {!$pre_clock_rc} { error "M2121 pre-clock check failed" }
+    clock_opt
+    foreach_in_collection mode [all_modes] {
+        current_mode $mode
+        set_propagated_clock [all_clocks]
+    }
+    current_scenario $setup_scenario
+    set pre_route_rc [check_design -checks pre_route_stage \
+        -ems_database "$axis_dir/reports/pre_route.ems" \
+        -log_file "$axis_dir/reports/pre_route_check.rpt"]
+    if {!$pre_route_rc} { error "M2121 pre-route check failed" }
+    route_auto
+    route_opt
+    redirect -file "$axis_dir/reports/route_check.rpt" {
+        set route_check_rc [check_routes -open_net true -report_all_open_nets true \
+            -drc true -antenna false -voltage_area true]
+    }
+    if {!$route_check_rc} { error "M2121 routed connectivity/DRC check failed" }
+    lassign [m2121_parse_route_report "$axis_dir/reports/route_check.rpt"] route_open_count route_drc_count
+
+    current_scenario $setup_scenario
+    set setup_paths [get_timing_paths -delay_type max -nworst 1 -max_paths 1]
+    m2121_require_nonempty $setup_paths "setup path"
+    set setup_wns [get_attribute [index_collection $setup_paths 0] slack]
+    current_scenario $hold_scenario
+    set hold_paths [get_timing_paths -delay_type min -nworst 1 -max_paths 1]
+    m2121_require_nonempty $hold_paths "hold path"
+    set hold_wns [get_attribute [index_collection $hold_paths 0] slack]
+    if {double($setup_wns) < 0.0 || double($hold_wns) < 0.0} {
+        error "M2121 timing not closed: setup=$setup_wns hold=$hold_wns"
+    }
+
+    current_scenario $setup_scenario
+    redirect -file "$axis_dir/reports/qor.rpt" { report_qor -summary -nosplit }
+    redirect -file "$axis_dir/reports/timing_setup.rpt" {
+        report_timing -delay_type max -path_type full_clock_expanded -max_paths 20 -nosplit
+    }
+    current_scenario $hold_scenario
+    redirect -file "$axis_dir/reports/timing_hold.rpt" {
+        report_timing -delay_type min -path_type full_clock_expanded -max_paths 20 -nosplit
+    }
+    redirect -file "$axis_dir/reports/clock_qor.rpt" { report_clock_qor -all -nosplit }
+    redirect -file "$axis_dir/reports/congestion.rpt" { report_congestion -mode summary -nosplit }
+    redirect -file "$axis_dir/reports/wirelength.rpt" { report_wirelength -verbose }
+    redirect -file "$axis_dir/reports/final_design.rpt" { report_design -all -nosplit }
+    current_scenario $power_scenario
+    redirect -file "$axis_dir/reports/vectorless_power_diagnostic.rpt" {
+        report_power -nosplit -verbose
+    }
+
+    write_verilog -top_module_first "$axis_dir/output/routed.v"
+    write_sdc -output "$axis_dir/output/routed.sdc" -nosplit
+    write_def "$axis_dir/output/routed.def"
+    write_parasitics -output "$axis_dir/output/routed.spef" -format spef -corner tt_power
+
+    set routed_leaf [get_cells -hierarchical -quiet -filter "is_hierarchical == false"]
+    set routed_seq [get_cells -hierarchical -quiet -filter "is_sequential == true"]
+    set routed_area [m2121_sum_cell_area $routed_leaf]
+    set clock_like [m2121_ref_prefix_count $routed_leaf {CKBD CKND}]
+    set hold_like [m2121_ref_prefix_count $routed_leaf {DEL BUFF INV}]
+    if {$routed_area <= 0.0 || $clock_like <= 0 || $hold_like <= 0} {
+        error "M2121 invalid routed cell census"
+    }
+
+    set fh [open "$axis_dir/machine_facts.txt" w]
+    puts $fh "status=PASS_M2121_MATCHED_MACROFREE_ICC2_AXIS"
+    puts $fh "axis=$axis"
+    puts $fh "top=$top"
+    puts $fh "public_port_count=[sizeof_collection [get_ports *]]"
+    puts $fh "input_master_count=$input_master_count"
+    puts $fh "tt_master_coverage=$tt_covered/94"
+    puts $fh "ss_master_coverage=$ss_covered/94"
+    puts $fh "ff_master_coverage=$ff_covered/94"
+    puts $fh "physical_master_coverage=$physical_covered/94"
+    puts $fh "unresolved_reference_count=$unresolved_count"
+    puts $fh "accepted_mismatch_count=$accepted_mismatch_count"
+    puts $fh "logical_physical_mismatch_count=$mismatch_count"
+    puts $fh "routing_layer_gate_count=$routing_layer_gate_count"
+    puts $fh "via_layer_gate_count=$via_layer_gate_count"
+    puts $fh "route_check_return=$route_check_rc"
+    puts $fh "route_open_net_count=$route_open_count"
+    puts $fh "route_drc_violation_count=$route_drc_count"
+    puts $fh "pre_placement_check_return=$pre_place_rc"
+    puts $fh "pre_clock_check_return=$pre_clock_rc"
+    puts $fh "pre_route_check_return=$pre_route_rc"
+    puts $fh "die_bbox_um=0,0,800,800"
+    puts $fh "core_bbox_um=40,40,760,760"
+    puts $fh "die_boundary_actual=$die_boundary_actual"
+    puts $fh "core_bbox_actual=$core_bbox_actual"
+    puts $fh "floorplan_policy=fixed_die_core_800_720um_v1"
+    puts $fh "pin_policy=sorted_four_side_round_robin_exact_location_v1"
+    puts $fh "route_layers=M2:M8"
+    puts $fh "cts_cell_policy=CKBD_and_CKND_only_v1"
+    puts $fh "hold_cell_policy=DEL_BUFF_INV_only_v1"
+    puts $fh "clock_period_ns=3.000"
+    puts $fh "setup_uncertainty_ns=0.200"
+    puts $fh "hold_uncertainty_ns=0.050"
+    puts $fh "parasitic_tech=n28_1p9m_6x1z1u_typ"
+    puts $fh "parasitic_corner_scope=same_typical_rc_on_ss_ff_tt"
+    puts $fh "setup_scenario_actual=[get_object_name $setup_scenario]"
+    puts $fh "hold_scenario_actual=[get_object_name $hold_scenario]"
+    puts $fh "power_scenario_actual=[get_object_name $power_scenario]"
+    puts $fh "common_external_sram_bytes=294912"
+    puts $fh "common_external_sram_integrated=false"
+    puts $fh "propagated_clock=true"
+    puts $fh "macro_instances=0"
+    puts $fh "physical_sdc_sha256=$physical_sdc_sha"
+    puts $fh "flow_tcl_sha256=$flow_tcl_sha"
+    puts $fh "floorplan_actual_sha256=POPULATED_BY_ONE_SHOT_RUNNER"
+    puts $fh "routing_policy_sha256=POPULATED_BY_ONE_SHOT_RUNNER"
+    puts $fh "scenario_policy_sha256=POPULATED_BY_ONE_SHOT_RUNNER"
+    puts $fh "port_inventory_sha256=POPULATED_BY_ONE_SHOT_RUNNER"
+    puts $fh "setup_wns_ns=$setup_wns"
+    puts $fh "hold_wns_ns=$hold_wns"
+    puts $fh "routed_standard_cell_area_um2=$routed_area"
+    puts $fh "routed_leaf_cell_count=[sizeof_collection $routed_leaf]"
+    puts $fh "routed_sequential_cell_count=[sizeof_collection $routed_seq]"
+    puts $fh "clock_like_cell_count=$clock_like"
+    puts $fh "hold_like_cell_count=$hold_like"
+    close $fh
+    set done [open "$axis_dir/RUN_COMPLETE.txt" w]
+    puts $done "PASS_M2121_MATCHED_MACROFREE_ICC2_AXIS"
+    close $done
+    puts "PASS_M2121_MATCHED_MACROFREE_ICC2_AXIS axis=$axis"
+}
+
+if {[catch {m2121_main} m2121_error m2121_options]} {
+    puts stderr "M2121_FATAL_FAIL_CLOSED: $m2121_error"
+    if {[dict exists $m2121_options -errorinfo]} {
+        puts stderr [dict get $m2121_options -errorinfo]
+    }
+    exit 42
+}
+exit 0
