@@ -1,0 +1,7 @@
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/rtl_m803/m803_fc2_bundle_to_8bank_channel_split_cutthrough_adapter.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/rtl_m2018/m2018_c2_tsbg_b4_divfree_fair_scheduler_frontend.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/rtl_m2020/m2020_m2018_vcs_public_name_adapter.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/verif_m1880/m1880_c2_tsbg_b4_real_channel_signed_frontend_assertions.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/rtl_m2067/m2067_fc2_exact_continuation_wrapper.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/tb_m2018/tb_m2051_ep34_tsbg_full40_cycle.sv
+/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/tb_m2018/tb_m2067_ep34_fc2_exact_continuation_s960.sv
