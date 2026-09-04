@@ -1,0 +1,4 @@
+rtl_m125/m125_block_phased_k4_row_fold.sv
+rtl_m123/m123_w384_signed19_forwarding_accumulator_frontend.sv
+rtl_m123/m123_w384_signed19_forwarding_lane_sliced_accumulator_adapter.sv
+rtl_m126/m126_block_phased_k4_forwarding_accumulator_island.sv

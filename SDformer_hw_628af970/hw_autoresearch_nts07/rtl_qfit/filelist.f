@@ -1,0 +1,5 @@
+../rtl_local5/local5_shiftmax5_q17.sv
+qfit_tagged_compactor4.sv
+qfit_xorbank_compactor4.sv
+qfit_local5_score_leaf.sv
+qfit_local5_qsilent_score_leaf.sv

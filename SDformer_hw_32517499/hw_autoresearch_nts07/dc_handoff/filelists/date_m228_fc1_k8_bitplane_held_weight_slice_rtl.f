@@ -1,0 +1,1 @@
+rtl_m228/m228_fc1_k8_bitplane_held_weight_slice.sv

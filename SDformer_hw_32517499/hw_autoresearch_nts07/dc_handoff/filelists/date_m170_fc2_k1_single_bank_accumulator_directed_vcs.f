@@ -1,0 +1,3 @@
+rtl_m170/m170_fc2_k1_single_bank_accumulator.sv
+verif_m170/m170_fc2_k1_single_bank_accumulator_assertions.sv
+tb_m170/tb_m170_fc2_k1_single_bank_accumulator.sv

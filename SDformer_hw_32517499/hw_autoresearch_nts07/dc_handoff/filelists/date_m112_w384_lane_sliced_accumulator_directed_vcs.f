@@ -1,0 +1,4 @@
+rtl_m111/m111_w384_signed24_accumulator_frontend.sv
+rtl_m112/m112_w384_lane_sliced_accumulator_adapter.sv
+verif_m112/m112_w384_lane_sliced_accumulator_assertions.sv
+tb_m112/tb_m112_w384_lane_sliced_accumulator.sv

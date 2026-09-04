@@ -1,0 +1,146 @@
+{
+  "schema": "m86_r2_arbitrated_sync_bank_independent_hammer_review_v1",
+  "status": "SCOPED_GO_EXACT_R1_TWO_CHANNEL_TRIGGER_ONLY_NO_GO_COMPLETE_ARBITER_OR_PERFORMANCE",
+  "score_percent": 78,
+  "score_breakdown": {
+    "exact_identity_and_reproducibility": "19/20",
+    "exact_r1_payload_descriptor_repair": "20/20",
+    "contention_liveness_and_fairness": "12/20",
+    "phase_transition_and_error_behavior": "14/20",
+    "integration_claim_discipline_and_paper_readiness": "13/20"
+  },
+  "severity_counts": {
+    "P0": 0,
+    "P1": 4,
+    "P2": 3
+  },
+  "independent_evidence": {
+    "exact_sha_and_truth_table": {
+      "status": "PASS",
+      "reviewed_exact_sha_files": 9,
+      "truth_table_rows": 8,
+      "loaded_both_valid_winner": "descriptor",
+      "unloaded_both_valid_winner": "payload",
+      "dual_selection_rows": 0
+    },
+    "sealed_simv_rerun": {
+      "status": "PASS",
+      "sim_rc": 0,
+      "simv_sha256": "21f974846dfe14f1fa25f26162bb259ec787c47d37e5404003816dff9d5a7f40",
+      "loaded_contentions": 1,
+      "unloaded_contentions": 1,
+      "outputs": 1,
+      "bank_issues": 3,
+      "bank_responses": 3,
+      "runtime_cover_matches": 3
+    },
+    "independent_source_recompiled_vcs": {
+      "status": "PASS_WITH_REMAINING_PHASE_PAYLOAD_DEADLOCK_REPRODUCED",
+      "compile_rc": 0,
+      "sim_rc": 0,
+      "exact_r1_trigger_directions_closed": 2,
+      "phase_payload_silent_deadlock_cycles": 4,
+      "bounded_winning_descriptor_accepts": 8,
+      "losing_payload_recovery_after_winner_stops": 1,
+      "unbounded_starvation_freedom": false,
+      "error_propagation_classes": 4,
+      "onehot_cycle_checks": 1433,
+      "bank_issues": 25,
+      "bank_responses": 25,
+      "ordered_zero_outputs": 8
+    }
+  },
+  "repair_assessment": {
+    "r1_exact_loaded_payload_descriptor_deadlock_closed": true,
+    "r1_exact_unloaded_payload_descriptor_deadlock_closed": true,
+    "accepts_exclusive_in_independent_test": true,
+    "phase_load_channel_in_arbitration": false,
+    "three_channel_liveness": false,
+    "starvation_freedom": false,
+    "actual_record_replay_through_r2": false
+  },
+  "findings": [
+    {
+      "id": "P1-1",
+      "severity": "P1",
+      "title": "Payload and phase-load valids still silently deadlock",
+      "evidence": "With only row 0 loaded, the independent bench held payload row 1, phase_load_valid, and an early descriptor valid for four cycles. The wrapper selected payload, but R1 suppressed payload_ready because phase_load_valid was forwarded; phase_load_ready stayed low because 459 rows were absent. All ready/accept/busy/protocol_error outputs remained zero.",
+      "impact": "The exact R1 payload-versus-descriptor trigger is fixed, but the three-channel request interface can still wedge silently at a natural final-row/early-commit boundary.",
+      "minimal_fix": "Arbitrate phase_load_valid too. Before commit, give payload transfer priority over an early phase request and forward phase_valid only when no payload is pending, or implement an explicit LOAD/COMMIT/EXECUTE FSM."
+    },
+    {
+      "id": "P1-2",
+      "severity": "P1",
+      "title": "Fixed priority has no starvation bound",
+      "evidence": "In a committed phase, one pending payload was denied while eight repeated descriptors were accepted across active, last-beat overlap, and output retirement. It moved only after descriptor_valid dropped and the pipeline drained. The Boolean arbitration permits this denial indefinitely.",
+      "impact": "A continuous winning stream can prevent the next phase from ever loading; the contract correctly excludes starvation freedom, so this is an implementation-completeness gap rather than a claim violation.",
+      "minimal_fix": "Track the frozen 128 descriptor accepts per phase and transition to LOAD, or implement bounded round-robin/age priority with a stated maximum wait."
+    },
+    {
+      "id": "P1-3",
+      "severity": "P1",
+      "title": "R2 evidence is only one zero signed8 vector",
+      "evidence": "The sealed test covers one descriptor, three reads, one zero output, and one contention in each phase state. It does not replay the 1728/221184 actual-record workload, all widths, escape, full FIFO, or random output backpressure through the wrapper.",
+      "impact": "The unchanged R1 datapath is plausible, but wrapper integration has not inherited R1's full actual-record evidence by execution.",
+      "minimal_fix": "Run the exact M86 actual-record TB through R2 and add randomized payload/descriptor/phase contention without changing the frozen data oracle."
+    },
+    {
+      "id": "P1-4",
+      "severity": "P1",
+      "title": "Selected invalid loader traffic can abort an in-flight descriptor into fail-stop busy",
+      "evidence": "A loaded OOB payload was masked while a descriptor won. After descriptor_valid dropped, the OOB request was forwarded during the accepted descriptor's busy window; protocol_error asserted after its first issue, no complete output was produced, and busy remained asserted until reset.",
+      "impact": "Fail-closed behavior is preferable to corruption, but kill/flush/reset semantics and outstanding-response accounting are not specified at the wrapper contract.",
+      "minimal_fix": "Add an explicit FAULT state that stops new grants, drains or invalidates outstanding work deterministically, exposes reset-required status, and proves response/tag conservation across the kill boundary."
+    },
+    {
+      "id": "P2-1",
+      "severity": "P2",
+      "title": "Production contention SVA is not error-qualified",
+      "evidence": "The unloaded property requires payload_ready for any OOB payload contention, and the loaded property requires descriptor_ready even after poisoned metadata. Both are expected to be false in fail-closed error states; the independent error bench therefore could not instantiate these properties without intentional assertion failures.",
+      "impact": "Negative verification can confuse correct fail-closed behavior with arbitration failure.",
+      "minimal_fix": "Gate progress properties with !protocol_error && !metadata_error and add separate assertions for sticky error propagation and blocked accepts."
+    },
+    {
+      "id": "P2-2",
+      "severity": "P2",
+      "title": "Phase-load is outside selection and observability",
+      "evidence": "payload_selected and descriptor_selected are onehot, but phase_load_valid is passed directly to R1 and has no selected/grant output. The contract phrase 'only one request channel' is therefore broader than the implemented two-way selector unless explicitly scoped.",
+      "impact": "Three-channel contention and phase transition debugging is incomplete.",
+      "minimal_fix": "Expose phase_selected/phase_accept and assert onehot0 across all three request accepts."
+    },
+    {
+      "id": "P2-3",
+      "severity": "P2",
+      "title": "The exact-SHA runner is not self-identified by the sealed manifest",
+      "evidence": "The runner pins all design/test/contract inputs, but its own SHA is absent from input_sha256.txt and RUN_COMPLETE.txt. The independent review freezes the observed runner SHA as fb93c22e...e6b.",
+      "impact": "The design evidence is reproducible, but the receipt alone cannot authenticate which runner revision enforced the checks.",
+      "minimal_fix": "Record the runner SHA and tool version in the sealed receipt before launch."
+    }
+  ],
+  "inherited_non_admissions": {
+    "terminal_aware_or_ping_pong_loading": false,
+    "actual_record_replay_through_r2": false,
+    "compiled_sram_macro": false,
+    "real_escape_fallback": false,
+    "rtl_cycle_speedup": false,
+    "paper_ppa_ready": false,
+    "system_speedup": false,
+    "headline": false
+  },
+  "admission": {
+    "scoped_go": [
+      "GO for closure of the exact M86-R1 payload-versus-descriptor simultaneous-valid trigger in both committed and uncommitted states.",
+      "GO for preserving onehot payload/descriptor selection and exclusive acceptance on the directed R2 wrapper milestone."
+    ],
+    "no_go": [
+      "NO-GO for calling R2 a complete three-channel or starvation-free arbiter.",
+      "NO-GO for actual-record integration, module-cycle speedup, M78/M88 readmission, system speedup, SRAM/PPA, energy, accuracy, DATE, or best-paper claims."
+    ]
+  },
+  "required_next_gate": [
+    "Replace the two-input Boolean selector with a LOAD/COMMIT/EXECUTE/FAULT phase FSM that arbitrates phase_load_valid.",
+    "Bound execution to the frozen 128 descriptors or provide a formal fairness limit.",
+    "Qualify progress SVA in error states and specify deterministic kill/reset behavior.",
+    "Replay all 1728 phases and 221184 descriptors through the repaired wrapper before any broader admission."
+  ]
+}

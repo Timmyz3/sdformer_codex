@@ -12764,3 +12764,27 @@ Best epoch: `34`; beats strict C10: `True`.
 
 
 该行是优化部署主线，不替代 strict same-parent full30 因果消融。
+
+<!-- MVSEC_STRICT_SAME_PARENT_C00_RESULT_20260830 -->
+
+### MVSEC strict 同父 C00 full30 结果（2026-08-30）
+
+| route | macro AEE | weighted AEE | macro Fl (%) | spikes (G) |
+|---|---:|---:|---:|---:|
+| c00_strict | 1.889594 | 2.417774 | 19.5309 | 258.0976 |
+| c10_atlif_only | 1.799195 | 2.259916 | 17.9547 | 125.1181 |
+| c12_atlif_ttx | 1.767113 | 2.230047 | 17.1276 | 140.6647 |
+
+All three rows start from the same MVSEC NB0 ep11 model and use the same fresh-optimizer full30 recipe.
+
+
+权威收据：`neuron_autoresearch/MVSEC_STRICT_SAME_PARENT_ABLATION_20260830.{json,md}`。
+
+<!-- DATE_PAPER_RESULT_TABLES_INDEX_20260901 -->
+
+### DATE 论文结果表总索引（2026-09-01）
+
+正文、消融、附录、公开 benchmark 和硬件侧待填表已统一整理到
+`neuron_autoresearch/DATE_PAPER_RESULT_TABLES_20260901.md`。该索引严格分开 DSEC local valid825、
+MVSEC day2 same-parent 和 DSEC official hidden test；optimized C12 ep34 不替代 strict full30 C12
+因果行，spike-energy proxy 不替代硬件 PPA/SAIF 能耗表。

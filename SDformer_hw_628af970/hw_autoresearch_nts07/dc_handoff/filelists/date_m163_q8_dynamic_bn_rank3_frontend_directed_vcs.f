@@ -1,0 +1,3 @@
+rtl_m163/m163_q8_dynamic_bn_rank3_frontend.sv
+verif_m163/m163_q8_dynamic_bn_rank3_frontend_assertions.sv
+tb_m163/tb_m163_q8_dynamic_bn_rank3_frontend.sv

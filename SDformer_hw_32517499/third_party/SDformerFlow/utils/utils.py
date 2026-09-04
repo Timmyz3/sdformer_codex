@@ -1,0 +1,279 @@
+import os
+import glob
+from models.STSwinNet.load_pretrained import remap_pretrained_keys_swin,load_pretrained_interpolate
+import mlflow
+import pandas as pd
+import torch
+from collections.abc import MutableMapping
+
+
+def _extract_model_output_id(run_dir: str) -> str | None:
+    output_meta_paths = glob.glob(os.path.join(run_dir, "outputs", "*", "meta.yaml"))
+    # A resumed run can log multiple model outputs. Use the latest output meta
+    # file so inference restores the final checkpoint instead of an earlier one.
+    for meta_path in sorted(output_meta_paths, key=os.path.getmtime, reverse=True):
+        with open(meta_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("destination_id:"):
+                    return line.split(":", 1)[1].strip()
+    return None
+
+
+def _resolve_model_path_from_run(run) -> str | None:
+    artifact_uri = run.info.artifact_uri
+    if artifact_uri[:7] == "file://":
+        artifact_uri = artifact_uri[7:]
+
+    legacy_model_path = os.path.join(artifact_uri, "model", "data", "model.pth")
+    if os.path.isfile(legacy_model_path):
+        return legacy_model_path
+
+    run_dir = os.path.dirname(artifact_uri)
+    experiment_dir = os.path.dirname(run_dir)
+    model_output_id = _extract_model_output_id(run_dir)
+    if model_output_id is None:
+        return None
+
+    mlflow3_model_path = os.path.join(
+        experiment_dir, "models", model_output_id, "artifacts", "data", "model.pth"
+    )
+    if os.path.isfile(mlflow3_model_path):
+        return mlflow3_model_path
+    return None
+
+
+def _extract_pretrained_state_dict(pretrained_model, test=False):
+    if hasattr(pretrained_model, "state_dict") and not isinstance(pretrained_model, dict):
+        pretrained_dict = pretrained_model.state_dict()
+    elif isinstance(pretrained_model, dict):
+        if "model_state_dict" in pretrained_model:
+            pretrained_dict = pretrained_model["model_state_dict"]
+        elif "state_dict" in pretrained_model:
+            pretrained_dict = pretrained_model["state_dict"]
+        elif "model" in pretrained_model and hasattr(pretrained_model["model"], "state_dict"):
+            pretrained_dict = pretrained_model["model"].state_dict()
+        else:
+            pretrained_dict = pretrained_model
+    else:
+        raise TypeError(f"Unsupported checkpoint type: {type(pretrained_model)}")
+
+    if test:
+        pretrained_dict = {key.replace("module.", ""): value for key, value in pretrained_dict.items()}
+    return pretrained_dict
+
+
+def _local_training_state_path(checkpoint_path: str) -> str:
+    if checkpoint_path.endswith("_state_dict.pth"):
+        return checkpoint_path
+    if checkpoint_path.endswith(".pth"):
+        return checkpoint_path.replace(".pth", "_state_dict.pth")
+    return checkpoint_path + "_state_dict.pth"
+
+
+#for test or finetune
+def load_model(prev_runid, model, device, remap = None, test=False):
+    if prev_runid and os.path.isfile(prev_runid):
+        pretrained_model = torch.load(prev_runid, map_location=device, weights_only=False)
+        pretrained_dict = _extract_pretrained_state_dict(pretrained_model, test=test)
+        if remap == "v2":
+            print(">>>>>>>>>> Remapping pre-trained keys for SWIN ..........")
+            pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
+        elif remap == "v1":
+            load_pretrained_interpolate(model, pretrained_dict)
+            model.load_state_dict(pretrained_dict, strict=False)
+            del pretrained_model
+            torch.cuda.empty_cache()
+            print("Model restored from local checkpoint " + prev_runid + "\n")
+            return model
+        model.load_state_dict(pretrained_dict, strict=False)
+        del pretrained_model
+        torch.cuda.empty_cache()
+        print("Model restored from local checkpoint " + prev_runid + "\n")
+        return model
+
+    try:
+        run = mlflow.get_run(prev_runid)
+    except:
+        return model
+
+    model_dir = _resolve_model_path_from_run(run)
+
+    if model_dir is not None and os.path.isfile(model_dir):
+        # MLflow stores the whole PyTorch module here, not just a plain state_dict.
+        # PyTorch 2.6+ defaults torch.load(..., weights_only=True), which rejects
+        # trusted project classes unless we explicitly opt into full module loading.
+        pretrained_model = torch.load(model_dir, map_location=device, weights_only=False)
+        #model.load_state_dict(model_loaded.state_dict())
+        #for data parallel model
+        pretrained_dict = _extract_pretrained_state_dict(pretrained_model, test=test)
+        if remap == "v2":
+            print(">>>>>>>>>> Remapping pre-trained keys for SWIN ..........")
+            pretrained_dict = remap_pretrained_keys_swin(model, pretrained_dict)
+            del pretrained_model
+            torch.cuda.empty_cache()
+        elif remap == "v1":
+            load_pretrained_interpolate(model,pretrained_dict)
+            del pretrained_model
+            torch.cuda.empty_cache()
+        model.load_state_dict(pretrained_dict, strict=False)
+        print("Model restored from " + prev_runid + "\n")
+    else:
+        print("No model found at" + prev_runid + "\n")
+
+    return model
+
+def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device):
+
+    if prev_runid and os.path.isfile(prev_runid):
+        state_dir = _local_training_state_path(prev_runid)
+        if os.path.isfile(state_dir):
+            state_dict = torch.load(state_dir, map_location=device, weights_only=False)
+            if "optimizer" in state_dict.keys():
+                optimizer.load_state_dict(state_dict["optimizer"])
+            if "scheduler" in state_dict.keys() and scheduler is not None:
+                scheduler.load_state_dict(state_dict["scheduler"])
+            if "scaler" in state_dict.keys() and scaler is not None:
+                scaler.load_state_dict(state_dict["scaler"])
+            epoch_initial = state_dict["epoch"] + 1
+
+            print("Training state resumed from local checkpoint " + state_dir + "\n")
+        else:
+            print("No local training state found at " + state_dir + "\n")
+        return optimizer, scheduler, scaler, epoch_initial
+
+    run = mlflow.get_run(prev_runid)
+
+    state_dir = run.info.artifact_uri + "/training_state_dict/state_dict.pth"
+    if state_dir[:7] == "file://":
+        state_dir = state_dir[7:]
+
+    if os.path.isfile(state_dir):
+
+        state_dict = torch.load(state_dir, map_location=device, weights_only=False)
+        # for item in state_dict["optimizer"]["state"]:
+        #     print(state_dict["optimizer"]["state"][item]["exp_avg"].shape)
+        if "optimizer" in state_dict.keys():
+            optimizer.load_state_dict(state_dict["optimizer"])
+        if "scheduler" in state_dict.keys() and scheduler is not None:
+            scheduler.load_state_dict(state_dict["scheduler"])
+        if "scaler" in state_dict.keys() and scaler is not None:
+            scaler.load_state_dict(state_dict["scaler"])
+        epoch_initial = state_dict["epoch"] + 1
+
+        print("Model resumed from " + prev_runid + "\n")
+    else:
+        print("No model found at" + prev_runid + "\n")
+
+    #resume previous metrics
+    # for key, value in run.data.metrics.items():
+    #     mlflow.log_metric(key, value)
+    # train_loss_file = os.path.dirname( run.info.artifact_uri) + "/metrics/train_loss"
+    # valid_loss_file = os.path.dirname( run.info.artifact_uri) + "/metrics/valid_loss"
+    # if os.path.isfile(train_loss_file):
+    #     with open(train_loss_file, 'r') as f:
+    #         train_loss = f.read()
+    #         mlflow.log_metric("train_loss", float(train_loss))
+    # if os.path.isfile(train_loss_file):
+    #     with open(valid_loss_file, 'r') as f:
+    #         valid_loss = f.read()
+    #         mlflow.log_metric("valid_loss", float(valid_loss))
+
+    return optimizer, scheduler, scaler, epoch_initial
+
+def create_model_dir(path_results, runid):
+    path_results += runid + "/"
+    if not os.path.exists(path_results):
+        os.makedirs(path_results)
+    print("Results stored at " + path_results + "\n")
+    return path_results
+
+
+def save_model(model, epoch=None):
+    local_dir = os.environ.get("SDFORMER_MDR_LOCAL_CHECKPOINT_DIR")
+    if local_dir:
+        os.makedirs(local_dir, exist_ok=True)
+        name = "checkpoint_latest.pth" if epoch is None else f"checkpoint_epoch{epoch}.pth"
+        path = os.path.join(local_dir, name)
+        torch.save({"model_state_dict": model.state_dict()}, path)
+        print(f"Model checkpoint saved locally at {path}\n")
+    if os.environ.get("SDFORMER_MDR_SKIP_MLFLOW_MODEL_LOG", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    mlflow.pytorch.log_model(model, "model")
+
+
+def save_state_dict(optimizer,scheduler,scaler, epoch):
+    state_dict = {
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict() if scheduler else None,
+        "epoch": epoch,
+        "scaler": scaler.state_dict() if scaler else None,
+    }
+    local_dir = os.environ.get("SDFORMER_MDR_LOCAL_CHECKPOINT_DIR")
+    if local_dir:
+        os.makedirs(local_dir, exist_ok=True)
+        state_path = os.path.join(local_dir, f"checkpoint_epoch{epoch}_state_dict.pth")
+        torch.save(state_dict, state_path)
+        print(f"Training state saved locally at {state_path}\n")
+    if os.environ.get("SDFORMER_MDR_SKIP_MLFLOW_STATE_LOG", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        mlflow.pytorch.log_state_dict(state_dict, artifact_path="training_state_dict")
+
+
+def save_csv(data, fname):
+    # create file if not there
+    path = mlflow.get_artifact_uri(artifact_path=fname)
+    if path[:7] == "file://":  # to_csv() doesn't work with 'file://'
+        path = path[7:]
+    if not os.path.isfile(path):
+        mlflow.log_text("", fname)
+        pd.DataFrame(data).to_csv(path)
+    # else append
+    else:
+        pd.DataFrame(data).to_csv(path, mode="a", header=False)
+
+
+def save_flops_csv(data, fname):
+    # create file if not there
+    path = mlflow.get_artifact_uri(artifact_path=fname)
+    if path[:7] == "file://":  # to_csv() doesn't work with 'file://'
+        path = path[7:]
+        mlflow.log_text("", fname)
+        data = flatten_dict(data)
+        df = pd.DataFrame.from_dict(data, orient='index', columns=['flops'])
+        df.to_csv(path)
+    # else append
+    # else:
+    #     pd.DataFrame(data).to_csv(path, mode="a", header=False)
+
+def save_diff(fname="git_diff.txt"):
+    # .txt to allow showing in mlflow
+    path = mlflow.get_artifact_uri(artifact_path=fname)
+    if path[:7] == "file://":
+        path = path[7:]
+    mlflow.log_text("", fname)
+    os.system(f"git diff > {path}")
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def print_parameters(model):
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(name, param.shape,  param.device)
+        # if torch.isnan(param):
+        #     print("Nan value:", name)
+
+    return 0
+
+
+
+
+
+
+def flatten_dict(d: MutableMapping, sep: str= '.') -> MutableMapping:
+    [flat_dict] = pd.json_normalize(d, sep=sep).to_dict(orient='records')
+    return flat_dict

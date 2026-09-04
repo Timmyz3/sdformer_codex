@@ -1,0 +1,2 @@
+rtl_m31/qfit_signed_int8_mul96_pool.sv
+rtl_m33/qfit_threshold_late_scale_uq0p24_radix20x4.sv

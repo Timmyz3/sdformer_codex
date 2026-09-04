@@ -1,0 +1,3 @@
+rtl_m433/m433_exact_dualbank_coread_pwp_adapter.sv
+verif_m433/m433_exact_dualbank_coread_pwp_adapter_assertions.sv
+tb_m433/tb_m433_exact_dualbank_coread_pwp_adapter.sv

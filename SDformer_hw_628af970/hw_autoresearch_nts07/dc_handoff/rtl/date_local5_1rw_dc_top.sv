@@ -1,0 +1,87 @@
+`timescale 1ns/1ps
+`default_nettype none
+
+// Local5 paper-tile ablation with the same score/relation/source-term flow as
+// local5_unified_out2_dc_top, but a legal single-port 1RW Acc32 backend.
+module local5_unified_out2_1rw_dc_top (
+    input  logic                 clk_core,
+    input  logic                 rst_core,
+    input  logic                 weight_valid,
+    output logic                 weight_ready,
+    input  logic [4:0]           weight_lane,
+    input  logic                 weight_out,
+    input  logic signed [7:0]    weight_data,
+    input  logic                 weight_last,
+    input  logic                 projection_start,
+    input  logic                 projection_close,
+    output logic                 projection_close_ready,
+    output logic                 projection_busy,
+    output logic                 projection_done,
+    input  logic                 relation_start,
+    input  logic                 relation_seal,
+    output logic                 relation_seal_ready,
+    output logic                 relation_active,
+    output logic                 relation_done,
+    input  logic                 row_valid,
+    output logic                 row_ready,
+    input  logic                 row_plane,
+    input  logic [3:0]           row_destination_y,
+    input  logic [3:0]           row_destination_x,
+    input  logic [31:0]          row_q,
+    input  logic [159:0]         row_candidate_k,
+    input  logic [4:0]           row_candidate_valid,
+    input  logic                 read_valid,
+    output logic                 read_ready,
+    input  logic                 read_plane,
+    input  logic [3:0]           read_y,
+    input  logic [3:0]           read_x,
+    input  logic                 read_out,
+    output logic                 read_data_valid,
+    output logic signed [31:0]   read_data,
+    output logic                 protocol_error,
+    output logic [31:0]          perf_score_rows,
+    output logic [31:0]          perf_score_service_cycles,
+    output logic [31:0]          perf_score_direct_rows,
+    output logic [31:0]          perf_relation_writes,
+    output logic [31:0]          perf_active_source_reads,
+    output logic [31:0]          perf_dense_reads_avoided,
+    output logic [31:0]          perf_memory_wait_cycles,
+    output logic [31:0]          perf_descriptors,
+    output logic [31:0]          perf_product_terms,
+    output logic [31:0]          perf_destination_updates,
+    output logic [31:0]          perf_qsilent_rows,
+    output logic [31:0]          perf_identk_rows,
+    output logic [31:0]          perf_overlap_accepts
+);
+    qfit_local5_score_active_projection_tile #(
+        .HEIGHT(15),
+        .WIDTH(15),
+        .TIME_PLANES(2),
+        .HEAD_DIM(32),
+        .OUT_DIM(2),
+        .RELATION_READ_LATENCY(1),
+        .RELATION_MEMORY_IMPL(0),
+        .RELATION_SCHED_MODE(0),
+        .BACKEND_KIND(0),
+        .ACC_BACKEND_KIND(1),
+        .ACC_MEMORY_IMPL(0),
+        .ARCH_QSILENT(1'b1),
+        .ARCH_IDENTK(1'b1),
+        .ARCH_QSILENT_OVERLAP(1'b1)
+    ) u_core (
+        .weight_context_release(1'b0),
+        .weight_context_release_ready(),
+        .projection_accumulate(1'b0),
+        .perf_cache_hits(),
+        .perf_cache_misses(),
+        .perf_tag_compares(),
+        .perf_lru_writes(),
+        .perf_product_reads(),
+        .perf_product_writes(),
+        .perf_product_starts(),
+        .perf_weight_reads(),
+        .*
+    );
+endmodule
+
+`default_nettype wire

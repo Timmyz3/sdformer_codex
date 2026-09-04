@@ -1,0 +1,3 @@
+rtl_m227/m227_fc1_k8_masked_held_weight_slice.sv
+verif_m227/m227_fc1_k8_masked_held_weight_slice_assertions.sv
+tb_m227/tb_m227_fc1_k8_masked_held_weight_slice.sv

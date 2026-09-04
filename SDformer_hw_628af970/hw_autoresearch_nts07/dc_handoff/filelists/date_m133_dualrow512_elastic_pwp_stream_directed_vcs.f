@@ -1,0 +1,3 @@
+rtl_m133/m133_dualrow512_elastic_pwp_stream.sv
+verif_m133/m133_dualrow512_elastic_pwp_stream_assertions.sv
+tb_m133/tb_m133_dualrow512_elastic_pwp_stream.sv

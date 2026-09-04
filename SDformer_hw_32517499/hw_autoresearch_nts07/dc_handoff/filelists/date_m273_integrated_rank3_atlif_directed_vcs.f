@@ -1,0 +1,3 @@
+rtl_m273/m273_integrated_rank3_atlif.sv
+verif_m273/m273_integrated_rank3_atlif_assertions.sv
+tb_m273/tb_m273_integrated_rank3_atlif.sv

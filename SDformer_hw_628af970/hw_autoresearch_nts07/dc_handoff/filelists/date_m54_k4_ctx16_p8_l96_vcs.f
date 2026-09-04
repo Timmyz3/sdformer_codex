@@ -1,0 +1,3 @@
+rtl_m54/qfit_k4_parent_delta_p8_l96_ctx16.sv
+verif_m54/qfit_k4_parent_delta_p8_l96_ctx16_assertions.sv
+tb_m54/tb_qfit_k4_parent_delta_p8_l96_ctx16.sv

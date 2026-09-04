@@ -1,0 +1,3 @@
+rtl_m84/hierarchical_pwp_bank_mapper.sv
+verif_m84/hierarchical_pwp_bank_mapper_assertions.sv
+tb_m84/tb_hierarchical_pwp_bank_mapper.sv

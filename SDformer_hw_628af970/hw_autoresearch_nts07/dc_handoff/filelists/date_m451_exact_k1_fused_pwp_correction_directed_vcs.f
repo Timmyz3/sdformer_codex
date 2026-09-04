@@ -1,0 +1,3 @@
+rtl_m451/m451_exact_k1_fused_pwp_correction_adapter.sv
+verif_m451/m451_exact_k1_fused_pwp_correction_adapter_assertions.sv
+tb_m451/tb_m451_exact_k1_fused_pwp_correction_adapter.sv

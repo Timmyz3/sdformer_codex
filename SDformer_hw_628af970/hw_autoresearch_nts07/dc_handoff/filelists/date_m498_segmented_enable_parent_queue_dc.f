@@ -1,0 +1,2 @@
+rtl_m498/m498_segmented_enable_parent_queue_pipeline.sv
+rtl_m498/m498_segmented_enable_backpressure_safe_parent_queue_pipeline.sv

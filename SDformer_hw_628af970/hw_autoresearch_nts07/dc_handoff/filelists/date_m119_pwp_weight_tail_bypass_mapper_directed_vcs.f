@@ -1,0 +1,3 @@
+rtl_m119/m119_pwp_weight_tail_bypass_mapper.sv
+verif_m119/m119_pwp_weight_tail_bypass_mapper_assertions.sv
+tb_m119/tb_m119_pwp_weight_tail_bypass_mapper.sv

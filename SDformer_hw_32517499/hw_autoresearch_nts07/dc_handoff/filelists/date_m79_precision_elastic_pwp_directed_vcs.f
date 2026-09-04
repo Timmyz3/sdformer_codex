@@ -1,0 +1,3 @@
+rtl_m79/precision_elastic_pwp_beat_assembler.sv
+verif_m79/precision_elastic_pwp_beat_assembler_assertions.sv
+tb_m79/tb_precision_elastic_pwp_beat_assembler.sv

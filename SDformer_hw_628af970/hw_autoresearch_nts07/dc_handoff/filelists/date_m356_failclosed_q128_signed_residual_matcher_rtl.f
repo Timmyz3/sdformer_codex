@@ -1,0 +1,2 @@
+rtl_m348/m348_exact_q128_signed_residual_matcher.sv
+rtl_m356/m356_failclosed_q128_signed_residual_matcher.sv

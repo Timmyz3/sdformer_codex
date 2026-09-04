@@ -1,0 +1,4 @@
+rtl_m235/m235_dynamic_bn_segmented_lut_newton_coefficient_engine.sv
+verif_m235/m235_dynamic_bn_segmented_lut_newton_coefficient_engine_assertions.sv
+verif_m276/m276_m235_full220800_protocol_ii_assertions.sv
+tb_m276/tb_m276_m235_full220800_protocol_ii.sv

@@ -1,0 +1,3 @@
+rtl_m188/m188_fc2_dual_window_k7_weakest_bank_defer_frontend.sv
+verif_m188/m188_fc2_dual_window_k7_weakest_bank_defer_frontend_assertions.sv
+tb_m188/tb_m188_fc2_dual_window_k7_weakest_bank_defer_frontend.sv

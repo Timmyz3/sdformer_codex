@@ -1,0 +1,3 @@
+rtl_m474/m474_fused_parent_dual_update_pipeline.sv
+verif_m474/m474_fused_parent_dual_update_assertions.sv
+tb_m474/tb_m474_fused_parent_dual_update_pipeline.sv

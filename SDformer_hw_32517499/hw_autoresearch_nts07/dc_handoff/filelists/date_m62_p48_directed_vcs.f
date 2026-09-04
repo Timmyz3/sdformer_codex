@@ -1,0 +1,3 @@
+rtl_m62/qfit_head_p48_signed_lane_fold.sv
+verif_m62/qfit_head_p48_signed_lane_fold_assertions.sv
+tb_m62/tb_qfit_head_p48_signed_lane_fold.sv

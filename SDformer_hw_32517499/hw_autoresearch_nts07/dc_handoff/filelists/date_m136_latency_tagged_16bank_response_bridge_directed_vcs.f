@@ -1,0 +1,3 @@
+rtl_m136/m136_latency_tagged_16bank_response_bridge.sv
+verif_m136/m136_latency_tagged_16bank_response_bridge_assertions.sv
+tb_m136/tb_m136_latency_tagged_16bank_response_bridge.sv

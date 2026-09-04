@@ -1,0 +1,3 @@
+rtl_m142/m142_sparse_mask_k4_three_bank_overlap_controller.sv
+verif_m142/m142_sparse_mask_k4_bounded_overlap_controller_assertions.sv
+tb_m142/tb_m142_sparse_mask_k4_bounded_overlap_controller.sv

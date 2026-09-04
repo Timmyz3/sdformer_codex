@@ -1,0 +1,230 @@
+{
+  "schema": "m98_m86_macro_boundary_pingpong_direction_review_v1",
+  "status": "GO_TWO_STAGE_BOUNDARY_THEN_PINGPONG_NO_PERFORMANCE_ADMISSION",
+  "date": "2026-08-24",
+  "scope": {
+    "read_only_design_audit": true,
+    "production_rtl_modified": false,
+    "rtl_implemented": false,
+    "vcs_executed": false,
+    "performance_admitted": false,
+    "system_speedup": false,
+    "headline": false
+  },
+  "source_audit": {
+    "m85": {
+      "single_metadata_image": true,
+      "phase_or_slot_tag": false
+    },
+    "m86_r1": {
+      "behavioral_payload_images": 1,
+      "banks": 8,
+      "rows_per_bank": 460,
+      "word_bits": 32,
+      "response_fifo_entries": 4,
+      "compiled_macro": false,
+      "load_execute_overlap": false
+    },
+    "m86_r3": {
+      "states": ["LOAD", "COMMIT", "EXECUTE", "DRAIN", "FAULT"],
+      "rows_per_phase": 460,
+      "metadata_commits_per_phase": 1,
+      "descriptor_accepts_per_phase": 128,
+      "load_execute_overlap": false,
+      "descriptor_identity_enforced": false
+    },
+    "m88": {
+      "abstract_phase_buffers": 2,
+      "weight_phase_buffers": 2,
+      "dram_bytes_per_cycle": 32,
+      "parser_cycles": 128,
+      "prepare_cycles_min": 786,
+      "prepare_cycles_max": 847,
+      "implemented_dma_parser_writer": false,
+      "always_ready_compute_model": true
+    }
+  },
+  "m88_overlap_attribution": {
+    "bounded_candidate_cycles_five_samples": 790706475,
+    "derived_same_work_serial_prepare_cycles_five_samples": 797760560,
+    "hidden_prepare_cycles_five_samples": 7054085,
+    "derived_serial_over_pingpong": 1.0089212434993655,
+    "m88_speedup_vs_bit_sparse": 1.409375695323603,
+    "conclusion": "The 1.409x comparison is predominantly the PWP compute mechanism; the modeled double-buffer preparation overlap contributes about 1.0089x versus the derived same-work serial schedule.",
+    "rtl_admission": false
+  },
+  "recommended_architecture": {
+    "name": "M98 two-slot phase-tagged guarded PWP frontend",
+    "implementation_order": [
+      "M98A boundary-equivalent single-slot macro wrapper with exact M86-R3 cycle lockstep",
+      "M98B true two-slot ping-pong with transaction equivalence and independent timeline oracle"
+    ],
+    "macro_reference": {
+      "organization": "two slots times eight independent 512x32 1RW macros",
+      "macro_count": 16,
+      "read_latency_cycles": 1,
+      "logical_payload_bytes": 29440,
+      "physical_payload_bytes_at_512x32": 32768,
+      "padding_bytes": 3328,
+      "padding_over_logical_fraction": 0.11304347826086956,
+      "simultaneous_operation": "one 256-bit read from ACTIVE slot and one 256-bit row write to FILL slot",
+      "read_during_write_dependency": false,
+      "one_r_one_w_alternative_is_reference": false
+    },
+    "slot_states": ["FREE", "FILL", "SEALED", "ACTIVE", "DRAIN"],
+    "slot_owned_state": [
+      "eight payload banks",
+      "592-bit metadata",
+      "460-bit row-seen bitmap",
+      "9-bit row count",
+      "32-bit phase sequence",
+      "slot generation",
+      "poison bit"
+    ],
+    "identity": {
+      "payload_phase_sequence": true,
+      "seal_phase_sequence": true,
+      "descriptor_phase_sequence": true,
+      "output_phase_sequence": true,
+      "internal_slot_and_generation_on_reads_and_fifo": true,
+      "descriptor_order": "accepted ordinal k=0..127 requires pattern=k[6:3] and block=k[2:0]"
+    },
+    "m85_metadata_policy": "Store metadata per slot; on atomic activation, spend an explicit activation cycle loading the unchanged M85 instance, observe ready/poison, and only then enable descriptors.",
+    "swap_requirements": [
+      "exact active 128-descriptor contract completed",
+      "no active beat, macro response, FIFO entry, M85/M82 transaction, or output remains",
+      "other slot sealed with 460 unique rows and matching metadata",
+      "no sticky fault"
+    ],
+    "backpressure": [
+      "output stalls stop active read issue through the existing FIFO but do not stop different-slot fills",
+      "a sealed fill slot backpressures a third phase",
+      "active drain waits if the next slot is not sealed",
+      "all eight banks accept a row atomically"
+    ]
+  },
+  "fault_contract": {
+    "policy_revision_1": "global sticky fault until reset",
+    "suppress_later_accepts_and_outputs": true,
+    "ignore_late_macro_responses_after_fault_or_reset": true,
+    "faults": [
+      "duplicate or out-of-range row",
+      "payload, seal, or descriptor phase mismatch",
+      "seal before exactly 460 unique rows",
+      "descriptor identity or order violation",
+      "metadata poison",
+      "operation inconsistent with slot ownership",
+      "swap while any active work is pending",
+      "unexpected, late, wrong-slot, or wrong-generation macro response",
+      "macro response error or partial eight-bank acceptance"
+    ],
+    "slot_local_retry_deferred": true
+  },
+  "vcs_oracles": {
+    "m98a": {
+      "oracle": "exact cycle lockstep against frozen M86-R3 with independent one-cycle macro model",
+      "actual_phases": 1728,
+      "descriptors_and_outputs": 221184,
+      "bank_issues_including_escape": 835383,
+      "compare_every_cycle": true
+    },
+    "m98b": {
+      "oracle": "phase-sequence transaction scoreboard plus independently reconstructed two-slot timeline",
+      "top_input_cycle_lockstep_against_serial_r3": false,
+      "required_positive_cover": "simultaneous active bank read and inactive fill-row acceptance in both slot polarities",
+      "actual_record_replay_required": true,
+      "random_output_backpressure_required": true,
+      "negative_attacks_required": true
+    }
+  },
+  "legal_cycle_replay_after_vcs": {
+    "allowed": [
+      "serial M98A versus ping-pong M98B isolated-frontend cycles under identical stimuli and macro latency",
+      "accepted row, seal, activation, compute, drain, and free timestamps",
+      "actual overlap cycles and exposed refill stalls",
+      "simultaneous different-slot read and write cycles"
+    ],
+    "forbidden": [
+      "M88 full 786-847 cycle preparation without executable DMA, parser, and weight buffers",
+      "attributing M88 1.409375695x to ping-pong",
+      "zero total datapath or backpressure stalls",
+      "full-network, system, accuracy, DATE, best-paper, or headline speedup"
+    ]
+  },
+  "scores": {
+    "evidence_quality": 96,
+    "architecture_specificity": 94,
+    "implementation_readiness": 82,
+    "hardware_innovation_potential": 74,
+    "pingpong_performance_advantage_potential": 58,
+    "overall_scoped_milestone": 90
+  },
+  "risk_counts": {
+    "P0": 0,
+    "P1": 5,
+    "P2": 4
+  },
+  "risks": [
+    {
+      "id": "M98-P1-01-TARGET-MACRO-ABSENT",
+      "severity": "P1",
+      "finding": "No exact target SRAM macro, Liberty DB, timing, or energy view is present.",
+      "mitigation": "Keep 512x32 1RW behind a replaceable wrapper and perform same-macro DC/PTPX before PPA claims."
+    },
+    {
+      "id": "M98-P1-02-PINGPONG-NOT-EXECUTABLE",
+      "severity": "P1",
+      "finding": "M86-R3 is serial and M88's two slots are analytical only.",
+      "mitigation": "Pass M98A lockstep, then implement M98B and require actual-record overlap covers."
+    },
+    {
+      "id": "M98-P1-03-M85-SINGLE-METADATA-SEAM",
+      "severity": "P1",
+      "finding": "M85 owns one active metadata image and cannot accept next-phase metadata during active compute.",
+      "mitigation": "Store per-slot metadata and charge one explicit M85 activation cycle after drain."
+    },
+    {
+      "id": "M98-P1-04-DESCRIPTOR-IDENTITY-GAP",
+      "severity": "P1",
+      "finding": "M86-R3 enforces 128 accepts but not the canonical identity/order of those accepts.",
+      "mitigation": "Add phase sequence plus an explicit ordered descriptor contract and negative VCS attacks."
+    },
+    {
+      "id": "M98-P1-05-M88-PREPARATION-NOT-RTL",
+      "severity": "P1",
+      "finding": "M88 preparation includes missing record DMA/parser and weight buffers.",
+      "mitigation": "Limit M98 claims to actual row-ingress overlap until an executable producer is integrated."
+    },
+    {
+      "id": "M98-P2-01-MACRO-PADDING",
+      "severity": "P2",
+      "finding": "512x32 macros add 3,328 payload bytes over two logical 460-row slots.",
+      "mitigation": "Report physical rather than logical capacity and revisit only with a qualified compiler option."
+    },
+    {
+      "id": "M98-P2-02-ZERO-TAIL-FILLS",
+      "severity": "P2",
+      "finding": "M88 identified 51,149 zero-tail row writes per 1,728-phase catalog pass.",
+      "mitigation": "Keep full-fill equivalence first; evaluate terminal-aware implicit zeros as a later separately verified optimization."
+    },
+    {
+      "id": "M98-P2-03-RESET-ONLY-RECOVERY",
+      "severity": "P2",
+      "finding": "The recommended first revision uses a global reset to recover from any slot fault.",
+      "mitigation": "Defer slot-local abort until the basic ownership and stale-response proof closes."
+    },
+    {
+      "id": "M98-P2-04-PARTIAL-PHYSICAL-MODEL",
+      "severity": "P2",
+      "finding": "ECC, row bitmap, tags, control, and clock-gating energy are outside M88's 116,525-byte subtotal.",
+      "mitigation": "Include them in later DC/SAIF/PTPX and macro-energy accounting."
+    }
+  ],
+  "verdict": {
+    "m98a_boundary_equivalent_first": "GO",
+    "m98b_after_m98a": "GO",
+    "direct_pingpong_before_boundary_equivalence": "NO_GO",
+    "new_rtl_or_model_speedup_claim": "NO_GO",
+    "system_or_headline_claim": "NO_GO"
+  }
+}

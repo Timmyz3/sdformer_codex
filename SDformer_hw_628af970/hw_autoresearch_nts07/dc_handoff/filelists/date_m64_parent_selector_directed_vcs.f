@@ -1,0 +1,3 @@
+rtl_m64/qfit_adaptive_parent_selector_p256.sv
+verif_m64/qfit_adaptive_parent_selector_p256_assertions.sv
+tb_m64/tb_qfit_adaptive_parent_selector_p256.sv

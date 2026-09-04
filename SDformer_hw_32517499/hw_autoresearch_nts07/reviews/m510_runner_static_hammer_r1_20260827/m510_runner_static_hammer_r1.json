@@ -1,0 +1,75 @@
+{
+  "schema": "m510_runner_static_hammer_review_v1",
+  "status": "NO_GO__RELATIVE_INVOCATION_CAN_CONSUME_ATTEMPT_BEFORE_IDENTITY_FAILURE",
+  "date": "2026-08-27",
+  "score_0_to_100": 76,
+  "p0_count": 1,
+  "p1_count": 2,
+  "production_runner_executed": false,
+  "production_audit_executed": false,
+  "reviewed_runner": {
+    "path": "hw_autoresearch_nts07/system_simulator/scripts/run_m510_h67_convtranspose_coverage_gap_audit_r2_exact_sha.sh",
+    "sha256": "e929848e8ce3e82f6a8a5044662a7bed7d3717031aea84bb5c7729546ca12a94",
+    "bash_syntax": "PASS"
+  },
+  "p0_findings": [
+    {
+      "id": "P0_BASH_SOURCE_CWD_DRIFT_BURNS_ONE_SHOT",
+      "finding": "The runner derives m510_root and then changes cwd to that root, but later passes the original BASH_SOURCE[0] string to sha256sum when creating identity.sha256. BASH_SOURCE[0] is not canonicalized. A normal invocation from the SDformer repository root uses hw_autoresearch_nts07/system_simulator/scripts/run_....sh; after cd into hw_autoresearch_nts07 this relative path points at a nonexistent nested hw_autoresearch_nts07/hw_autoresearch_nts07 path.",
+      "failure_order": [
+        "Pinned analyzer/contract/docs/review checks pass.",
+        "Atomic attempt directory is created and retained as permanently consumed.",
+        "ATTEMPT_CONSUMED.txt is written.",
+        "sha256sum of the cwd-stale BASH_SOURCE[0] fails under set -e.",
+        "No audit output or POSTAUDIT_PASS exists, but rerun is forbidden because the attempt lock remains."
+      ],
+      "impact": "Invocation behavior depends on the caller cwd and path spelling. A legitimate relative launch can irreversibly consume the only allowed attempt before the production audit starts.",
+      "required_fix": "Before changing cwd, canonicalize the runner to an absolute path, for example m510_runner_abs=$(readlink -f -- ${BASH_SOURCE[0]}), validate its expected location and reviewed SHA, and use only m510_runner_abs in identity.sha256. Prefer canonical absolute paths for every identity entry or paths explicitly relative to m510_root. Re-review the new runner before execution."
+    }
+  ],
+  "p1_findings": [
+    {
+      "id": "P1_REVIEWED_RUNNER_SHA_NOT_CHECKED_PRE_ATTEMPT",
+      "finding": "The exact runner SHA is recorded only after the attempt is consumed and is checked only for start/end mutation. The runner does not preflight itself against the externally reviewed e929... identity.",
+      "required_fix": "After canonicalizing the self path, verify the reviewed runner SHA before creating the attempt lock. The new runner review seal remains the external root of trust."
+    },
+    {
+      "id": "P1_FINAL_RECEIPT_DOES_NOT_REVALIDATE_NESTED_INITIAL_SEAL",
+      "finding": "The final SHA256SUMS pins SHA256SUMS.initial.seal.sha256 as a file, but the final block does not rerun sha256sum -c SHA256SUMS.initial.seal.sha256. Under strict single-owner operation this is low risk, but a concurrent mutation of SHA256SUMS.initial could leave the final top-level seal passing while the nested initial seal fails.",
+      "required_fix": "In the final verification block, revalidate SHA256SUMS.initial and SHA256SUMS.initial.seal.sha256 before writing POSTAUDIT_PASS and the final seal."
+    }
+  ],
+  "passed_checks": {
+    "external_input_pinning": "PASS: analyzer, r2 contract, docs510, docs359, r2 review SHA256SUMS and its outer-seal file are hard-pinned and the review members are revalidated.",
+    "single_owner_lock": "PASS_CONDITIONALLY: mkdir is atomic and the attempt is deliberately durable, but the P0 makes its placement too early relative to path validation.",
+    "failure_not_pass": "PASS: set -euo pipefail prevents POSTAUDIT_PASS creation after analyzer, seal or identity failures; failure retains a consumed attempt rather than masquerading as PASS.",
+    "analyzer_argument_paths": "PASS: after cd to the hardware root, analyzer/contract/output paths resolve consistently with the analyzer and contract canonical paths.",
+    "output_rehash": "PASS: successful analyzer completion is followed by member and outer-seal verification, another frozen-input verification, and identity.sha256 revalidation.",
+    "pass_receipt_binding": "PASS_WITH_P1: POSTAUDIT_PASS records the output outer-seal-file SHA and is included in the final attempt seal."
+  },
+  "invocation_matrix": [
+    {
+      "caller_cwd": "hardware root",
+      "runner_spelling": "system_simulator/scripts/run_....sh",
+      "identity_self_path_after_cd": "valid",
+      "expected": "can proceed"
+    },
+    {
+      "caller_cwd": "SDformer repository root",
+      "runner_spelling": "hw_autoresearch_nts07/system_simulator/scripts/run_....sh",
+      "identity_self_path_after_cd": "invalid nested path",
+      "expected": "attempt consumed, then exit before audit"
+    },
+    {
+      "caller_cwd": "any",
+      "runner_spelling": "absolute path",
+      "identity_self_path_after_cd": "valid",
+      "expected": "can proceed"
+    }
+  ],
+  "decision": {
+    "verdict": "NO_GO",
+    "one_shot_authorized": false,
+    "reason": "P0 count is nonzero. Supersede and re-review the runner; do not manually work around the defect by choosing a favorable cwd because the reviewed artifact itself is not path-invariant."
+  }
+}

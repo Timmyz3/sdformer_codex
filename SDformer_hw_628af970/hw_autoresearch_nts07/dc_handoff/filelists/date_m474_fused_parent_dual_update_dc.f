@@ -1,0 +1,1 @@
+rtl_m474/m474_fused_parent_dual_update_pipeline.sv

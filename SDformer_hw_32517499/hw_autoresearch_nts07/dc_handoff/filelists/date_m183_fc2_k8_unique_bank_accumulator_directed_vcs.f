@@ -1,0 +1,3 @@
+rtl_m183/m183_fc2_k8_unique_bank_accumulator.sv
+verif_m183/m183_fc2_k8_unique_bank_accumulator_assertions.sv
+tb_m183/tb_m183_fc2_k8_unique_bank_accumulator.sv

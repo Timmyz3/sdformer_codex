@@ -1,0 +1,3 @@
+rtl_m82/zero_bubble_elastic_pwp_stream.sv
+verif_m82/zero_bubble_elastic_pwp_stream_assertions.sv
+tb_m82/tb_zero_bubble_elastic_pwp_stream.sv

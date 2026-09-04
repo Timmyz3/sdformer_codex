@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+task_dc_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+task_hw_root="$(cd "$task_dc_root/.." && pwd)"
+task_run="$task_dc_root/runs/m139_epoch_safe_fallthrough_bridge_logic_only_dc_3p000ns_r1_sealed_20260824"
+task_dc_shell="${DC_SHELL:-/opt/synopsys/syn/V-2023.12-SP3/bin/dc_shell}"
+task_lib="/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/timing_power_noise/NLDM/tcbn28hpcplusbwp35p140_180a/tcbn28hpcplusbwp35p140ssg0p9v125c.db"
+task_min_lib="/opt/tech/tsmc28/StandardCell/tcbn28hpcplusbwp35p140_190a/TSMCHOME/digital/Front_End/timing_power_noise/NLDM/tcbn28hpcplusbwp35p140_180a/tcbn28hpcplusbwp35p140ffg1p05vm40c.db"
+
+if [[ -e "$task_run" ]]; then
+    echo "refusing to overwrite M139 sealed DC run: $task_run" >&2
+    exit 2
+fi
+if [[ ! -x "$task_dc_shell" || ! -s "$task_lib" || ! -s "$task_min_lib" ]]; then
+    echo "M139 Synopsys executable or TSMC28 library missing" >&2
+    exit 3
+fi
+mkdir -p "$(dirname "$task_run")"
+mkdir "$task_run"
+task_complete=0
+on_exit() {
+    local task_rc="$?"
+    if [[ "$task_complete" -ne 1 ]]; then
+        {
+            echo "status=FAILED_OR_INCOMPLETE_DO_NOT_CITE"
+            echo "runner_exit_code=$task_rc"
+        } > "$task_run/RUN_FAILED_OR_INCOMPLETE.txt"
+    fi
+}
+trap on_exit EXIT
+
+cd "$task_hw_root"
+task_m137="rtl_m137/m137_fallthrough_tagged_16bank_response_bridge.sv"
+task_m139="rtl_m139/m139_epoch_safe_fallthrough_tagged_16bank_response_bridge.sv"
+task_files="dc_handoff/filelists/date_m139_epoch_safe_fallthrough_tagged_16bank_response_bridge_logic_only_dc.f"
+task_sdc="dc_handoff/constraints/date_m97_m85_logic_only_3ns.sdc"
+task_tcl="dc_handoff/scripts/run_dc_m135r3_flattened_logic_only.tcl"
+task_contract="contracts/m139_epoch_safe_fallthrough_bridge_logic_only_dc_contract_r1_20260824.json"
+task_vcs_contract="contracts/m139_epoch_safe_fallthrough_tagged_16bank_response_bridge_vcs_contract_r1_20260824.json"
+task_vcs_receipt="dc_handoff/runs/m139_epoch_safe_fallthrough_tagged_16bank_response_bridge_vcs_r1_sealed_20260824/RUN_COMPLETE.txt"
+task_m137_dc_receipt="dc_handoff/runs/m137_fallthrough_tagged_16bank_response_bridge_logic_only_dc_3p000ns_r1_sealed_20260824/RUN_COMPLETE.txt"
+task_m136_dc_receipt="dc_handoff/runs/m136_latency_tagged_16bank_response_bridge_logic_only_dc_3p000ns_r1_sealed_20260824/RUN_COMPLETE.txt"
+
+declare -A task_expected=(
+    ["$task_m137"]="e2b0a271728dc8c0f79ba3361f76df554ad61e6d6efaf11ae09ff89be9384af2"
+    ["$task_m139"]="e1d4b1acd99d054137d43863802058f08c980a3559a3e2e55276aee9b2208c32"
+    ["$task_files"]="a97c6885e7a4fd2ffe26d253ada747659bb758d0e7067b5ff46bc43a66d18afe"
+    ["$task_sdc"]="808307c496bd67843907b727acdfe18ea3b48565798f97cb55e689c70c1183f5"
+    ["$task_tcl"]="837b50d1c1700ef83edebd070ca3ebb6a6de166a2d649272f7b597c13e56dbe9"
+    ["$task_contract"]="35c6e8ab37568c2b5b6e584877295ef2f3f3d05dbcbb1fc1d2a9bfb99b40b7ca"
+    ["$task_vcs_contract"]="42545bc1538cfd3c3c334f6256dfe58e8e502b4848dbaf354d4992d53bd7c54f"
+    ["$task_vcs_receipt"]="f4a70765c3cf0be9933c5180890d2065e9010c47c6acc18368c1bf3cd4fe55dc"
+    ["$task_m137_dc_receipt"]="dd77ebb075825d501e20d6a726abf1858c0789e92a0f99d1daed37e8a20dd3c6"
+    ["$task_m136_dc_receipt"]="f7d0f35b05477e9e7f8db758392ec40fd9f1662cc362d9a25b910971a4ee9185"
+)
+
+: > "$task_run/preflight_sha_checks.txt"
+for task_path in "${!task_expected[@]}"; do
+    task_observed="$(sha256sum "$task_path" | awk '{print $1}')"
+    printf 'path=%s expected=%s observed=%s\n' \
+        "$task_path" "${task_expected[$task_path]}" "$task_observed" \
+        >> "$task_run/preflight_sha_checks.txt"
+    if [[ "$task_observed" != "${task_expected[$task_path]}" ]]; then
+        echo "M139 DC exact-SHA preflight mismatch: $task_path" >&2
+        exit 10
+    fi
+done
+sha256sum "${!task_expected[@]}" > "$task_run/input_sha256.txt"
+
+export DESIGN_NAME="m139_epoch_safe_fallthrough_tagged_16bank_response_bridge"
+export HW_ROOT="$task_hw_root"
+export RTL_FILELIST="$task_hw_root/$task_files"
+export LIB_DB="$task_lib"
+export MIN_LIB_DB="$task_min_lib"
+export SDC_FILE="$task_hw_root/$task_sdc"
+export OUTPUT_DIR="$task_run"
+export OPERATING_CONDITION="ssg0p9v125c"
+
+set +e
+"$task_dc_shell" -f "$task_hw_root/$task_tcl" > "$task_run/dc.log" 2>&1
+task_rc="$?"
+set -e
+printf '%s\n' "$task_rc" > "$task_run/dc.rc"
+if [[ "$task_rc" -ne 0 ]]; then exit 20; fi
+if grep -Eq 'ELAB-312|TIM-209|OPT-150|^Error:' "$task_run/dc.log"; then exit 21; fi
+if ! grep -Fq 'Thank you...' "$task_run/dc.log"; then exit 22; fi
+
+for task_report in area.rpt qor.rpt timing_setup.rpt timing_hold.rpt \
+        constraint_violators.rpt check_design_postcompile.rpt check_timing_postcompile.rpt; do
+    if [[ ! -s "$task_run/reports/$task_report" ]]; then exit 30; fi
+done
+if [[ ! -s "$task_run/netlist/${DESIGN_NAME}_mapped.v" \
+      || ! -s "$task_run/netlist/${DESIGN_NAME}_mapped.sdc" \
+      || ! -s "$task_run/netlist/${DESIGN_NAME}.ddc" ]]; then exit 31; fi
+if grep -Fq 'slack (VIOLATED)' "$task_run/reports/timing_setup.rpt" \
+        "$task_run/reports/timing_hold.rpt"; then exit 32; fi
+if ! grep -Fq 'slack (MET)' "$task_run/reports/timing_setup.rpt" \
+        || ! grep -Fq 'slack (MET)' "$task_run/reports/timing_hold.rpt"; then exit 33; fi
+if [[ "$(grep -Fc 'This design has no violated constraints.' \
+        "$task_run/reports/constraint_violators.rpt")" -ne 5 ]]; then exit 34; fi
+if [[ "$(tr -d '[:space:]' < "$task_run/reports/check_design_postcompile.rpt")" != "1" ]]; then exit 35; fi
+if [[ "$(tail -n 1 "$task_run/reports/check_timing_postcompile.rpt" \
+        | tr -d '[:space:]')" != "1" ]]; then exit 36; fi
+if ! grep -Fq 'Number of macros/black boxes:               0' \
+        "$task_run/reports/area.rpt"; then exit 37; fi
+
+task_area="$(awk '/Total cell area:/ {print $4; exit}' "$task_run/reports/area.rpt")"
+task_setup="$(awk '/slack \(MET\)/ {print $3; exit}' "$task_run/reports/timing_setup.rpt")"
+task_hold="$(awk '/slack \(MET\)/ {print $3; exit}' "$task_run/reports/timing_hold.rpt")"
+task_cells="$(awk '/Number of cells:/ {print $4; exit}' "$task_run/reports/area.rpt")"
+task_seq="$(awk '/Number of sequential cells:/ {print $5; exit}' "$task_run/reports/area.rpt")"
+if ! awk -v task_candidate="$task_area" 'BEGIN {exit !(task_candidate < 6098.148005)}'; then exit 38; fi
+if ! awk -v task_candidate="$task_seq" 'BEGIN {exit !(task_candidate < 1212)}'; then exit 39; fi
+task_area_overhead_m137="$(awk -v c="$task_area" 'BEGIN {printf "%.6f",100*(c-4729.157996)/4729.157996}')"
+task_cell_overhead_m137="$(awk -v c="$task_cells" 'BEGIN {printf "%.6f",100*(c-6740)/6740}')"
+task_seq_overhead_m137="$(awk -v c="$task_seq" 'BEGIN {printf "%.6f",100*(c-643)/643}')"
+task_area_reduction_m136="$(awk -v c="$task_area" 'BEGIN {printf "%.6f",100*(6098.148005-c)/6098.148005}')"
+{
+    echo "status=PASS_M139_EPOCH_SAFE_FALLTHROUGH_BRIDGE_LOGIC_ONLY_DC_3NS"
+    echo "exact_sha=true"
+    echo "tool=Synopsys_DC_V-2023.12-SP3"
+    echo "clock_period_ns=3.000"
+    echo "hierarchy=flattened_before_mapping"
+    echo "cell_area_um2=$task_area"
+    echo "cell_count=$task_cells"
+    echo "sequential_cells=$task_seq"
+    echo "area_overhead_vs_m137_pct=$task_area_overhead_m137"
+    echo "cell_overhead_vs_m137_pct=$task_cell_overhead_m137"
+    echo "sequential_cell_overhead_vs_m137_pct=$task_seq_overhead_m137"
+    echo "area_reduction_vs_m136_pct=$task_area_reduction_m136"
+    echo "setup_worst_slack_ns=$task_setup"
+    echo "hold_worst_slack_ns=$task_hold"
+    echo "macro_count=0"
+    echo "flush_fsm_bits=2"
+    echo "actual_macro_flush_wrapper=false"
+    echo "foundry_macro=false"
+    echo "paper_ppa_ready=false"
+    echo "physical_speedup=false"
+    echo "system_speedup=false"
+    echo "headline=false"
+} > "$task_run/RUN_COMPLETE.txt"
+sha256sum "$task_run"/dc.log "$task_run"/reports/*.rpt \
+    "$task_run"/netlist/* "$task_run"/RUN_COMPLETE.txt > "$task_run/evidence_manifest.sha256"
+sha256sum "dc_handoff/scripts/run_dc_m139_epoch_safe_fallthrough_bridge_logic_only.sh" \
+    > "$task_run/runner_sha256.txt"
+task_complete=1
+echo "PASS M139 epoch-safe fallthrough bridge logic-only DC sealed at $task_run"

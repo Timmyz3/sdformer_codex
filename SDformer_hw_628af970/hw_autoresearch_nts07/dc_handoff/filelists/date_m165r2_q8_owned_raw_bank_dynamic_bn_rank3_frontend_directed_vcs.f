@@ -1,0 +1,3 @@
+rtl_m165/m165_q8_owned_raw_bank_dynamic_bn_rank3_frontend.sv
+verif_m165/m165_q8_owned_raw_bank_dynamic_bn_rank3_frontend_assertions.sv
+tb_m165_r2/tb_m165_q8_owned_raw_bank_dynamic_bn_rank3_frontend.sv

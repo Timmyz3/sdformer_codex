@@ -1,0 +1,145 @@
+`timescale 1ns/1ps
+`default_nettype none
+module tb_m236_dynamic_bn_lut16_newton2_coefficient_engine;
+    localparam int TAG_BITS = 24;
+    localparam int VECTOR_COUNT = 220800;
+    logic clk_core=0,rst_core; always #1.5 clk_core=~clk_core;
+    logic request_valid,request_ready,request_accept;
+    logic[TAG_BITS-1:0]request_tag;
+    logic[21:0]variance_plus_epsilon_uq6p16;
+    logic signed[17:0]mean_sq3p14;
+    logic signed[15:0]gamma_sq1p14,beta_sq1p14;
+    logic result_valid,result_ready,result_accept;
+    logic[TAG_BITS-1:0]result_tag; logic[19:0]invstd_uq4p16;
+    logic signed[19:0]alpha_sq3p16,offset_sq3p16;
+    logic protocol_error,busy; logic[3:0]debug_state;
+    logic[31:0]debug_request_count,debug_result_count;
+    integer cycle_count,vectors_checked,mismatches,max_latency;
+    integer max_unstalled_accept_ii,result_stall_cycles,attacks,last_accept_cycle;
+    integer expected_invstd,expected_alpha,expected_offset,expected_tag;
+    bit previous_result_stalled;
+
+    m236_dynamic_bn_lut16_newton2_coefficient_engine dut(.*);
+    m236_dynamic_bn_lut16_newton2_coefficient_engine_assertions sva(.*);
+
+    always @(posedge clk_core) begin
+        if(rst_core) cycle_count=0;
+        else begin
+            cycle_count++;
+            if(result_valid&&!result_ready) result_stall_cycles++;
+            if(result_accept) begin
+                if(result_tag!==expected_tag[TAG_BITS-1:0]
+                        ||invstd_uq4p16!==expected_invstd[19:0]
+                        ||alpha_sq3p16!==expected_alpha[19:0]
+                        ||offset_sq3p16!==expected_offset[19:0]) begin
+                    mismatches++;
+                    $fatal(1,"M236 mismatch tag=%0d got=%0d inv=%0d/%0d alpha=%0d/%0d offset=%0d/%0d",
+                        expected_tag,result_tag,expected_invstd,invstd_uq4p16,
+                        expected_alpha,$signed(alpha_sq3p16),expected_offset,
+                        $signed(offset_sq3p16));
+                end
+                vectors_checked++;
+            end
+        end
+    end
+
+    task automatic run_vector(input integer vector_id,input integer variance_q,
+            input integer mean_q,input integer gamma_q,input integer beta_q,
+            input integer inv_q,input integer alpha_q,input integer offset_q,
+            input bit stall_result);
+        integer accept_cycle,latency,interval;
+        begin
+            expected_tag=vector_id+1; expected_invstd=inv_q;
+            expected_alpha=alpha_q; expected_offset=offset_q;
+            @(negedge clk_core); request_tag=expected_tag;
+            variance_plus_epsilon_uq6p16=variance_q;
+            mean_sq3p14=mean_q; gamma_sq1p14=gamma_q; beta_sq1p14=beta_q;
+            request_valid=1;
+            do @(posedge clk_core); while(!request_accept);
+            accept_cycle=cycle_count;
+            if(last_accept_cycle>=0&&!previous_result_stalled) begin
+                interval=accept_cycle-last_accept_cycle;
+                if(interval>max_unstalled_accept_ii) max_unstalled_accept_ii=interval;
+            end
+            last_accept_cycle=accept_cycle;
+            @(negedge clk_core); request_valid=0;
+            if(stall_result) result_ready=0;
+            wait(result_valid); latency=cycle_count-accept_cycle;
+            if(latency>max_latency) max_latency=latency;
+            if(stall_result) begin
+                repeat(5) @(posedge clk_core);
+                @(negedge clk_core); result_ready=1;
+            end
+            do @(posedge clk_core); while(!result_accept);
+            @(negedge clk_core);
+            previous_result_stalled=stall_result;
+        end
+    endtask
+
+    task automatic fault_with_pending_result;
+        integer requests_before,results_before;
+        begin
+            expected_tag=24'h236bad; expected_invstd=171977;
+            expected_alpha=175367; expected_offset=1103;
+            @(negedge clk_core); request_tag=expected_tag;
+            variance_plus_epsilon_uq6p16=9517; mean_sq3p14=-149;
+            gamma_sq1p14=16707; beta_sq1p14=-123;
+            request_valid=1; result_ready=0;
+            do @(posedge clk_core); while(!request_accept);
+            @(negedge clk_core); request_valid=0;
+            wait(result_valid); requests_before=debug_request_count;
+            results_before=debug_result_count;
+            @(negedge clk_core); request_valid=1;
+            variance_plus_epsilon_uq6p16=0; result_ready=1; #0.1;
+            if(!protocol_error||request_accept||result_accept||request_ready
+                    ||result_valid) $fatal(1,"M236 fault-cycle atomicity failed");
+            @(posedge clk_core); #0.2;
+            if(debug_request_count!=requests_before
+                    ||debug_result_count!=results_before||!protocol_error)
+                $fatal(1,"M236 fault cycle state commit");
+            attacks++;
+            @(negedge clk_core); request_valid=0;
+        end
+    endtask
+
+    initial begin #30000000; $fatal(1,"M236 watchdog"); end
+    initial begin
+        integer fd,scan_status,vector_id,flat_index;
+        integer variance_q,mean_q,gamma_q,beta_q,even_exp,mantissa_q,lut_index;
+        integer inv_q,alpha_q,offset_q;
+        reg[2047:0]line;
+        rst_core=1;request_valid=0;result_ready=0;request_tag=0;
+        variance_plus_epsilon_uq6p16=0;mean_sq3p14=0;
+        gamma_sq1p14=0;beta_sq1p14=0;cycle_count=0;vectors_checked=0;
+        mismatches=0;max_latency=0;max_unstalled_accept_ii=0;
+        result_stall_cycles=0;attacks=0;last_accept_cycle=-1;
+        previous_result_stalled=0;
+        repeat(4)@(posedge clk_core);@(negedge clk_core);rst_core=0;result_ready=1;
+        fd=$fopen("results/m236_h67_lut16_newton2_full_vectors_r1_20260825/m236_h67_lut16_newton2_full220800_vectors.csv","r");
+        if(fd==0)$fatal(1,"M236 full vector file missing");
+        scan_status=$fgets(line,fd);
+        while(!$feof(fd)) begin
+            scan_status=$fscanf(fd,"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                vector_id,flat_index,variance_q,mean_q,gamma_q,beta_q,
+                even_exp,mantissa_q,lut_index,inv_q,alpha_q,offset_q);
+            if(scan_status==12) begin
+                if(vector_id!=flat_index)$fatal(1,"M236 full vector identity drift");
+                run_vector(vector_id,variance_q,mean_q,gamma_q,beta_q,
+                    inv_q,alpha_q,offset_q,vector_id==110399);
+            end else if(!$feof(fd))
+                $fatal(1,"M236 vector parse failed %0d",scan_status);
+        end
+        $fclose(fd);
+        if(vectors_checked!=VECTOR_COUNT||mismatches!=0||max_latency>16
+                ||max_unstalled_accept_ii>16||result_stall_cycles<5)
+            $fatal(1,"M236 coverage/count failure vectors=%0d mismatch=%0d lat=%0d ii=%0d stall=%0d",
+                vectors_checked,mismatches,max_latency,max_unstalled_accept_ii,
+                result_stall_cycles);
+        fault_with_pending_result();
+        if(attacks!=1)$fatal(1,"M236 protocol attack missing");
+        $display("PASS M236 checkpoint vectors=220800 mismatches=0 max_latency=%0d max_unstalled_accept_ii=%0d result_stalls=%0d protocol_attacks=1 shared_multiplier_slots=1 multiply_ops_per_pair=8 lut_entries=16 newton_steps=2 tail_extrema_included=6 moment_finalizer=false event_equivalence=false system_speedup=false headline=false",
+            max_latency,max_unstalled_accept_ii,result_stall_cycles);
+        $finish;
+    end
+endmodule
+`default_nettype wire

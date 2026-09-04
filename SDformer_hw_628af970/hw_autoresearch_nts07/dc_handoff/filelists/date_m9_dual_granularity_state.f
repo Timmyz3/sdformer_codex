@@ -1,0 +1,2 @@
+rtl_qfit/qfit_sync_1rw_acc_bank.sv
+rtl_qfit/qfit_dual_granularity_temporal_state_engine.sv

@@ -1,0 +1,3 @@
+rtl_m384/m384_active_descriptor_streaming_controller.sv
+verif_m384/m384_active_descriptor_streaming_controller_assertions.sv
+tb_m384/tb_m384_active_descriptor_streaming_controller.sv

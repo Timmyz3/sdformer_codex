@@ -1,0 +1,219 @@
+{
+  "schema": "m380_m377_active_descriptor_controller_prertl_hammer_contract_v1",
+  "status": "FROZEN_BEFORE_M380_EXECUTION",
+  "milestone": "M380_M377_ACTIVE_DESCRIPTOR_CONTROLLER_PRERTL_HAMMER",
+  "date": "2026-08-25",
+  "objective": "Independently attack M377 before any RTL: freeze the smallest exact active-descriptor compact/write/dual-replay controller, replay descriptor sufficiency on the frozen S10 source population, and quantify how SRAM latency, active-count sealing, FIFO behavior and port serialization can consume the 1.081x finite-event margin.",
+  "inputs": {
+    "analyzer": {
+      "path": "system_simulator/scripts/analyze_m380_m377_active_descriptor_controller_prertl_hammer.py",
+      "sha256": "07a3b92d87bd3f4d3e17d99d0c4e778b31ae2cd87a77e3ca95f4572e65096e4f"
+    },
+    "m377_result": {
+      "path": "results/m377_q32_o4_active_descriptor_compact_executor_r1_20260825/m377_q32_o4_active_descriptor_compact_executor_r1.json",
+      "sha256": "b931f0698e80de7d2a71d9db4f07010cfe4aac2dbf707d671f47cb3500d19f68"
+    },
+    "m377_candidate_events": {
+      "path": "results/m377_q32_o4_active_descriptor_compact_executor_r1_20260825/candidate_events.csv",
+      "sha256": "b0a0a5fad48b8b2dfe96e36c15ec6a3594349981a2dbd2232ecf89b2633a328a"
+    },
+    "m377_seal": {
+      "path": "results/m377_q32_o4_active_descriptor_compact_executor_r1_20260825/SHA256SUMS.seal.sha256",
+      "sha256": "c222fbd7696b29a1a828562348ba45d3164f25e853370f50b6ef8517d52798f7"
+    },
+    "m373_result": {
+      "path": "results/m373_q32_o4_finite_event_executor_r1_20260825/m373_q32_o4_finite_event_executor_r1.json",
+      "sha256": "6591482cd2c474c2837132c31bfd9b4c67b36cab6788f0a3bee74d564ec5bf73"
+    },
+    "m373_seal": {
+      "path": "results/m373_q32_o4_finite_event_executor_r1_20260825/SHA256SUMS.seal.sha256",
+      "sha256": "a45e531b4e8d664b7621fe78dd07a140ab7ed8e27bdd851c3eedac94fadf9f5a"
+    },
+    "m358_contract": {
+      "path": "contracts/m358_two_slot_serial_phase_constructive_cycle_contract_r1_20260825.json",
+      "sha256": "a41187804a6d07634c51e7c70940a98543dae67032e8a1ab7c0d55e8fae66dc2"
+    },
+    "docs359": {
+      "path": "docs/359_DATE终局冻结_20260813.md",
+      "sha256": "dedde7ce44c3e595098f25ce6550dc0f6dfd66ce7227bcffd3dab0426a7bdfc4"
+    }
+  },
+  "controller_boundary": {
+    "states": [
+      "IDLE",
+      "MATCH_WRITE",
+      "ACTIVE_COUNT_SEAL",
+      "WAIT_TILE0",
+      "REPLAY0_PRIME",
+      "REPLAY0",
+      "WAIT_TILE1",
+      "REPLAY1_PRIME",
+      "REPLAY1",
+      "TAIL_RETIRE",
+      "STICKY_ERROR"
+    ],
+    "phase_extent": {
+      "samples": 10,
+      "operators": 4,
+      "partitions_per_operator": 432,
+      "rows_per_phase": 3000,
+      "output_tiles_per_phase": 2,
+      "context_source": "sample/operator/partition/tile are phase registers outside the descriptor",
+      "cross_phase_overlap": false
+    },
+    "descriptor48_layout_lsb0": {
+      "bits_11_0": "row_id12",
+      "bits_27_12": "original16",
+      "bits_34_28": "center_id7",
+      "bits_39_35": "distance5",
+      "bit_40": "use_pwp1",
+      "bits_47_41": "reserved_flags7_must_be_zero"
+    },
+    "descriptor_canonical_checks": [
+      "row_id must be 0..2999 and strictly increase within a compact phase stream",
+      "center_id must be 0..31 under q32",
+      "distance must equal popcount(original16 XOR frozen_center16[phase_context][center_id])",
+      "reserved flags must be zero",
+      "original16 must be nonzero; zero has no descriptor"
+    ],
+    "exact_backend_reconstruction": {
+      "pwp": "plus_mask=original16 AND NOT center16; minus_mask=center16 AND NOT original16; exact result is PWP(center16) plus W-times-plus_mask minus W-times-minus_mask",
+      "fallback": "when use_pwp=0, ignore center residual for execution and run exact bit-sparse W-times-original16",
+      "pop1": "every original16 with popcount one is a retained active descriptor and must take fallback; only original16 equal zero may be elided",
+      "distance_field": "redundant protection field, recomputed and compared before issue"
+    },
+    "serialized_match_and_write": {
+      "architecture": "one shared q16 matcher slot per cycle; popcount below two retires after first slot and all other rows retire after their second serialized slot",
+      "retirement_bound": "at most one source row and therefore at most one compact descriptor write can retire in a cycle",
+      "write_rule": "desc_w_valid equals row_retire_valid AND original16_nonzero; one write address increments only on accepted active retirement",
+      "active_count": "a phase-local 12-bit counter increments on accepted descriptor writes and is sealed once, one cycle after row2999 retirement",
+      "write_backpressure": "the phase-exclusive descriptor write port must accept one write/cycle; otherwise matcher retirement stalls and the exact stall must enter the cycle ledger"
+    },
+    "external_descriptor_sram": {
+      "organization": "two alternating banks, each 3000 rows by 48 data bits; one phase-exclusive 1RW port per selected bank is sufficient because matching and replay never overlap",
+      "read_contract": "in-order req_valid/req_ready and rsp_valid/rsp_ready, one complete 48-bit row per accepted response",
+      "supported_fixed_response_latency_cycles": [1, 2, 3, 4, 5, 6, 7, 8],
+      "steady_state_request_ii": 1,
+      "steady_state_response_ii": 1,
+      "response_reordering": false,
+      "correctness_under_backpressure": "arbitrary finite request or response backpressure must preserve order/count and may only add explicitly counted stalls",
+      "performance_contract": "M377 performance is admitted only after measured SRAM/wrapper stalls are below the reported per-replayed-descriptor budget; a blocking read per descriptor is forbidden",
+      "port_exclusion": "descriptor SRAM does not share a cycle-arbitrated port with DMA0, tile data SRAM, pattern SRAM or SHARED96 compute"
+    },
+    "fifo_and_credit": {
+      "descriptor_fifo_depth": 8,
+      "reservation_rule": "fifo_occupancy plus accepted_unreturned_requests must never exceed eight",
+      "request_issue": "issue in monotonically increasing compact address order while credit exists",
+      "consume": "one descriptor is popped only when the backend accepts its reconstructed exact work bundle",
+      "simultaneous_push_pop": true,
+      "underflow_overflow": "both are sticky protocol errors; backend valid is never fabricated"
+    },
+    "dual_replay": {
+      "replay_count": 2,
+      "tile_order": [0, 1],
+      "per_replay_extent": "exactly sealed active_count accepted responses and accepted backend descriptors",
+      "rewind": "read address and replay_accept_count reset to zero only between replay0 and replay1",
+      "completion": "phase retires only after both replay accepted counts equal the same sealed active_count and all outstanding responses/FIFO entries drain",
+      "zero_active": "skip both tile DMAs and both replays, retain tail and phase retirement"
+    },
+    "fail_close_reset_reload": {
+      "sticky_faults": [
+        "row_id out of range, duplicate or non-monotonic",
+        "active_count overflow or descriptor write without active retirement",
+        "center_id out of q32 range, distance mismatch or nonzero reserved flags",
+        "SRAM response without request, response count overflow, FIFO overflow or underflow",
+        "replay count mismatch, third replay attempt, tile/context change during replay",
+        "reload or bank reuse before clean phase retirement"
+      ],
+      "fault_action": "enter STICKY_ERROR, suppress further SRAM requests/writes, backend issues and phase-done until reset",
+      "reset": "clear valid state, active_count, FIFO, outstanding/read/write/replay counters and sticky error; SRAM contents become invalid",
+      "reload": "accepted only in IDLE after reset or clean phase retirement; a fresh all-row match/write is mandatory before replay"
+    }
+  },
+  "hammer_findings": {
+    "P0": [],
+    "P1": [
+      "M377 did not materialize packed 48-bit descriptor bytes, so field packing and corruption checks remain unproved until VCS.",
+      "M377 replaces all external SRAM req/resp timing with one startup cycle per replay; it does not prove latency, credit, FIFO or backpressure recurrence.",
+      "M377 does not timestamp the one-time active_count seal/commit or prove both replay counts against it.",
+      "M377 does not freeze whether descriptor SRAM is independent and phase-exclusive; an uncounted shared-port or blocking per-descriptor access can consume the gain."
+    ],
+    "P2": [
+      "The seven flag bits had no canonical meaning; M380 reserves them as zero and requires a sticky fault otherwise.",
+      "row_id is phase-local; sample/operator/partition/tile context must remain stable in controller registers.",
+      "Aggregate phase work proves at least four compute cycles per descriptor but not real descriptor-order FIFO occupancy; VCS must replay the actual ordered stream.",
+      "Logic-only DC cannot make the performance claim; a 3000x48 macro or conservative wrapper timing/area is required."
+    ]
+  },
+  "vcs_miter_and_coverage_gates": {
+    "must_pass": [
+      "cycle miter against a software descriptor pack/unpack and exact plus/minus/fallback reference for both replays",
+      "assert at most one matcher retirement and one accepted descriptor write per cycle",
+      "assert descriptor write iff accepted active retirement; active_count equals accepted writes",
+      "assert SRAM accepted requests equal returned responses plus outstanding and preserve compact address order",
+      "assert FIFO occupancy is 0..8 and occupancy plus outstanding never exceeds eight",
+      "assert replay0 and replay1 each accept exactly active_count descriptors with no third replay",
+      "assert any protocol/data/context fault is sticky and suppresses all architectural side effects until reset"
+    ],
+    "directed_vectors": [
+      "all-zero, active_count one, active_count 2400 and capacity 3000 phases",
+      "all-pop1 fallback; exact-center; plus-only; minus-only; mixed plus/minus; maximum-distance fallback",
+      "row IDs 0 and 2999; illegal 3000/4095; center31/illegal32; bad distance; nonzero flags; duplicate/out-of-order row",
+      "SRAM response latency 1/2/4/8, request-ready bursts, response gaps, backend stalls, FIFO empty/full and simultaneous push/pop",
+      "reset in every state, reload before completion, response without request, second-replay under/overrun and third-replay attack"
+    ],
+    "coverage": [
+      "both replay IDs and identical nonzero accepted counts",
+      "pop1 fallback and PWP with nonzero plus and minus masks",
+      "FIFO occupancy every value 0..8 and outstanding every value 0..8",
+      "all supported SRAM latencies and at least a 16-cycle request-backpressure burst after FIFO prefill",
+      "every sticky error class and clean reset/reload recovery"
+    ]
+  },
+  "dc_gates_after_vcs": {
+    "prerequisites": [
+      "VCS exact miter, assertions and required coverage all pass with exact RTL SHA",
+      "post-VCS cycle replay on the frozen ordered population remains at least 1.05x after all controller/SRAM stalls",
+      "descriptor SRAM offers one complete 48-bit row response at II1 with fixed latency no greater than eight, or a slower measured interface is charged exactly"
+    ],
+    "reports": [
+      "3.0 ns TSMC28 pre-macro DC/STA for controller plus FIFO/wrapper, with setup/hold and unconstrained-path audit",
+      "incremental logic area, sequential/combinational split, clock-gating inference and maximum fanout",
+      "two 3000x48 SRAM macro area/latency/energy or an explicitly non-paper-ready conservative envelope",
+      "SAIF/PTPX after gate-level cycle agreement; no energy or PPA claim from logic-only DC"
+    ],
+    "stop_conditions": [
+      "post-VCS speedup below 1.05x",
+      "any blocking one-cycle-or-more penalty per replayed descriptor that cannot overlap exact compute",
+      "shared descriptor/DMA/compute port conflict omitted from the cycle replay",
+      "failure to meet 3.0 ns or any unresolved correctness assertion"
+    ]
+  },
+  "scorecard": {
+    "score_out_of_100": 88,
+    "evidence_integrity": 98,
+    "exactness_argument": 96,
+    "controller_boundary_completeness": 94,
+    "cycle_model_realism": 78,
+    "rtl_readiness": 72,
+    "reason_for_not_100": "The source population and event ledger are sealed and exact, but there are no packed descriptors, RTL, SRAM transaction trace, ordered FIFO occupancy proof or Synopsys results."
+  },
+  "decision": "CONDITIONAL_GO_VCS_MINIMAL_ACTIVE_DESCRIPTOR_CONTROLLER_ONLY__NO_GO_IF_BLOCKING_OR_SHARED_PORT",
+  "claim_boundary": {
+    "read_only_prertl_hammer": true,
+    "descriptor_sufficiency_on_frozen_source_population": true,
+    "cycle_sensitivity": true,
+    "rtl_cycle_match": false,
+    "synopsys_area": false,
+    "energy": false,
+    "system_speedup": false,
+    "paper_ppa_ready": false,
+    "date_headline": false
+  },
+  "red_lines": [
+    "Do not write RTL in M380.",
+    "Do not modify M377, M373 or docs/359.",
+    "Do not call 1.081x a realized controller speedup.",
+    "Do not average away a per-descriptor SRAM, FIFO or port stall."
+  ]
+}

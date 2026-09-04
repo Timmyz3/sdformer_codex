@@ -1,0 +1,9 @@
+rtl_ttx/ttx_tx_score_q7.sv
+rtl_ttx/ttx_zero_k_class_score_q7.sv
+rtl_ttx/ttx_exp2_lut_q8.sv
+rtl_ttx/ttx_ceil_log2_u32.sv
+rtl_ttx/ttx_gate_quant_q17.sv
+rtl_ttx/ttx_late_gate_accum.sv
+rtl_ttx/ttx_row_engine.sv
+rtl_ttx/ttx_descriptor_scheduler.sv
+rtl_ttx/ttx_attention_top.sv

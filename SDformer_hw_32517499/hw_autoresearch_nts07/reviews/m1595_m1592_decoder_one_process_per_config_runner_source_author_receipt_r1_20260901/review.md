@@ -1,0 +1,9 @@
+# M1595｜M1592 decoder one-process-per-config runner author receipt
+
+Verdict: **PASS author-side dual-runtime control-plane tests. A different-author source hammer is required; no actual execution is authorized.**
+
+M1595 pins the exact M1583 engine, M1592 authority, docs/359, fixed CPython 3.10 binary, and decoder resource identity. Its future production control path consumes the global attempt marker before launching any child, then invokes the three admitted configurations sequentially. Each invocation structurally uses a new fixed Python interpreter and a target-bound private ticket. The result gate requires three distinct child PIDs and tickets, exact configuration/resource identity, common commit ordering, request-kind conservation, address/commit/payload digest binding, positive RSS gate calls, and strict RSS below 8 GiB. Product capture is forbidden.
+
+The unit suite passed 6/6 under CPython 3.10.18 and 6/6 under CPython 3.6.8. It covered a three-configuration synthetic success, permanent attempt consumption after a synthetic second-child failure, rejection before a second launcher call, and nine child-envelope/result mutations. Both success and failure publication are no-replace operations with inner and outer seals. A read-only preflight against the production namespace passed without consuming an attempt.
+
+This is author evidence, not independent evidence. The tests injected a fake launcher; they did not invoke `subprocess.run`, launch a real child, call the M1583 actual worker, or open payload. The source contains future `--run` and child entries, but their presence conveys no execution authority. No cycle, request, traffic, energy, speedup, RTL, EDA, or paper result was created. A different author must hammer this exact source and seals before deciding whether a single D0/call0 diagnostic attempt may run.

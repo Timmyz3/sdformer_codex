@@ -1,0 +1,5 @@
+rtl_m212/m212_fc2_raw4_to_descriptor4_terminal_hint_compactor.sv
+rtl_m212/m212_fc2_descriptor4_terminal_close_frontend.sv
+rtl_m212/m212_fc2_raw4_to_terminal_close_frontend.sv
+verif_m212/m212_fc2_raw4_to_terminal_close_frontend_assertions.sv
+tb_m212/tb_m212_fc2_bank48_adversarial.sv

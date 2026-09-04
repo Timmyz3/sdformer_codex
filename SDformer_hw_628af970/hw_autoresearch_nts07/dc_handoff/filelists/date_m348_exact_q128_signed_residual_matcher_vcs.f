@@ -1,0 +1,3 @@
+rtl_m348/m348_exact_q128_signed_residual_matcher.sv
+verif_m348/m348_exact_q128_signed_residual_matcher_assertions.sv
+tb_m348/tb_m348_exact_q128_signed_residual_matcher.sv

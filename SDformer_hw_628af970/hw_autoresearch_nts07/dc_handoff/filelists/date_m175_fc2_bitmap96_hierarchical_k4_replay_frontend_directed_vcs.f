@@ -1,0 +1,3 @@
+rtl_m175/m175_fc2_bitmap96_hierarchical_k4_replay_frontend.sv
+verif_m175/m175_fc2_bitmap96_hierarchical_k4_replay_frontend_assertions.sv
+tb_m175/tb_m175_fc2_bitmap96_hierarchical_k4_replay_frontend.sv

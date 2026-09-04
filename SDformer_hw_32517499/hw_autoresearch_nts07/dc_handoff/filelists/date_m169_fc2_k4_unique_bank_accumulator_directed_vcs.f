@@ -1,0 +1,3 @@
+rtl_m169/m169_fc2_k4_unique_bank_accumulator.sv
+verif_m169/m169_fc2_k4_unique_bank_accumulator_assertions.sv
+tb_m169/tb_m169_fc2_k4_unique_bank_accumulator.sv

@@ -1,0 +1,3 @@
+rtl_m803/m803_fc2_bundle_to_8bank_channel_split_cutthrough_adapter.sv
+verif_m803/m803_fc2_channel_split_cutthrough_adapter_assertions.sv
+tb_m803/tb_m803_c2_r16_channel_split_adapter_attacks.sv

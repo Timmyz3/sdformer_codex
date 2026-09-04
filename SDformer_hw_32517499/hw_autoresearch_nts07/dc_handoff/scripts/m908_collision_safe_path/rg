@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Additive compatibility shim for the one defective M892 collision pipeline.
+# Every other ripgrep invocation is delegated to the independently pinned
+# system binary.  This branch intentionally ignores the pipeline stdin and
+# inspects same-UID executable identity, never argv text.
+m908_pattern='(^|/)(dc_shell|dc_shell-t)([[:space:]]|$)|common_shell_exec -shell dc_shell'
+if [[ "$#" -eq 2 && "$1" == -q && "$2" == "${m908_pattern}" ]]; then
+    m908_uid="$(id -u)"
+    while read -r m908_pid; do
+        [[ "${m908_pid}" =~ ^[0-9]+$ ]] || continue
+        m908_proc="/proc/${m908_pid}"
+        [[ -d "${m908_proc}" ]] || continue
+        [[ "${m908_pid}" != "$$" ]] || continue
+        m908_owner="$(stat -c '%u' "${m908_proc}" 2>/dev/null || true)"
+        [[ "${m908_owner}" == "${m908_uid}" ]] || continue
+        m908_exe="$(readlink -f "${m908_proc}/exe" 2>/dev/null || true)"
+        m908_base="${m908_exe##*/}"
+        m908_comm="$(tr -d '\n' <"${m908_proc}/comm" 2>/dev/null || true)"
+        case "${m908_base}:${m908_comm}" in
+            dc_shell:*|dc_shell-t:*|common_shell_exec:*|*:dc_shell|*:dc_shell-t|*:common_shell_exec|*:common_shell_exe)
+                exit 0
+                ;;
+        esac
+    done < <(ps -u "${m908_uid}" -o pid=)
+    exit 1
+fi
+
+exec /usr/bin/rg "$@"

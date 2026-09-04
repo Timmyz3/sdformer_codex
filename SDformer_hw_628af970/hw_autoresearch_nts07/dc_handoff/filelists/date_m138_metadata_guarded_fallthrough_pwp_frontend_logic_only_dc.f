@@ -1,0 +1,3 @@
+rtl_m133/m133_dualrow512_elastic_pwp_stream.sv
+rtl_m137/m137_fallthrough_tagged_16bank_response_bridge.sv
+rtl_m138/m138_metadata_guarded_fallthrough_pwp_frontend.sv

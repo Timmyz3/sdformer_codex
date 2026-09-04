@@ -1,0 +1,3 @@
+rtl_m235/m235_dynamic_bn_segmented_lut_newton_coefficient_engine.sv
+verif_m235/m235_dynamic_bn_segmented_lut_newton_coefficient_engine_assertions.sv
+tb_m235/tb_m235_dynamic_bn_segmented_lut_newton_coefficient_engine.sv

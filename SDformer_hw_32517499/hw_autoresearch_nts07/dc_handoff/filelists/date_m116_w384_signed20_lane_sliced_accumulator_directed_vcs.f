@@ -1,0 +1,4 @@
+rtl_m116/m116_w384_signed20_accumulator_frontend.sv
+rtl_m116/m116_w384_signed20_lane_sliced_accumulator_adapter.sv
+verif_m116/m116_w384_signed20_lane_sliced_accumulator_assertions.sv
+tb_m116/tb_m116_w384_signed20_lane_sliced_accumulator.sv

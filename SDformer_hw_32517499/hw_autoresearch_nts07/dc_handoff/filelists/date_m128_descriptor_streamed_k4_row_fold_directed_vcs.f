@@ -1,0 +1,3 @@
+rtl_m128/m128_descriptor_streamed_k4_row_fold.sv
+verif_m128/m128_descriptor_streamed_k4_row_fold_assertions.sv
+tb_m128/tb_m128_descriptor_streamed_k4_row_fold.sv
