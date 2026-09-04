@@ -44,6 +44,8 @@ def main() -> None:
     assert r"\documentclass[journal]{IEEEtran}" in text
     assert "no whole-network speedup is inferred" in abstract
     assert "K1$\\times$8" in abstract
+    assert r"\newcommand{\dctag}{\textsuperscript{[DC]}}" in text
+    assert r"\newcommand{\pttag}{\textsuperscript{[DC/PT]}}" in text
     assert "never multiplied" in text.replace("\n", " ")
     assert "prelayout" in abstract
     assert "compatibility check" in text
@@ -55,6 +57,12 @@ def main() -> None:
     assert "M2063" not in text
     assert "0.0118 W" not in text
     assert "docs/359" not in text
+    assert "parent masks and psums" not in text
+    assert "parent-product scratch" in text
+    assert "deterministic directed INT8 verification weights" in text
+    assert "Naturally nonzero descriptors" in text
+    assert "Prosperity already discovers subset/prefix parents" in text
+    assert "FireFly-T already broadcasts" in text
 
     keywords = between(text, r"\begin{IEEEkeywords}", r"\end{IEEEkeywords}")
     nkw = len([k.strip() for k in keywords.replace("\n", " ").split(",") if k.strip()])

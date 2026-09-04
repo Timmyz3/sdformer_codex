@@ -2,7 +2,7 @@
 
 **To:** Editor-in-Chief, IEEE Transactions on Circuits and Systems II: Express Briefs
 
-**Manuscript:** Exact Product Capture and Context-Safe Weight Broadcast for Event-Driven Spiking Optical Flow
+**Manuscript:** Finite-Lifetime Single-Port Product Capture and Context-Safe Weight Broadcast for Event-Driven Spiking Optical Flow
 
 **Article type:** Express Brief (regular)
 

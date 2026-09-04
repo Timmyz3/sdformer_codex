@@ -44,11 +44,11 @@ python3.12 check_claim_boundaries.py
 pdfinfo build/main.pdf
 ```
 
-Current compile (2026-09-04, musl tectonic): **4 Letter pages**.  This is an
-intermediate working draft, not upload-ready: TCAS-II requires exactly 5 pages
-with content ending after page 5 column 1 and references occupying page 5
-column 2 only.  Legitimate remaining content is the continuation-safe FC2
-result, a TSBG sequence/energy ablation, the ordinary-vs-broadcast timing
-diagram, and final author/thanks/funding/ORCID metadata.  No result may be
-invented merely to fill the page.  Tune `\IEEEtriggeratref{N}` only after the
+Current compile (2026-09-04, musl tectonic): **5 Letter pages**, with page 5
+column 2 containing references only.  It remains an intermediate working
+draft rather than upload-ready because page 5 column 1 is underfilled relative
+to the strict 4.5-page content target.  Legitimate remaining content is the
+continuation-safe FC2 result, matched TSBG logic/SRAM energy and hold closure,
+and final author/thanks/funding/ORCID metadata.  No result may be invented
+merely to fill the page.  Tune `\IEEEtriggeratref{N}` only after the
 matched-power campaign and independent paper review are complete.
