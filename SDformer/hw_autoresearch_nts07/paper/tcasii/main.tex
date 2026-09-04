@@ -1,0 +1,402 @@
+\documentclass[journal]{IEEEtran}
+\usepackage{newtxtext,newtxmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\modeltag}{\textsuperscript{[model]}}
+\newcommand{\vcstag}{\textsuperscript{[VCS]}}
+\newcommand{\dctag}{\textsuperscript{[DC/PT]}}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\markboth{IEEE Transactions on Circuits and Systems---II: Express Briefs}{Authors: Finite-Capacity Exact Product Capture}
+
+\title{Exact Product Capture under a Finite Single-Port Parent Store\\
+for Event-Driven Spiking Optical Flow}
+
+\author{Authors to be inserted%
+\thanks{Manuscript received Month Day, 2026; revised Month Day, 2026.}%
+\thanks{The authors are with Huazhong University of Science and Technology,
+Wuhan 430074, China. TCAS-II is single-blind: replace this block with legal
+names, IEEE membership, e-mail, ORCID, and funding before submission.}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Low firing activity does not automatically accelerate event-driven optical
+flow when parent-state traffic is bound by finite storage and a single 1RW
+port.  This brief reports one exact product-capture island, C1, for a frozen
+binary-event optical-flow checkpoint.  A row may reuse only a still-resident
+exact-subset parent, issues the XOR residual, and reconstructs the signed
+product row by addition.  Dead writes that no later row can observe are
+elided.  Completion of a row and its final psum write are atomic under a
+deadline-aware 1RW arbiter.  On 51.84 million source rows from ten
+\texttt{zurich\_city\_09\_a} samples, the same-ledger cycle model reduces
+component time by 40.99\% (1.6945$\times$) versus strongest-zero skipping;
+same-coordinate bit skipping on that ledger is only 1.003$\times$.  The mapped
+28-nm nine-SRAM island occupies 166{,}514~$\mu$m$^2$, meets 3-ns setup/hold,
+dissipates 29.08~mW / 22.07~nJ in a 64-row/253-cycle directed window, and
+passes 16{,}549 mapped-to-mapped Formality compare points.  A real-mask VCS
+tile calibrates event counts; the 1.6945$\times$ ratio remains a cycle-model
+result.  All physical numbers are prelayout and pre-macro-extracted.  We make
+no whole-network speedup claim.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Digital accelerator, event-based vision, optical flow, product sparsity,
+single-port SRAM, spiking neural networks.
+\end{IEEEkeywords}
+
+\IEEEPARstart{E}{vent} cameras make inactivity visible, but sparse arithmetic
+is only one term in execution time.  In a binary-event optical-flow
+deployment, nonzero sources still trigger parent-state reads, residual
+issues, and psum writes.  A design that reports only operation sparsity can
+therefore be slower than an equal-resource zero-skipping baseline once the
+parent working set is finite and the store is single-ported.
+
+Prosperity~\cite{prosperity} and Phi~\cite{phi} show that useful SNN speedups
+come from executable reuse or patterns, not firing rate alone.  Digital
+neuromorphic processors such as ODIN~\cite{frenkel2019odin} and
+event-stream accelerators such as SpinalFlow and SNE~\cite{spinalflow,sne}
+establish spike-driven datapaths.  TCAS-II SRAM compute-in-memory macros
+exploit sparsity inside the array~\cite{qiao2022dscim,taylor2022pim}.  Our
+object is different: repeated \emph{products} of a convolution-like layer,
+subject to a 240-KiB-class parent lifetime and a physical 1RW contract.
+
+This brief makes one architectural contribution.  C1 captures exact repeated
+products while a legal parent remains resident, reconstructs the child from
+the residual, and never exposes a partial row.  The frozen Motion checkpoint
+is an evaluation workload, not a parallel algorithmic claim.  A companion
+typed weight-broadcast fabric for fully connected layers exists in the same
+project; its hold and power are not closed, so it is not claimed here.
+
+\section{Workload and Exactness Contract}
+The frozen Motion C12 ep34 checkpoint obtains 1.199514 average endpoint error
+(AEE) on an 825-frame local DSEC validation set and has a 5.6709\% global
+firing rate.  Of 105 configured ATLIF wrappers, 12 \texttt{sn2\_q} wrappers
+are runtime-bypassed, so capture invokes 93 (48 $T{=}2$, 45 $T{=}10$).  A
+graph audit finds that 12 invoked \texttt{attn\_sn} returns have no consumer
+under fixed normal inference, leaving 81 graph-live services.  All 93
+captured ATLIF outputs are binary.  Signed source codes are a downstream
+execution-protocol property (polarity and correction traffic), not evidence
+that the captured tensors are analog.  The frozen software path uses
+Motion-XOR scoring with $\alpha{=}0.125$ and K as its value carrier;
+hardware quantization is disabled on that path.
+
+Each result is assigned one evidence class.  A cycle-model result replays the
+same trace and charged resources in software.  A VCS result proves directed
+RTL function and protocol properties.  DC/PT/Formality results anchor area,
+timing, and equivalence.  Only a result that closes all three classes on one
+workload may be called an RTL speedup; this brief reports the three classes
+side by side.
+
+Bottleneck convolution exposes repeated products only while parent and
+destination state remain resident.  That invariant defines C1.  Attention and
+decoder traces remain part of the frozen identity but are not promoted to
+performance contributions.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.99\columnwidth]{figures/typed_source_islands.pdf}
+\caption{Typed-source context of the frozen optical-flow network.  This brief
+reports only C1: exact product capture in a finite 1RW parent store.  The
+other branches are workload context and are not claimed.}
+\label{fig:overview}
+\end{figure}
+
+\section{C1 Microarchitecture}
+\subsection{Directory and Legal Parents}
+C1 first builds a ping-pong directory for each 64-row, 16-source mask task.
+A row may select only an earlier exact-subset row as its parent.  Stable
+population-count ordering makes that choice unique: among legal parents the
+engine prefers the earliest still-live candidate so that later rows keep a
+deterministic residual.  A live-parent bitmap records which completed rows
+remain observable.  When the bitmap shows that no subsequent row can read a
+stored psum, that location is a dead write and is elided exactly rather than
+being scheduled as a drain.
+
+The 240-KiB-class working set is the capacity that must be respected, not a
+DRAM-backed scratchpad.  Nine $128\times128$ 1RW SRAM macros hold parent
+masks and psums.  The engine never assumes the ideal simultaneous 1R1W access
+that produced a higher but unphysicalized reuse ceiling.  This is the object
+difference from an unbounded product-sparsity opportunity: reuse must survive
+capacity, port, parent lifetime, and completion constraints.
+
+\subsection{Residual Issue and Exact Reconstruct}
+A selected parent mask $\mathcal{M}_p\subset\mathcal{M}_r$ yields a disjoint
+residual.  C1 issues only that residual and reconstructs the 96-lane signed
+product row by adding the stored parent:
+\begin{equation}
+\mathbf{P}_r=\mathbf{P}_p+
+\sum_{s\in\mathcal{M}_r\setminus\mathcal{M}_p}\mathbf{p}_s.
+\label{eq:c1exact}
+\end{equation}
+Exactness follows from the disjoint union, not from value prediction.  If no
+resident legal parent exists, C1 selects the empty parent and issues the
+original source row.  Sign, destination, and accumulator identity are never
+coalesced across rows.  Thus sparsity changes delivered work without changing
+the operator result.
+
+\subsection{Single-Port Arbiter and Atomic Commit}
+The execution side combines one earliest-parent lookahead, a two-entry
+reserved response queue, and forwarding under a deadline-aware 1RW arbiter.
+A parent read, a residual product, and a psum write compete for the same
+macro port.  The arbiter grants the access that would otherwise miss its
+row-completion deadline; the reserved queue absorbs one already-accepted
+response so that a later grant cannot orphan it.  Forwarding supplies a
+just-written parent to the next residual without a second macro read when
+the bitmap still marks that parent live.
+
+Final psum write and row completion are a single atomic event.  Backpressure
+may change service order, but it cannot expose a partially reconstructed row:
+the typed-source terminal bit and the completion pulse retire together.  A
+directed VCS tile on the first 64 real support masks of the cycle ledger is
+used later only to calibrate these event counts, not to replace the
+same-ledger cycle model.
+
+Speculative parent hits are disallowed.  A candidate is legal only if its
+mask is an exact subset and the live-parent bitmap is still set at grant
+time, not at directory build time.  That second check is what makes
+(1) exact under eviction: a parent that died between directory construction
+and issue is treated as missing, and C1 falls back to the empty parent.
+The fallback is slower than a stale hit and is the price of never
+reconstructing from a psum that the store no longer owns.
+
+\section{Evaluation}
+All physical results use a commercial 28-nm flow at 3.0~ns.  Reported points
+are prelayout, use ideal clocks and ZeroWireload, and have no extracted
+parasitics.  C1 area includes the nine SRAM macros.  Logic-only comparisons
+from other islands in the same project are not mixed into Table~\ref{tab:main}.
+
+Table~\ref{tab:c1ladder} exposes the baseline ladder instead of attributing
+all inactivity to product capture.  The ledger is 51.84 million source rows
+from ten \texttt{zurich\_city\_09\_a} ep34 samples.  Per-sample ratios span
+1.661--1.723$\times$, with a 1.6946$\times$ geometric mean.  Strongest-zero
+skipping still walks parent-state traffic for every nonzero source;
+same-coordinate bit skipping on this ledger removes almost none of that
+traffic (1.003$\times$).  Exact parent reuse is what creates the material
+reduction.  The remaining 12.25\% gap from C1 to the concurrent-access
+ceiling is the tax of the physical single-port contract.  We do not promote
+the ceiling as an attainable RTL result.
+
+The cycle model charges the same resources the RTL would charge: one 1RW
+grant per accepted macro access, residual issue, forward, deadline hold, and
+atomic commit.  It is not a CPU-time measurement and is not an RTL speedup.
+Only a future campaign that closes model, VCS, and DC/PT on one full ledger
+may use that stronger label.
+
+\begin{table}[t]
+\caption{C1 same-ledger capture ladder (51.84~M source rows).}
+\label{tab:c1ladder}
+\centering
+\scriptsize
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+Execution point & Cycles (M) & vs.\ zero & Boundary \\
+\midrule
+Strong zero & 648.741 & 1.000$\times$ & baseline \\
+Same-coordinate bit & 646.619 & 1.003$\times$ & baseline \\
+C1 finite 1RW & 382.849 & 1.6945$\times$ & cycle model \\
+Concurrent-access & 341.058 & 1.902$\times$ & ceiling only \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The mapped nine-SRAM island occupies 166{,}514~$\mu$m$^2$.  Synthesis and
+place-equivalent mapping use the foundry 28-nm standard-cell library and the
+nine compiler SRAM abstracts; no Yosys or educational library is used as an
+ASIC PPA proxy.  PrimeTime reports setup/hold slack of $+27.9$/$+1.8$~ps at
+3~ns under ideal clocks.  Formality passes 16{,}549 mapped-to-mapped compare
+points on that netlist pair.  In a separately bounded 64-row, 253-cycle
+directed window the island dissipates 29.08~mW and 22.07~nJ.  That energy is
+a mixed-corner, prelayout PrimeTime PX estimate without SPEF and without a
+frame-level activity factor; it is not energy per DSEC frame and is not a
+chip measurement.
+
+A separately sealed ep34 tile uses the first 64 real support masks of the
+cycle ledger.  VCS matches 196 accepted issues, 58 parent edges, 31
+dead-write elisions, 54/33 macro reads/writes, four forwards, six deadline
+holds, 14 stalls, and 64 commits/completions.  Lane values are deterministic
+synthetic signed-12-bit data with zero prior psum.  This calibrates modeled
+event counts and directed arithmetic; it does not itself produce the
+1.6945$\times$ cycle ratio.  Protocol errors, X-pessimism on energy, and
+failed sibling attempts in the same repository are not cited.
+
+The 64-row task is the scheduling quantum that matches the ping-pong
+directory, not a claim that the deployed convolution is only 64 rows deep.
+Each task carries up to 16 typed sources and writes a 96-lane signed product.
+The nine macros are addressed as a single 1RW parent store: one grant moves
+either a mask, a psum, or a residual payload.  Capacity eviction follows the
+live-parent bitmap rather than LRU of raw addresses, because a recently
+written parent may already be dead while an older parent remains legally
+observable.  That replacement rule is why the concurrent-access ceiling in
+Table~\ref{tab:c1ladder} is not a drop-in RTL mode: it would require a second
+port that the mapped island does not have.
+
+The same-ledger model therefore reports two numbers that must not be
+conflated.  1.6945$\times$ is C1 versus strongest-zero on the physical 1RW
+contract.  1.902$\times$ is the unphysicalized ceiling.  The 12.25\% gap is
+disclosed so that a reader cannot mistake the ceiling for a second reported
+architecture.
+
+For numerical binding, eight retained Conv3x3/ConvTranspose weights are
+quantized per output channel to narrow-range signed INT8 with a power-of-two
+scale.  An independently checked export has zero pre-clip violations; the
+largest absolute-code accumulator bound for C1 is 200{,}219, below Acc24.
+An operator-local replay covers 160 full calls and $3.27168\times10^9$ output
+elements.  Against FP32 it gives 0.009106 MAE, 0.012407 RMSE, 0.239204
+maximum absolute error, and 0.9999789 cosine similarity.  All 1{,}280
+independently sampled Python-integer probes match; the observed final
+accumulator range is $[-29{,}680,27{,}619]$.  These are operator-local
+numerical results, not task AEE or a hardware speedup.
+
+\begin{table}[t]
+\caption{Frozen-population local DSEC accuracy against a historical,
+backend-mismatched baseline (825 frames; lower is better).}
+\label{tab:accuracy}
+\centering
+\scriptsize
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Metric & Baseline & Candidate & $\Delta$ \\
+\midrule
+AEE & 1.199514 & 1.197367 & $-0.002147$ \\
+AAE & 5.400641 & 5.412808 & $+0.012167$ \\
+AAE-Bench. & 5.106363 & 5.121619 & $+0.015256$ \\
+DSEC-Fl & 5.313360 & 5.328834 & $+0.015475$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:accuracy} uses the same 825 frames, 18 sequences, and
+48{,}152{,}523 valid pixels.  The candidate applies hardware-order attention
+to all 12 blocks and dyadic-INT8 QDQ to four C1 Conv3x3 and four decoder
+ConvTranspose weights.  Other operators remain at checkpoint precision.  The
+historical baseline enabled TF32/cuDNN benchmarking whereas the candidate
+disables both; the table is therefore a compatibility gate, not a causal
+accuracy improvement.  Aggregate AEE falls by 0.002147, but the three
+auxiliary errors rise and 10 of 18 sequences regress in AEE.
+
+\begin{table}[t]
+\caption{Admitted C1 evidence; open claims are not inferred.}
+\label{tab:main}
+\centering
+\scriptsize
+\begin{tabular}{@{}L{0.14\columnwidth}L{0.36\columnwidth}L{0.36\columnwidth}@{}}
+\toprule
+Class & Result & Boundary \\
+\midrule
+Cycle model & 1.6945$\times$; $-40.99\%$ time vs.\ strong zero\modeltag & Ten-sample same-ledger ratio; not an RTL speedup \\
+Directed RTL & 64-row tile: 196 issues, 58 parents, 31 dead writes, 64 commits\vcstag & Event-count calibration; synthetic signed-12-bit lanes \\
+Physical & 166{,}514~$\mu$m$^2$; $+27.9$/$+1.8$~ps; 16{,}549 FM pts; 29.08~mW / 22.07~nJ\dctag & Prelayout nine-SRAM island; mixed-corner window; no SPEF \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Related Work}
+Prosperity isolates product sparsity from bit sparsity on PTB~\cite{prosperity};
+the latter comparison is the relevant mechanism-level analogue to
+Table~\ref{tab:c1ladder}.  Phi stores hierarchical patterns chosen by
+DSE~\cite{phi}.  We adopt their evaluation pattern---cycle simulation plus
+RTL/physical anchors and a baseline ladder---without relabeling their numbers
+as ours.  FireFly-T motivates multi-spike service in a different
+operator~\cite{fireflyt} and is not an iso-graph baseline for C1.
+
+SpinalFlow sorts compressed spike streams to preserve state locality, and SNE
+makes convolutional work proportional to the incoming event
+stream~\cite{spinalflow,sne}.  Both establish event-driven execution.  Neither
+removes repeated products under a finite 1RW parent lifetime with atomic
+completion.  ODIN is a 28-nm digital neuromorphic core with online
+learning~\cite{frenkel2019odin}; it is a silicon neuron/synapse fabric, not a
+product-capture convolution island.  TCAS-II SRAM compute-in-memory briefs
+push sparsity into the array, including dynamic-sparsity control and PIM
+tutorials~\cite{qiao2022dscim,taylor2022pim}.  C1 is a digital 1RW parent store
+with residual reconstruction, not an in-array MAC macro; we cite those briefs
+as the circuits-venue prior on sparsity, not as interchangeable PPA.
+
+A 28-nm optical-flow chip jointly reports operations, external-memory
+traffic, latency, energy, and AEE~\cite{ciccflow}.  We follow that separation
+of metrics and do not numerically rank its silicon measurements against this
+prelayout island.  For a co-designed network, a published chip rarely supports
+the identical graph.  Comparison therefore stays at three levels: same-network
+component baselines, iso-workload public-artifact opportunities, and published
+technology-normalized metrics.  Results from different levels are never multiplied
+into a system speedup.
+
+\section{Discussion}
+C1's circuits contribution is the 1RW contract, not a larger
+sparsity percentage.  On this ledger, bit sparsity is already
+visible to a zero-skipping baseline and does not move time
+(1.003$\times$).  Product reuse does, but only while a legal parent
+occupies one of nine macros and the arbiter can still meet the
+row deadline.  Removing either constraint returns the design to
+the 1.902$\times$ ceiling, which we refuse to report as an island.
+
+ELSA and SpikeX reuse bundled events or weights across
+windows~\cite{elsa,spikex}.  Those priors matter for a typed
+source stream, but they do not substitute for residual
+reconstruction of a convolution product under a live-parent
+bitmap.  Claiming them as C1 would mix delivery reuse with
+product reuse.  This brief keeps the two objects separate: only
+product reuse with atomic completion is measured here.
+
+The physical numbers are prelayout on purpose.  ZeroWireload
+and ideal clocks are optimistic for a nine-macro island; they
+are still the correct class of evidence for an Express Brief that
+does not have a taped-out chip.  A reader looking for pJ/SOP
+on silicon should use ODIN or the CICC optical-flow
+chip~\cite{frenkel2019odin,ciccflow} and should not scale our
+29.08~mW window to those metrics.
+
+The ten-sample spread (1.661--1.723$\times$) is narrow enough to
+argue that C1 is not a one-trace accident, and wide enough to
+forbid quoting only the best sample.  We therefore report the
+ledger aggregate 1.6945$\times$ and the geometric mean 1.6946$\times$
+together, and we do not promote a max-sample headline.  The
+directed 64-row VCS tile sits at the other end of that honesty
+rule: it is one real-mask slice used to count grants, not a second
+speedup.
+
+Deadline holds and stalls in that tile (six and fourteen) are
+evidence that the 1RW arbiter is doing work.  A design that
+never stalls is either dual-ported or under-occupied.  C1 is
+neither.  The 12.25\% tax versus the concurrent-access ceiling
+is the same phenomenon at ledger scale: the port, not the
+parent relation, is the remaining bottleneck once dead writes
+are gone.
+
+\section{Limitations}
+The 1.6945$\times$ ratio is a cycle-model result calibrated by one real-mask
+RTL tile.  The mapped nine-SRAM component is a separate physical anchor, not
+a full integration of the 240-KiB-class common-charge ledger.  Energy is a
+directed window, not energy per frame, and the activity factor of that window
+is the directed 64-row mask task rather than a DSEC frame.  Hold and power of
+a companion weight-broadcast fabric, full-network FPS, and monolithic
+integration remain open and are not derived from C1 ratios.
+
+This brief therefore refuses several claims that would make a stronger
+headline.  We do not multiply the C1 model ratio by any FC-delivery or
+neuron-service factor.  We do not treat the concurrent-access ceiling as a
+second architecture.  We do not report Yosys or educational-library area as
+ASIC PPA.  We do not promote the compatibility-gate AEE delta as a
+quantization gain.  Those omissions are completeness requirements for a
+binary Express Brief, not missing experiments to be inferred by the reader.
+If a later campaign closes matched hold and power on the weight-broadcast
+fabric, that result belongs in a separate manuscript with at least thirty
+percent new material relative to this brief; it is not an unstated extra
+column of Table~\ref{tab:main}.
+
+\section{Conclusion}
+The principal circuit result is not firing sparsity itself, but its
+executable capture under a finite single-port parent store.  C1 provides
+bounded exact product reuse with a same-ledger model reduction of 1.6945$\times$
+and a 28-nm SRAM island that meets 3-ns setup/hold.  Separating model, VCS,
+and physical evidence yields a complete Express Brief without an unsupported
+whole-network claim.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\end{document}
