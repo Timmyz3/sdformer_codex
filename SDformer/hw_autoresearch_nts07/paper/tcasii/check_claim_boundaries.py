@@ -65,6 +65,9 @@ def main() -> None:
     assert "docs/359" not in text
     assert "parent masks and psums" not in text
     assert "parent-product scratch" in text
+    assert "18{,}432 B / 9 macros" in text
+    assert "214{,}912 B / 105 macros / 0.988 mm$^2$" in text
+    assert "complete ledger is an area model, not integrated PPA" in text
     assert "deterministic directed INT8 verification weights" in text
     assert "Naturally nonzero descriptors" in text
     assert "all 12 FC1 and 12 FC2 layer identities" in text
