@@ -15,7 +15,7 @@
 | TSBG | 2,880 固定区域 VCS workload，1.8345×、read −58.13%；matched logic +0.0118% | matched hold 仍有 −16.4 ps；matched energy 没有正结果 |
 | full-token robustness | 11.16M quartets，2.0874× VCS-calibrated CPU model | 仅为建模鲁棒性，不能提升为 RTL、full-network 或 energy/frame |
 | pre/post-read 消融 | M2231仅解析恢复，M2232独立结果审阅98/100；24 commits/axis、4608 products/axis、0 mismatch；2304/2304/576 reads | 已准入定向功能/省读因果，非population、mapped area或power；旧M2215失败保持不变 |
-| ICC2 库准备 | M2223 runtime证明 Milkyway option可query/set/readback；local_output_dir在本版本未注册 | checker混淆echo源码与runtime且存在隔离目录rename；M2224允许仅解析修复；没有转换/P&R结果 |
+| ICC2 库准备 | M2239只解析恢复、M2240独立结果审阅98/100；Milkyway option可query/set/readback，local_output_dir本版本未注册 | 后续转换源删除不支持的option并设已验证路径；没有转换/NDM/P&R结果，不与当前功耗DC抢队列 |
 | 功耗源修复 | M2233补齐M2160传递依赖，M2234独立审阅98/100、P0/P1/P2=0；已启动唯一一次M2235 | ordinary/TSBG × low/median/high 六点；仍须DC/PTPX与M2236结果审阅，当前不能引用新功耗 |
 | 稿件 | 新增通过审阅的pre/post-read因果消融；五页Letter，195词abstract、6 keywords；严格PDF检查PASS，末栏仅references | authors/funding等仍待填；功耗/hold未闭合，版式PASS不等于投稿证据全部完成 |
 
@@ -82,6 +82,6 @@ CPU 初筛已运行在全部 2,880 个现有固定区域 workload，共 4,320 �
 
 ## 收口顺序
 
-先恢复并独立审核现成的三轴 VCS 结果；完成传递依赖修复后跑冻结三档 matched power；基于 LM 诊断闭合物理库和 hold。新 beat 候选只占 CPU 模型工作，不阻塞这些实证。随后精简防御性文字，用时序图、bank activation 与 logic/SRAM energy 表组织五页正文，最终核对作者信息、格式和引用。
+三轴 VCS 与 LM命令发现的解析修复均已通过独立结果审阅，前者已进正文。M2235六套measurement SAIF均已生成且解析通过，当前ordinary DC正在mapping；两轴DC及六次PTPX尚未完成。下一步基于LM诊断闭合物理库和hold；新beat候选只占CPU模型工作，不阻塞这些实证。随后精简防御性文字，用时序图、bank activation与logic/SRAM energy表组织五页正文，最终核对作者信息和引用。2026-09-05版严格PDF检查已PASS且末页目视通过，不能等同于硬件/提交信息全部完成。
 
 内部自评维持约 3.8/5 的 Weak Accept 路径；新假设和解析器修复不自动提升分数。只有 matched physical/energy 与公平对标补齐，才有理由重新评估到更强的接收档位。
