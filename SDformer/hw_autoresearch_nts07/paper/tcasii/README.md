@@ -48,6 +48,12 @@ Official constraints (verify before upload):
   M2215 failure remains failed. The 75% directed reduction is not a new
   population speedup, matched energy result, or abstract headline.
 - Added TCAS-II / TBioCAS citations (Taylor PIM tutorial, Qiao DS-CIM, Frenkel ODIN).
+- Added six matched M2018 logic-energy estimates (M2248): low reuse is nearly
+  neutral, median/high selected windows save 33.65/65.86% completion energy.
+  These are ungated, ideal-clock TT estimates with verification INT8 weights,
+  not SRAM-inclusive or frame energy. Clock-pin power dominates, so a common
+  clock-gated comparison remains necessary. The new M2249 partial-bank variant
+  does not inherit these power numbers and is not yet promoted into the paper.
 - No M-numbers, no system FPS, no multiplied component ratios.
 
 ## 9.20 body vs submit
@@ -77,6 +83,8 @@ speedups or changing the abstract's scoped numbers. The FC2 continuation is comp
 the fixed-region VCS population covers all 12 FC1 and all 12 FC2 layer
 identities.  Legitimate remaining content is matched TSBG logic/SRAM energy,
 post-route timing/hold, and final author/thanks/funding/ORCID metadata.  No
-result may be invented merely to fill the page.  Tune `\IEEEtriggeratref{N}`
+result may be invented merely to fill the page. After the M2248 power table,
+the strict five-page check passes (body reaches 739.49 pt) and pages 4–5 were
+visually inspected. Tune `\IEEEtriggeratref{N}`
 only after the matched-power/P&R campaigns and independent paper review are
 complete.

@@ -52,7 +52,9 @@ def main() -> None:
     assert "never multiplied" in text.replace("\n", " ")
     assert "prelayout" in abstract
     assert "compatibility check" in text
-    assert "hold and power remain open" in text.replace("\n", " ")
+    assert "hold closure and SRAM-inclusive power remain open" in text.replace("\n", " ")
+    assert "ungated logic estimates" in text
+    assert "33.65" in evaluation and "65.86" in evaluation
     assert "logic-only" in text
     assert "not deployed SRAM area" in text
     assert "39.72\\% area reduction" in text

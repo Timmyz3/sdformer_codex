@@ -16,16 +16,16 @@ from m2244_consumer_union_bank_reads import masked_reads
 
 
 @lru_cache(None)
-def response_delay(phase, mask):
+def response_delay(phase, mask, uniform_latency=None):
     # Request is accepted in cycle 'phase', not phase+1. Accepted bank b
     # loads delay=8-b; the response is consumed 9-b cycles later. A blocked
     # ready phase adds one cycle. M803 assembles the latest required response.
-    return max(int((phase+b*2) % 7 == 0) + 9-b
+    return max(int((phase+b*2) % 7 == 0) + (9-b if uniform_latency is None else uniform_latency)
                for b in range(8) if mask >> b & 1)
 
 
-def run_chunk(words, mode, start=384):
-    cycle, age, reads = start, 0, 0
+def run_chunk(words, mode, start=384, prefetch_union=True, memory_latency=None):
+    cycle, age, reads, refills, partial = start, 0, 0, 0, 0
     cache = {}
     order = ((c,g) for c in range(4) for g in range(48)) if mode == 0 else (
         (c,g) for g in range(48) for c in range(4))
@@ -35,20 +35,23 @@ def run_chunk(words, mode, start=384):
             continue
         cycle += 1  # ST_FIND.
         age += 1
-        needed = active if mode == 0 else (
+        needed = active if mode == 0 or not prefetch_union else (
             words[0][g] | words[1][g] | words[2][g] | words[3][g]) & 65535
         valid = cache.get(g, (0,0))[0]
         missing = needed & ~valid
+        partial += int(bool(valid and missing))
         if g not in cache and len(cache) == 4:
             del cache[min(cache, key=lambda key: cache[key][1])]
         cache[g] = (valid | needed, age)
         for half in (missing & 255, missing >> 8):
             if half:
+                refills += 6
                 reads += 6 * half.bit_count()
                 for _ in range(6):
-                    cycle += response_delay(cycle % 7, half) + 1
+                    cycle += response_delay(cycle % 7, half, memory_latency) + 1
         cycle = issue(cycle, 6*(bool(active & 255)+bool(active >> 8)))
-    return dict(cycles=commit(cycle)-start, bank_reads=reads)
+    return dict(cycles=commit(cycle)-start, bank_reads=reads,
+                refill_beats=refills, partial_refills=partial)
 
 
 def main():
