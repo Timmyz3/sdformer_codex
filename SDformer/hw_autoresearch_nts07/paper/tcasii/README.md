@@ -70,7 +70,10 @@ Current compile (2026-09-05, musl tectonic): **5 Letter pages**, with page 5
 column 2 containing references only. The strict PDF checker passes without
 the draft-underfill exception; the final body reaches 703.62 pt, and page 5
 has been visually inspected. This formatting result does not close open
-hardware or author-metadata requirements. The FC2 continuation is complete:
+hardware or author-metadata requirements. The 2026-09-05 story revision also
+passes the five-page check (final body 727.53 pt); its contribution paragraph
+now leads with the two redundant-transfer costs, without adding candidate
+speedups or changing the abstract's scoped numbers. The FC2 continuation is complete:
 the fixed-region VCS population covers all 12 FC1 and all 12 FC2 layer
 identities.  Legitimate remaining content is matched TSBG logic/SRAM energy,
 post-route timing/hold, and final author/thanks/funding/ORCID metadata.  No

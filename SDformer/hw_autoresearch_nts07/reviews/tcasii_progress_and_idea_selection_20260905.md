@@ -1,5 +1,7 @@
 # TCAS-II 收口与新增机制取舍，2026-09-05
 
+当日后续更新：M2235 六份 measurement SAIF 正常，但 DC 的 filelist 根目录拼接错误，随后误用旧 WORK elaboration；该次 DC/功耗结果不可用。M2242 改为复用已生成活动、全新 WORK、只续跑 DC/PTPX。下文描述 M2235 在跑的段落是较早截点。M2241 已补同 streaming-cache 公平对照：取消额外缓存本身不加速，只留下复制/驻留状态的面积能量机会。最新文献和取舍见 [TCAS-II 行文与下一步](tcasii_accelerator_story_and_next_ideas_20260905.md)。
+
 ## 判断
 
 当前是可继续打磨的 C1 + C2/TSBG 电路组件稿。最优先补齐的证据是 C2 的 matched logic/SRAM energy 和 setup/hold；无需为普通 TCAS-II 投稿临时改成 FPGA 项目。保留两条主贡献，新增优化若成立就嵌入 C2，不再同时讲完整光流系统、算法创新和第三个硬件引擎。
