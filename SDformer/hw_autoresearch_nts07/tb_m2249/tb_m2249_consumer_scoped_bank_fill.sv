@@ -11,6 +11,9 @@
 `endif
 
 module tb_m2249_consumer_scoped_bank_fill;
+    bit service_sensitivity;
+    initial service_sensitivity=$test$plusargs("M2258_MEMORY_LATENCY")
+                                  || $test$plusargs("M2258_ALWAYS_READY");
     localparam int BUNDLE=4, GROUPS=48, SLICES=6, LANES=16;
     localparam int SCHEDULE_MODE=`M2217_SCHEDULE_MODE;
     localparam realtime CLOCK_PERIOD_NS=3.0;
@@ -326,7 +329,8 @@ module tb_m2249_consumer_scoped_bank_fill;
                     || req_sum-start_memory_requests!=expected_masked_reads
                     || rsp_sum-start_memory_responses!=expected_masked_reads
                     || terminal_count!=4
-                    || (!directed_case && (reorder_count==0 || independent_stall_count==0)))
+                    || (!directed_case && !service_sensitivity
+                        && (reorder_count==0 || independent_stall_count==0)))
                 $fatal(1,"M2217 completion ledger drift");
             for (int ctx=0;ctx<BUNDLE;ctx++) for (int os=0;os<SLICES;os++)
                 if (!observed[ctx][os]) $fatal(1,"M2217 missing commit");

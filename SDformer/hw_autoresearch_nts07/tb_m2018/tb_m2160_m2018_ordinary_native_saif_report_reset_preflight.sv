@@ -54,6 +54,16 @@ module m2160_directed_scalar_bank_memory #(
     logic [TAG_BITS-1:0] tag_q;
     logic [CHANNEL_BITS-1:0] channel_q;
     integer group_index, half_index, raw_weight;
+    // Optional explicit SRAM service sensitivity; original campaign defaults
+    // retain bank-dependent delay and independent ready stalls.
+    integer service_latency = -1;
+    bit service_always_ready = 0;
+    initial begin
+        if ($value$plusargs("M2258_MEMORY_LATENCY=%d",service_latency)
+                && (service_latency<1 || service_latency>16))
+            $fatal(1,"M2258 latency must be 1..16 cycles");
+        service_always_ready=$test$plusargs("M2258_ALWAYS_READY");
+    end
 `ifdef M2253_CAPTURED_WEIGHTS
     logic signed [7:0] captured_weights [0:73727];
     string captured_weight_file;
@@ -64,7 +74,8 @@ module m2160_directed_scalar_bank_memory #(
     end
 `endif
 
-    assign req_ready = !pending_q && ((cycle_q + BANK_ID * 2) % 7 != 0);
+    assign req_ready = !pending_q && (service_always_ready
+                                      || (cycle_q + BANK_ID * 2) % 7 != 0);
     assign rsp_valid = pending_q && delay_q == 0;
     assign rsp_epoch = epoch_q;
     assign rsp_slot = slot_q;
@@ -115,7 +126,7 @@ module m2160_directed_scalar_bank_memory #(
                 if (req_source_channel[2:0] != BANK_ID[2:0])
                     $fatal(1, "M2160 source-channel bank mismatch");
                 pending_q <= 1;
-                delay_q <= 8 - BANK_ID;
+                delay_q <= service_latency>=1 ? service_latency-1 : 8-BANK_ID;
                 epoch_q <= req_epoch;
                 slot_q <= req_slot;
                 generation_q <= req_generation;

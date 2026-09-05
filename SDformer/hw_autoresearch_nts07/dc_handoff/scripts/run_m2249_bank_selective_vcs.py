@@ -32,6 +32,8 @@ def main():
     ap.add_argument("--reuse-builds", type=Path)
     ap.add_argument("--demand-only", action="store_true",
                     help="Causal third axis: group-major order without union prefetch")
+    ap.add_argument("--memory-latency", type=int, choices=range(1,17))
+    ap.add_argument("--always-ready", action="store_true")
     args = ap.parse_args()
     if args.after_m2248:
         print("Waiting for M2248; no second EDA process launched.", flush=True)
@@ -64,6 +66,9 @@ def main():
             raise RuntimeError("VCS error: " + str(log))
         return text
     rows, directed = [], []
+    service_args = ([f"+M2258_MEMORY_LATENCY={args.memory_latency}"] if args.memory_latency else [])
+    if args.always_ready:
+        service_args.append("+M2258_ALWAYS_READY")
     axes = ((1, "tsbg_demand"),) if args.demand_only else ((0, "ordinary"), (1, "tsbg"))
     for mode, axis in axes:
         point = out / axis
@@ -82,7 +87,7 @@ def main():
             # Demand/union have equal scalar reads for a complete B4 group;
             # they differ in refill transaction count and waiting cycles.
             predicted = masked_reads(words, "tsbg" if mode else "ordinary", 4)[0]["bank_reads"]
-            text = command([str(build / "simv"), "-no_save", f"+M2217_STRATUM={window}",
+            text = command([str(build / "simv"), "-no_save", *service_args, f"+M2217_STRATUM={window}",
                 f"+EXPECTED_MASKED_READS={predicted}"], build, point / f"{window}.log")
             match = re.search(r"PASS_M2249_BANK_SELECTIVE mode=(\d+) stratum=(\w+) "
                 r"slot=(\d+) cycles=(\d+) bank_reads=(\d+) products=(\d+) "
@@ -98,7 +103,7 @@ def main():
         for index in range(4):
             counts, cache = masked_reads(directed_round(index), "tsbg" if mode else "ordinary", 4, cache)
             expected.append(counts["bank_reads"])
-        text = command([str(build / "simv"), "-no_save", "+M2249_PARTIAL_WARM",
+        text = command([str(build / "simv"), "-no_save", *service_args, "+M2249_PARTIAL_WARM",
             *[f"+EXPECTED_MASKED_READS{i}={v}" for i,v in enumerate(expected)]],
             build, point / "partial_warm.log")
         passes = re.findall(r"PASS_M2249_BANK_SELECTIVE[^\n]+", text)
@@ -107,6 +112,7 @@ def main():
         directed.append(dict(axis=axis, expected_bank_reads_per_round=expected, pass_lines=passes))
         print(axis, "partial/warm/eviction:", expected, flush=True)
     result = dict(status="PASS", rows=rows, directed=directed,
+        memory_latency_cycles=args.memory_latency, bank_ready_unstalled=args.always_ready,
         scope="Three preselected G48 windows and warm directed rounds; fixed memory/backpressure; not full population",
         consumer_union_enabled=not args.demand_only,
         arithmetic="Every committed Acc24 lane compared against independent signed INT8 reference",

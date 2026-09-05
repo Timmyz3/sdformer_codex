@@ -14,7 +14,7 @@
 
 \markboth{IEEE Transactions on Circuits and Systems---II: Express Briefs}{Authors: Exact Product and Weight-Delivery Reuse}
 
-\title{Finite-Lifetime Single-Port Product Capture and Context-Safe Weight Broadcast\\
+\title{Single-Port Product Capture and Context-Safe Weight Broadcast\\
 for Event-Driven Spiking Optical Flow}
 
 \author{Authors to be inserted%
@@ -32,9 +32,9 @@ flow: repeated arithmetic and weight delivery remain constrained by finite
 storage, ports, and accumulator ownership.  This brief presents two exact
 reuse islands for a frozen spiking optical-flow workload.  Both decide reuse
 before the resource being suppressed and preserve private completion state.
-C1 captures a
-product only while an exact-subset parent remains resident in a single-1RW
-store, issues the residual, suppresses dead writes, and retires completion
+C1 executes a
+Prosperity-compatible exact-subset forest in a single-1RW
+store, issues the residual, suppresses unused-parent writes, and retires completion
 atomically.  On 51.84 million source rows, its same-ledger cycle model reduces
 component time by 40.99\% (1.6945$\times$) versus strongest-zero skipping; a
 mapped 28-nm nine-SRAM island occupies 166{,}514~$\mu$m$^2$ and meets 3-ns
@@ -43,7 +43,8 @@ Token-set broadcast (TSBG) reuses only weight delivery while keeping products,
 destinations, and accumulators private.  Across 2,880 fixed real-activity
 workloads spanning all 12 FC1 and 12 FC2 layer identities, same-port/cache VCS
 reduces post-load cycles by 45.49\% (1.8345$\times$) and scalar weight reads by
-58.13\%, with 0.0118\% matched logic-area overhead.  Against equal-bandwidth
+58.13\%.  A matched clock-gated implementation adds 0.50\% logic area.
+Against equal-bandwidth
 K1$\times$8, K8 uses 77.61\%
 less logic and provides 4.541$\times$ directed-throughput/logic-area.  Results
 remain component-level and prelayout; no whole-network speedup is inferred.
@@ -67,12 +68,13 @@ neuromorphic processors such as ODIN~\cite{frenkel2019odin} and
 event-stream accelerators such as SpinalFlow and SNE~\cite{spinalflow,sne}
 establish spike-driven datapaths.  TCAS-II SRAM compute-in-memory macros
 exploit sparsity inside the array~\cite{qiao2022dscim,taylor2022pim}.  Our
-object is different: repeated \emph{products} of a convolution-like layer,
-subject to a 240-KiB-class parent lifetime and a physical 1RW contract.
+focus is the execution circuit for repeated \emph{products} of a
+convolution-like layer within a 240-KiB-class total storage budget and a
+physical 1RW contract, not a new definition of product sparsity.
 
 This brief addresses two costs that remain after zero-source skipping:
 retaining reusable products and repeatedly delivering the same weights.
-C1 captures products only while their parents are live, schedules reads and
+C1 retains selected parents for the current tile, schedules reads and
 writes through one physical port, and suppresses writes without a future
 consumer.  C2 shares an Acc24 fabric across eight typed sources; its TSBG
 frontend groups consumers before weight reads so that one delivered row
@@ -102,7 +104,7 @@ performance contributions.
 \centering
 \includegraphics[width=0.99\columnwidth]{figures/typed_source_islands.pdf}
 \caption{Two exact reuse objects under one typed-source protocol.  C1 retains
-only legal live parents in a finite 1RW store; C2/TSBG broadcasts one delivered
+selected parents in a finite 1RW store; C2/TSBG broadcasts one delivered
 weight row while preserving private signed products and Acc24 contexts.}
 \label{fig:overview}
 \end{figure}
@@ -110,23 +112,29 @@ weight row while preserving private signed products and Acc24 contexts.}
 \section{C1 Microarchitecture}
 \subsection{Directory and Legal Parents}
 C1 first builds a ping-pong directory for each 64-row, 16-source mask task.
-A row may select only an earlier exact-subset row as its parent.  Stable
-population-count ordering makes that choice unique: among legal parents the
-engine prefers the earliest still-live candidate so that later rows keep a
-deterministic residual.  A live-parent bitmap records which completed rows
-remain observable.  When the bitmap shows that no subsequent row can read a
-stored psum, that location is a dead write and is elided exactly rather than
-being scheduled as a drain.
+For a row with at least two active sources, C1 selects the nonempty
+exact-subset parent with maximum population
+count, breaking ties by original row index.  Equal-mask parents must have
+an earlier original index.  Execution follows stable population-count/index
+order.  Both the one-parent forest and this dependency-respecting order are
+inherited from the Prosperity artifact~\cite{prosperity}; they are not our
+algorithmic contribution.  A static parent-needed bitmap marks rows selected
+by at least one child.  A row with no selected child is never written to
+parent scratch.  This is unused-result write suppression, not dynamic
+last-consumer reclamation.
 
-The 240-KiB-class working set is the capacity that must be respected, not a
-DRAM-backed scratchpad.  Nine $128\times128$ 1RW SRAM leaves operate in
+The 240-KiB-class budget covers the modeled working set, not parent scratch
+alone.  Nine $128\times128$ 1RW SRAM leaves operate in
 parallel as one $128\times1152$ parent-product scratch and retain 96 signed
 12-bit product lanes.  Masks and the live-parent directory are control state;
-the downstream psum store is a separate boundary.  The engine never assumes
+the downstream psum store is a separate boundary.  The current 64-row task
+addresses only 64 entries: selected parents are retained until task completion,
+without within-task eviction or allocation-pressure misses.  The engine never assumes
 the ideal simultaneous 1R1W access that produced a higher but unphysicalized
-reuse ceiling.  This is the object difference from an unbounded
-product-sparsity opportunity: reuse must survive capacity, port, parent
-lifetime, and completion constraints.
+reuse ceiling.  The circuit contribution is implementing this established
+reuse relation with single-port service, write suppression, and atomic
+completion; the measured ratio against zero skipping also includes the
+inherited product-sparsity benefit.
 
 \subsection{Residual Issue and Exact Reconstruct}
 A selected parent mask $\mathcal{M}_p\subset\mathcal{M}_r$ yields a disjoint
@@ -138,7 +146,7 @@ product row by adding the stored parent:
 \label{eq:c1exact}
 \end{equation}
 Exactness follows from the disjoint union, not from value prediction.  If no
-resident legal parent exists, C1 selects the empty parent and issues the
+legal nonempty parent exists during directory construction, C1 selects the empty parent and issues the
 original source row.  Sign, destination, and accumulator identity are never
 coalesced across rows.  Thus sparsity changes delivered work without changing
 the operator result.
@@ -146,12 +154,12 @@ the operator result.
 \subsection{Single-Port Arbiter and Atomic Commit}
 The execution side combines one earliest-parent lookahead, a two-entry
 reserved response queue, and forwarding under a deadline-aware 1RW arbiter.
-A parent read, a residual product, and a psum write compete for the same
-macro port.  The arbiter grants the access that would otherwise miss its
+A parent-scratch read and a retained-result write compete for the same
+macro port; residual arithmetic can overlap a read, and architectural psum
+commit is a separate interface.  The arbiter grants the access that would otherwise miss its
 row-completion deadline; the reserved queue absorbs one already-accepted
 response so that a later grant cannot orphan it.  Forwarding supplies a
-just-written parent to the next residual without a second macro read when
-the bitmap still marks that parent live.
+just-completed parent to a waiting residual without a macro read.
 
 Final psum write and row completion are a single atomic event.  Backpressure
 may change service order, but it cannot expose a partially reconstructed row:
@@ -160,13 +168,12 @@ directed VCS tile on the first 64 real support masks of the cycle ledger is
 used later only to calibrate these event counts, not to replace the
 same-ledger cycle model.
 
-Speculative parent hits are disallowed.  A candidate is legal only if its
-mask is an exact subset and the live-parent bitmap is still set at grant
-time, not at directory build time.  That second check is what makes
-(1) exact under eviction: a parent that died between directory construction
-and issue is treated as missing, and C1 falls back to the empty parent.
-The fallback is slower than a stale hit and is the price of never
-reconstructing from a psum that the store no longer owns.
+Exactness depends on the subset relation and producer-before-consumer
+ordering.  The written bitmap distinguishes scratch-resident results from
+not-yet-written producers; forwarding is an alternative source of a valid
+parent.  Protocol checks do not implement eviction recovery.  Alternative
+parents, dynamic reclamation, and lifetime-minimizing row schedules are not
+part of this mapped island.
 
 \section{C2 Typed-K8 and Context-Safe Broadcast}
 The C2 fabric accepts up to eight nonzero typed sources and shares the Acc24
@@ -194,8 +201,8 @@ request state, so a reused row suppresses the memory request and all downstream
 response traffic instead of merely gating the multiplier after a read.
 
 Exact fallbacks are explicit.  If token contexts disagree on a weight-row
-identity, C2 emits separate fetches.  If C1 has no resident legal parent, it
-selects the empty parent and issues the original source row.  Backpressure may
+identity, C2 emits separate fetches.  If C1 finds no legal nonempty parent
+when building its directory, it issues the original source row.  Backpressure may
 alter service order but not ownership: terminal and atomic commit retire only
 after the corresponding private accumulator is complete.
 
@@ -272,8 +279,7 @@ holds, 14 stalls, and 64 commits/completions.  Lane values are deterministic
 synthetic signed-12-bit data with zero prior psum.  This calibrates modeled
 event counts and directed arithmetic; it does not itself produce the
 1.6945$\times$ cycle ratio.  A 64-row task is the scheduling quantum, not the
-convolution depth.  Parent replacement follows future liveness rather than
-raw-address recency: a recent product may already have no future consumer.
+convolution depth; no parent replacement occurs within it.
 
 For numerical binding, eight retained Conv3x3/ConvTranspose weights use
 per-output-channel narrow-range INT8 with a power-of-two scale.  The largest
@@ -299,6 +305,15 @@ Table~\ref{tab:main} reports post-load execution.  The G48
 subset spans 2.381--2.546$\times$ by sequence.  The continuation population
 contains 554 improvements, 404 ties, and two regressions of one and seven
 cycles (worst 0.99987$\times$); these tails remain in the ratio of sums.
+
+The shared verification memory uses bank-dependent one-to-nine-cycle
+responses, periodic request backpressure, and independent issue/commit
+stalls.  These service assumptions are identical across modes, not measured
+foundry-SRAM latency.  Consequently, the ratios characterize this frontend
+and its response-assembly contract; they do not establish superiority over
+an arbitrary fully overlapped streaming architecture.  A faster memory or
+another refill/compute overlap policy requires a new matched comparison,
+rather than multiplying a separate streaming gain into Table~\ref{tab:tsbgseq}.
 
 \begin{table}[t]
 \caption{TSBG-B4 fixed 40-sample VCS scope ladder.}
@@ -386,10 +401,14 @@ C1 store & 18{,}432 B / 9 macros; 214{,}912 B / 105 macros / 0.988 mm$^2$\modelt
 \end{tabular}
 \end{table}
 
-The matched ordinary/TSBG logic ablation occupies 249{,}710/249{,}740
-$\mu$m$^2$ ($+0.0118\%$) and both axes meet 3-ns setup.  Both retain a
-$-16.4$-ps prelayout hold diagnostic; consequently this brief does not claim a
-hold-closed C2 frequency.  The common 288-KiB, 16-macro weight capacity is a
+The matched clock-gated ordinary/TSBG implementations occupy
+234{,}537/235{,}701~$\mu$m$^2$ ($+0.50\%$).  Common 3-ns constraints,
+200-ps setup uncertainty, and 50-ps hold uncertainty are preserved through
+clock gating and hold-buffer repair.  Setup slack is $+122.7/+72.4$~ps;
+reported hold slack is positive but below 0.01~ps, not a robust post-CTS
+margin.  Mapped-to-mapped Formality passes 77,180/77,155 compare points.
+The earlier ungated pair was $+0.0118\%$ in area with hold open; that ratio
+does not describe the gated implementation.  The common 288-KiB, 16-macro weight capacity is a
 558{,}507-$\mu$m$^2$ foundry-QRT area model and is not counted as logic or as
 capacity saved by TSBG.  The observed 58.13\% reduction is bank activation,
 not deployed SRAM area.
@@ -402,19 +421,20 @@ capacity, not an integrated macro placement or routed timing result.
 
 \emph{Reuse density and execution energy.} Table~\ref{tab:power} uses three
 windows selected from low/median/high reuse-density strata before power
-measurement.  PrimeTime PX consumes post-load VCS activity on the matched
-ordinary/B4 netlists at TT, 0.9~V, 25~$^\circ$C, with a 0.1-ns ideal-clock
-slew.  All 1,712 inputs and 74,460 register outputs are activity-mapped.
-These are ungated logic estimates with verification INT8 weights; SRAM
-bank energy, preload, CTS and routing are excluded.  Average power changes
-by $-0.018/+0.054/+0.757\%$: the medium/high-density energy savings arise
-primarily from shorter completion time, not lower power per cycle.
-Clock-pin internal power contributes 97--98\%, making a common clock-gated
-implementation an important further comparison.  The three points describe
-density sensitivity, not a population or frame-energy average.
+measurement.  PrimeTime PX consumes post-load, zero-delay gate-VCS activity
+at TT, 0.9~V, 25~$^\circ$C with 0.1-ns ideal-clock slew.  Both netlists use
+common automatic clock-gating settings.  All 1,712 inputs and
+74,349/74,324 register outputs receive direct gate activity.  Weights are
+checkpoint-derived candidate INT8 FC weights, not an admitted FC quantization
+accuracy result.  SRAM bank energy, preload, CTS, routed glitches, and
+parasitics are excluded.  B4 averages 24.43--24.52~mW versus
+21.93--21.95~mW for ordinary: different clock-enable groupings leave B4 with
+higher clock-pin power.  Low reuse therefore \emph{increases} logic energy
+by 11.53\%; medium/high reuse saves energy through shorter execution, not
+lower power per cycle.  These are density sensitivities, not frame averages.
 
 \begin{table}[t]
-\caption{Matched post-load logic energy [prelayout PTPX, ungated].}
+\caption{Matched clock-gated post-load logic energy [prelayout PTPX].}
 \label{tab:power}
 \centering
 \scriptsize
@@ -422,9 +442,9 @@ density sensitivity, not a population or frame-energy average.
 \toprule
 Reuse stratum & Ordinary / B4 cycles & Energy (nJ), O / B4 & Reduction \\
 \midrule
-Low & 4,717 / 4,717 & 1,101.81 / 1,101.61 & 0.02\% \\
-Median & 6,733 / 4,465 & 1,570.48 / 1,042.02 & 33.65\% \\
-High & 22,294 / 7,554 & 5,200.13 / 1,775.33 & 65.86\% \\
+Low & 4,717 / 4,717 & 310.67 / 346.48 & $-11.53\%$ \\
+Median & 6,733 / 4,465 & 443.10 / 327.25 & 26.15\% \\
+High & 22,294 / 7,554 & 1,467.03 / 555.64 & 62.12\% \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -433,52 +453,37 @@ High & 22,294 / 7,554 & 5,200.13 / 1,775.33 & 65.86\% \\
 Prosperity already discovers subset/prefix parents, issues residual
 activations, and dependency-schedules their reconstruction~\cite{prosperity};
 C1 does not reclaim those ideas.  Its circuits claim is their execution under
-a finite parent-product lifetime and one physical 1RW port, including
-grant-time liveness recheck, deadline arbitration, reserved response,
-forwarding, dead-write suppression, and atomic completion.  Phi stores
+a tile-resident parent-product store and one physical 1RW port, including
+deadline arbitration, reserved response, forwarding, unused-parent write
+suppression, and atomic completion.  C1 inherits stable population-count
+ordering; it does not actively shorten parent lifetime.  Phi stores
 hierarchical patterns chosen by DSE~\cite{phi}.  We adopt their evaluation
 pattern---cycle simulation plus RTL/physical anchors and a baseline
 ladder---without relabeling their numbers as ours.
 
 FireFly-T already broadcasts wider vectorized data from one memory bank across
-spatial-temporal work~\cite{fireflyt}; ELSA and SpikeX establish bundled
-Gustavson delivery and cross-window weight reuse~\cite{elsa,spikex}.  TSBG does
+spatial-temporal work~\cite{fireflyt}; ELSA, SpikeX, and Bishop establish bundled
+delivery and spatial/temporal weight reuse~\cite{elsa,spikex,bishop}.  TSBG does
 not reclaim broadcast, bundling, group-major order, or weight reuse.  Its
 specialization decides a row hit before the SRAM request and shares only that
 delivery among typed signed contexts while destination, tag, terminal,
 product, and Acc24 ownership remain private under the same cache/port contract.
 This direct prior also precludes comparing K8 against a single K1 lane.
 
-SpinalFlow sorts compressed spike streams to preserve state locality, and SNE
-makes convolutional work proportional to the incoming event
-stream~\cite{spinalflow,sne}.  Both establish event-driven execution.  Neither
-removes repeated products under a finite 1RW parent lifetime or repeated
-weight delivery across private signed contexts.  ODIN is a 28-nm digital
-neuromorphic core with online
-learning~\cite{frenkel2019odin}; it is a silicon neuron/synapse fabric, not a
-product-capture convolution island.  TCAS-II SRAM compute-in-memory briefs
-push sparsity into the array, including dynamic-sparsity control and PIM
-tutorials~\cite{qiao2022dscim,taylor2022pim}.  C1 is a digital 1RW parent store
-with residual reconstruction, not an in-array MAC macro; we cite those briefs
-as the circuits-venue prior on sparsity, not as interchangeable PPA.  A
-TCAS-II SNN accelerator combines weight-stationary/local-output-stationary
-reuse with address skipping and dynamic scheduling~\cite{wslos2023}; C2 differs
-by sharing a delivered row across polarity-bearing contexts whose products and
-accumulators must remain private.
-Another TCAS-II accelerator encodes inter-network weight deltas to reduce
-external-memory access~\cite{an2024dws}.  That static representation is
-orthogonal to TSBG: our weights are unchanged, and the saved event is a runtime
-read of the same row by multiple live contexts.  The comparison reinforces why
-request count, logic cost, and SRAM energy must be reported separately.
+SpinalFlow and SNE establish event-driven execution and state
+locality~\cite{spinalflow,sne}; ODIN demonstrates a silicon neuromorphic
+core~\cite{frenkel2019odin}.  Their PPA is not an interchangeable baseline
+for these digital reuse islands.  TCAS-II WS-LOS combines weight/local-output
+reuse with skipping~\cite{wslos2023}, while delta weight sharing reduces
+traffic through static inter-network representation~\cite{an2024dws}.
+Our weights are unchanged; the evaluated event is a runtime read shared by
+private contexts.  Request counts, logic cost, and memory energy therefore
+remain separate metrics.
 
-A 28-nm optical-flow chip jointly reports operations, external-memory
-traffic, latency, energy, and AEE~\cite{ciccflow}.  We follow that separation
-of metrics and do not numerically rank its silicon measurements against this
-prelayout island.  For a co-designed network, a published chip rarely supports
-the identical graph.  Comparison therefore stays at three levels: same-network
-component baselines, iso-workload public-artifact opportunities, and published
-technology-normalized metrics.  Results from different levels are never
-multiplied into a system speedup.
+A 28-nm optical-flow chip separates operations, memory traffic, latency,
+energy, and AEE~\cite{ciccflow}.  We likewise separate same-workload component
+comparisons, public-artifact opportunities, and published chip results,
+without ranking prelayout estimates against silicon energy.
 
 \begin{table}[t]
 \caption{Direct-prior boundary; inherited mechanisms are not reclaimed.}
@@ -489,7 +494,7 @@ multiplied into a system speedup.
 \toprule
 Prior & Inherited mechanism & Circuit specialization here \\
 \midrule
-Prosperity & subset parent, residual, dependency & finite lifetime; one 1RW grant; atomic completion \\
+Prosperity & subset parent, residual, dependency & tile-resident 1RW service; atomic completion \\
 FireFly-T / ELSA & bank broadcast; bundled Gustavson delivery & typed sign/destination/Acc24 private; hit before read request \\
 Phi & hierarchical sparse pattern and DSE & no pattern claim; physical port/capacity ladder \\
 WS-LOS & weight/local-output reuse and skipping & same-cache token-set A/B with private products \\
@@ -499,12 +504,9 @@ Delta weight sharing & static representation and traffic reduction & unchanged w
 \end{table}
 
 \section{Scope and Limitations}
-C1 and C2 remove different max terms.  C1 reuses a signed product while paying
-for finite parent lifetime and one 1RW grant; C2/TSBG reuses a weight delivery
-while retaining private products and accumulators.  Their ratios are therefore
-not multiplied.  On the C1 ledger, same-coordinate bit skipping gives only
-1.003$\times$, whereas exact parent reuse gives 1.6945$\times$; the remaining
-12.25\% gap to the concurrent-access ceiling is the measured single-port tax.
+C1 reuses products under a 1RW service constraint; C2/TSBG reuses weight
+delivery while retaining private accumulation.  Their ratios are not
+multiplied, and neither proves a whole-network latency improvement.
 
 In the 2,880-workload direct-VCS population, TSBG has seven slightly slower
 nonempty cases because group-major order can
@@ -516,7 +518,8 @@ time.  Ordinary scheduling remains an exact fallback.
 C1's mapped nine-SRAM island and full 214,912-B ledger are separate evidence;
 the 105-macro capacity is a 0.988-mm$^2$ area model rather than integrated PPA.
 Its 22.07-nJ result is a directed prelayout window, not frame energy.  C2/TSBG
-is presently setup-clean; hold closure and SRAM-inclusive power remain open.
+has prelayout gated setup/hold repair and a three-window logic-energy
+comparison; post-CTS timing robustness and SRAM-inclusive power remain open.
 Its common 288-KiB weight store is modeled separately.  No component ratio is promoted to
 monolithic FPS, energy/frame, or whole-network speedup.
 

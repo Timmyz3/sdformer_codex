@@ -36,7 +36,7 @@ def main() -> None:
 
     for required in (
         "1.6945", "40.99", "51.84", "166", "514", "setup/hold",
-        "2,880", "1.8345", "45.49", "58.13", "0.0118", "4.541", "77.61",
+        "2,880", "1.8345", "45.49", "58.13", "0.50", "4.541", "77.61",
         "prelayout", "whole-network",
     ):
         assert required in abstract, ("missing admitted component fact in abstract", required)
@@ -52,9 +52,9 @@ def main() -> None:
     assert "never multiplied" in text.replace("\n", " ")
     assert "prelayout" in abstract
     assert "compatibility check" in text
-    assert "hold closure and SRAM-inclusive power remain open" in text.replace("\n", " ")
-    assert "ungated logic estimates" in text
-    assert "33.65" in evaluation and "65.86" in evaluation
+    assert "post-CTS timing robustness and SRAM-inclusive power remain open" in text.replace("\n", " ")
+    assert "zero-delay gate-VCS activity" in text
+    assert "26.15" in evaluation and "62.12" in evaluation and "11.53" in evaluation
     assert "logic-only" in text
     assert "not deployed SRAM area" in text
     assert "39.72\\% area reduction" in text

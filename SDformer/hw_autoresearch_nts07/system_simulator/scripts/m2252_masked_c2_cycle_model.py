@@ -16,15 +16,15 @@ from m2244_consumer_union_bank_reads import masked_reads
 
 
 @lru_cache(None)
-def response_delay(phase, mask, uniform_latency=None):
+def response_delay(phase, mask, uniform_latency=None, always_ready=False):
     # Request is accepted in cycle 'phase', not phase+1. Accepted bank b
     # loads delay=8-b; the response is consumed 9-b cycles later. A blocked
     # ready phase adds one cycle. M803 assembles the latest required response.
-    return max(int((phase+b*2) % 7 == 0) + (9-b if uniform_latency is None else uniform_latency)
+    return max(int(not always_ready and (phase+b*2) % 7 == 0) + (9-b if uniform_latency is None else uniform_latency)
                for b in range(8) if mask >> b & 1)
 
 
-def run_chunk(words, mode, start=384, prefetch_union=True, memory_latency=None):
+def run_chunk(words, mode, start=384, prefetch_union=True, memory_latency=None, always_ready=False):
     cycle, age, reads, refills, partial = start, 0, 0, 0, 0
     cache = {}
     order = ((c,g) for c in range(4) for g in range(48)) if mode == 0 else (
@@ -48,7 +48,7 @@ def run_chunk(words, mode, start=384, prefetch_union=True, memory_latency=None):
                 refills += 6
                 reads += 6 * half.bit_count()
                 for _ in range(6):
-                    cycle += response_delay(cycle % 7, half, memory_latency) + 1
+                    cycle += response_delay(cycle % 7, half, memory_latency, always_ready) + 1
         cycle = issue(cycle, 6*(bool(active & 255)+bool(active >> 8)))
     return dict(cycles=commit(cycle)-start, bank_reads=reads,
                 refill_beats=refills, partial_refills=partial)
