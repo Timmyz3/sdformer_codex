@@ -6,6 +6,9 @@
 `ifndef M2217_SCHEDULE_MODE
 `define M2217_SCHEDULE_MODE -1
 `endif
+`ifndef M2254_UNION_PREFETCH
+`define M2254_UNION_PREFETCH 1
+`endif
 
 module tb_m2249_consumer_scoped_bank_fill;
     localparam int BUNDLE=4, GROUPS=48, SLICES=6, LANES=16;
@@ -44,7 +47,8 @@ module tb_m2249_consumer_scoped_bank_fill;
         if (rst_core) tb_cycle <= 0; else tb_cycle <= tb_cycle + 1;
 
     m2249_c2_consumer_scoped_bank_fill_frontend #(
-        .SCHEDULE_MODE(SCHEDULE_MODE), .SOURCE_GROUPS(GROUPS)
+        .SCHEDULE_MODE(SCHEDULE_MODE), .SOURCE_GROUPS(GROUPS),
+        .UNION_PREFETCH(`M2254_UNION_PREFETCH)
     ) dut_axis (
         .clk_core(clk_core), .rst_core(rst_core),
         .load_valid(load_valid), .load_ready(axis.load_ready),

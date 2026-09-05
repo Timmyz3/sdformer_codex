@@ -61,3 +61,30 @@ that population, and neither experiment provides mapped area or timing for this
 new variant. Conventional sector-valid caching and sparse broadcast scheduling
 are antecedents; the implementation contribution is their concrete combination
 with this C2 signed/banked interface and fair ordinary baseline.
+
+## Causal third axis (M2254)
+
+`UNION_PREFETCH=0` keeps group-major TSBG but fills only the current consumer's
+missing banks. This separates existing locality from the new union co-fill.
+On 4,320 cold chunks, the cycle model gives:
+
+| Axis | Cycles | Bank reads | Refill transactions (half × output slice) |
+| --- | ---: | ---: | ---: |
+| ordinary, demand | 14,508,203 | 2,623,644 | 1,657,104 |
+| group-major, demand | 10,545,945 | 1,604,430 | 1,165,050 |
+| group-major, union | 8,052,073 | 1,604,430 | 743,718 |
+
+Union's **increment beyond group-major demand** is 1.3097x modeled cycles and
+36.16% fewer refill transactions, with **no extra scalar-read reduction**.
+An independent reviewer recomputed these counts without calling the production
+cycle function. There are 2,432 improved chunks, 1,867 ties and 21 regressions;
+the worst changes 210 to 214 cycles. Uniform 1/2/4/8-cycle memory-response
+sensitivity yields 1.232/1.289/1.351/1.423x versus group-major demand. Those
+latency variants are models, not additional VCS measurements.
+
+`run_m2249_bank_selective_vcs.py --demand-only` has now passed the causal third
+RTL axis: `results/m2249_bank_selective_h8ncb9k8/result.json`. Its low/median/high
+cycles are 2044/2424/7549 with unchanged 312/300/1098 bank reads; the union mode
+uses 2044/2189/5848 cycles. All three agree with the literal model. The four
+warm/partial/eviction/signed rounds also pass. These three extra anchors are not
+a full-population RTL execution.

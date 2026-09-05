@@ -20,7 +20,9 @@ if {[catch {
     set_wire_load_model -name ZeroWireload -library tcbn28hpcplusbwp35p140tt0p9v25c
     set_input_transition 0.100 [remove_from_collection [all_inputs] [get_ports clk_core]]
     set_clock_transition 0.100 [get_clocks core_clk]
-    source $::env(M2246_MAP)
+    if {![info exists ::env(M2246_GATE_LEVEL)] || $::env(M2246_GATE_LEVEL) ne "1"} {
+        source $::env(M2246_MAP)
+    }
     redirect "$output/saif_annotation.rpt" {
         read_saif $::env(M2246_SAIF) \
             -strip_path tb_m2217_m2018_tsbg_matched_native_saif_power/dut_axis \

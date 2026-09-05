@@ -30,6 +30,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--after-m2248", action="store_true")
     ap.add_argument("--reuse-builds", type=Path)
+    ap.add_argument("--demand-only", action="store_true",
+                    help="Causal third axis: group-major order without union prefetch")
     args = ap.parse_args()
     if args.after_m2248:
         print("Waiting for M2248; no second EDA process launched.", flush=True)
@@ -62,7 +64,8 @@ def main():
             raise RuntimeError("VCS error: " + str(log))
         return text
     rows, directed = [], []
-    for mode, axis in ((0, "ordinary"), (1, "tsbg")):
+    axes = ((1, "tsbg_demand"),) if args.demand_only else ((0, "ordinary"), (1, "tsbg"))
+    for mode, axis in axes:
         point = out / axis
         point.mkdir()
         previous = args.reuse_builds.resolve() / axis if args.reuse_builds else point
@@ -70,12 +73,15 @@ def main():
         if not (build / "simv").is_file():
             command([str(cfg.VCS), "-full64", "-sverilog", "-timescale=1ns/1ps",
                 "+vcs+initreg+random", f"+define+M2217_SCHEDULE_MODE={mode}",
+                f"+define+M2254_UNION_PREFETCH={0 if args.demand_only else 1}",
                 "-assert", "svaext", "-lca", *map(str, sources), "-top",
                 "tb_m2249_consumer_scoped_bank_fill", "-o", str(build / "simv")],
                 build, point / "compile.log")
         for window, slot in (("low", 1606), ("median", 526), ("high", 1071)):
             words = [packed[slot*192+c*48:slot*192+(c+1)*48] for c in range(4)]
-            predicted = masked_reads(words, axis, 4)[0]["bank_reads"]
+            # Demand/union have equal scalar reads for a complete B4 group;
+            # they differ in refill transaction count and waiting cycles.
+            predicted = masked_reads(words, "tsbg" if mode else "ordinary", 4)[0]["bank_reads"]
             text = command([str(build / "simv"), "-no_save", f"+M2217_STRATUM={window}",
                 f"+EXPECTED_MASKED_READS={predicted}"], build, point / f"{window}.log")
             match = re.search(r"PASS_M2249_BANK_SELECTIVE mode=(\d+) stratum=(\w+) "
@@ -90,7 +96,7 @@ def main():
             print(match.group(), flush=True)
         cache, expected = None, []
         for index in range(4):
-            counts, cache = masked_reads(directed_round(index), axis, 4, cache)
+            counts, cache = masked_reads(directed_round(index), "tsbg" if mode else "ordinary", 4, cache)
             expected.append(counts["bank_reads"])
         text = command([str(build / "simv"), "-no_save", "+M2249_PARTIAL_WARM",
             *[f"+EXPECTED_MASKED_READS{i}={v}" for i,v in enumerate(expected)]],
@@ -101,12 +107,13 @@ def main():
         directed.append(dict(axis=axis, expected_bank_reads_per_round=expected, pass_lines=passes))
         print(axis, "partial/warm/eviction:", expected, flush=True)
     result = dict(status="PASS", rows=rows, directed=directed,
-        scope="Three preselected G48 windows, two actual RTL modes, fixed memory/backpressure; not full population",
+        scope="Three preselected G48 windows and warm directed rounds; fixed memory/backpressure; not full population",
+        consumer_union_enabled=not args.demand_only,
         arithmetic="Every committed Acc24 lane compared against independent signed INT8 reference",
         comparison="Both modes use per-bank valid LRU4; only context-vs-group scheduling and consumer union differ",
         timing_area_power_measured=False, system_speedup_measured=False)
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
-    print("PASS six M2249 pilots; result:", out / "result.json", flush=True)
+    print("PASS M2249 campaign; result:", out / "result.json", flush=True)
 
 
 if __name__ == "__main__":

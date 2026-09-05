@@ -33,6 +33,11 @@ module tb_m2217_m2018_tsbg_matched_native_saif_power;
     integer expected_bundles, expected_reads, expected_cycles;
     string stratum, sequence_name, target_name, token_role;
     logic [31:0] fixture_word [0:368639];
+`ifdef M2253_CAPTURED_WEIGHTS
+    // Optional power sensitivity only; default directed campaign is unchanged.
+    logic signed [7:0] captured_weights [0:73727];
+    string captured_weight_file;
+`endif
     integer signed expected [0:BUNDLE-1][0:SLICES-1][0:LANES-1];
     logic observed [0:BUNDLE-1][0:SLICES-1];
     logic measurement_window_active=0;
@@ -45,9 +50,14 @@ module tb_m2217_m2018_tsbg_matched_native_saif_power;
     always @(posedge clk_core)
         if (rst_core) tb_cycle <= 0; else tb_cycle <= tb_cycle + 1;
 
+`ifdef M2256_MAPPED_TOP
+    // Same port-level stimulus/scoreboard, but observe the actual gated netlist.
+    `M2256_MAPPED_TOP dut_axis (
+`else
     m2018_c2_tsbg_b4_divfree_fair_scheduler_frontend #(
         .SCHEDULE_MODE(SCHEDULE_MODE), .SOURCE_GROUPS(GROUPS)
     ) dut_axis (
+`endif
         .clk_core(clk_core), .rst_core(rst_core),
         .load_valid(load_valid), .load_ready(axis.load_ready),
         .load_context(load_context), .load_tag(load_tag),
@@ -170,10 +180,15 @@ module tb_m2217_m2018_tsbg_matched_native_saif_power;
         input integer group_index, half_index, output_slice, bank, lane);
         integer value;
         begin
+`ifdef M2253_CAPTURED_WEIGHTS
+            return int'(captured_weights[
+                (((group_index*2+half_index)*6+output_slice)*8+bank)*16+lane]);
+`else
             value=(group_index*17+half_index*11+output_slice*7+bank*5+lane*3)%255-127;
             if (group_index==0 && half_index==0 && output_slice==0
                     && bank==0 && lane==0) value=-128;
             return value;
+`endif
         end
     endfunction
 
@@ -342,6 +357,14 @@ module tb_m2217_m2018_tsbg_matched_native_saif_power;
         if (SCHEDULE_MODE!=0 && SCHEDULE_MODE!=1)
             $fatal(1,"M2217 schedule mode compile definition missing/illegal");
         choose_window(); tb_cycle=0; done_cycle=-1; execute_start_cycle=-1;
+`ifdef M2253_CAPTURED_WEIGHTS
+        if (!$value$plusargs("M2253_WEIGHTS=%s",captured_weight_file))
+            $fatal(1,"M2253 weight file required");
+        $readmemh(captured_weight_file,captured_weights);
+        foreach (captured_weights[i]) if ($isunknown(captured_weights[i]))
+            $fatal(1,"M2253 incomplete weight input");
+        $display("M2253_REAL_WEIGHT_POWER_SENSITIVITY file=%s accuracy_admitted=0",captured_weight_file);
+`endif
         terminal_count=0; reorder_count=0; last_response_bank=-1;
         independent_stall_count=0; rst_core=1; load_valid=0;
         load_context=0; load_tag=0; load_group=0; load_source_active=0;

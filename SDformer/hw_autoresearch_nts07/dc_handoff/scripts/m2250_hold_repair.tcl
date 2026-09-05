@@ -23,9 +23,16 @@ if {[catch {
     set_cost_priority -min_delay
     if {$::env(M2250_GATE_CLOCK) eq "1"} {
         # A common implementation axis, never credited as new sparsity.
-        set_clock_gating_style -positive_edge_logic integrated -control_point none \
+        # The foundry ICG cells have latch_posedge_precontrol, not the
+        # no-test-pin latch_posedge flavor. Functional test enable is tied low.
+        set_clock_gating_style -positive_edge_logic integrated -control_point before \
             -minimum_bitwidth 8 -max_fanout 64
         compile_ultra -incremental -gate_clock
+        set test_ports [get_ports -quiet *test*]
+        set scan_ports [get_ports -quiet *scan_enable*]
+        foreach_in_collection port [add_to_collection $test_ports $scan_ports] {
+            set_case_analysis 0 $port
+        }
         redirect "$output/reports/clock_gating.rpt" {report_clock_gating}
     }
     compile_ultra -incremental -only_design_rule

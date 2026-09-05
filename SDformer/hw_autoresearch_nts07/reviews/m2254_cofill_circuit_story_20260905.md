@@ -27,7 +27,9 @@ The **incremental** modeled result is 23.65% less execution time (1.3097x)
 and 36.16% fewer refill beats, at identical bank-read counts. The 38.85% read
 reduction versus token-major includes existing TSBG locality and must not be
 attributed to union co-fill alone. Six original VCS pilot axes calibrate the
-model exactly; a third group-demand RTL axis is prepared, not yet run.
+model exactly; the third group-demand RTL axis subsequently passed all three
+pilots (2044/2424/7549 cycles, 312/300/1098 reads) and four warm/signed rounds
+in `results/m2249_bank_selective_h8ncb9k8/result.json`.
 An independent reviewer reproduced all table totals without calling the
 production cycle-model function, plus all eight warm/directive rounds.
 

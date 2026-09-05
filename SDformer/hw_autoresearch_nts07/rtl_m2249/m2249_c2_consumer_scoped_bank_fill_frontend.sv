@@ -9,6 +9,7 @@
 // changing layer/weight tensor; group tags are not global model addresses.
 module m2249_c2_consumer_scoped_bank_fill_frontend #(
     parameter int SCHEDULE_MODE = 1,
+    parameter bit UNION_PREFETCH = 1'b1,
     parameter int BUNDLE = 4,
     parameter int SOURCE_GROUPS = 48,
     parameter int SOURCES_PER_GROUP = 16,
@@ -208,7 +209,7 @@ module m2249_c2_consumer_scoped_bank_fill_frontend #(
 
     always_comb begin : consumer_bank_set
         needed_banks = find_active_row;
-        if (SCHEDULE_MODE == 1) begin
+        if (SCHEDULE_MODE == 1 && UNION_PREFETCH) begin
             needed_banks = 0;
             for (int c = 0; c < 4; c++)
                 needed_banks |= active_row_q[c][find_group];

@@ -54,6 +54,15 @@ module m2160_directed_scalar_bank_memory #(
     logic [TAG_BITS-1:0] tag_q;
     logic [CHANNEL_BITS-1:0] channel_q;
     integer group_index, half_index, raw_weight;
+`ifdef M2253_CAPTURED_WEIGHTS
+    logic signed [7:0] captured_weights [0:73727];
+    string captured_weight_file;
+    initial begin
+        if (!$value$plusargs("M2253_WEIGHTS=%s",captured_weight_file))
+            $fatal(1,"M2253 memory weight file required");
+        $readmemh(captured_weight_file,captured_weights);
+    end
+`endif
 
     assign req_ready = !pending_q && ((cycle_q + BANK_ID * 2) % 7 != 0);
     assign rsp_valid = pending_q && delay_q == 0;
@@ -66,12 +75,17 @@ module m2160_directed_scalar_bank_memory #(
         group_index = int'(channel_q) / 16;
         half_index = (int'(channel_q) / 8) % 2;
         for (int lane = 0; lane < LANES; lane++) begin
+`ifdef M2253_CAPTURED_WEIGHTS
+            raw_weight = int'(captured_weights[
+                (((group_index*2+half_index)*6+int'(slice_q))*8+BANK_ID)*16+lane]);
+`else
             raw_weight = (group_index * 17 + half_index * 11
                           + int'(slice_q) * 7 + BANK_ID * 5
                           + lane * 3) % 255 - 127;
             if (group_index == 0 && half_index == 0 && slice_q == 0
                     && BANK_ID == 0 && lane == 0)
                 raw_weight = -128;
+`endif
             rsp_weight[lane] = raw_weight;
         end
     end

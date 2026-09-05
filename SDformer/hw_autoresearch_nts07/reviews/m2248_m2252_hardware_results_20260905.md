@@ -68,12 +68,63 @@ Evidence: `results/m2252_masked_c2_cycle_model/result.json`.
 
 - Existing ordinary/B4 mapped areas reproduce 249710.45 / 249739.81 um2.
   Setup +26.4/+68.8 ps; hold -16.4 ps. First hold-only optimization inserted no
-  cells; a hold-priority attempt is running with unchanged clock/I/O limits.
+  cells; a hold-priority attempt also inserted no cells. A common clock-gated
+  comparison is running with unchanged clock/I/O limits. The first ICG style
+  was unavailable in the library; the corrected style uses its existing
+  precontrol ICG cells, not an invented library primitive.
 - Compare common clock gating on both axes before using the ungated energy
   numbers as the best implementation comparison.
 - Three real ep34 FC weight candidates exported on CPU (M2251), without
-  training or changing the checkpoint; power sensitivity is not run yet.
+  training or changing the checkpoint. Both RTL axes now pass all three
+  real-weight numerical/SAIF windows (M2253); this is an activity sensitivity,
+  not an admitted FC quantization/AEE result.
 - C1 is unchanged. No new fourth contribution or full-system headline is added.
 - Strong Accept is not certified by these results. The useful improvement is
   actual component power evidence plus a functioning stronger-baseline RTL
   extension; mapped closure, fair gating and manuscript integration remain.
+
+## September 5, 16:02: ordinary clock-gated timing and preservation close
+
+The original gated DC reduced area to 223190.85 um2 but left -16.496 ps hold.
+A data/reset endpoint buffer ECO closed hold, and sizing three shared-control
+cells recovered setup without weakening constraints. The final ordinary axis
+is `results/m2255_hold_buffers_wq4h9t91`: 234537.41 um2, setup +122.717 ps,
+hold +0.004 ps, still ideal-clock/ZeroWireload, no routing. Hold uncertainty
+remains 50 ps; the tiny positive reported margin is not a post-CTS guarantee.
+
+`results/m2255_mapped_preservation_x62ps2cz` proves preservation against the
+original ungated mapped ordinary netlist: 77180 compare points PASS, no failing
+or aborted points. The 1163 inserted clock-gating latches are recognized by
+Formality's latch-based clock-gate analysis, not cut as functional data paths.
+This is mapped-to-mapped preservation, not an added RTL-to-gate campaign.
+
+The TSBG gated axis is running. Do not transfer the
+ordinary result to TSBG, change the paper's matched area pair yet, or use
+M2248 ungated power for this netlist. The consumer-union causal third RTL mode
+has passed; its population model and the three actual RTL anchors are
+separated in M2254.
+
+## September 5, 16:31: direct mapped activity and first gated power point
+
+The old RTL map is not valid after register merging during clock insertion;
+the first attempted mapped-ECO/old-map PTPX was stopped and is not used.
+Instead, M2256 runs the actual gated netlist with the same port-level workload,
+scalar arithmetic scoreboard, request ledger, and candidate ep34 FC weights.
+DC's flattened port order is explicitly reconstructed; no state is forced.
+The middle window passes at the unchanged 6733 cycles. Low and high also pass
+4717/22294 cycles using the same compiled mapped design.
+
+The first direct-SAIF PTPX point is 21.9369202 mW, ordinary/median, at TT
+0.9 V/25 C. All 257197 reported nets, including 1163 clock-gate outputs, obtain
+toggle and probability directly from the gate SAIF; none use default activity.
+The report includes 74349 sequential output nets and 1712 primary input nets.
+This is zero-delay mapped activity plus prelayout library power, not routed
+glitch power or external SRAM energy. It must not be compared directly with
+M2248 as a pure gating improvement: M2248 used verification weights and RTL
+activity propagation. The fair TSBG gated/real-weight counterpart is pending.
+
+Independent milestone review confirms unchanged SDC, the 30016 buffer ECO and
+three cell sizes, and the mapped-preservation result. The unfiltered min-path
+report and full timing constraint report support reported hold MET; an empty
+slack-filter query by itself would not. There is still a zero-valued leakage
+optimization target violation, so this is not "all constraints PASS".
