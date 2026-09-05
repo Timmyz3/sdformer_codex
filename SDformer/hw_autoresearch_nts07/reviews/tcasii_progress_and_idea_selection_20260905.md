@@ -14,12 +14,14 @@
 | C2 K8 | 等带宽 K1×8 对比 1913/1945 周期；4.541× throughput/logic-area；logic area −77.61% | 不把面积效率写成同资源周期倍率 |
 | TSBG | 2,880 固定区域 VCS workload，1.8345×、read −58.13%；matched logic +0.0118% | matched hold 仍有 −16.4 ps；matched energy 没有正结果 |
 | full-token robustness | 11.16M quartets，2.0874× VCS-calibrated CPU model | 仅为建模鲁棒性，不能提升为 RTL、full-network 或 energy/frame |
-| pre/post-read 消融 | M2215 原始 VCS 24 commits/axis、4608 products/axis、0 mismatch；2304/2304/576 reads | 原生产parser失败；M2216独立确认可新身份parse-only恢复，旧失败包保持不变 |
+| pre/post-read 消融 | M2231仅解析恢复，M2232独立结果审阅98/100；24 commits/axis、4608 products/axis、0 mismatch；2304/2304/576 reads | 已准入定向功能/省读因果，非population、mapped area或power；旧M2215失败保持不变 |
 | ICC2 库准备 | M2223 runtime证明 Milkyway option可query/set/readback；local_output_dir在本版本未注册 | checker混淆echo源码与runtime且存在隔离目录rename；M2224允许仅解析修复；没有转换/P&R结果 |
-| 功耗源修复 | M2226发现最后一级M2160未锁SHA，尚未启动生产 | M2233修复完整传递依赖闭包，另人独立评审后再启动新身份 |
-| 稿件 | 五页 Letter；195词abstract，6 keywords；最后右栏为references | 第五页正文未达到项目检查器目标，authors/funding等仍待填；应以功耗和机制图填充有效内容 |
+| 功耗源修复 | M2233补齐M2160传递依赖，M2234独立审阅98/100、P0/P1/P2=0；已启动唯一一次M2235 | ordinary/TSBG × low/median/high 六点；仍须DC/PTPX与M2236结果审阅，当前不能引用新功耗 |
+| 稿件 | 新增通过审阅的pre/post-read因果消融；五页Letter，195词abstract、6 keywords；严格PDF检查PASS，末栏仅references | authors/funding等仍待填；功耗/hold未闭合，版式PASS不等于投稿证据全部完成 |
 
-上表的 C1、K8、TSBG 倍率采用各自冻结分母，不能相乘。三轴消融的原始日志当前只用于诊断；修复解析器和独立结果审查完成之前不回填论文。
+上表的 C1、K8、TSBG 倍率采用各自冻结分母，不能相乘。三轴消融经M2232独立审阅后已回填Evaluation，仅说明定向请求因果，不改摘要倍率。M2232 review SHA为 `05309255148c9d55b2ee84dc10abb925ccf2f72a4d2906a27cc2e2a8926bd732`。
+
+功耗仍有输入边界：M2217/M2235使用真实ep34 activity/sign，但权重来自TB的确定性INT8验证函数，不是checkpoint FC权重。新功耗只能标成这些固定输入下的matched比较，不能自动称为真实网络功耗。若要增强TCAS-II实用性证据，完成当前六点后优先补真实FC权重的toggle敏感性；本地已有 `system_handoff/incoming/motion_c12_ep34_live93_checkpoint_epoch34.pth`，这项权重绑定不要求重训。新权重对应新活动身份，不能覆写本轮SAIF或沿用其功耗数字。
 
 ## 是否上板
 
@@ -40,6 +42,10 @@
 
 这个想法的电路意义是将 **已知的最后一次消费转换成短的物理存储寿命**，从而减少 payload 寄存器、LRU/大mux的代价。多播、缓冲旁路和 weight reuse 本身有强 prior；[Eyeriss v2](https://arxiv.org/abs/1807.07928)已系统研究数据复用和带宽的关系，不能将本候选写为首次发明 broadcast。
 
+更直接的电路 prior 是 Carmona 等 [Elastic Circuits，TCAD 2009，Fig. 21](https://www.cs.upc.edu/~jordicf/gavina/BIB/files/ElasticCircuits_tcad2009.pdf)：eager fork 用每个接收者的状态记住已经完成的传送。因此 pending bitmap 本身也不是新协议。候选可成立的对象差应限定为：在既有带 epoch/generation 的 SRAM response slot 上，实现 B4 signed-Acc24 消费者的最后消费释放，省去 adapter→row-cache 的重复数据搬运，并测出相对于 ordinary 同样零拷贝实现的电路收益。
+
+[Josipović 等 FPGA 2018 的动态调度HLS工作](https://www.epfl.ch/labs/lap/wp-content/uploads/2018/11/JosipovicFeb18_DynamicallyScheduledHighLevelSynthesis_FPGA18.pdf)同时提示代价：多播的慢消费者可能拖住整个返回槽，增加FIFO才能解耦。不能一边删掉缓存一边假设原有预取并行度不变。M803已经有response hold-slot锁存，候选应复用这条所有权路径，而不是再加一个宽payload副本；下一步必须对槽占用、bank响应乱序及慢Acc24收费。
+
 CPU 初筛已运行在全部 2,880 个现有固定区域 workload，共 4,320 个 48-group chunk。结果与源码分别位于 `results/tcasii_consumer_lifetime_screen_20260905/result.json` 和 `system_simulator/scripts/explore_tcasii_consumer_lifetime_20260905.py`：
 
 - TSBG LRU4 与 LRU1 缺失均为 78,333；
@@ -55,6 +61,12 @@ CPU 初筛已运行在全部 2,880 个现有固定区域 workload，共 4,320 �
 一个决定性限制：M2018 在 `ST_DONE` 后保留 cache。跨 B4 的 group 序列 `[0,1,2,3,0,1,2,3]` 上，LRU4 只需四次填充，LRU1 需八次。所以上面的冷启动性质不能外推到热缓存。候选应保留适用边界或为多出的重读取数收费。
 
 建议只升级到一天的端口/周期模型：同一 M803 延迟、同一 Acc24 端口，比较 ordinary-LRU1、ordinary-LRU4、TSBG-LRU1、TSBG-one/two-beat。若额外周期不超过 5%，且总组件面积/能量有实质下降空间，再写可综合候选。当前没有候选 RTL、PPA 或周期结果。
+
+### 若过门，怎样让两贡献更凝练
+
+可把主线组织成“有界物理生命周期的数据复用”，而非继续列更多稀疏名称。C1在生产端判断中间乘积是否还有未来消费者，省掉无用parent写入；C2在消费端用最后一次实际Acc24接受释放返回槽，省掉二次缓存复制和不必要留存。两者共享的是电路设计问题——复用收益是否值得付出存储、端口和保持时间——而不是声称发现了新的多播或缓存理论。
+
+候选的必要不变量是：`pending_next = pending & ~accepted_contexts`，且 `release` 仅在本beat所有必要消费者接受后发生。`valid`、预测ready或收到SRAM响应都不能充当消费完成。signed权重只能共享原始weight，不能把一个context已乘过符号的product直接给另一个context。输出提交和epoch/generation错误隔离继续沿用C2。若总面积/能量无明显改善，这个组织只保留为解释，不把候选加入摘要，也不替换现有通过验证的实现。
 
 ## 其他候选排序
 

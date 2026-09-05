@@ -85,6 +85,13 @@ def main() -> None:
     assert "2.0874" not in after_evaluation
     assert "whole-network execution" in text
     assert "not a formal bound" in text
+    for required in (
+        "Pre-read causality", "2,304/2,304/576", "4,608 signed products",
+        "24 commits with zero mismatch", "not matched area or energy",
+        "separate from the",
+    ):
+        assert required in evaluation, ("causal ablation boundary", required)
+    assert "2,304/2,304/576" not in abstract
     assert "Prosperity already discovers subset/prefix parents" in text
     assert "FireFly-T already broadcasts" in text
 
