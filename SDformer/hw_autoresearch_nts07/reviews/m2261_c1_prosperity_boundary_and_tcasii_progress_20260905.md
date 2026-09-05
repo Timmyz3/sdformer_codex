@@ -58,6 +58,12 @@ scalar compares，0 mismatch；pending/queue/consumer三类负控均检出。
 尚缺RTL反压、epoch/输出bank切换及实际2R1W时序。先做强prior/timing对照，
 不扩多候选matcher。
 
+进一步强先例对照（`m2260_prior_tie_probe_s1`）：sample0的5,184个native-K
+tile上，论文largest-index tie 单独为1.001836×，SRAM访问反增4.252%。
+first/latest residual+synthetic issues完全相同，均210,137；81,712,512
+scalar compares为0 mismatch。largest-index forest配threaded+2slot仍为
+1.065221×，因此不能用tie差异解释主要驻留收益；但DFS和小槽仍是已有基础机制。
+
 ## 原有 C2 收口：新结果，不是新建议
 
 同约束门控与hold修补后的 ordinary/TSBG：
@@ -89,8 +95,11 @@ TT0.9V25C、理想clock、zero-delay gate activity、无SRAM/CTS/SPEF。
    4320冷G48块上 union 对同样group-major但demand-fill为1.23276×，
    refill事务−36.16%，bank read数量完全相同。不能包装成额外稀疏率。
    24块略慢，最差609→616cycles，保留。
-2. union DC：191,514.45µm²，setup +6.334ps，hold −12.154ps。
-   matched group-demand 正在综合；未有配对面积/功耗，不借旧M2018数字。
+2. matched group-demand 与 union DC/hold ECO 均完成。最终分别为
+   190,949.218549 / 191,635.036537µm²，面积增量0.3592%；
+   setup +306.406 / +5.909ps，hold +0.052 / 0.000ps（报告精度）。
+   两轴 mapped→mapped Formality 均77,247点PASS。不是RTL→mapped证明；
+   union极小裕量不等于布线/CTS签核。新pair功耗仍未测，不借旧M2018数字。
 3. **选择性保留值得下一步小测，不立即替换。** 原同streaming缓存对照已
    说明完全零拷贝无额外周期收益，warm反例841→1094cycle必须保留。
    下一B4需求要有实际就绪身份并计入descriptor预取/存储，不用全未来oracle。

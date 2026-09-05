@@ -21,7 +21,7 @@ def main():
     out = Path(tempfile.mkdtemp(prefix="m2255_mapped_preservation_", dir=cfg.HW / "results"))
     reference = args.reference.resolve() / "netlist/m2018_axis_mapped.v"
     implementation = args.implementation.resolve() / "netlist/m2018_axis_mapped.v"
-    design = re.search(r"\bmodule\s+(m2018_c2_tsbg_b4\w+)", reference.read_text()).group(1)
+    design = re.search(r"\bmodule\s+(m(?:2018_c2_tsbg_b4|2249_c2_consumer_scoped_bank_fill)\w+)", reference.read_text()).group(1)
     env = {**os.environ, "PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
         "SNPSLMD_LICENSE_FILE": cfg.LICENSE_SERVER, "LM_LICENSE_FILE": cfg.LICENSE_FILE,
         "M2250_FM_OUTPUT": str(out), "M2250_FM_LIBRARY": str(cfg.SLOW_DB),
