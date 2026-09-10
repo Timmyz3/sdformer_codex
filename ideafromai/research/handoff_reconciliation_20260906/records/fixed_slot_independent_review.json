@@ -1,0 +1,82 @@
+{
+  "date": "2026-09-06",
+  "reviewer": "/root/c2_research",
+  "role": "independent reviewer, not implementer",
+  "verdict": "PASS_WITH_LIMITED_CLAIMS：未发现影响当前容量、读取及全层 raw 旁路结论的实质错误。固定 80B 槽分支失败；普通目录保留即可重现原增大缓存的全部收益。",
+  "scope": "完整读新脚本和 checkpoint_numpy.py，核继承的 bank_stream/workload_sources/misses/canonical_table；只读已有结果并做 1238 项算术恒等复核，无错误。未重复运行编码或 trace 实验。",
+  "artifacts": [
+    {
+      "path": "/home/zhumd/work/ideafromai/research/handoff_reconciliation_20260906/scripts/screen_fixed_slot_compression.py",
+      "sha256": "00b92d987580dd7e477ebebe04f8285918818ed9afdd864df24d3b5e498ea9ed"
+    },
+    {
+      "path": "/home/zhumd/work/ideafromai/research/handoff_reconciliation_20260906/records/fixed_slot_compression.json",
+      "sha256": "68bfdfe9fb228cda54ca23494dfe415ff178dced485b4c46230a1f7da7303615"
+    }
+  ],
+  "causal_and_format_checks": [
+    "tile-major 下 q=source//8 正确对应 output tile 0；source%8 保留原 bank，FC2 continuation 来自既有 workload_sources。没有改变 B4 union 后的需求次序或再次计共享 fetch。",
+    "80B 主槽首址 q*80 等价 q*5 个 128-bit 字，正常头为零；异常头最高位置 1、低31位为本 bank pool 的字节偏移。pool 每条96B，自然16B对齐。main/pool 独立命名空间与缓存标签没有地址混叠。",
+    "正常请求固定读5字；异常请求列表先 main/header，再 pool 6字。静态权重布局可在 CPU 预构地址表，但硬件需等 header 后确定异常指针；脚本只计读数，不假定此依赖无延迟，因果语义可接受。",
+    "异常槽的80B空洞没有回收；pool=96*异常包数，main=80*总包数，码表及共同128B层描述符计容量。只有完整权重容量决定整层旁路，没有按验证 trace 读数挑模式。",
+    "保留目录对照每 bank 使用1目录字和capacity-1数据字，合计仍4/16字；raw 可用全部字保存数据。独立 LRU 仅改变替换策略，未改变请求、目录查找数或数据解码量。",
+    "独立 decoder 从序列化码长重建前缀树，从 main/pool bytes 取 header 和数据；不直接使用 encoder table 或 pointers 数组解码。固定布局全部17,252,352个源字节逐包比对。",
+    "M2264 每层5项布局数及两种缓存全部字典逐项相等；三份功耗 memh 逐code相等。结果中 delivered_vectors 此处均为96值source请求，跨轴分母一致。"
+  ],
+  "read_only_result_reconciliation": {
+    "identities_checked": 1238,
+    "errors": 0,
+    "layers": 24,
+    "cold_chunks": 4320,
+    "packets": 179712,
+    "inline_packets": 12,
+    "exception_packets": 179700,
+    "requests": 267405,
+    "inline_requests": 31,
+    "exception_requests": 267374,
+    "bytes_read_back": 17252352,
+    "storage_bytes": {
+      "raw_including_common_descriptors": 17255424,
+      "dense_including_alignment_codebook_descriptors": 15514256,
+      "fixed_forced": 31637376,
+      "fixed_selected": 17255424
+    },
+    "fixed_forced_storage_ratio": 1.833474274523767,
+    "reads": {
+      "raw": 1604430,
+      "dense_shared4": 1818652,
+      "dense_shared16": 1730101,
+      "dense_reserved4": 1730101,
+      "dense_reserved16": 1730101,
+      "fixed_forced_both": 1871773,
+      "fixed_selected_both": 1604430
+    },
+    "fixed_read_identity": "5*267405 + 2*267374 = 1871773；main=267529，pool=1604244。固定槽没有读cache命中。",
+    "directory_control_identity": "每层均成立：reserved4 = reserved16 = shared16，包括所有统计字段；数据缺失均1551247，目录缺失178854。reserved4 相对 shared4 少88551读，全部是目录。",
+    "all_layers_raw_bypass": 24,
+    "conclusion": "几乎所有包都超过76B内联上限，容量远超异常率<1/6的必要条件。此80B槽合同可以停止；它不否定其他分包或压缩布局。目录保留后仍较raw多7.83275%读，不能称已有读取优势。"
+  },
+  "limitations_and_minor_gaps": [
+    {
+      "severity": "claim boundary",
+      "finding": "全量 fixed 字节读回主要是 raw exception 路径；只有12个真实 normal 包做了 Huffman 内联解码，另有定向合成 normal 用例。",
+      "impact": "可以称全部 fixed 镜像源字节读回一致；不可改写为全部179712包均经过压缩 Huffman bitstream round-trip。当前 validation 字段名称本身没有夸大。"
+    },
+    {
+      "severity": "claim boundary",
+      "finding": "NumPy quant 重构与 PyTorch 原结果全容量/请求计数、三份 memh 相同，是强一致性证据，但没有完整24张量逐code或SHA的 NumPy/PyTorch比较。checkpoint_numpy 明示不模拟 PyTorch 算术；log2实现边界不能凭聚合相等排除。",
+      "impact": "不影响本记录复核已有账本的结论；如声称整个原FC候选byte-identical，需独立完整字节证据。无需为本次明显负结果扩大或重跑全实验。"
+    },
+    {
+      "severity": "minor error-boundary gap",
+      "finding": "decode_packet 未显式检查 packet>=0 与 packet*80+80<=len(main)。负 packet 在异常槽情况下可能通过 Python负索引读到尾槽并成功返回；decoder_tree 也不是针对任意恶意码长表的完整合法性校验器。",
+      "impact": "生产循环只传合法0..M-1和canonical_table产生的码长，故不影响已生成镜像或读数。malformed_headers_rejected=3只能覆盖列出的三种测试，不能宣称任意坏包/地址均fail-closed。若将来复用作外部镜像验收器，先补完整输入范围检查。"
+    },
+    {
+      "severity": "resource boundary",
+      "finding": "共同描述符及额外码表只计存储，其加载读数不在继承的冷G48 packet replay 内；标签、码表展开/复制、解码器、队列、反压与16值/bank/拍吞吐均未定价。",
+      "impact": "只可报告CPU容量与payload/header读数，不可推same-area、cycles、能量或宏面积。普通保留目录收益也不是新的算术原语。"
+    }
+  ],
+  "requested_changes": "没有阻止当前负结果归档的必改项。保留现有范围标签，避免扩大byte-identical及malformed覆盖声明；不要为挽救本80B槽方案扩参数扫。"
+}

@@ -1,0 +1,1276 @@
+                                                                                                                                                                                             2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+
+                                                                                                                                                                          GustavSNN: Unleashing the Power of Gustavson’s
+                                                                                                                                                                                Algorithm on SNN Acceleration with
+                                                                                                                                                                                Column-Parallel Tick-Batch Dataflow
+                                                                                                                                                                                                        Sangwoo Hwang1 †, Donghun Lee1 ‡, Jahyun Koo§, and Jaeha Kung2 ‡
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408587
+
+
+
+
+                                                                                                                                                                            Semiconductor Technology Research Institute, Korea University†, School of Electrical Engineering, Korea University‡,
+                                                                                                                                                                                                        Electrical Engineering and Computer Science, DGIST§
+                                                                                                                                                                                              {nemesis0523, dhleeids}@korea.ac.kr, jhkoo@dgist.ac.kr, jhkung@korea.ac.kr
+
+
+                                                                                                                                                                          Abstract—Spiking neural networks (SNNs) require sequential                                     Neuron Index          Neuron Index                     Neuron Index
+                                                                                                                                                                                                                                                                   #0       #1     ...   #N    #0   #1    ...   #N   #0   #1     #2     #3     #4    #5   ...
+                                                                                                                                                                       computation over long timesteps, introducing substantial mem-                                                                      ...
+                                                                                                                                                                                                                                                             #0
+                                                                                                                                                                       ory and energy overheads due to frequent updates of neuron
+
+
+
+
+                                                                                                                                                                                                                                                        Timestep
+                                                                                                                                                                       membrane potentials. Previous SNN accelerators address this                                                ...
+                                                                                                                                                                                                                                                             #1                                           ...                                               ...
+                                                                                                                                                                       by employing tick-batch techniques, which process all timesteps
+
+
+
+
+                                                                                                                                                                                                                                                                                                         ...
+                                                                                                                                                                                                                                                         ...
+                                                                                                                                                                       within a layer before moving on to the next. However, existing
+
+
+
+
+                                                                                                                                                                                                                                                                            ...
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                               ...
+                                                                                                                                                                                                                                                                   ...
+
+
+
+
+                                                                                                                                                                                                                                                                                         ...
+
+
+
+
+                                                                                                                                                                                                                                                                                                                          ...
+                                                                                                                                                                       approaches rely on neuron-centric scheduling, limiting their abil-                    #T                                           ...
+                                                                                                                                                                       ity to exploit temporal sparsity. In this work, we propose a novel
+                                                                                                                                                                                                                                                               Tick-Batch Sequential Temporal Parallel               Column-Parallel Tick-Batch
+                                                                                                                                                                       scheduling approach along with its hardware architecture for
+                                                                                                                                                                       Gustavson product (GP)-based SNN acceleration. We introduce
+                                                                                                                                                                       a column-parallel tick-batch (CPTB) dataflow that partitions                     Fig. 1. Comparison of tick-batch dataflows in SNN accelerators. (Left)
+                                                                                                                                                                                                                                                        Tick-batch sequential processing [29], where all timesteps are computed
+                                                                                                                                                                       the spike matrix into multiple submatrices and processes each                    sequentially. (Middle) Temporal-parallel dataflow [26], [47], which processes
+                                                                                                                                                                       submatrix of a timestep in parallel while maintaining tick-                      multiple timesteps simultaneously for each neuron. (Right) Proposed column-
+                                                                                                                                                                       batch semantics. To support this, we present the first GP-based                  parallel tick-batch dataflow, where a group of neurons is processed in parallel
+                                                                                                                                                                       SNN accelerator, named GustavSNN, which avoids accessing the                     for the entire timestep.
+                                                                                                                                                                       global membrane potential memory by updating neuron states
+                                                                                                                                                                       directly in local registers. In addition, we propose a non-zero row              adopts a tick-batch sequential dataflow (Fig. 1(Left)), where
+                                                                                                                                                                       vector (NRV) spike format that enables fine-grained skipping
+                                                                                                                                                                       of inactive spike rows. As a result, our proposed architecture                   all timesteps in a layer are processed before moving to the
+                                                                                                                                                                       achieves up to 11.8× higher energy efficiency (GOPS/W) than                      next layer, thereby reducing the overhead of repeatedly loading
+                                                                                                                                                                       naı̈ve GP-based accelerator and 1.43× higher energy efficiency                   neuron states and weights. To further reduce the repetitive
+                                                                                                                                                                       compared to state-of-the-art SNN accelerators.                                   memory traffic per timestep, temporal-parallel dataflow has
+                                                                                                                                                                                                                                                        been proposed [26], [47], which processes multiple timesteps
+                                                                                                                                                                                                    I. I NTRODUCTION
+                                                                                                                                                                                                                                                        concurrently (Fig. 1(middle)). However, temporal-parallel suf-
+                                                                                                                                                                          Spiking neural networks (SNNs) based on neuromorphic                          fers from limited zero-skipping ability, resulting in degraded
+                                                                                                                                                                       computing architectures [4], [28] have been investigated as                      efficiency at longer timesteps T .
+                                                                                                                                                                       energy-efficient alternatives to traditional artificial neural net-                 Unlike other SNN accelerators, which focus on SNN pro-
+                                                                                                                                                                       works (ANNs). While mimicking the event-driven behavior                          cessing based on the inner product, our design leverages
+                                                                                                                                                                       of biological neurons, SNNs have advanced beyond CNN-                            the overlooked advantages of Gustavson product (GP), which
+                                                                                                                                                                       based designs [9], [21] to transformer architectures [22], [45],                 repeatedly reads sparse 1-bit spike rows but reduces the data
+                                                                                                                                                                       demonstrating competitive accuracy compared to ANNs [44].                        traffic on fetching multi-bit weights and neuron potentials. To
+                                                                                                                                                                       Unlike ANNs, which require energy-intensive multiply-and-                        efficiently apply GP to SNNs, we introduce a novel column-
+                                                                                                                                                                       accumulate (MAC) operations between multi-bit activations                        parallel tick-batch dataflow, which preserves the conventional
+                                                                                                                                                                       and weights, SNNs update neuron states only when spikes                          layer-wise tick-batch structure while enabling spatial paral-
+                                                                                                                                                                       (binary events) occur, reducing the need for multipliers. No-                    lelism across neurons (Fig. 1(Right)). By partitioning the spike
+                                                                                                                                                                       tably, a 32-bit MAC operation consumes approximately 5×                          matrix along the column dimension, our approach supports on-
+                                                                                                                                                                       more energy than a 32-bit addition [19]. Furthermore, various                    the-fly potential update and fine-grained skipping of inactive
+                                                                                                                                                                       SNN models [13], [36] have been proposed to produce highly                       spike rows. Combined with weight row tiled architecture and
+                                                                                                                                                                       sparse spike activity, allowing effective exploitation of sparsity               column-major time-second scheduling, our work achieves high
+                                                                                                                                                                       during computation. Despite sparse addition-only operations,                     temporal sparsity exploitation and low memory access, without
+                                                                                                                                                                       SNNs require computation to be repeated across multiple                          imposing any constraints on the choice of SNN architectures
+                                                                                                                                                                       timesteps (denoted as T ), which offsets energy advantages                       or neuron models.
+                                                                                                                                                                       if spikes occur frequently. To address this inefficiency, [29]                      The main contributions are summarized below:
+                                                                                                                                                                          1 S.   Hwang and D. Lee are equally contributed authors.                           •     First Gustavson-based SNN Hardware: We propose
+                                                                                                                                                                          2 J.   Kung is the corresponding author (jhkung@korea.ac.kr)                             GustavSNN, the first GP-based SNN accelerator to sup-
+
+
+
+
+                                                                                                                                                                     Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                   D                    N               N
+         port in-situ GP dataflow without external buffering for                               Sparse Matrix
+         neuron potential updates. This is enabled by our novel                                Multiplication           M                      D                 M
+         column-parallel tick-batch (CPTB) dataflow, which par-                                  (SpMM)
+         titions spike matrices for fine-grained parallelism.                                                                   Matrix A             Matrix B        Matrix C
+                                                                                                       Row of A / Read N time
+     •   Weight Row Tiled Architecture: We present a weight
+         row tiled architecture in which multiple weight rows and
+                                                                                                                                                                 IP Dataflow
+         spike submatrices are computed in parallel without inter-
+
+
+
+
+                                                                                     Read M times
+                                                                                                                                                         for m in [0,M):
+                                                                                                                                    Element of C /
+
+
+
+
+                                                                                       Col of B /
+         tile or inter-PE communication. By combining it with a                                                                     Psum Merge X          for n in [0,N):
+                                                                                                                                                           for d in [0,D):
+         non-zero row vector (NRV) format, GustavSNN enables                                                                                                 C[m,n]+=A[m,d]*B[d,n]
+         efficient memory usage and aggressive skipping.
+     •   Column-Major Scheduling with Improved Compat-                                                     Inner Product PE
+                                                                                                       Row of B / Read 1 time
+         ibility: We propose a column-major scheduling that
+                                                                                                                                        Matrix of C /
+         ensures consistent efficiency regardless of the timestep                                                                      Psum Merge O
+                                                                                                                                                                 OP Dataflow
+         of SNNs, the neuron model, and the spike coding.                                                                                (MxN size)
+
+
+
+
+                                                                                      Read 1 time
+                                                                                                                                                         for d in [0,D):
+
+
+
+
+                                                                                       Col of A /
+         Our scheduling removes algorithmic constraints, enabling                                                                                         for m in [0,M):
+                                                                                                                                                           for n in [0,N):
+         higher parallelism and making GustavSNN broadly com-                                                                                                C[m,n]+=A[m,d]*B[d,n]
+         patible with various spike coding methods and neuron
+         models.                                                                                         Outer Product PE
+                                                                                                       Row of B / Read M times
+                                                                                                                                                                 GP Dataflow
+
+
+
+
+                                                                                      Element of A /
+                                                                                                                                         Row of C /
+                            II. P RELIMINARIES
+
+
+
+                                                                                       Read 1 time
+                                                                                                                                       Psum Merge O      for m in [0,M):
+                                                                                                                                         (1xN size)       for d in [0,D):
+  A. Spiking Neural Network                                                                                                                                for n in [0,N):
+                                                                                                                                                             C[m,n]+=A[m,d]*B[d,n]
+                                                                                                         Gust Product PE
+     1) Neuron Model: SNNs consist of simplified neuron mod-
+                                                                                                    : Active       : Inactive               : Processed Dataflow in Single PE
+  els [17], [23] that partially mimic the electrical activity of                                    : Element      : Partial Sum
+  biological neurons. Leaky integrate-and-fire (LIF) model [11],
+                                                                                   Fig. 2. Overview of SpMM methods, i.e., inner product, outer product, and
+  which is the most energy-efficient neuron model, is defined as                   Gustavson product.
+                                         X
+                  vj (t) = λvj (t − 1) +     wij Si (t),                              3) Training SNNs: In addition to emulating biological neu-
+                                         i=1                 (1)                   ral networks with SNNs, SNNs with binary spikes {0,1} are
+     Sj (t) = 1, vj (t) = vj (t) − Vθ when vj (t) ≥ Vθ ,                           one of the promising lightweight ANNs because they remove
+                                                                                   expensive multiplications while keeping accuracy at par with
+  where i or j is the index of a pre-or post-synaptic neuron,                      ANNs. The most common training method is backpropagation
+  vj is the potential of the neuron j, and λ is the leak factor                    with surrogate gradients [10], [51]. This method first runs the
+  of potential that causes the vj to change over time. The                         forward pass to compute the loss with a non-differentiable
+  Sj (t) represents the binary spike (0 or 1) of the neuron j                      thresholding function for spike generation. During the back-
+  at time t. When a binary spike occurs from a pre-synaptic                        propagation, this non-differentiable spike function is relaxed to
+  neuron, the synaptic weight wij between the neuron i and j                       a differentiable one so that weight gradients can be computed.
+  accumulates to vj (t). When vj (t) exceeds the threshold Vθ ,                    QKFormer [52] is one of the examples that leverages the surro-
+  the neuron j fires a spike (Sj (t) = 1) and its potential resets to              gate gradient, which achieves 85.65% accuracy on ImageNet
+  vj (t) − Vθ . As SNNs simply accumulate weights when spikes                      classification, outperforming mainstream ANNs. In contrast,
+  are encountered, SNNs are more energy efficient than ANNs.                       some SNN works have focused on directly converting pre-
+     2) Spike Coding Schemes: Spike coding is a scheme that                        trained ANNs to SNNs without additional training [14], [21],
+  determines when to generate spikes while converting contin-                      [41], which is defined as ANN-to-SNN conversion. Recently,
+  uous values into a discrete set of spikes. The most widely                       SpikedAttention [22] has achieved high accuracy on ImageNet
+  used spike coding is rate coding, which generates multiple                       and GLUE benchmarks, i.e., within 1% of the original ANNs,
+  spikes per neuron over a predefined number of timesteps T [7],                   by converting transformers to SNNs. With these training
+  [14]. The rate coding generates more spikes as it converts a                     methods, SNNs have demonstrated competitive performance
+  larger value into spikes. However, increasing the spike count                    with their ANN counterparts on computer vision [25], [44]
+  and the timestep for higher resolution leads to higher energy                    and language understanding tasks [2], [53].
+  consumption due to more weight accumulations in Eq. (1). In
+  contrast, temporal coding [13], [33] generates a single spike                    B. Sparse Matrix Multiplication (SpMM)
+  per neuron, and each spike in temporal coding represents a                         1) SpMM Methods: As shown in Fig. 2, sparse matrix
+  different value at a different spike time t for a given total                    multiplication (SpMM) can be performed using several ap-
+  timestep T (the earlier spike represents a larger value). The                    proaches, i.e., inner product (IP), outer product (OP), and
+  temporal coding is energy efficient but requires a long timestep                 Gustavson product (GP). Each method exhibits different com-
+  T to ensure high accuracy.                                                       putational characteristics that affect the data reusability and
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                                        N                   N
+  the buffer size of each tensor. In the IP, an element of the                                                                                  T                   T
+                                                                                                                              D
+  output matrix C is computed by multiplying a row vector of
+                                                                                     Sparse Matrix
+  matrix A and a column vector of matrix B at each PE. In                            Multiplication
+                                                                                                    M                                      D                    M
+  the IP-based PE, the output is locally accumulated within the                        (SpMM)
+  PE, eliminating the need to merge partial sums or access a                           for SNN
+                                                                                                                           Matrix A            Spike Matrix B        Matrix C
+  global buffer. However, multiple reads from on-chip buffers                                                             (multi-bit)              (1-bit)          (multi-bit)
+  for rows of matrix A and columns of matrix B are required.                                            Row of B / Read M times
+                                                                                                                                                            GP Dataflow for SNN
+                                                                                                         (1-bit and very sparse)
+  In contrast, the OP computes partial sums of the entire output                                                                          Row of C /    for m in [0,M):
+
+
+
+
+                                                                                      Element of A /
+                                                                                       Read 1 time
+                                                                                                                                        Psum Merge O     for t in [0,T):
+  matrix (or part of it) by performing a Cartesian product                                                                                (1xN size)      for d in [0,D):
+  between a column vector of A and a row vector of B. In                                                     &   &    &   &                                 for n in [0,N):
+  the OP-based PE, a partial-sum (output) matrix is generated                                                                                                C[m,n]+=A[m,d]*B[d,n]
+                                                                                                       Gust Product PE for SNN
+  and repeatedly stored/loaded for updates, which incurs output-
+                                                                                   Fig. 3. Gustavson product for SNN and its PE structure. The main difference
+  buffering overhead, while input vectors are loaded only once.                    from typical SpMM is a temporal dimension T with extremely high sparsity.
+  The GP method offers a different trade-off by multiplying
+  each element of matrix A and the corresponding row vector of                     exhibit extremely high activation sparsity, e.g., a temporal-
+  matrix B at each PE. In the GP-based PE, the element of A is                     coded SNN [21] shows 97% spike sparsity while a rate-coded
+  used only once, but the row vector of B needs to be repeatedly                   SNN [9] shows 88%. Second, spikes are binary data which
+  loaded to PEs. GP-based PE also requires an output buffer for                    require no multipliers in computation. Note that even with bi-
+  partial sums, but since only one row is generated at a time, it                  nary spikes, weights are multi-bit data similar to ANNs. Third,
+  has less overhead than OP-based PE.                                              additional temporal dimension in the spike tensor makes
+     2) SpMM Accelerators: As shown in Fig. 2, due to the                          the previous SpMM accelerators sub-optimal because there
+  presence of zeros in input matrices, some multipliers become                     are more options for loop tiling and loop ordering. Adding
+  inactive during SpMM computations. Therefore, prior works                        a temporal dimension complicates the dataflow selection as
+  have focused on efficiently skipping zeros so that hardware uti-                 the neuron potential vj needs to be updated sequentially.
+  lization becomes significantly higher than dense NPUs, CPUs,                     Also, repetitive accesses to the neuron membrane potential
+  or GPUs. IP-based sparse accelerators [5], [12], [15], [16], [35]                introduce significant memory overhead and increase energy
+  perform inner join operations to find matching indices of non-                   consumption. This diminishes the advantages of IP- and GP-
+  zeros from two input vectors. However, as the matrix becomes                     based computations, which typically avoid storing intermediate
+  larger, finding such matching indices by scanning all elements                   partial sums. Fourth, the required timestep of an SNN varies
+  in the corresponding rows and columns or implementing a                          with respect to the SNN training algorithm and spike coding
+  distribution network becomes a huge overhead. The OP-based                       schemes. The number of timesteps T in SNN models can vary
+  sparse accelerators [6], [18], [24], [32], [50] eliminate the                    significantly, ranging from 4 [45] to 4,096 [14].
+  overhead of index matching since all non-zeros from both
+  vectors are used for the OP-based SpMM. However, they                            B. Dataflows in Previous SNN Accelerators
+  increase the hardware complexity when merging intermediate                          1) Tick-Batch Dataflow: To deal with the SNN character-
+  partial sums since the indices of partial sums need to be                        istics, many SNN accelerators have been proposed [26], [27],
+  sorted prior to merging. Meanwhile, GP-based sparse ac-                          [29], [47]. SpinalFlow [29] is the first SNN accelerator that
+  celerators [1], [20], [39], [49] have demonstrated superior                      proposes a tick-batch dataflow (Fig. 1), which processes each
+  energy efficiency by reducing the index-matching complexity                      timestep (called tick) sequentially for all neurons in a given
+  compared to IP and the merging complexity compared to OP.                        layer before moving on to the next layer. SpinalFlow utilizes
+  Among several GP-based accelerators, GAMMA [49] employs                          output stationary PEs, eliminating the need to store neuron
+  a simple yet effective PE architecture that computes an output                   potentials in the global buffer over the entire timestep. How-
+  row through a linear combination of sparse input rows. Prior to                  ever, since it follows the IP-based SpMM, it accesses weights
+  the multiplication phase, merging is done, which orchestrates                    multiple times, i.e., low weight reuse. This is further worsened
+  the order of executions that reduces the hardware complexity.                    because neurons within the receptive field may access the
+  Additionally, its row-level parallelism enables high throughput                  same weight row multiple times at different computing steps.
+  by distributing SpMM workloads to multiple PEs.                                  Thus, even though SpinalFlow reduces the required buffer size
+                                                                                   for neuron potentials, it significantly increases the number of
+            III. P RIOR W ORK ON SNN ACCELERATION                                  weight accesses, significantly increasing energy consumption.
+                                                                                   (Design Choice #1) We solve it by using GP-based SpMM and
+  A. Why Dedicated SNN Accelerators?
+                                                                                   distributing the weight data to local buffers that are shared by
+     Even with the proliferation of SpMM accelerators, prior                       multiple PEs in our GustavSNN (Section IV-A).
+  SpMM accelerators cannot be directly used to run SNNs                               2) Temporal-Parallel Dataflow: To tackle the challenge of
+  with high efficiency. This is mainly because SNNs have                           repeated weight loading in the tick-batch dataflow, IP-based
+  unique characteristics that differ from ANNs. Fig. 3 shows                       SNN accelerators with temporal-parallel dataflow are pro-
+  the SNN version of SpMM with the GP method. First, SNNs                          posed [26], [27], [47]. PTB [26] partially exploits the temporal
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+  parallelism within the spike train by introducing a time batch,                                   IP              IP(FTP)         OP         Ex-situ GP        In-situ GP
+  that is, a part of the spike train for a given time window TW (≤                                                    Timestep = 4                  Timestep = 16
+  timestep T). This time batch (do not confuse with tick-batch)                                                               Sparse Spikes                  Sparse Spikes
+  is processed in parallel across multiple PEs while skipping                                                                 Dense Weights                  Dense Weights
+
+  computations for non-firing time batches. Note that spikes                                                                                       PTB
+
+
+
+
+                                                                                           Normalized Energy
+  within TW are processed sequentially at each PE. Stellar [27]
+  is the first SNN accelerator that fully parallelizes computations                                                                                      SpinalFlow
+  in the temporal domain, i.e., fully temporal-parallel (FTP)
+                                                                                                                              Sparse Spikes                  Sparse Spikes
+  dataflow (Fig. 1), by using few-spike (FS) neurons that have no                                                             Sparse Weights                 Sparse Weights
+  temporal dependencies. However, [27] cannot be generalized
+  to any SNNs as temporal independencies are not commonly                                                                          LoAS
+  exploited on SNNs. LoAS [47] uses a spike compression
+  format by identifying silent neurons (that never fire) and
+                                                                                                               80         90              100 80            90           100
+  approximates the computation by initially assuming that spikes
+                                                                                                                                       Sparsity (%)
+  occur at every tick, enabling FTP execution for LIF neuron-
+  based SNNs. Then, it is followed by a correction stage for the                   Fig. 4. Normalized energy consumption of running SNNs with different
+                                                                                   SpMM methods, i.e., IP, OP, ex-situ GP, and in-situ GP, under various sparsity
+  true neuron potential update. Owing to the FTP dataflow with                     levels (80∼100%) when T = 4 and T = 16.
+  proper spike compression, it achieves a noticeable speed-up
+  with reduced memory traffic than other works [26], [29].                         methods both store and update potentials inside the PE (in-
+     Although temporal-parallel dataflow reduces the overhead                      situ). As shown in Fig. 4, we evaluate them in two scenarios:
+  caused by repeated weight loading in tick-batch dataflow, it                     (i) only the spike matrix is sparse, while the weight matrix
+  is not optimal to effectively handle temporal spike sparsity.                    remains dense (top), and (ii) both spike and weight matrices
+  Specifically, only silent neurons that do not fire over the                      are sparse (bottom). We adopt the flat-memory assumption (all
+  timestep or the time batch can fully benefit from sparsity by                    SNN parameters are assumed to reside on chip) and evaluate
+  skipping unnecessary computations. Even neurons that rarely                      per-operation energy consumption by counting accumulations,
+  generate spikes must still be processed, making it difficult                     multiplications, or memory accesses, and multiplying by their
+  to skip unnecessary computations. This problem is especially                     unit energy values from [30]. To isolate algorithmic effects,
+  critical for temporal-coded SNNs, since each neuron fires                        we assume unbounded on-chip bandwidth and no bank con-
+  at most once over a longer timestep than in rate coding.                         flicts. This abstraction intentionally excludes timing effects,
+  Similarly, in rate coding, where timesteps are longer, FTP                       so the estimation captures only the dataflow-driven counts of
+  efficiency decreases as the ratio of silent neurons increases.                   computations and on-chip accesses. System-level results that
+  In other words, FTP dataflow is efficient at running rate-                       incorporate realistic bandwidths and contention are provided
+  coded SNNs with a short timestep. In addition, Stellar [27]                      in Section VI.
+  is restricted to FS neurons, and LoAS [47] selects simple LIF                       In the first scenario, in-situ GP consistently demonstrates
+  neurons specifically to enable synchronized spike generation                     the lowest energy consumption across all sparsity levels and
+  over multiple timesteps, which simplifies temporal-parallel                      timesteps because it repeatedly reads sparse 1-bit spike data
+  execution. If more complex neuron models (e.g., adaptive                         while requiring only a single access to each weight row (i.e.,
+  ones) are used, they can encounter difficulties due to long                      expensive multi-bit data), without moving neuron potentials
+  critical paths, thereby tightening timing slack when executing                   out of PEs. In contrast, ex-situ GP consumes more energy
+  multiple timesteps in parallel. (Design Choice #2) Thus, in this                 than in-situ GP, as it requires repeated data movement of
+  work, we present a new dataflow, named column-parallel tick-                     potentials at every timestep (≥ 80% of total energy). The IP
+  batch (CPTB), which works well with any spike coding and                         with FTP dataflow consumes less energy than the IP with tick-
+  arbitrary timesteps and imposes no architectural constraints on                  batch dataflow at T = 4 since the number of weight loads is
+  the choice of neuron models (Section IV-C).                                      smaller. When T = 16, however, FTP consumes more energy
+                                                                                   than the tick-batch when sparsity is above 90%, as the number
+            IV. M ICROARCHITECTURE OF G USTAV SNN
+                                                                                   of silent neurons decreases with a longer timestep T , where
+  A. Why Gustavson Product for SNNs?                                               Nsilent ∝ 1 − ρT where ρ is sparsity. The OP-based dataflow
+     To select the proper SpMM method, we compare the energy                       is the least energy-efficient, because it repeatedly accesses
+  profiles of IP, OP, and GP under tick-batch execution, as                        and updates multi-bit neuron potentials for multiple output
+  well as IP-based FTP, at two different timesteps (T = 4                          neurons.
+  and 16) and various sparsity levels (80∼100%). For GP, we                           In the second scenario, trends are quite similar, except
+  simulated two dataflows: (i) storing the neuron potential in a                   that both IP- and OP-based dataflows become competitive at
+  register inside PE and updating it internally (in-situ), and (ii)                extremely high sparsity (> 95%). As weight sparsity increases,
+  accumulating the potential externally without storing it in the                  the number of neuron potential updates in the OP decreases,
+  PE (ex-situ). Note that the OP assumes ex-situ because it needs                  significantly reducing energy consumption. However, extreme
+  to merge potentials from multiple PEs, while the two IP-based                    dual sparsity is uncommon in typical SNNs without explicit
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                                                      Skip          Spike Sub-Matrices
+           Spike Matrix                                k=0                   k=1                   k=2                   k=3         Algorithm 1 Column-Parallel Tick-Batch Gustavson Dataflow
+                                                       0       1             2       3             4       5             6       7
+               0 1 2 3 4 5 6 7
+                                             @0                     @0                    @0                    @0                         Weight matrix A ∈ RM ×D
+          @0
+                                                                                                                                           Input spike matrix B ∈ {0, 1}D×N ×T
+ Weight
+
+
+
+
+          @1                                 @1                     @1                    @1                    @1
+
+          @2
+          @3
+                                             @2                     @2                    @2                    @2
+                                                                                                                                           Output spike matrix C ∈ {0, 1}M ×N ×T
+                                             @3                     @3                    @3                    @3
+                            N
+                                                           P                     P                     P                     P
+                                                                                                                                           P = N/K, p = P ∗ k
+                                            PE#1                   PE#2                  PE#1                  PE#2                        B = [B0 |B1 |...|BK−1 ], Bk ∈ {0, 1}D×P ×T
+   PE Accum. &                               Accum. &               Accum. &              Accum. &              Accum. &                   C = [C0 |C1 |...|CK−1 ], Ck ∈ {0, 1}M ×P ×T
+                   Neuron                     Neuron                 Neuron                Neuron                Neuron
+                       Hold for T
+                                                                                                                                      1:   parallel-for m ∈ [0, M ) do : Tile-level
+                                                                                                                                      2:      parallel-for k ∈ [0, K) do : PE-level
+          Potential REG (N')                 Potential              Potential             Potential             Potential             3:         for t ∈ [0, T ) do
+                                             REG (P)                REG (P)               REG (P)               REG (P)
+                            N' >> N                                                                                                   4:           for d ∈ [0, D] do
+  0        1   2    3   4       5   6   7         0    1                 2   3                 4   5                 6   7            5:              for n ∈ [p, p + P ) do
+                                                                                                                                      6:                 Ok [m, n, t] += A[m, d] ∗ Bk [d, n, t]
+                                    Cycle#1                       Cycle#2
+        In-situ GP                        In-situ GP with CPTB
+                                                                                                                                      7:              end-for
+    Fig. 5. Overview of in-situ GP architecture with column partitioning (CPTB).                                                      8:           end-for
+                                                                                                                                      9:    Ck [m, p : p + P − 1, t] =LIF(Ok [m, p : p + P − 1, t])
+    weight pruning [46], which may require finetuning to maintain                                                                    10:         end-for
+    accuracy [47]. Although both GP dataflows show relatively                                                                        11:      end-for
+    low energy cost when both input and weight matrices are                                                                          12:   end-for
+    sparse, ex-situ GP presents a higher energy cost due to off-PE
+    potential updates, unlike in-situ GP.
+                                                                                                                                     another. Therefore, we partition the spike matrix column-wise
+    B. Efficient In-Situ GP Architecture                                                                                             into smaller submatrices and process those at multiple PEs
+       (Challenge) Based on the analysis in Section IV-A, we con-                                                                    in parallel (column-parallel). The column-parallel dataflow
+    jecture that in-situ GP dataflow ensures high energy efficiency                                                                  reduces the number of output columns assigned to each PE,
+    at multiple scenarios, supporting its selection as the basis                                                                     allowing output neuron potentials to be retained locally.
+    for our accelerator design. As presented on Fig. 5(left), the                                                                       Therefore, we partition the spike matrix B into K smaller
+    main limitation of in-situ GP is the requirement of a potential                                                                  submatrices along the column dimension, such that the whole
+    registers as each PE computes an output row (1×N ). In SNNs                                                                      matrix multiplication C = A · B is decomposed into K
+    with a wide spike matrix (large N ), the required potential                                                                      independent sub-computations: Ck = A ·Bk , where
+    registers per PE (1 × N ′ ) become large, increasing memory                                                                                        B = [B0 | B1 | · · · | BK−1 ].             (2)
+    traffic and energy consumption per timestep. For instance,
+    storing a neuron potential vector of length 1,024 in 8-bit                                                                       Each partial output Ck corresponds to the multiplication of
+    requires at least 1KiB of storage per PE, making on-the-fly                                                                      A with a column block Bk , and the final output matrix is
+    accumulation impractical. Furthermore, assigning a large size                                                                    obtained by concatenating these results along the columns:
+    of N ′ can result in memory waste when computing a spike
+                                                                                                                                                       C = [C0 | C1 | · · · | CK−1 ].             (3)
+    matrix with a small N . Even within a single SNN model, the
+    N of the spike matrix varies widely, making it challenging to                                                                    The proposed column-wise partitioning enables each subma-
+    determine the size of the potential register N ′ .                                                                               trix to be computed in parallel, thereby efficiently distributing
+       (Our proposal) To enable potential updates on-the-fly, i.e.,                                                                  the workload across multiple PEs. In particular, each PE is
+    in-situ GP, we propose an SNN-tailored GP-based PE, as                                                                                                   N
+                                                                                                                                     responsible for P = K       output columns and only needs
+    shown in Fig. 5(right). Our design partitions the spike matrix                                                                   to store P output potentials locally, thereby significantly
+    column-wise into multiple submatrices, thereby constraining                                                                      reducing the memory requirement per PE and enabling on-
+    the size of the potential register required within a single PE                                                                   chip accumulation without any off-chip memory access.
+    (Section IV-C). Column-wise partitioning not only limits the                                                                        Algorithm 1 describes the proposed column-parallel tick-
+    register size for the neuron potential but also increases the                                                                    batch Gustavson dataflow. The algorithm takes a dense weight
+    possibility of skipping all-zero rows. To fully exploit the row-                                                                 matrix A ∈ RM ×D and a binary input spike matrix B ∈
+    wise sparsity while minimizing memory usage, we introduce                                                                        {0, 1}D×N ×T as inputs, where M ×D is the input dimension,
+    a non-zero row vector (NRV) format (Section IV-D).                                                                               N is the number of columns in the spike matrix B, C is the
+                                                                                                                                     output spike matrix, and T is the total timestep. The output
+    C. Column-Parallel Tick-Batch (CPTB) Dataflow                                                                                    is a binary spike matrix C ∈ {0, 1}M ×N ×T . We partition
+      To reduce the memory overhead of in-situ GP, we observe                                                                        the spike matrix B into K submatrices of size D × P × T ,
+    a key structural property of GP, i.e., each output column                                                                        where P = N/K, assigning each submatrix Bk to a PE
+    depends only on the corresponding column of the spike matrix.                                                                    (parfor in k-dimension). The outer loop iterates over all
+    Spike columns are independent and do not interfere with one                                                                      output channels M , and for each m, all K partitions are
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                        100                                                                                                            Sub-Matrix #k           NRV Spike Format #k
+                                                   P=8               P=16        P=32
+        Skipping Ratio (%)   90                                                                                                                ↑              Row IDX    Row Vector
+                                                                                                                                Skip
+                             80                                                                                                                                 0         0 0 1 0
+                                                                                                                                Skip
+                                                                                                                                            ↑ ↑                 3         0 1 1 0
+                             70                                                                                                 Skip
+
+
+
+
+                                                                                                                                                                        ...
+                             60                                                                                                               P                                            Leading-1
+                                                                                                                                                        Skipping Module                     Detector
+                             50
+                                                                                                                                     Fig. 7. Non-zero row vector format for spike matrix.
+                             40
+                                  1   2    3   4    5    6   7   8    9 10 11 12 13 14 15 16 17
+                                          Layer on One-Spike SNN (ResNet-18)                                                                Naive      Ours                   Naive           Ours
+
+
+
+
+                                                                                                     Normalized Memory Usage
+                                                                                                                                            COO        CSR                    COO             CSR
+
+  Fig. 6. Skipping ratios across different layers in one-spike SNN benchmark
+  (ONE [21]) of ResNet-18 at various column widths P .
+
+  processed in parallel. At each timestep t, spikes Bk [d, n, t] = 1
+  trigger accumulations of the corresponding weights A[m, d]
+  into the partial sum Ok [m, n, t]. After processing all input
+  spikes at each partition, the LIF module is activated to generate                                                            100     90         80   70     60 Embed    #1          #2     #3      #4
+  the final spike output Ck [m, n, t] by evaluating Ok . The                                                                            Sparsity (%)                Stage on SpikedAttention
+  proposed dataflow not only enables efficient memory usage by                                    Fig. 8. Memory usage of our NRV format compared to other sparse data
+  localizing the potential storage to each PE, but also achieves                                  formats. Normalized memory usage at various spike sparsity levels (left), and
+                                                                                                  at different stages in SpikedAttention (SPA) benchmark [22] (right).
+  high throughput by leveraging parallelism across spike matrix
+  partitions. The detailed description of the selected loop order
+  in Algorithm 1 is explained in Section V-B.                                                     uses less memory than the naı̈ve format on high sparsity (>
+                                                                                                  93%) while consuming slightly higher memory on dense spike
+  D. Skipping Rows with NRV Format                                                                patterns. This shows that the NRV format is memory-efficient
+     The proposed column-wise partitioning of the spike matrix                                    at high sparsity while avoiding a sharp increase in memory
+  into submatrices with P columns reveals the potential to                                        usage under low-sparsity conditions.
+  exploit row-wise sparsity. If a row in a submatrix is entirely                                     Fig. 8 (right) presents memory usage at different stages in
+  zero, fetching the corresponding row can be skipped. Given a                                    the SpikedAttention (SPA) benchmark [22]. In the embedding
+  submatrix sparsity of ρ ∈ [0, 1], the probability that a row                                    stage, the naı̈ve format consumes the least memory since the
+  within a submatrix is entirely zero is proportional to ρP ,                                     spike matrix exhibits only 76% sparsity. However, in later
+  meaning that a smaller P results in a greater number of                                         stages, where sparsity exceeds 98%, the naı̈ve format requires
+  skipped row vectors. According to Fig. 6, which shows the                                       5× more memory than the NRV format. Occasionally, some
+  skipping ratio at each layer of the one-spike SNN [21] with                                     spike matrices in SPA exhibit low sparsity (less than 80%),
+  95% sparsity, i.e., a directly converted SNN from ResNet-18,                                    causing COO and CSR to consume excessive memory due to
+  it is evident that the smaller P leads to a higher number of                                    their multi-bit indexing. In contrast, the NRV format maintains
+  skipped rows. On average, 80% of row vectors can be skipped                                     low memory usage, even at decreased sparsity levels. Overall,
+  when P = 8, but only 58% of row vectors can be skipped                                          our NRV format achieves 28% lower memory usage compared
+  when P = 32. To fully exploit row-wise sparsity in hardware,                                    to COO and 42% compared to CSR.
+  we present an efficient spike data format, called a non-zero row
+  vector (NRV) format, as shown in Fig. 7. For each submatrix                                     E. Processing Elements in GustavSNN
+  with P columns, we store row indices and spike row vectors of                                      To fully exploit the benefit of the proposed CPTB dataflow
+  length P for the rows with at least one spike. With row indices,                                with an NRV format, we designed a specialized PE as illus-
+  the spike row vector has the naive form of the spike {0, 1}                                     trated in Fig. 9. We enhance merger-tree based GAMMA [49],
+  instead of the column index of the spike. Since the NRV format                                  which computes outputs in column-index order, to efficiently
+  only stores row vectors with valid spikes, it is a highly efficient                             deal with highly sparse and binarized inputs (= spikes). The
+  spike data format for CPTB.                                                                     GustavSNN PE consists of two pipeline stages for enhanced
+     Fig. 8 (left) compares the memory usage of the NRV format                                    throughput, i.e., fetch and execution stages. The fetch module
+  with other sparse data formats, including naı̈ve (i.e., bitmap),                                takes (up to NR ) input spike vectors in the NRV format and
+  COO, and CSR formats. The COO and CSR formats require                                           sequentially accesses NR weights from the shared weight
+  multi-bit indices for each non-zero element, leading to higher                                  buffer. The NR is the width of a merger tree in each PE, where
+  memory consumption unless the spike sparsity is extremely                                       NR = 4 in Fig. 9. The fetch module fetches row indices in
+  high. In contrast, the NRV format requires less memory than                                     NRV format and a row of weights. In this process, weights
+  COO and CSR, even with a fine-grained configuration (e.g.,                                      with indices not included in the NRV format are skipped
+  P = 8) for a wide range of sparsity levels. Our NRV format                                      (weight skipping). After the weights are fetched, the spikes
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+      STAGE1 Ě Fetch Module                                                                                                                          NR = 4
+                                                                                                                         NR                                                                   Bit-Flag Empty
+           Fetch Spike
+         1                                                              2 Skipping                                                               Col_idx
+           & Weight                                                                                                              L-1D[0]
+                                                                                                                                                 Select                     0 1 0            1      1                            Bit-Flag
+                                                                                                                                0 1     0    0                           Back               Front            Bit-Flag                         010
+                                                                                  Skipped                                     Back           Front                                                                                  to                 Col_idx
+                                                                                                                                                                                                    0         REG
+            Input Spike                                                         Input Spike                                                      Col_idx
+                                                                                                                                                                            0 1 0 0                                              Col_idx
+           0                                                                   0
+                                                                                                                                 L-1D[1]                                                                    EN
+                                                                                                                                                 Select
+                                                                                                                                                                         Back               Front
+
+
+
+                                                     Skipping Module
+           1                                                                   1                                                1 0     1    0
+           2                                                                   2                                              Back           Front
+                                                                                                                                                                                                         Select              01012
+
+
+
+
+                                                                                                                                                           Pipelining
+           4                                                                   4                                    Skip                        Col_idx                                            (from Merger)
+           5                                                                   5
+                                                                                                                                 L-1D[2]
+                                                                                                                                                 Select
+       ROW Front
+        IDX
+                                         Back                            ROW Front
+                                                                          IDX
+                                                                                                            Back                0 1
+                                                                                                                              Back
+                                                                                                                                        1    0
+                                                                                                                                             Front
+                                                                                                                                                                          SPIKE = SPIKE - (1 << Col_idx)             00012
+                                 P                                                                  P
+                                                                                                                                                 Col_idx
+                                                                                                                                                                           ex. (01002 = 01012 - (1 << 010))
+                                                                                                                                 L-1D[3]                                Fig. 10. Leading-one detecter for efficient non-zero column index fetching.
+                                                                       Skip¢: Weight Skipping                                                    Select
+                                                                                                                                0 1     0    1
+                                                                       Skip£: Row Skipping                                    Back           Front                          Off-Chip Memory                            Scheduler        TILE[0]
+                                                                                            Skip¢       Skip£                   0 1     0    0                                                          128KB
+                                                                                                                                                                                           D
+                                                                                                                              Back           Front                                                                 0    1 2 5 0 2 6          Shared Weight
+                                                                                                                                                                                         M'xD           Weight
+       3             9   7   5       0   2                                      3       9   7    5      0       2                                                                                                                             L-BUF (8KB)
+                                                                                                                                                                             M                          G-BUF     M'-1 5 2 0 3 0 1
+                     Weight                                             Skipped Weight
+                                                                                                                                                                                                                             D              PE[0]     PE[K'-1]
+      STAGE2 - Execution Module                                                                                                                                                         Weight                         k=0   0
+                                                                                                                                                                                                         1KB
+                                                 Sort by                                                Partial Sum                                                              N(K Submatrices)                       NR
+                                                                                                                                                                                                                             2
+                                         3
+                                         2                                                      5                                                                                                       Spike                3
+                         Col_idx
+                                                 Merger Tree                                            Accumulation                                                                                    G-BUF                5
+
+
+
+
+                                                                                                                                                                                         [K'-1]
+                                                                                                                                                                                 NRxP
+
+
+                                                                                                                                                                                         NRxP
+                                             2                                                                                                                                                            [0]
+                                                                                                                                        Output Spike                                                                                    TILE[M'-1]
+
+
+
+
+                                                                                                                                                                                  [0]
+                         Select                                                                                                                                                                                                  P
+                                                                                    0
+                                                 >   1 @1                                                                                                                   D                                     k=K'-1                      Shared Weight
+                                                                                                                                                                                                                             1                 L-BUF (8KB)
+                         Col_idx                                                                                     =                                                                                   1KB                 3
+                                             1                                      @3                                        Output                                                                                    NR
+                         Select                                                                                                                                                                         Spike                5
+                                                                                                Index
+
+
+
+
+                                                                                                                              Col_idx
+                                                                                                 L-1D
+
+
+
+
+                                                                                                                                        Comparator(>Vth)                                                G-BUF                7              PE[0]     PE[K'-1]
+        Pipelining
+
+
+
+
+                                                             >          0 @3
+                                                                                                                                                                             T                          [K'-1]
+                                                                                                                                                                                   NRV Format                                    P
+                         Col_idx                                                    3                                         Output
+                                             1                                              @0
+                                                                                            @0
+                                                                         W REG NR
+
+
+
+
+                                                                                                                               Valid        Potential REG
+                         Select                                                     9       @1
+                                                                                            @1
+                                                                                                            2
+                                                                                                                     0                                                  Fig. 11. The proposed GustavSNN hardware that supports column-parallel
+                                                 >   0 @3                           7       @2
+                                                                                            @2                                          Neuron Model                    dataflow where spike submatrices 0∼(K′ -1) are shared by PEs with the same
+                         Col_idx                                                                                               Output
+                                             0                                      2       @3
+                                                                                            @3          +            1                                                  ID in each tile. Each weight row is mapped to a tile by storing it in the local
+                                                                                                                               Value             Potential
+                         Select
+                                                  Merger                                                                                     6                          weight buffer that is shared by K′ PEs.
+                             NR                    Tree
+                                                                                                                                                 Update
+                                             2
+
+
+                             4 Update P-bit REG
+                                                                                                                                                                        value is written to the neuron model module, and a new partial
+                                                                                                                                                                        sum accumulation begins. In the neuron model module, the
+  Fig. 9. Architecture of PE in the proposed GustavSNN. Each PE consists of                                                                                             output value updates the stored neuron potential at a selected
+  a fetch module and an execution module, which are pipelined.
+                                                                                                                                                                        column index. When the fetched NR rows are consumed in the
+  are fetched. If the weight value is 0, the corresponding spike                                                                                                        PE, the next NR rows in the NRV-formatted spike submatrix
+  row is skipped (row skipping). Thus, spikes are skipped in two                                                                                                        are loaded into the PE. Since our PE is pipelined, the next
+  ways: (i) when storing spikes in the NRV format and (ii) when                                                                                                         NR rows are fetched while the execution module is running.
+  fetching spikes by looking at loaded weights. The proposed                                                                                                            After sweeping the entire row of a given spike submatrix at
+  fetch module fetches spikes until all NR registers are filled,                                                                                                        each timestep, P neuron potentials at each PE are compared
+  i.e., P-bit registers, skipping all unnecessary operations.                                                                                                           with the threshold (Vθ ) for spike generation.
+     After fetching, spikes across NR rows are assigned to                                                                                                                   V. ROW T ILING AND S CHEDULING IN G USTAV SNN
+  leading-one detectors (L-1D in Fig. 9). L-1Ds convert the P-
+  bit spike of register into non-zero column indices in parallel                                                                                                        A. Weight Row Tiled Architecture
+  (Fig. 10). Then, the execution module looks at the column                                                                                                                To support column-parallel dataflow while maximizing
+  indices from ‘NR ’ L-1D units. The merger tree sorts the                                                                                                              weight reuse, we designed GustavSNN with a hierarchy con-
+  incoming column indices and outputs the smallest index,                                                                                                               sisting of tiles, each of which contains multiple PEs and a
+  which becomes the column index of the output neuron to be                                                                                                             shared weight buffer (Fig. 11). As explained in Section IV-E,
+  updated. Which weight to be accumulated is determined by the                                                                                                          each PE is responsible for handling a column-partitioned spike
+  L-1D ID. For instance, the column index ‘0’ is selected from                                                                                                          submatrix. Since a single weight row can be shared when
+  the spike register 4’b1010 by the merger tree from the L-1D[3]                                                                                                        processing multiple spike submatrices with GP-based SpMM,
+  in Fig. 9. Thus, W REG[3] = 2 is read and gets accumulated                                                                                                            we group PEs into a single tile and let them share a local
+  to update the output value. After the merger tree selects one                                                                                                         dual-port weight buffer. Note that each weight row vector is
+  spike for the computation, it returns a selection signal back                                                                                                         written to the local weight buffer only once, and when the
+  to the corresponding L-1D. Then, it toggles the selected spike                                                                                                        computation is completed for all submatrices, a new weight
+  signal from 1 to 0, e.g., 1010 changes to 0010 (Fig. 10). Now,                                                                                                        row vector is fetched from the spike global buffer.
+  the column index ‘2’ from L-1D[3] is passed to the merger                                                                                                                As presented in Section IV-A, GP requires repetitive access
+  tree for seamless operation. This entire step is repeated until                                                                                                       to sparse and binary spikes instead of expensive multi-bit
+  all spikes in the input spike matrix are consumed.                                                                                                                    weights or neuron potentials, thus it prevails over other SpMM
+     If the selected column index matches the previous one, the                                                                                                         methods in SNN processing. Nevertheless, the most dominant
+  corresponding weight is accumulated; otherwise, the output                                                                                                            memory cost of GP is the repeated access to the spike matrix,
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                    Shared W_BUF                 Step #1              Step #2              Step #3                                                  Step #8             Step #9
+                                         T
+                        PE#1 PE#2
+                                    NR                                                                                                  ...                                                               ...
+                    P                                                                                                                                                                                 T
+    Weight Matrix        NR   NR         P   P                                                                                                                           P   P
+
+  Fig. 12. Execution flow of a single tile in GustavSNN under column-major time-second scheduling. Each PE first sweeps the entire column (column-major
+  order) so that full potential updates of the selected output neurons are done for a given timestep (tick). Then, the next computation is performed on spike
+  submatrices at the next tick (time-second execution).
+
+
+
+
+                                                                                             Spike Register Utilization (%)
+                                                                                                                                    Utilization               Latency
+  which scales with the number of weight rows M . To minimize                                                                 100
+  the number of spike matrix accesses to off-chip memory, a
+
+
+
+
+                                                                                                                                                                                 Normalized Latecny
+  global buffer is allocated for the spike matrices. Using the                                                                80                     Timestep
+  weight row tiled architecture with M ′ tiles, we can share                                                                                           Major
+                                                                                                                              60              Column
+  a spike submatrix in the NRV format across M ′ PEs that
+  have the same ID at each tile. Thus, the number of off-                                                                                      Major
+                                                                                                                              40
+  chip memory accesses for each spike submatrix becomes
+  M/M ′ , which decreases as the number of tiles increases.                                                                   20
+  The D × N spike matrix in the off-chip memory is sliced                                                                      0
+  into NR ×P submatrices. Assuming that the entire column is                                                                        2   6      10 14 18 22 26 30 34 38 42
+  partitioned into K groups, only K ′ (< K) submatrices among                                                                                       Density (%)
+  them are stored in the global buffer for their computation in                    Fig. 13. Comparison of spike register utilization and latency between column-
+  the corresponding PEs. The required weights and spikes are                       major and timestep-major scheduling at various spike density levels.
+  dispatched by a centralized scheduler, as illustrated in Fig. 11.
+  In typical SNNs, the weights tend to be dense, so the sparsity                   However, it is not suitable for temporal coding, where each
+  of spikes primarily determines the overall latency. Since PEs                    neuron is expected to spike only once across the entire
+  with the same ID operate on the same spike submatrix, they                       timestep. For example, 71% of neurons have already fired
+  tend to exhibit similar latency. Therefore, we synchronize the                   before the last timestep in the temporal-coded spike-based
+  operation of PEs at the same position to reduce the number                       transformer [22], allowing most of the computations to be
+  of spike loads from the global buffer.                                           skipped at t = T . With the timestep-major scheduling, this
+                                                                                   opportunity is missed since the full potential at each timestep
+  B. Column-Major Time-Second Scheduling                                           can only be computed by sweeping the entire spike column.
+     To maximize both compute utilization and data reuse, we                       In contrast, column-major scheduling can skip unnecessary
+  adopt a column-major time-second scheduling strategy. Fig. 12                    computations of already-fired neurons.
+  depicts the proposed scheduling, where the parameters are set                       In addition, column-major scheduling follows the timestep-
+  to K = 4, K ′ = 2, P = 2, and NR = 2. In each processing                         wise update order of neuron models, removing constraints
+  cycle, every PE in a tile is assigned with a different submatrix                 in selecting neuron models. In contrast, [27] assumes inde-
+  and performs computations using the same weights. (Step 1) A                     pendent firing across timesteps, limiting support for neuron
+  PE starts to compute with a NR × P non-zero spike submatrix                      models with time-varying potentials. Similarly, [47] executes
+  at tick 0 (t = 0). (Step 2) It continues processing the next                     multiple timesteps in parallel, so any temporal dependencies
+  submatrix along the column direction, sweeping the entire                        must be handled in a single cycle, which increases logic
+  column of the current timestep. (Step 3) Once all submatrices                    depth and complicates timing closure as neuron models grow
+  at the same column-partition at tick 0 are consumed, the                         more complex. Using column-major scheduling, GustavSNN
+  scheduler advances to the next timestep (t = 1). (Step 8)                        increases (column-wise) parallelism while supporting diverse
+  This continues until the entire timestep is processed, which                     neuron models without requiring changes to the underlying
+  completes the output potential update. (Step 9) Afterward, a                     neuron computation logic by timesteps. In this work, we
+  new spike submatrix at the next column partition is assigned                     implement LIF neurons, but the neuron computation logic
+  to each PE in the tile. As shown in Fig. 12, it now starts                       inside the PE can be replaced with any target model without
+  from tick 0 again. This column-major time-second scheduling                      altering the overall architecture.
+  determines the loop order in Algorithm 1.                                           Furthermore, the timestep-major scheduling has a challenge
+     Compared to the column-major scheduling, timestep-major                       in fully exploiting row vector skipping using the NRV format.
+  scheduling processes the entire timestep for given spike rows                    If at least one timestep within T has a non-zero row vector,
+  (NR in our example) before moving on to the next, loading the                    that row vector must occupy one L-1D in the PE. As a
+  corresponding weight row only once. In other words, instead of                   result, the probability that each row vector occupies a PE
+  computing in the order of Step 1→2→3· · · , the timestep-major                   jumps from 1 − ρP to 1 − ρP T , resulting in a decrease in
+  scheduling proceeds in the order of Step 1→3→5→7· · · .                          utilization, where ρ is the sparsity. The issue with timestep-
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                                TABLE I                                                                      Weight Skipping            Merger+Accumulator
+                     SNN B ENCHMARKS FOR E VALUATION
+                                                                                                             Leading-one Detector       Neuron Model
+                                                                                                 0.024                                                      12
+       Model           SEW [9]       ONE [21]      SDT [45]     SPA [22]
+
+
+
+
+                                                                                                                                                                 Power (mW)
+                                                                                    Area (mm2)
+    Architecture       ResNet-18     ResNet-18       VIT         Swin-T
+                                                                                                 0.016                                                      8
+       Coding            Rate        Temporal        Rate       Temporal
+      Timestep             4            24            4            40
+    Sparsity (%)         87.5          95.2          88.9         98.4                           0.008                                                      4
+    Accuracy (%)         63.18         68.73        77.07         80.0
+                                                                                                   0.0                                                      0
+                                                                                                         4       8     16      32   4      8    16     32
+  major scheduling is similar to temporal parallel dataflow in                                                       Sub-matrix Column Size P
+  that temporal sparsity is not fully utilized, and it allows
+  skipping only silent neurons. As shown in Fig. 13, under high                                      Fig. 14. Area and power breakdowns of GustavSNN PE.
+  sparsity conditions (i.e., sparsity > 95%), the column-major
+  scheduling achieves the spike register utilization over 60%,                     bit-width of PEs, and evaluations in this work are conducted
+  while the timestep-major scheduling has below 25%. With                          using 8-bit weights for all benchmarks, where a little accuracy
+  higher spike register utilization in L-1Ds, the column-major                     drop is observed.
+  scheduling runs faster at high spike sparsity (> 90%), which                     B. Impact of Column Partition Factor P
+  is the case for most SNNs. The timestep-major scheduling
+                                                                                      1) Area and Power Analysis of PE: First, we analyze the
+  becomes slightly faster on lower sparsity(≤ 86%), as it only
+                                                                                   post-layout area and power consumption of GustavSNN PE at
+  requires loading the weight vector once over the entire T .
+                                                                                   various P factors. As shown in Fig. 14, as P gets larger, the PE
+                     VI. E XPERIMENTAL R ESULTS                                    occupies more area and consumes more power to handle more
+                                                                                   columns at the same time. Specifically, as P gets larger, the
+  A. Methodology                                                                   overhead of L-1D and potential buffers increases significantly.
+     1) Hardware Evaluation: To evaluate GustavSNN hard-                           The overhead of L-1D due to a large P becomes dominant;
+  ware, we implemented GustavSNN and other baselines in                            for example, at P = 32, it takes up 70% of the area and
+  RTL and synthesized them using Synopsys Design Compiler                          56% of the power consumption. In contrast, a merger tree,
+  at 1GHz with 28nm FDSOI technology. We performed a                               an accumulator, and a skipping module presented in Fig. 9
+  place-and-route using Synopsys IC Compiler II to estimate                        exhibit consistent area and power that are independent of P .
+  the post-layout area of one GustavSNN tile. For the area and                        2) Performance Analysis: The finer-grained partitioning
+  power analysis for global buffers and local weight buffers,                      with a smaller P increases the number of NRV fetches
+  we used CACTI-7.0 [3]. We estimate the power consumption                         to the tile, considering there is the same number of PEs
+  by Synopsys PrimePower with end-to-end simulation using                          in a tile, resulting in lower operations per second (OPS).
+  cocotb [37], i.e., a Python-based verification framework.                        However, with a smaller P , we can allocate a larger number
+     2) Software Evaluation: To verify the performance (= la-                      of PEs per tile that run in parallel within the same silicon
+  tency) of GustavSNN on recent SNN benchmarks, summarized                         area since each PE is smaller in size compared to the one
+  in Table I, we simulated them using cocotb to extract exact                      with a large P . Furthermore, a smaller P allows more row
+  compute cycles on RTL and to obtain toggle rate in PEs. The                      vectors to be skipped, due to the high sparsity of the spike
+  SEW [9] and SDT [45] are based on rate coding, which has                         matrix. Therefore, we extracted the OPS assuming GustavSNN
+  low spike sparsity (87∼89%) with short timesteps (T = 4).                        hardware with 8 tiles, each capable of computing 64 spike
+  The ONE [21] and SPA [22] are based on temporal coding,                          columns in parallel. For example, we need to place 16 PEs
+  i.e., single spike approximation on phase coding, which has                      when P = 4 in each tile so that a tile can process 64 columns
+  higher spike sparsity (95∼98%) but with longer timesteps. The                    in parallel; smaller P require more PEs. For the evaluation,
+  accuracy and sparsity of all benchmarks are extracted using                      we used random spike matrices with various sparsity levels.
+  PyTorch [34] and SpikingJelly [8].                                               As shown in Fig. 15(a), having more PEs with a smaller P
+     Despite the efforts of [43], most SNNs avoid weight pruning                   results in lower latency at sparsity higher than 85% as more
+  due to the significant accuracy degradation (3 ∼ 5%) ob-                         spike rows can be skipped. However, placing too many PEs
+  served when it is combined with quantization [38]. Pruning                       in the tile leads to latency overhead due to memory access
+  alone, without quantization, could provide a better trade-off                    conflicts in the shared weight buffer, especially when sparsity
+  by reducing the compute workload without harming accuracy.                       becomes lower (as weight access becomes more frequent).
+  However, [38] demonstrates that pruning-only designs, which                      Thus, GustavSNN with P = 4 performs worse than the one
+  preserve accuracy up to 80% sparsity, consume 45% more                           with P = 8 when the sparsity falls below 85%, or even with
+  energy than their quantized counterparts. Therefore, instead of                  the one with P = 16 or 32 when sparsity is below 75%.
+  pursuing dual-sparse compression, we focus on efficiently sup-                      3) Efficiency Analysis: Fig. 15(b) reports the power con-
+  porting high spike sparsity with quantization [40], [48], which                  sumption at various P factors. The reported power of a group
+  is more common and accuracy-preserving. Our architecture                         of PEs is extracted by PrimePower, while that of each buffer
+  can support various weight bit-widths by simply changing the                     is estimated by considering the amount of buffer accesses
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+   Normalized Latency                                                                                            800                                              TABLE II
+                        P = 32                    P=8                          Shared Weight Buffer
+                                                                                                                                                   G USTAV SNN H ARDWARE C ONFIGURATION
+
+
+
+
+                                                                                                                       Power (mW)
+                        P = 16                    P=4                          BUF         PE                    600
+                                                                                                                                              Components in GustavSNN (1GHz at 1.1V)
+                                                                                                                 400                 Tile                     8 EA
+                                                                                                                                      - PEs                   8 EA per tile, P = 8, 8-bit weights
+                                                                                                                 200                  - Shared Weight L-BUF 1 EA per tile, 8 KiB, Dual-port
+                                                                                                                                     Spike G-BUF              8 EA, 1 KiB
+                                                                                                                 0                   Weight G-BUF             1 EA, 128 KiB
+                 100    95                  90     85    80        75   70    32     16          8      4
+                                            Sparsity (%)                      Submatrix Column Size P                                Main Memory              LPDDR3, 6.4 GB/sec
+                                                   (a)                                     (b)
+                                                                                                                                       Total: 1.34 mm2
+  Fig. 15. (a) Normalized latency and (b) power consumption of GustavSNN
+                                                                                                                                          Weight                          PE #1
+                                                                                                                                                                             4     PE
+                                                                                                                                                                                    PE5#2   PE #3   PE #4
+  with 8 tiles at various P values of each PE.
+                                                                                                                                          G-BUF
+                                                                                                                                                   64 PE
+                                           1200                                                                                                                                     Shared Weight
+                                                                                                                                       Spike                                         Local Buffer
+                                                                                          P = 32      P=8                              G-BUF
+                        Effective GOPS/W
+
+
+
+
+                                                                                                                                                                       150[um]
+                                            900                                           P = 16      P=4                                                  1 Tile
+                                                                                                                                          Shared Weight                    PE #5   PE #6    PE #7   PE #8
+                                                                                                                                             L-BUF
+
+                                            600                                                                                       Area Breakdown                               Tile Layout
+
+                                            300                                                                                     Fig. 17. Area breakdown of GustavSNN and layout of a tile that consists of
+                                                                                                                                    eight PEs with a shared weight buffer.
+                                                 0
+                                                 100          99         98          97          96         95                         2) Implementation of Baselines: Brain-like neuromorphic
+                                                                         Sparsity (%)                                               platforms, such as Loihi [4] and SpiNNaker [31], which are
+  Fig. 16. Energy efficiency at various P in terms of GOPS/W based on actual                                                        widely used in the SNN community, focus on simulating bio-
+  FLOPs and sparsity of each layer in SNN benchmarks. Each dot represents                                                           logically plausible and flexible neuron models. Their general-
+  a layer in the benchmark.
+                                                                                                                                    purpose design results in higher hardware costs compared to
+  at a given P . A smaller P increases the average power                                                                            task-specific accelerators. For this reason, direct performance
+  due to more frequent data accesses to global spike buffers                                                                        comparisons with such platforms are neither fair nor infor-
+  (also, increased size of skipped row indices) and to local                                                                        mative when evaluating our proposed architecture. Instead of
+  weight buffers. Notably, as the number of PEs increases, the                                                                      an unfair comparison with neuromorphic chips, we compare
+  total power consumption increases, with the total power at                                                                        our approach against recent SNN accelerators [27], [29], [47]
+  P = 4 being roughly twice that of P = 32. Therefore,                                                                              that target SNNs, which increase computational efficiency for
+  while a smaller P enables higher inference speed, it leads to                                                                     sparse spike patterns.
+  higher power consumption, which negatively impacts energy                                                                            To validate the performance of GustavSNN, we imple-
+  efficiency. Fig. 16 compares the energy efficiency (GOPS/W)                                                                       mented the following baselines for comparison. We imple-
+  at various P factors, which are estimated by using the actual                                                                     mented the naiv̈e GP-based SNN accelerator (GP), exploiting
+  FLOPs and sparsity of each layer in our SNN benchmarks.                                                                           architecture in [49]. As IP-based accelerators, we implemented
+  Regardless of P , we found that the effective energy efficiency                                                                   two baselines, i.e., TS and TP. A TS-based accelerator follows
+  tends to increase with the sparsity level. As we decrease P                                                                       the tick-batch sequential dataflow described in Section III-B,
+  from 32 to 8, the energy efficiency improves, but as P reaches                                                                    e.g., SpinalFlow [29]. In addition, we implemented a TP-
+  4, the energy efficiency significantly drops due to increased                                                                     based accelerator that computes four ticks in parallel (Sec-
+  memory conflicts in the shared weight buffer.                                                                                     tion III-B2), e.g., LoAS [47]. Finally, we implemented an OP-
+                                                                                                                                    based accelerator (OP) based on [18], [24] while removing
+  C. Evaluation of GustavSNN                                                                                                        the multiply units for a fair comparison. Since naiv̈e GP and
+     1) Configuration: Based on the analysis in Section VI-B,                                                                       OP require large memory capacity for neuron potentials, we
+  we configured the GustavSNN accelerator with parameters                                                                           assume that their potentials are accumulated at the global
+  summarized in Table II. Fig. 17 shows the area breakdown                                                                          buffer level (ex-situ). Also, all designs were configured to use
+  of GustavSNN and the layout of a single tile in GustavSNN.                                                                        64 PEs and the same global buffer size.
+  Based on the results shown in Fig. 16, we set P = 8 in                                                                               3) Memory Traffic: Thanks to the weight row tiled ar-
+  partitioning the spike matrix. We place eight tiles, where each                                                                   chitecture and the column-parallel tick-batch GP dataflow,
+  tile consists of eight PEs and a shared weight buffer. The size                                                                   GustavSNN shows the least on-chip and off-chip memory
+  of a shared weight local buffer is 8 KiB, which is enough to                                                                      traffic compared to the selected baselines. Fig. 18 shows the
+  store one weight row for all SNN benchmarks. Also, we place                                                                       normalized on-chip and off-chip data traffic generated when
+  a 128 KiB global buffer for weights and eight 1 KiB global                                                                        computing the SNN benchmarks in Table I. The OP loads
+  buffers for spikes. These buffer sizes are sufficient for double                                                                  spikes and weights less but has high memory traffic due to
+  buffering, enabling concurrent data transfer and computations.                                                                    frequent potential updates. Since TS locally updates neuron
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                                             Spike                Weight                Potential        efficiency degrades because of the reduced number of silent
+                        3                                                                           15   neurons, as shown in Fig. 22 In contrast, GustavSNN exhibits
+                            On-chip Memory Traffic                       Off-chip Memory Traffic
+   Normalized Traffic
+
+
+                                                                                                         higher energy efficiency by fully exploiting temporal sparsity
+                        2                                                                           10   regardless of T . We achieved 1.18–1.71× higher energy
+                                                                                                         efficiency than PR. For a highly sparse (< 5% density) spike
+                                                                                                         matrix, PR’s bitmap data format yields a lower compression
+                        1                                                                           5
+                                                                                                         ratio than NRV (Fig. 8), resulting in higher data traffic.
+                                                                                                         Furthermore, the number of reusable spike patterns declines
+                        0                                                                           0    in the ultra-sparse regime, limiting energy-efficiency gain. As
+                            TS         OP    TP      GP Ours             TS     OP    TP GP Ours
+                            [29]             [47]    [49]                [29]         [47]   [49]        a result, our architecture maintains superior energy efficiency
+       Fig. 18. Normalized memory traffic of GustavSNN and various baselines.                            on various SNN benchmarks with different spike coding.
+                                                    OP                TS [29]        GP [49]                                   VII. D ISCUSSIONS
+                                                    TP [47]           PR [42]        Ours
+                                       600                                                               A. Load Imbalance of PE Synchronization
+                                                                                     1.71x
+                              GOPS/W
+
+
+
+
+                                       450                                                                  As presented in Section V-A, each tile handles a different
+                                                              1.63x                                      row vector, and the same spike sub-matrix Bk is shared by PEs
+                                       300                                                               with the same ID at each tile. To access the spike global buffer
+                                                    1.18x                   1.21x
+                                       150                                                               at the same time, all PEs with the same ID must complete the
+                                                                                                         use of the assigned spike sub-matrix before fetching the next
+                                         0                                                               spike sub-matrix, i.e., PE synchronization. Sharing the spike
+                                               SEW             ONE          SDT        SPA
+                                                [9]            [21]         [45]       [22]              sub-matrix across tiles minimizes off-chip memory access, but
+                                                                                                         it can increase latency and reduce utilization because of the
+  Fig. 19. Comparison of energy efficiency (GOPS/W) between SNN accel-                                   sparsity of the weights. Fig. 20 shows the idle cycle ratio of
+  erator baselines and GustavSNN on four representative SNN benchmarks.
+                                                                                                         PEs under various weight sparsity levels. On SEW [9] and
+                                                                                                         SDT [45] benchmarks, we pruned weight matrices to evaluate
+  potentials, traffic due to potential updates was minimal; how-                                         the impact of weight sparsity. For non-pruned SNNs, every
+  ever, off-chip traffic increases due to repeated weight loading                                        PE with the same ID across tiles computes on the same sub-
+  at every timestep. In contrast, TP computes multiple timesteps                                         matrix at nearly the same pace since skipping by zero weight
+  in parallel, reducing off-chip traffic by minimizing the number                                        rarely occurs, resulting in a negligible idle cycle ratio (1%).
+  of weight loads. However, since SNN benchmarks do not                                                  As the weight sparsity increases, idle cycle ratios rise due to
+  prune weights, TP cannot skip computations for spikes from                                             uneven workload across tiles. With the same sub-matrix, PEs
+  non-silent neurons. Thus, spikes are frequently loaded from                                            with more non-zero weights take longer to complete, and PEs
+  the on-chip spike buffer. Naive GP implementation shows high                                           with fewer non-zero weights remain idle to synchronize. Yet,
+  on-chip traffic due to repeated accesses to spike rows. Also, it                                       the idle cycle ratio is less than 10% for a weight sparsity lower
+  shows high off-chip memory traffic due to fetching neuron                                              than 80%, indicating that GustavSNN can tolerate a significant
+  potentials from external memory. In contrast, GustavSNN                                                level of pruning with weak load imbalance.
+  (Ours) avoids the increase in off-chip traffic by updating
+  potentials on the fly, and NRV-formatted spikes reduce on-chip                                         B. Performance on Sparse Weights
+  memory traffic as the data size of spikes has been reduced.                                               Beyond this inter-PE imbalance, our current pipeline may
+     4) Energy Efficiency: Fig. 19 compares the energy effi-                                             have intra-module cycle imbalance between the skipping and
+  ciency between four baselines with various dataflows (OP, TS,                                          execution stages when dealing with highly sparse weights.
+  GP, and TP) and GustavSNN on selected SNN benchmarks.                                                  The skipping module repeatedly fetches NRV indices only
+  In addition, we also compare with Prosperity (PR) [42], which                                          to discard them when the corresponding weights are zero.
+  efficiently reuses computations exploiting product sparsity. It                                        As illustrated in Fig. 21(left), the imbalance makes the
+  identifies repeating spike patterns or sub-patterns to eliminate                                       skipping stage the performance bottleneck when the weight
+  repeated computations in SNNs. For a fair comparison, we                                               density drops below 40%, shifting the pipeline from being
+  use its publicly available simulator of PR and CACTI-7.0 for                                           execution-dominant to skipping-dominant. Thus, as shown
+  memory modeling.                                                                                       in Fig. 21(right), the naive skipping shows lower energy
+     GustavSNN consistently performs the best for all bench-                                             efficiency than LoAS when weight sparsity is above 80%.
+  marks, with various spike sparsity levels (ρ = 87 ∼ 99%).                                                 To address this highly dual-sparse case, we adopt two-
+  Compared to the GP baseline, GustavSNN results in 11×                                                  pointer index matching that efficiently finds intersections be-
+  better energy efficiency on average owing to efficient on-chip                                         tween two sparse vectors. One pointer scans the non-zero
+  potential updates. Furthermore, GustavSNN achieves 1.52 ∼                                              row indices from NRV, while the other scans the non-zero
+  2.25× higher energy efficiency than TP, which presents the                                             weight indices; by advancing only the pointer with the smaller
+  most optimal energy efficiency among baselines. Specifically,                                          index until it finds a non-zero intersection. As shown in
+  on ONE and SPA, which require longer timesteps, TP’s energy                                            Fig. 21(right), GustavSNN with two-pointer index matching
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                 Idle Cycle Ratio per PE (%)   40
+                                                                      P=8          P = 16         P = 32                                                          TP   GustavSNN:         P=4       P=8     P=16        P=32
+
+                                                             # of Tile = 16                      # of Tile = 4                                                             SDT (Rate Coding)          SPA (Temporal Coding)
+                                                                                                                                                                100
+
+
+
+
+                                                                                                                                            Processed Neuron
+                                                                                                                                             Vector Ratio (%)
+                                               30
+                                                                                                                                                                 80
+                                               20                                                                                                                60
+                                                                                                                                                                 40
+                                               10                                                                                                                20
+                                                                                                                                                                  0
+                                               0                                                                                                                       4       8     12        16    8     16      24    32
+                                                    0      20    40    60    80    100 0    20     40    60      80     100                                                               # of Timesteps
+                                                           Weight Sparsity (%)              Weight Sparsity (%)
+                                                                                                                                            Fig. 22. Comparison of processed neuron vector ratio while varying timesteps
+  Fig. 20. Idle cycle ratio per PE due to PE synchronization by weight sparsity.                                                            for SDT [45] and SPA [22] benchmarks executed on GustavSNN with a
+                                                                                                                                            different P and FTP [47].
+                                                           Weight Density
+                                                        60%     40%       20%            Naive      Two-Pointer
+  Dominance Factor
+
+
+
+
+                      5                                                                                           2.0
+
+
+
+
+                                                                                                                        Energy Efficiency
+                                                                                                                                               For the SNN benchmark with temporal coding, having
+
+
+
+
+                                                                                                                          Normalized
+                      4                                                                                           1.5
+                                               Execution                                                                                    a higher spike sparsity than rate-coded SNNs, the ratio of
+                      3
+                      2
+                                               Dominant
+                                                                                         LoAS
+                                                                                                                  1.0                       processed vectors is much higher for fully TP (FTP) compared
+                      1                                                                                           0.5                       to GustavSNN. Due to the “at-most-one-spike” constraint of
+                      0
+                                                             Skipping Dominant
+                                                                                                                  0.0
+                                                                                                                                            temporal coding, achieving high accuracy typically requires
+                                        0                10     20     30     40     5      10     15       20                              most neurons to fire at least once within a given timestep. As
+                                                         Spike Density (%)               Weight Density (%)
+                                                                                                                                            a result, fully silent neurons remain rare, further limiting TP’s
+  Fig. 21. Latency ratio between the execution module to the skipping module                                                                skipping opportunities. In contrast, our method is unaffected
+  defined as the dominance factor (left). Normalized energy efficiency of the
+  naı̈ve skipping vs. the two-pointer index matching on [45] (right).                                                                       by the proportion of silent neurons and thus effectively exploits
+                                                                                                                                            spike sparsity regardless of the coding scheme. These results
+                                                                                                                                            show that our approach maintains high energy efficiency
+  not only resolves the inefficiency but surpasses LoAS even
+                                                                                                                                            regardless of timestep T or a spike coding scheme.
+  in the SNN with low spike sparsity [45]. With the two-
+  pointer scheme, the energy efficiency improves as weight
+  sparsity increases. This benefit is pronounced on SNNs with                                                                                                                      VIII. C ONCLUSION
+  high spike sparsity like SPA [22], where up to 2× higher
+  energy efficiency is achieved than LoAS. However, for SNNs                                                                                   In this work, we presented GustavSNN, the first GP-based
+  with dense weights, the index traversal overhead of the two-                                                                              SNN accelerator that supports on-the-fly potential updates
+  pointer scheme degrades performance compared to our orig-                                                                                 through column-wise partitioning. To reduce the overhead of
+  inal, dense-optimized design. It leads to a valuable research                                                                             storing neuron potentials, we proposed an NRV format and
+  direction for future work: a flexible engine that dynamically                                                                             a specialized PE architecture that enables efficient column-
+  selects the optimal skipping scheme based on weight sparsity.                                                                             parallel execution of partitioned spike submatrices, thereby
+                                                                                                                                            enhancing both sparsity exploitation and compute parallelism.
+  C. Exploiting Temporal vs. Spatial Sparsity                                                                                               Furthermore, by adopting a weight row tiled architecture and
+                                                                                                                                            a column-major time-second scheduling strategy, GustavSNN
+     By using NRV, our proposal skips entire spike row vectors
+                                                                                                                                            significantly reduces the energy consumption associated with
+  when all P neurons in a row remain inactive at a given
+                                                                                                                                            memory access. Our column-major scheduling ensures con-
+  timestep (temporal sparsity). In contrast, the TP-based LoAS
+                                                                                                                                            sistent performance across various timestep T and supports
+  architecture operates on all timesteps simultaneously. It pro-
+                                                                                                                                            a wide range of neuron models without requiring architec-
+  cesses the full time window in parallel and therefore captures
+                                                                                                                                            tural modifications. Our architecture achieves 1.43× higher
+  spatial sparsity by skipping only neurons that are silent across
+                                                                                                                                            energy efficiency, on average, than the state-of-the-art SNN
+  the entire timestep (spatial sparsity). As shown in Fig. 22, the
+                                                                                                                                            accelerator and 11× higher energy efficiency than the direct
+  ratio of silent neurons decreases as the total timestep increases,
+                                                                                                                                            deployment of a GP-based SpMM accelerator.
+  reducing opportunities to skip computations. In contrast, our
+  approach can control the ratio of processed neuron vectors
+  by P , while being less affected by the timestep T . Thus,                                                                                                                  IX. ACKNOWLEDGEMENTS
+  skipping ratios on benchmarks requiring a long timestep for
+  better accuracy are unaffected by the increase in T . With the                                                                               This work was partially supported by the Institute of Infor-
+  increased P , it seems that GustavSNN needs to process a                                                                                  mation & Communications Technology Planning & Evaluation
+  higher number of neuron vectors. However, the merger tree                                                                                 (IITP) grant (RS-2023-00229849), and the National Research
+  in Fig. 9 feeds in only the non-zero spikes, keeping dynamic                                                                              Foundation of Korea (NRF) grant (NRF-2023R1A2C2006290)
+  energy consumption low. Also, for dense-weight SNNs where                                                                                 funded by the Korean government (MSIT). The chip fab-
+  the execution module dominates, throughput is essentially not                                                                             rication and EDA tools were supported by the IC Design
+  affected by the increased P .                                                                                                             Education Center (IDEC), Korea.
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+                                R EFERENCES                                                FPGAs,” in Proceedings of the IEEE International Symposium on High-
+                                                                                           Performance Computer Architecture (HPCA), 2021, pp. 84–96.
+   [1] D. Baek, S. Hwang, T. Heo, D. Kim, and J. Huh, “InnerSP: A memory            [19]   M. Horowitz, “1.1 Computing’s energy problem (and what we can do
+       efficient sparse matrix multiplication accelerator with locality-aware in-          about it),” in Proceedings of the IEEE International Solid-State Circuits
+       ner product processing,” in Proceedings of the International Conference             Conference (ISSCC), 2014.
+       on Parallel Architectures and Compilation Techniques (PACT), 2021, pp.       [20]   R. Hwang, M. Kang, J. Lee, D. Kam, Y. Lee, and M. Rhu, “GROW:
+       116–128.                                                                            A row-stationary sparse-dense GEMM accelerator for memory-efficient
+   [2] M. Bal and A. Sengupta, “SpikingBERT: Distilling BERT to train                      graph convolutional neural networks,” in Proceedings of the Interna-
+       spiking language models using implicit differentiation,” in Proceedings             tional Symposium on High-Performance Computer Architecture (HPCA),
+       of the AAAI Conference on Artificial Intelligence (AAAI), vol. 38, no. 10,          2023, pp. 42–55.
+       2024, pp. 10 998–11 006.                                                     [21]   S. Hwang and J. Kung, “One-Spike SNN: Single-spike phase coding
+   [3] R. Balasubramonian, A. B. Kahng, N. Muralimanohar, A. Shafiee,                      with base manipulation for ANN-to-SNN conversion loss minimization,”
+       and V. Srinivas, “CACTI 7: New tools for interconnect exploration in                IEEE Transactions on Emerging Topics in Computing (TETC), 2024.
+       innovative off-chip memories,” ACM Transactions on Architecture and          [22]   S. Hwang, S. Lee, D. Park, D. Lee, and J. Kung, “SpikedAttention:
+       Code Optimization (TACO), vol. 14, no. 2, pp. 1–25, 2017.                           Training-free and fully spike-driven transformer-to-SNN conversion with
+   [4] M. Davies, N. Srinivasa, T.-H. Lin, G. Chinya, Y. Cao, S. H. Choday,                winner-oriented spike shift for softmax operation,” in Proceedings of
+       G. Dimou, P. Joshi, N. Imam, S. Jain et al., “Loihi: A neuromorphic                 the International Conference on Neural Information Processing Systems
+       manycore processor with on-chip learning,” IEEE Micro, vol. 38, no. 1,              (NeurIPS), vol. 37, 2024, pp. 67 422–67 445.
+       pp. 82–99, 2018.                                                             [23]   E. M. Izhikevich, “Which model to use for cortical spiking neurons?”
+                                                                                           IEEE Transactions on Neural Networks (TNN), vol. 15, no. 5, pp. 1063–
+   [5] A. Delmas Lascorz, P. Judd, D. M. Stuart, Z. Poulos, M. Mahmoud,
+                                                                                           1070, Sept. 2004.
+       S. Sharify, M. Nikolic, K. Siu, and A. Moshovos, “Bit-Tactical: A
+       software/hardware approach to exploiting value and bit sparsity in           [24]   J. Kim, M. Jang, H. Nam, and S. Kim, “Harp: Hardware-based pseudo-
+       neural networks,” in Proceedings of the ACM International Conference                tiling for sparse matrix multiplication accelerator,” in Proceedings of
+       on Architectural Support for Programming Languages and Operating                    the IEEE/ACM International Symposium on Microarchitecture (MICRO),
+       Systems (ASPLOS), 2019, p. 749–763.                                                 2023, pp. 1148–1162.
+                                                                                    [25]   S. Kim, S. Park, B. Na, and S. Yoon, “Spiking-YOLO: spiking neural
+   [6] C. Deng, Y. Sui, S. Liao, X. Qian, and B. Yuan, “GoSPA: An energy-
+                                                                                           network for energy-efficient object detection,” in Proceedings of the
+       efficient high-performance globally optimized sparse convolutional neu-
+                                                                                           AAAI Conference on Artificial Intelligence (AAAI), 2020.
+       ral network accelerator,” in Proceedings of International Symposium on
+                                                                                    [26]   J.-J. Lee, W. Zhang, and P. Li, “Parallel time batching: Systolic-array
+       Computer Architecture (ISCA), 2021, pp. 1110–1123.
+                                                                                           acceleration of sparse spiking neural computation,” in Proceedings of
+   [7] P. U. Diehl and M. Cook, “Unsupervised learning of digit recognition
+                                                                                           the IEEE International Symposium on High-Performance Computer
+       using spike-timing-dependent plasticity,” Frontiers in Computational
+                                                                                           Architecture (HPCA). IEEE, 2022, pp. 317–330.
+       Neuroscience, vol. 9, p. 99, Aug. 2015.
+                                                                                    [27]   R. Mao, L. Tang, X. Yuan, Y. Liu, and J. Zhou, “Stellar: Energy-
+   [8] W. Fang, Y. Chen, J. Ding, Z. Yu, T. Masquelier, D. Chen, L. Huang,                 efficient and low-latency snn algorithm and hardware co-design with
+       H. Zhou, G. Li, and Y. Tian, “SpikingJelly: An open-source machine                  spatiotemporal computation,” in Proceedings of the IEEE International
+       learning infrastructure platform for spike-based intelligence,” Science             Symposium on High-Performance Computer Architecture (HPCA), 2024,
+       Advances, vol. 9, no. 40, p. eadi1480, 2023.                                        pp. 172–185.
+   [9] W. Fang, Z. Yu, Y. Chen, T. Huang, T. Masquelier, and Y. Tian, “Deep         [28]   P. A. Merolla, J. V. Arthur, R. Alvarez-Icaza, A. S. Cassidy, J. Sawada,
+       residual learning in spiking neural networks,” in Proceedings of the                F. Akopyan, B. L. Jackson, N. Imam, C. Guo, Y. Nakamura, B. Brezzo,
+       International Conference on Neural Information Processing Systems                   I. Vo, S. K. Esser, R. Appuswamy, B. Taba, A. Amir, M. D. Flickner,
+       (NeurIPS), 2021, pp. 21 056–21 069.                                                 W. P. Risk, R. Manohar, and D. S. Modha, “A million spiking-neuron
+  [10] W. Fang, Z. Yu, Y. Chen, T. Huang, T. Masquelier, and Y. Tian, “Deep                integrated circuit with a scalable communication network and interface,”
+       residual learning in spiking neural networks,” in Proceedings of the                Science, vol. 345, no. 6197, pp. 668–673, 2014.
+       International Conference on Neural Information Processing Systems            [29]   S. Narayanan, K. Taht, R. Balasubramonian, E. Giacomin, and P.-
+       (NeurIPS), 2021.                                                                    E. Gaillardon, “SpinalFlow: An architecture and dataflow tailored for
+  [11] N. Fourcaud-Trocmé, D. Hansel, C. van Vreeswijk, and N. Brunel,                    spiking neural networks,” in Proceedings of the International Symposium
+       “How spike generation mechanisms determine the neuronal response                    on Computer Architecture (ISCA). IEEE, 2020, pp. 349–362.
+       to fluctuating inputs,” The Journal of Neuroscience, vol. 23, no. 37, pp.    [30]   F. Ottati, C. Gao, Q. Chen, G. Brignone, M. R. Casu, J. K. Eshraghian,
+       11 628–11 640, 2003.                                                                and L. Lavagno, “To spike or not to spike: A digital hardware perspective
+  [12] A. Gondimalla, N. Chesnut, M. Thottethodi, and T. Vijaykumar,                       on deep learning acceleration,” IEEE Journal on Emerging and Selected
+       “SparTen: A sparse tensor accelerator for convolutional neural net-                 Topics in Circuits and Systems (JETCAS), 2023.
+       works,” in Proceedings of the IEEE/ACM International Symposium on            [31]   E. Painkras, L. A. Plana, J. Garside, S. Temple, F. Galluppi, C. Patterson,
+       Microarchitecture (MICRO), 2019, pp. 151–165.                                       D. R. Lester, A. D. Brown, and S. B. Furber, “SpiNNaker: A 1-W 18-
+  [13] B. Han and K. Roy, “Deep spiking neural network: Energy efficiency                  core system-on-chip for massively-parallel neural network simulation,”
+       through time based coding,” in Proceedings of the European Conference               IEEE Journal of Solid-State Circuits, vol. 48, no. 8, pp. 1943–1953,
+       on Computer Vision (ECCV). Springer, 2020, pp. 388–404.                             2013.
+  [14] B. Han, G. Srinivasan, and K. Roy, “RMP-SNN: Residual membrane               [32]   S. Pal, J. Beaumont, D.-H. Park, A. Amarnath, S. Feng, C. Chakrabarti,
+       potential neuron for enabling deeper high-accuracy and low-latency                  H.-S. Kim, D. Blaauw, T. Mudge, and R. Dreslinski, “OuterSPACE:
+       spiking neural network,” in Proceedings of the IEEE/CVF Conference                  An outer product based sparse matrix multiplication accelerator,” in
+       on Computer Vision and Pattern Recognition (CVPR), 2020, pp. 13 555–                Proceedings of the IEEE International Symposium on High-Performance
+       13 564.                                                                             Computer Architecture (HPCA), 2018, pp. 724–736.
+  [15] S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. A. Horowitz, and                [33]   S. Park, S. Kim, B. Na, and S. Yoon, “T2FSNN: deep spiking neural net-
+       W. J. Dally, “EIE: efficient inference engine on compressed deep neural             works with time-to-first-spike coding,” in Proceedings of the ACM/IEEE
+       network,” in Proceedings of the International Symposium on Computer                 Design Automation Conference (DAC), 2020, pp. 1–6.
+       Architecture (ISCA), 2016, p. 243–254.                                       [34]   A. Paszke, S. Gross, S. Chintala, G. Chanan, E. Yang, Z. DeVito, Z. Lin,
+  [16] K. Hegde, H. Asghari-Moghaddam, M. Pellauer, N. Crago, A. Jaleel,                   A. Desmaison, L. Antiga, and A. Lerer, “Automatic differentiation in
+       E. Solomonik, J. Emer, and C. W. Fletcher, “ExTensor: An accelerator                PyTorch,” 2017.
+       for sparse tensor algebra,” in Proceedings of the IEEE/ACM Interna-          [35]   E. Qin, A. Samajdar, H. Kwon, V. Nadella, S. Srinivasan, D. Das,
+       tional Symposium on Microarchitecture (MICRO), 2019, p. 319–333.                    B. Kaul, and T. Krishna, “SIGMA: A sparse and irregular GEMM
+  [17] A. L. Hodgkin and A. F. Huxley, “Currents carried by sodium and                     accelerator with flexible interconnects for DNN training,” in Proceedings
+       potassium ions through the membrane of the giant axon of loligo,” The               of the IEEE International Symposium on High-Performance Computer
+       Journal of Physiology, vol. 116, no. 4, pp. 449–472, 1952.                          Architecture (HPCA). IEEE, 2020, pp. 58–70.
+  [18] R. Hojabr, A. Sedaghati, A. Sharifian, A. Khonsari, and A. Shriraman,        [36]   N. Rathi and K. Roy, “DIET-SNN: A low-latency spiking neural network
+       “SPAGHETTI: Streaming accelerators for highly sparse GEMM on                        with direct input encoding and leakage and threshold optimization,”
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+         IEEE Transactions on Neural Networks and Learning Systems (TNNLS),
+         2021.
+  [37]   B. J. Rosser, “Cocotb: a Python-based digital logic verification frame-
+         work,” in Micro-electronics Section seminar. CERN, Geneva, Switzer-
+         land, 2018.
+  [38]   C. J. Schaefer, P. Taheri, M. Horeni, and S. Joshi, “The hardware impact
+         of quantization and pruning for weights in spiking neural networks,”
+         IEEE Transactions on Circuits and Systems II: Express Briefs, vol. 70,
+         no. 5, pp. 1789–1793, 2023.
+  [39]   N. Srivastava, H. Jin, J. Liu, D. Albonesi, and Z. Zhang, “MatRaptor:
+         A sparse-sparse matrix multiplication accelerator based on row-wise
+         product,” in Proceedings of the IEEE/ACM International Symposium
+         on Microarchitecture (MICRO), 2020, pp. 766–780.
+  [40]   S. Venkatesh, R. Marinescu, and J. K. Eshraghian, “Squat: state-
+         ful quantization-aware training in recurrent spiking neural networks,”
+         in 2024 Neuro Inspired Computational Elements Conference (NICE).
+         IEEE, 2024, pp. 1–10.
+  [41]   Z. Wang, Y. Fang, J. Cao, Q. Zhang, Z. Wang, and R. Xu, “Masked
+         spiking transformer,” in Proceedings of the IEEE/CVF International
+         Conference on Computer Vision (ICCV), 2023.
+  [42]   C. Wei, C. Guo, F. Cheng, S. Li, H. F. Yang, H. H. Li, and Y. Chen,
+         “Prosperity: Accelerating spiking neural networks via product sparsity,”
+         in IEEE International Symposium on High Performance Computer
+         Architecture (HPCA). IEEE, 2025, pp. 806–820.
+  [43]   W. Wei, M. Zhang, Z. Zhou, A. Belatreche, Y. Shan, Y. Liang, H. Cao,
+         J. Zhang, and Y. Yang, “QP-SNN: Quantized and pruned spiking neural
+         networks,” in Proceedings of the International Conference on Learning
+         Representations (ICLR), 2025.
+  [44]   M. Yao, J. Hu, T. Hu, Y. Xu, Z. Zhou, Y. Tian, X. Bo, and G. Li, “Spike-
+         driven Transformer V2: Meta spiking neural network architecture inspir-
+         ing the design of next-generation neuromorphic chips,” in Proceedings
+         of the International Conference on Learning Representations (ICLR),
+         2024.
+  [45]   M. Yao, J. Hu, Z. Zhou, L. Yuan, Y. Tian, X. Bo, and G. Li, “Spike-
+         driven transformer,” in Proceedings of the International Conference on
+         Neural Information Processing Systems (NeurIPS), 2023.
+  [46]   R. Yin, Y. Kim, Y. Li, A. Moitra, N. Satpute, A. Hambitzer, and P. Panda,
+         “Workload-balanced pruning for sparse spiking neural networks,” IEEE
+         Transactions on Emerging Topics in Computational Intelligence, vol. 8,
+         no. 4, pp. 2897–2907, 2024.
+  [47]   R. Yin, Y. Kim, D. Wu, and P. Panda, “LoAS: Fully temporal-parallel
+         dataflow for dual-sparse spiking neural networks,” in Proceedings of
+         the IEEE/ACM International Symposium on Microarchitecture (MICRO).
+         IEEE, 2024, pp. 1107–1121.
+  [48]   R. Yin, Y. Li, A. Moitra, and P. Panda, “MINT: Multiplier-less integer
+         quantization for energy efficient spiking neural networks,” in Proceed-
+         ings of Asia and South Pacific Design Automation Conference (ASP-
+         DAC). IEEE, 2024, pp. 830–835.
+  [49]   G. Zhang, N. Attaluri, J. S. Emer, and D. Sanchez, “Gamma: leveraging
+         gustavson’s algorithm to accelerate sparse matrix multiplication,” in
+         Proceedings of the ACM International Conference on Architectural
+         Support for Programming Languages and Operating Systems (ASPLOS),
+         ser. ASPLOS ’21. New York, NY, USA: Association for Computing
+         Machinery, 2021, p. 687–701.
+  [50]   Z. Zhang, H. Wang, S. Han, and W. J. Dally, “SpArch: Efficient
+         architecture for sparse matrix multiplication,” in Proceedings of the IEEE
+         International Symposium on High-Performance Computer Architecture
+         (HPCA), 2020, pp. 261–274.
+  [51]   H. Zheng, Y. Wu, L. Deng, Y. Hu, and G. Li, “Going deeper with
+         directly-trained larger spiking neural networks,” in Proceedings of the
+         AAAI Conference on Artificial Intelligence (AAAI), 2021.
+  [52]   C. Zhou, H. Zhang, Z. Zhou, L. Yu, L. Huang, X. Fan, L. Yuan, Z. Ma,
+         H. Zhou, and Y. Tian, “QKFormer: Hierarchical spiking transformer
+         using Q-K attention,” in Proceedings of the International Conference
+         on Neural Information Processing Systems (NeurIPS), vol. 37, 2024,
+         pp. 13 074–13 098.
+  [53]   R.-J. Zhu, Q. Zhao, G. Li, and J. Eshraghian, “SpikeGPT: Generative
+         pre-trained language model with spiking neural networks,” Transactions
+         on Machine Learning Research, 2024.
+
+
+
+
+Authorized licensed use limited to: Hong Kong University of Science and Technology. Downloaded on May 23,2026 at 03:24:54 UTC from IEEE Xplore. Restrictions apply.
+

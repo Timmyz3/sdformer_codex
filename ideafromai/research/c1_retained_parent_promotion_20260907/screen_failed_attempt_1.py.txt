@@ -1,0 +1,123 @@
+"""Local retained-parent promotion screen, independent of pairwise graph search."""
+import sys
+sys.dont_write_bytecode = True
+from pathlib import Path
+from collections import Counter
+import itertools
+import json
+import numpy as np
+
+ROOT=Path(__file__).resolve().parent
+PRIOR=ROOT.parent/'fusion_delivery_20260907'
+sys.path.insert(0,str(PRIOR))
+import screen_virtual_parents as graph
+
+def analyze(rows):
+    _,masks,parents,order,base=graph.forest(rows,[])
+    children=[[] for _ in rows]
+    for i,p in enumerate(parents):
+        if p>=0:children[int(p)].append(i)
+    c=Counter(base)
+    c['baseline_binary_vector_adds']=base['binary_vector_adds']
+    c['baseline_source_coefficient_reads']=base['source_coefficient_reads']
+    c['base_parent_edge_count']=sum(p>=0 for p in parents)
+    # Directory construction is common to both retained-parent variants, and is
+    # not a free property of the production m935 block.
+    c['common_child_link_insertions']=c['base_parent_edge_count']
+    c['metadata_parent_headers_inspected']=len(rows)
+    stars=[]
+    for p,kids in enumerate(children):
+        if not kids:continue
+        c['metadata_child_edges_scanned']+=len(kids)
+        c['metadata_child_leaf_tests']+=len(kids)
+        if any(children[k] for k in kids):continue
+        # Both baselines may retain ANY complete leaf star, even one with no C.
+        c['common_retained_parent_groups']+=1
+        c['common_retained_parent_edges']+=len(kids)
+        c['common_child_seed_copies']+=len(kids)
+        if len(kids)<2:continue
+        c['multi_child_complete_leaf_groups']+=1
+        q=rows[kids[0]]
+        for k in kids[1:]:
+            q &= rows[k]
+            c['metadata_mask_ANDs']+=1
+        c['metadata_child_masks_read']+=len(kids)
+        assert q & rows[p] == rows[p]
+        common=q ^ rows[p]
+        if not common:continue
+        assert q not in rows, 'A larger existing common row would have been selected'
+        savings=(len(kids)-1)*common.bit_count()
+        # Exercise the actual changed coefficient computation, not just a mask
+        # identity: every original row keeps its own architectural result.
+        retained=graph.old.vector_value(rows[p])
+        original_parent_commit=retained.copy()
+        retained=retained+graph.old.vector_value(common)
+        assert np.array_equal(original_parent_commit,graph.old.vector_value(rows[p]))
+        for k in kids:
+            value=retained+graph.old.vector_value(rows[k] ^ q)
+            assert np.array_equal(value,graph.old.vector_value(rows[k]))
+        c['promoted_groups']+=1
+        c['promoted_children']+=len(kids)
+        c['incremental_vector_adds_saved']+=savings
+        c['incremental_coefficient_reads_saved']+=savings
+        c['promotion_construction_adds']+=common.bit_count()
+        c['extra_virtual_parent_addresses']+=0
+        stars.append({'parent_index':p,'parent_mask':rows[p],'children':kids,
+                      'child_masks':[rows[k] for k in kids],'promoted_mask':q,
+                      'common_residual_mask':common,'incremental_vector_adds_saved':savings})
+    c['binary_vector_adds']-=c['incremental_vector_adds_saved']
+    c['source_coefficient_reads']-=c['incremental_coefficient_reads_saved']
+    # An ideal contiguous retained leaf-star service eliminates these backing
+    # transactions equally on both sides. Metadata/control timing is unmodeled.
+    c['common_service_wide_reads']=base['wide_reads']-c['common_retained_parent_edges']
+    c['common_service_wide_writes']=base['wide_writes']-c['common_retained_parent_groups']
+    assert c['common_service_wide_reads']>=0 and c['common_service_wide_writes']>=0
+    c['incremental_parent_backing_events']=0
+    c['diagnostic_lane_values_verified']=graph.verify(([],masks,parents,order,base),len(rows))
+    c['diagnostic_promoted_lane_values_verified']=sum((len(x['children'])+1)*graph.old.LANES for x in stars)
+    return c,stars
+
+def main():
+    target=ROOT/'result_r1.json'
+    assert not target.exists()
+    plan_path=ROOT/'plan.json'
+    plan=json.loads(plan_path.read_text())
+    plan_sha=graph.digest(plan_path)
+    assert graph.digest(graph.LEDGER)==graph.LEDGER_SHA
+    examples=[]
+    for masks in ([1,15,23,39],[1,7,11,13],[1,3,7,11],[0,1,1,3,3]):
+        c,stars=analyze(list(masks));examples.append({'masks':masks,'counts':dict(c),'stars':stars})
+    assert examples[0]['counts']['baseline_binary_vector_adds']==9
+    assert examples[0]['counts']['binary_vector_adds']==5
+    assert examples[1]['counts']['incremental_vector_adds_saved']==0
+    total=Counter();tiles=[]
+    with graph.LEDGER.open('rb') as stream:
+        for s,o,k,ch in itertools.product(plan['evaluation_samples'],plan['operators'],plan['k_partitions'],plan['evaluation_chunks']):
+            rows,_=graph.old.read_rows(stream,s,o,k,ch*64,min(64,3000-ch*64))
+            c,stars=analyze(rows)
+            for key,value in c.items():
+                if key.startswith('peak_'):total[key]=max(total[key],int(value))
+                else:total[key]+=int(value)
+            total['tiles']+=1
+            total['tiles_with_promotion']+=bool(stars)
+            tiles.append({'sample':s,'operator':o,'k_partition':k,'chunk':ch,'counts':dict(c),'promotions':stars})
+    old_receipt=json.loads((PRIOR/'materialization_r1.json').read_text())
+    assert total['baseline_binary_vector_adds']==old_receipt['strong_baseline']['binary_vector_adds']==6662
+    assert total['baseline_source_coefficient_reads']==8747
+    assert total['original_destination_commits']==11904
+    assert graph.digest(plan_path)==plan_sha
+    result={'date':'2026-09-07','status':'EXPLORATORY_LOCAL_SERVICE_OPPORTUNITY_ONLY','plan':plan,
+            'plan_sha256':plan_sha,'script_sha256':graph.digest(Path(__file__)),
+            'imported_script_sha256':{p.name:graph.digest(p) for p in [PRIOR/'screen_virtual_parents.py',PRIOR/'screen_materialization.py',graph.old.Path(graph.old.__file__)]},
+            'ledger_sha256':graph.LEDGER_SHA,'same_cohort_reference_sha256':graph.digest(PRIOR/'materialization_r1.json'),
+            'aggregate':dict(total),'relative_add_reduction':total['incremental_vector_adds_saved']/total['baseline_binary_vector_adds'],
+            'examples':examples,'tiles':tiles,
+            'limits':['Parent-retention and contiguous child service are credited to both sides, not promotion novelty.',
+                      'Child-directory construction, scans, leaf tests, mask AND and service scheduling are counted logically, not timed.',
+                      'No new global parent identity or SRAM address is allocated, but each child seed copy and original destination commit remains.',
+                      'Exact rational diagnostic is not frozen FP32, Acc24 or old 96x12 mapped-width proof.',
+                      'Same inspected cohort. No subgroup selection after observing these results.']}
+    with target.open('x') as f:json.dump(result,f,ensure_ascii=False,indent=2);f.write('\n')
+    print(json.dumps({'counts':dict(total),'relative_add_reduction':result['relative_add_reduction']},indent=2))
+
+if __name__=='__main__':main()

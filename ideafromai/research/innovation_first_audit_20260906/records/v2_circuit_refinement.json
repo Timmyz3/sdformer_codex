@@ -1,0 +1,66 @@
+{
+  "status": "RESEARCH_MICROARCH_DRAFT_NOT_RTL_OR_MEASUREMENT",
+  "date": "2026-09-06",
+  "author_role": "c2_research 是本记录设计者；不提供独立评分，不据此上调TCAS-II潜力或预测录用。",
+  "scope": "仅浅层 C=96,N=192000,H=384，统计-only。二值源S、有效signedINT8权重W、FC1无bias，生成当前BN sum/sumsq；不含阈值早停。整数组件合同不是冻结FP32/TF32逐位等价，部署AEE另闭。",
+  "dataflow": "输入位图→64-token转置缓冲→上三角G=SᵀS计数→按输出通道块收缩sum=wᵀdiag(G)、sumsq=wᵀGw→既有BN系数服务→源位图重放与正常FC1/full-T PSN。",
+  "storage": {
+    "gram": "4656个18bit计数=10476B裸载荷。三个32source对角块、三个交叉块；交叉项必须全部保留。",
+    "packing": "每128bit宏字装7×18bit计数，余2bit。每字固定一个源i、最多7个连续j，使7个popcount共享同一源位平面。",
+    "words": "3×Σ(r=1..32)ceil(r/7)+3×32×ceil(32/7)=270+480=750字，12000B。比全局紧凑ceil(4656/7)更大，费用换较简单读源布线。",
+    "macros": "全局字地址奇偶分成2逻辑bank，各375字；每bank用3个128×128 1RW宏，共6宏=12KiB。六块各自成bank的粗配需9宏，不能拿它当最优对照。",
+    "transpose": "96×64bit=768B；ping-pong为1536B。若采用寄存器阵列，位写使能、8路64bit读选择与布线均收费；不能把该容量直接按SRAM密度估PPA。",
+    "replay": "完整二值输入2304000B，不能假设全放片上。保存/重读与full-T时序重组另计；统计域包含零token，分母不能用活动描述符数。"
+  },
+  "dense_candidate": {
+    "lanes": "7个64bit AND-popcount，结果各7bit（0..64），加到7个18bit计数。不是XNOR的±1语义。",
+    "ports": "两个1RW逻辑bank，每个物理宏每拍最多一个读或写。整128bit字RMW，不依赖未证明的18bit写掩码。",
+    "phase": "按连续全局字地址发读，bank=address%2。读→popcount→累加→写总延迟D须为奇数，或加显式相位等待使写bank与本拍读bank错开。流水标签携带epoch、64-token块号与字地址。",
+    "dependency": "下一64-token块重用同一计数地址前必须确认先前写入完成；只有D小于地址重访间隔且缓冲读取生命周期已证明，才可跨块不断流。保守版本每块尾drain D拍；最终帧尾必须flush后才开放收缩。",
+    "stalls": "背压、可变延迟或跳过零增量字会破坏简单奇偶推导；需冻结全局相位/NOP槽，或显式仲裁并计停顿。不能把零字跳过自动变成周期收益。",
+    "formulas": "N/64=3000块。每块750字、4656个有效popcount。若有W_issue个整字更新槽/拍，资源下界ceil(3000×750/W_issue)；单引擎W_issue≤1仅设计目标。实际加输入、clear、相位冲突、flush与背压。单bank保守RMW需读写两个端口时隙/字。",
+    "ingress": "一般连续位流、允许跨token打包时，每块payload传输下界为ceil(64×96/B_s)拍；只有逐token对齐且不跨token打包时才是64×ceil(96/B_s)拍。描述符、物理接口与解包费用另计。双缓冲只能重叠，不能无限吸收上游更快输入。",
+    "coordinator_amendment": "协调者在设计记录归档后限定了ingress公式的对齐条件；这是接口下界说明，不是新增实验。"
+  },
+  "sparse_strong_baseline": {
+    "scalar": "逐token枚举活动源对：E=Σ_n k_n(k_n+1)/2；每事件标识bank/字/计数槽。同字RAW必须转发、合并或停顿。",
+    "required_packed": "必须比较相同7计数/字的packed-word sparse outer product：对活动源i一次产生该字7个0/1增量，同字多个cofire一次RMW。不能只用每pair一次RMW的弱基线。",
+    "cost": "设实际合并后字更新U、各bank更新U_b、发射宽P，则下界max(ceil(U/P),2 max_b U_b)，再加生成器、队列、同址依赖和清零。E不能直接替代U；缺真实trace时不预测胜负。",
+    "comparison": "两方案同宏、相同7路18bit累加器与缓冲预算；sparse额外译码/队列与dense额外popcount/转置分别收费。"
+  },
+  "contraction": {
+    "schedule": "输出块L_h=16；本地保留96×16个8bit权重（1536B裸载荷），固定i锚点寄存器，顺序读取j，避免同拍双读权重SRAM。G按整字读后逐槽广播。更换输出块的加载/排空不能免费重叠。",
+    "no_rom": "4656×384个16bit权重对系数需3575808B，禁止免费预存；运行时形成w_iw_j。非对角项加倍必须显式处理。",
+    "width": "G为unsigned18，w_iw_j为signed16，乘积保守signed34；非对角×2需signed35。不得把G高位当符号。全局统计累加另扩宽，不能沿用Acc24给sumsq。",
+    "reuse_target": "探索复用16lane moment乘法资源：相继执行8×8权重积、18×16统计积；对角还需k_i×w_i形成一阶矩。复用的mux、依赖流水与宽累加尚未闭合。",
+    "formula": "双阶段共享乘法器的资源槽数下界为ceil(H/L_h)×[2×4656+96]，另加权重加载、Gram读取、累加依赖及系数服务；不是周期实测。",
+    "pending": "乘法器延迟/II、signed34/35到最终sum/sumsq的精确宽度与反馈时序、权重/G端口调度、现有moment单元能否低成本复用，均待独立审阅与后续闭环。",
+    "generic_control": "还必须比较通用G×W后逐通道点积的收缩；其乘法位宽、G重读和中间状态不同，不能只凭上三角项数判本方案更快。"
+  },
+  "fc1_baselines": {
+    "physical": "生产m2018硬约束LANES=16、OUTPUT_SLICES=6；96是逻辑输出块。不得把一拍16lane按96lane除周期。L=96需明确六倍执行资源。",
+    "service": "令q_n为token n在12个8source半组中的非空个数，Q=Σq_n；理想consumer桥接服务数为ceil(H/L)×Q，实际再计提交/停顿。TSBG共享fetch已在基线内，不能再次记同一取权收益。",
+    "A": "完整稀疏FC1+moments融合，保存raw hidden，随后BN/full-T消费者融合。INT24 raw hidden为221184000B；本方案相对此基线主要省宽张量写读，两者都只完整算一次FC1。",
+    "B": "完整稀疏FC1+moments融合后丢hidden，保存binary输入并重算FC1。相对此基线本方案用Gram+收缩替换第一遍FC1统计服务。",
+    "fairness": "A/B在同SRAM/带宽下取优，并纳入本仓m480已去normalized tensor物化的强实现。零raw结果的moment跳过应允许；仍用完整N。16lane统计与FC1可重叠时不能把两者时间简单相加。"
+  },
+  "increment_judgment": "AND-popcount、上三角Gram、转置、RMW、7字段packing与乘法器时分复用都属于已有通用技术。潜在贡献只能是二值源统计先行这一跨层执行替换，以及它在真实1RW/宽收缩预算下净划算的实现。若普通Gram引擎+BNFF同样达到效果，就只是工作负载映射，不能靠新名字当新原语。",
+  "sources": [
+    {
+      "title": "BISMO",
+      "url": "https://arxiv.org/html/1806.08862v1",
+      "access": "一手§II/III-A已核：AND-popcount和缓冲调度已有"
+    },
+    {
+      "title": "Optimizing Bit-Serial Matrix Multiplication for Reconfigurable Computing",
+      "url": "https://www.sjalander.com/research/pdf/sjalander-trets2019.pdf",
+      "access": "一手§3.3：布局转换必须收费"
+    },
+    {
+      "title": "BNFF",
+      "url": "https://mlsys.org/Conferences/2019/doc/2019/18.pdf",
+      "access": "一手已核；本仓m480仍保留raw输入与moment barrier"
+    }
+  ],
+  "admission": "没有生产RTL、实验、EDA、PPA或测得周期；本记录不构成RTL加速比准入。"
+}

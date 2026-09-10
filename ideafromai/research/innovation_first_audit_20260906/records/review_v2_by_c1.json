@@ -1,0 +1,253 @@
+{
+  "reviewer": "c1_research",
+  "reviewed_candidate": "V2 source-only current-batch moment computation",
+  "independence": "未参与V2提案；只审V2，不比较或推销本人V1候选。",
+  "date": "2026-09-06",
+  "status": "INDEPENDENT_READ_ONLY_REVIEW_NO_NEW_EXPERIMENTS",
+  "scores": {
+    "N": 6,
+    "F": 5,
+    "H": 5,
+    "T": 6
+  },
+  "score_rationale": {
+    "N": "实数矩传播是旧数学；将第一遍宽输出计算替换为二值源共发放统计、再跨输出通道收缩，是比BN融合更明确的执行图变化。尚缺能体现此变化价值的专用电路，故不给高分定案。",
+    "F": "二值源、无bias FC1和真实动态BN很好匹配；但整数精确仅适配新组件合同，不能保证冻结FP/TF32逐位复现。若只评分明确INT8统计子图，F可为9；冻结网络整体目前仍为5。",
+    "H": "浅层C96的Gram计数裸量约10.5KB可做，但输入转置、Gram服务吞吐、宽乘法收缩和同资源基线尚未设计；深层扩展很不利。",
+    "T": "单一浅层二值矩统计电路有短文结构；是否胜过强融合/重算基线完全未证。分数不是录用概率。"
+  },
+  "verdict": "保留浅层两个FC1作为有条件新电路研究；现在不足以投稿或称稳accept。不要推广到全部12FC1；深层不是当前主推对象。",
+  "core_mathematics": {
+    "valid_identity": "在同一个完整BN域、同一静态有效W、无bias、无中间饱和/截断的精确算术下：k=S^T1，G=S^TS，sumY=W^Tk，sumsqY_h=w_h^T G w_h。",
+    "not_new_math": "Analytic Variance Propagation §1.1/§2 已明确线性变换下均值和完整协方差的二次型；不可称首创矩传播。它随后采用对角近似的算法不等于我们的精确Gram，不能把其近似开销当本候选开销。",
+    "implementation_invariant": "每个输入BN域只形成一份源共发放统计，并跨H个输出共享；不需要第一遍产生N×H个FC1输出。最终FC1/BN/完整PSN仍需执行一次。",
+    "must_not_omit": [
+      "G的非对角项",
+      "跨K分块的交叉项：16源局部Gram相加不能代替完整C96 Gram",
+      "原bias/缩放/舍入合同；目前原FC1代码bias=False支持简化",
+      "完整T×B×H×W统计域和同一snapshot版本"
+    ]
+  },
+  "nearest_priors": [
+    {
+      "title": "Normalization of Neural Networks using Analytic Variance Propagation, 2018",
+      "url": "https://arxiv.org/html/1803.10560v1",
+      "access": "本轮原文§1.1与§2已核",
+      "done": "均值线性传播、方差完整协方差二次型明确已有；随后可作对角近似。",
+      "remaining": "没有据此证明本文的输入二值Gram生成/收缩电路或新近先验不存在。"
+    },
+    {
+      "title": "Jung et al., Restructuring Batch Normalization to Accelerate CNN Training, SysML/MLSys 2019 (BNFF)",
+      "url": "https://mlsys.org/Conferences/2019/doc/2019/18.pdf",
+      "access": "本轮原文§3.2 pp5–6已核",
+      "done": "将统计融入前置CONV输出生成，归一化融入后继层；单次并算E(X)和E(X²)已有。",
+      "remaining": "仍生成完整前置CONV输出；没有把统计对象改成二值源Gram。应采用其融合结构作为强基线，不能拿独立多遍BN比较。"
+    },
+    {
+      "title": "仓库m480 dynamic-BN materialization-elision",
+      "path": "/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/system_simulator/scripts/analyze_m480_dynamic_bn_materialization_elision.py",
+      "access": "本轮427行完整读取",
+      "done": "L4–7和L321–340保留原始BN输入、统计barrier与回放，只删除归一化中间量写读。",
+      "remaining": "L308明写ep35旧几何；不能引用旧cycle作为ep34对照；只能迁执行合同，重建当前输入域/带宽/资源。"
+    },
+    {
+      "title": "OPN, TCAS-II 2024",
+      "url": "https://doi.org/10.1109/TCSII.2024.3354738",
+      "access": "本轮原文入口访问失败；完整算法未核",
+      "done": "候选卡注明为采样近似归一化；本评审未核全文，不将其作精确基线或声称被超越。",
+      "remaining": "投稿前补全文确定统计采样和电路边界，防止相关工作漏比。"
+    }
+  ],
+  "minimum_strong_baselines": [
+    {
+      "id": "B1",
+      "description": "正常稀疏FC1与sum/sumsq融合，原始FC1输出保存；统计就绪后直接回放到BN→完整PSN消费者，无归一化张量物化。",
+      "fairness": "同INT8/Acc24合同、相同源/权重、同SRAM容量/端口/外存带宽；写回可与FC1真正重叠部分不得重复计时。"
+    },
+    {
+      "id": "B2",
+      "description": "正常稀疏FC1与统计融合，丢弃宽输出；统计就绪后重放二值输入并重算FC1，直接BN→PSN。",
+      "fairness": "源保存/读取与候选一致；保留矩引擎、系数和时间状态服务。"
+    },
+    {
+      "id": "B3",
+      "description": "按层、容量和带宽，选择B1/B2较优者；C2 K8/既有强广播均作为生产FC1底座。",
+      "fairness": "候选与baseline必须同资源或给面积-能耗Pareto；不能对比单K1或朴素未融合BN。"
+    },
+    {
+      "id": "B4",
+      "description": "最小组件统计-only：正常FC1→直接moments，对比k/G→收缩，双方输出count/sum/sumsq相同。",
+      "fairness": "这个边界允许组件短文，但不能把未测BN/PSN/整网收益加入结果。"
+    }
+  ],
+  "geometry_and_existing_sample_evidence": {
+    "status": "引用协调者已有封存metadata推导及sample0限定CPU统计；本代理没有重放trace或新做统计。",
+    "geometry_by_stage": [
+      {
+        "stage": 0,
+        "N_over_C": 2000,
+        "Gram_bytes": 10476,
+        "contraction_terms": 1787904
+      },
+      {
+        "stage": 1,
+        "N_over_C": 250,
+        "Gram_bytes": 37056,
+        "contraction_terms": 14229504
+      },
+      {
+        "stage": 2,
+        "N_over_C": 31.25,
+        "Gram_bytes": 129360,
+        "contraction_terms": 113541120
+      },
+      {
+        "stage": 3,
+        "N_over_C": 3.90625,
+        "Gram_bytes": 442944,
+        "contraction_terms": 907149312
+      }
+    ],
+    "shallow_sample0": [
+      {
+        "module": "sttmultires_unet.encoders.swin3d.layers.0.swin_blocks.0.mlp.fc1",
+        "N": 192000,
+        "C": 96,
+        "H": 384,
+        "active_elements": 3253146,
+        "mean_active_per_row": 16.94346875,
+        "mean_square_active_per_row": 382.5875208333333,
+        "max_active_per_row": 53,
+        "source_distinct_pair_count_updates": 35101829,
+        "offdiagonal_gram_nonzero_fraction": 1.0,
+        "upper_gram_count_payload_bytes": 10476,
+        "full_quadratic_contraction_terms": 1787904,
+        "normal_fc1_active_scalar_weight_terms": 1249208064
+      },
+      {
+        "module": "sttmultires_unet.encoders.swin3d.layers.0.swin_blocks.1.mlp.fc1",
+        "N": 192000,
+        "C": 96,
+        "H": 384,
+        "active_elements": 2831410,
+        "mean_active_per_row": 14.746927083333333,
+        "mean_square_active_per_row": 282.75385416666666,
+        "max_active_per_row": 47,
+        "source_distinct_pair_count_updates": 25728665,
+        "offdiagonal_gram_nonzero_fraction": 1.0,
+        "upper_gram_count_payload_bytes": 10476,
+        "full_quadratic_contraction_terms": 1787904,
+        "normal_fc1_active_scalar_weight_terms": 1087261440
+      }
+    ],
+    "full_sample0_nonzero_offdiagonal_range": [
+      0.9862356040851804,
+      1.0
+    ],
+    "interpretation": "浅层两个G的非对角100%非零；全12层约98.6%–100%。输入稀疏并不产生稀疏Gram，收缩必须按近乎全密收费。浅层计数更新35,101,829/25,728,665不能用均值活跃数平方替代。",
+    "limitation": "仅预选sample_id=0完整12FC1 BN域，不代表S40或valid825分布；封存capture尚需独立hammer。CRC/形状/计数恒等式通过不等于部署AEE或FP位等价。"
+  },
+  "hardware_feasibility": {
+    "Gram_generation": "必须在稀疏外积更新和密集时间位打包AND-popcount两种架构中落实至少一种。计数器SRAM的读改写端口/地址冲突、转置缓冲、批量更新合并、计数清零及全域flush都收费。不能把每个pair update当一位门。",
+    "operation_units": "原FC1 active_scalar_weight_terms是INT8→Acc24加法项，Gram是宽计数器更新，收缩是G计数×权重乘积的多位运算。把三者直接相除不是周期、能量或面积收益；96lane原本并行，scalar项数优势可能被缩小。",
+    "contraction": "浅层H=384仍约1.79M上三角项；深层约907M项，且乘法/累加宽度更大于原二值条件加法。不得免费保存C²H系数。可分块从CH权重生成，但两次乘法/符号/宽累加和buffer周转必须映射。",
+    "memory": "Gram计数裸量10.5KB不含输入位图、权重、乘积系数和PSN上下文。浅层二值源约2.304MB；原Acc24隐层约221.184MB是张量payload，不是片上必须分配容量。最强baseline可以外存保留或重算，候选优势应对实际服务而非巨型虚构SRAM。",
+    "causality": "完整Gram才能封存当前BN统计。候选没有消除global barrier，也不自动提前首个输出；输入重放需同snapshot，下一域不可覆盖尚未用完的源/计数。",
+    "bounded_scope": "建议只浅层两个FC1；阶段深度增加时N/C下降、Gram与收缩迅速膨胀，现有元数据不足以支持全层扩展。"
+  },
+  "numeric_contract_findings": [
+    "实数恒等式不能逐位复现浮点GEMM、TF32输入舍入、cuDNN reduction树或先中心化方差。改变求和顺序亦会改变阈值附近的ATLIF位。",
+    "先选共同精确整数合同：二值S、静态INT8有效W、Acc24无饱和、count/sum/sumsq按N扩宽；直接枚举Y与Gram收缩输出可严格等价。该结果仍不是冻结FP或量化部署AEE。",
+    "如存的是w_i*w_j，INT8乘积可用signed16；若预存上三角2*w_i*w_j，-128*-128*2=32768，需signed17。可在宽累加器中再左移避免17-bit表项，但不能漏计。",
+    "上三角交叉项可能为负，sumsq最终非负不允许中间用无符号截断或饱和。平方与累加宽度须由最大N/C/W范围推导。",
+    "有效theta吸收/逐通道QDQ必须先固定顺序与scale合同；浮点吸收操作重排未必bit-exact。",
+    "bias=False在当前MS_Spiking_Mlp源代码已核；若未来加bias，需要N*b和2*b*sumY+N*b²项，不能直接沿用简式。",
+    "统计-only不覆盖BN的eps、gamma/beta、总体/样本方差选项及PSN时间矩阵。扩为消费者电路后必须全部复现；BF/TF32误差区间和fallback是另一套实现，不是免费注脚。"
+  ],
+  "card_corrections_or_clarifications": [
+    "把m480标成ep35机制先验；不得搬旧周期。",
+    "把Gram为密集及sample0实测pair-update计数加入判断门，禁止按发放率平方估计或跳过非对角。",
+    "明确系数表int16仅指w_i*w_j；乘2若预存需17bit。",
+    "称“代替第一遍产生隐层的统计路径”，不称“消除BN全域barrier”。",
+    "组件整数无损、冻结FP近似/回退、部署量化AEE分开三条身份。"
+  ],
+  "minimum_new_evidence_before_submission": [
+    {
+      "gate": "1. 合同与等价",
+      "needed": "签名固定完整BN域、源编码、有效权重、bias、整数宽度与统计定义；用独立大整数枚举Y核sum/sumsq，包含极值/空域边界/全活跃/强相关源，形成RTL miter。"
+    },
+    {
+      "gate": "2. 具体电路机制",
+      "needed": "给Gram形成、bank/转置、宽收缩、barrier封存和输入重放的因果图与状态表。必须指出相对BNFF/通用Gram计算哪一个硬件组织才是新增贡献。"
+    },
+    {
+      "gate": "3. 同资源强对照",
+      "needed": "B1/B2取优并映射相同SRAM、端口、带宽和计算预算。报告Gram、收缩、FC1、保存/重读、归一化/PSN边界各自实际服务；禁止scalar项数作倍率。"
+    },
+    {
+      "gate": "4. 工作负载代表性",
+      "needed": "对浅层两个FC1，预声明多个ep34样本/场景，保留高活跃与突发最坏点；source capture独立hammer后封存。sample0机会只可作为初筛。"
+    },
+    {
+      "gate": "5. 数字电路闭环",
+      "needed": "同工作负载VCS+DC/PT+Formality闭合，含合法存储宏、位宽/端口、setup/hold；至少组件级真实周期与面积/能量优势，不能只给CPU统计。"
+    },
+    {
+      "gate": "6. 算法及文字边界",
+      "needed": "若声称用于ep34部署，需要明确量化版本并做valid825 AEE；若仅做整数统计电路，可不声称冻结网络位等价或整网速度。引用BNFF/矩传播/OPN相关原文，不借首创/特定任务名称遮盖先验。"
+    }
+  ],
+  "likely_rejection_reasons_now": [
+    "只有旧矩恒等式和模型容量数字，没有新电路与实测净优势。",
+    "仅比较未融合BN，隐藏正常稀疏FC1重算可避免大隐层存储。",
+    "把密Gram或C²H多位乘法当免费，声称二值天然低成本。",
+    "整数精确偷换冻结FP精度，或者以sample0计数宣称完整网络性能。"
+  ],
+  "stop_conditions": [
+    "映射后Gram+收缩+源重放使同资源统计服务不优于B1/B2取优，且无清楚能量优势。",
+    "所有可见收益都来自旧BN融合／归一化物化消除，而非减少首遍隐层执行。",
+    "必须采用对角近似或样本采样才划算且AEE不可接受。",
+    "只能在深层扩展增加面积后平均凑出收益，浅层单组件亦无稳定改进。"
+  ],
+  "sources_read": [
+    {
+      "path": "/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/candidate_cards_v1.md",
+      "sha256": "8d57746efe870fb217a366dec951e42c359cc3be789014629dcc613520c912e0",
+      "read_scope": "V2全文；本轮重读快照"
+    },
+    {
+      "path": "/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/v2_existing_geometry.json",
+      "sha256": "eb5858c58e2ec2ecce80f2c0bcdea1216c76dcbb89780a7138a674690a9766c3",
+      "read_scope": "全部标量metadata记录"
+    },
+    {
+      "path": "/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/v2_sample0_moments.json",
+      "sha256": "4098112ffd7feb8c6085644a4b75d2bfbd42aac21ef236eae940a3fc00504599",
+      "read_scope": "全部12层标量统计及准入边界；长直方图不逐项引用"
+    },
+    {
+      "path": "/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/system_simulator/scripts/analyze_m480_dynamic_bn_materialization_elision.py",
+      "sha256": "b5f99fc8517f9a89c58ff2502e2560759bf9ef906735ed16568f69aa8f3bbb40",
+      "read_scope": "全文427行；只读未运行"
+    },
+    {
+      "path": "/home/zhumd/work/sdformer_codex/SDformer/third_party/SDformerFlow/models/STSwinNet_SNN/Spiking_swin_transformer3D.py",
+      "sha256": "8d551eac17e2272813dd0238ea4aee2e84cfe0b7e9435a1407d0787fb5407768",
+      "read_scope": "MLP定义与MS forward，L115–180"
+    },
+    {
+      "path": "/home/zhumd/work/sdformer_codex/SDformer/third_party/SDformerFlow/models/STSwinNet_SNN/Spiking_modules.py",
+      "sha256": "130e32bba2c0bc23a4da091087d09b71cb50e9381ed2d1c25ff6b447bce52948",
+      "read_scope": "SpikingNormLayer定义L101–145"
+    }
+  ],
+  "claim_boundary": {
+    "new_experiments_by_reviewer": false,
+    "new_EDA": false,
+    "new_production_RTL": false,
+    "RTL_SPEEDUP_ADMISSION": 0,
+    "PPA_ADMISSION": 0,
+    "frozen_FP_bit_exact": false,
+    "accept_probability": null
+  }
+}

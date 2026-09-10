@@ -1,0 +1,260 @@
+{
+  "status": "RESEARCH_HYPOTHESIS_ONLY",
+  "date": "2026-09-06",
+  "author_agent": "snn_ann_mechanisms",
+  "scope": "ANN/SNN 执行与数值服务；没有 EDA、训练、新 GPU 捕获；只有一条值得独立送审的候选，不凑第二条。",
+  "admission": {
+    "PPA_ADMISSION": 0,
+    "RTL_SPEEDUP_ADMISSION": 0,
+    "FROZEN_FP_EQUIVALENCE": 0
+  },
+  "reread_files": [
+    "research/01_ann_sparsity_mechanisms.md",
+    "research/02_snn_atlif_realvalued_mechanisms.md",
+    "research/07_transformer_attention_accelerators.md",
+    "research/13_isscc_vlsi_hotchips_edge_npus.md",
+    "research/15_CROSS_AI_READ_GROK46_CODEX_VS_GROKBOT.md",
+    "research/16_ATLIF_IDENTITY_VERDICT_GROKBOT.md",
+    "research/innovation_first_audit_20260906/synthesis.md"
+  ],
+  "reread_verdict": "原包中移植控制、广播、位宽、存储的部分仍可当底座；其自评 8–9 不沿用。15/16 正确提醒 ep35 统计不能偷成 ep34，但不能据此令 ep34 变成实值 ATLIF。实值载荷属于另模型，不能直接获得创新分。",
+  "candidates": [
+    {
+      "id": "NDS",
+      "name": "动态归一化引起的阈值移动与局部值变化联合执行",
+      "short_handle": "normalization-drift sweep",
+      "one_sentence": "把动态 BN 对整张特征图的影响改写为每通道、每输出时间的阈值移动；用缓存投影的值域索引检索真正跨界的位置，与局部输入变化合并，输出精确二值变化。",
+      "why_worth_review": "上轮把动态 BN 当作视频差分的全域阻碍；这里直接服务该阻碍。它没有要求 BN 静态化，也不把 full-rank PSN 换成 LIF。潜在收益是免去未变化位置的 BN/PSN 扫描，并防止仅由归一化变化引起的正确脉冲被漏掉。",
+      "mount": "先选一个 Conv/FC → 当前域 BN → ATLIF/full-rank PSN → 线性消费者边界。以 MLP 的 FC1/BN1/sn2 为候选；FC2/BN2 仍需数值输出，不越过残差偷删。具体层级先由连续帧变化与状态费用筛选。",
+      "algorithm_facts": [
+        "MS_Spiking_Mlp: sn1 → FC1 → BN1 → sn2 → FC2 → BN2；FC 无偏置。",
+        "评估 no_running 模式令 BN 用当前完整 T×B×H×W 域均值/方差；不是静态校准。",
+        "sn2 的 PSN 为完整 A[T,T]·Y+b[T,1]；A 有正负系数，输出比较用 >=，不是 leak/reset。",
+        "ATLIF 出口是静态 θ 缩放二值；跨帧 1→0 撤销会自然产生负差分，但这不表示 ATLIF 有实值 payload。"
+      ],
+      "derivation": {
+        "definitions": "Y_spc 为 pre-BN 值；d_c=sqrt(var_c+eps)；R_t=Σ_s A_ts；U_tpc=Σ_s A_ts Y_spc。先忽略有限精度重排误差。",
+        "full_expression": "H_tpc=(γ_c/d_c)U_tpc+(β_c−γ_c μ_c/d_c)R_t+b_t。",
+        "threshold_positive_gamma": "γ_c>0: bit_tpc=1[U_tpc >= τ_tc], τ_tc=μ_c R_t+(d_c/γ_c)(θ−b_t−β_c R_t)。",
+        "other_cases": "γ_c<0 时比较方向反转；γ_c=0 时为全域常量位。若 center 非零必须折入 θ+bias 条款。eps 保留。",
+        "interpretation": "A 与 BN 仿射交换只是已知线性代数，不是创新。新增研究问题是动态 τ 改变时如何只服务跨界坐标，而不重新访问所有 U。"
+      },
+      "input_output_contract": {
+        "minimal_component_input": "已提交旧 U 和旧 bit；带 (model/layer/channel/t/p/epoch) 身份的精确 U 更新；新 epoch 封存的阈值、方向或保守阈值区间；完整域完成标志。",
+        "output": "对每坐标恰好一次的最终 bit 改变描述符：0→1 为 +1，1→0 为 −1；无变化不发；末尾 epoch terminal。消费者以旧输出为锚点累加这些差分。",
+        "commit": "所有局部更新先合并；修复索引；统计完整封存后再查询，未决数据不提交给下一层。冷启动、场景/模型/几何切换做完整重建。",
+        "numeric_boundary": "最小电路先采用声明位宽、无溢出定点 U 和同一阈值合同，比较 dense sweep。它不自动等价于原 cuDNN/TF32 的 BN→PSN；冻结 FP 需有严格舍入包络和匹配原算序的回退。",
+        "upstream_not_free": "完整系统必须付 Y 形成、当前域统计、旧 Y 或其他精确充分统计状态、ΔU=AΔY、输入匹配和冷启动。只交给组件阈值不允许宣称整段 FC1 被省掉。"
+      },
+      "hardware_sketch": [
+        "每 (channel,t) 的空间连续块存 U 的 min/max；可以先平面目录扫描，再判断是否值得加层级树。索引是常见 range-skip，不能单独宣称新原语。",
+        "新旧阈值之间的半开区间定义未变化 U 的候选跨界集合；目录无交集跳过，完全覆盖可整块产生统一翻转，边界块读 U 精查。边界开闭严格遵从 >=。",
+        "局部已变化坐标记 dirty mask，以新 U 修复目录；全域阈值查询排除 dirty 坐标，它们单独比较旧 bit 与新 (U,τ)。这样不会把同一改变提交两次。",
+        "1RW 目录、U 数据和 dirty 状态存在读改写竞争。块内变化合并、目录修复完成位、查询 epoch 与回压必须显式实现；不能假设排序/CAM/并发端口免费。",
+        "阈值大幅移动、目录失去选择性或 dirty 很密时走共同 dense sweep；比较必须把索引维护与选择成本计入。只在最终 seal 后输出，首版不做易爆炸的跨层投机撤销。"
+      ],
+      "cost_model": {
+        "symbols": "P=空间位置数，T=PSN步数，H=隐藏通道，bU/bY=实际合同位宽，B=目录块大小，L=ceil(P/B)。",
+        "state": "U 裸状态=P*T*H*bU bits；若不能替代旧 Y，还要 P*T*H*bY bits。平面目录=2*L*T*H*bU bits；完整二叉 min/max 树=2*(2L−1)*T*H*bU bits，另付旧 bit、dirty、epoch。",
+        "example": "仅示意 P=300、B=32、bU=32：每 (channel,t) 的 U=1200 B，平面目录80 B，完整树152 B，dirty至少38 B；这不是硬件映射或 PPA。",
+        "updates": "一处 Y 时间元素变化一般影响全部 T 个 U；不能用发放率替代 ΔU 密度。精确平方和更新为 Q'=Q+Σ_changed(2Y_old ΔY+ΔY²)，因此旧 Y 或等价有代价的机制必需。",
+        "net_condition": "索引维护+阈值生成+候选叶读取+符号差分投递 < 同资源的 dense BN/PSN/bit-change sweep。端到端再加前后层状态和线性差分成本。"
+      },
+      "toy_example": {
+        "setup": "T=2,P=2,γ=1,β=0,θ=1,b=[1,1],A=[[1,1],[1,−1]]。旧 Y=[[3,1],[3,1]]，新 Y=[[3,5],[3,5]]；只有第2空间位置改变。",
+        "result": "均值2→4，方差均为1。第1输出时间 R=2，τ=4→8；未变化第1位置 U=6，因此 bit 1→0。第2位置 U=2→10，bit 0→1。第2输出时间 R=0，U=0，bit恒为1。",
+        "lesson": "只按局部输入 dirty mask 重算会漏掉第1位置；新服务需要同时处理阈值扫过与局部 U 修改。此例为手算数学示例，未声称 RTL 验证。"
+      },
+      "strongest_priors": [
+        "FINN2017",
+        "VSA2022",
+        "INSTA2023",
+        "DELTACNN2022",
+        "SPIKON2026",
+        "PARQUET"
+      ],
+      "novelty_boundary": "FINN/VSA 已把归一化折成阈值；INSTA-BNN 已有实例统计驱动阈值；DeltaCNN 已有缓存非线性及差分；SpikON 已有时间差分复用并替换 BN；min/max 页跳过属于通用索引。候选只主张：保留当前域 BN+full-rank PSN 时，把全域参数漂移转成可索引的正确 spike-flip 事件，并和局部状态更新在有限端口上闭合。未检出直接命中不等于首创。",
+      "counterexamples_and_kill": [
+        "全部 U 聚在阈值附近时，任意小统计改变也可能翻转整层；最坏退化必须报告。",
+        "高运动/事件噪声令 pre-BN Y 几乎全变，目录维护比正常扫描更贵；没有用 5.6709% 代替这种变化率。",
+        "全域统计域或序列身份改变而复用旧目录会错误；同 layer 名字不充分。",
+        "若 FP 回退需要重新跑整层原kernel，而近界点常见，则冻结 FP 方案可能无收益。",
+        "若唯一收益来自省掉传统BN物化或已有DeltaCNN缓存，而索引自身无净优势，应降为实现。"
+      ],
+      "scores_author_only": {
+        "N": 7,
+        "F_frozen_FP": 3,
+        "F_explicit_integer_deployment": 8,
+        "H": 5,
+        "T": 6,
+        "note": "作者研究潜力评分；不是独立审稿，不是录用概率；尚不能判断强于上一轮 V2 的实测价值。"
+      },
+      "validation_gates": [
+        "G0：核所选层共享BN域、A/R/θ/β/γ/eps、center与位宽；新部署另身份。",
+        "G1：预声明连续帧/序列，测 ΔY/ΔU 密度、纯阈值引起的 flips、候选叶比例、目录修复工作量；只有离散不连续样本不能冒充帧间测量。",
+        "G2：同一个固定点合同、随机全T负系数、γ正/负/零、等号、阈值来回移动、同址多更新，和无索引完整扫描逐位对照。",
+        "G3：全费用 CPU 门含冷启动、末帧、场景切换、低/高运动、状态容量/端口。不能只报少访问了多少 U。",
+        "G4：只有 G1–G3 成立后才选定 RTL；同负载 VCS+DC/PT+FM 与合法宏闭环。无需把 C1/C2 都保留。"
+      ]
+    }
+  ],
+  "screened_out_directions": [
+    {
+      "name": "时间签名分组再合成 full-rank PSN",
+      "verdict": "暂不列第二候选",
+      "reason": "A(SW)=(AS)W 不新且把binary AC变多位乘法；完整签名/虚拟基有LoAS、RSR++、SumMerge、UCNN、Comperity先验。LoAS还已有全1伪累加与修正。没有独立电路缺口不能升标题。"
+    },
+    {
+      "name": "SpikePack式时间压成一个多位值",
+      "verdict": "冻结不适配，换模型也已有核心",
+      "reason": "SpikePack原文定义w·S·q与动态阈值解码；满秩 A 的 T个自由方向不能免费压成一个全局膜值。尾部 flow head 时间求和可合法合并部分线性运算，但属于普通融合，潜力不足。"
+    },
+    {
+      "name": "去BN/多时间阈值/乘法自由PSN新模型",
+      "verdict": "不靠改名形成第二条",
+      "reason": "SpikON2026 LTTT+sWCTT已替代BN；NeurIPS2025 multiplication-free PSN是强算法先验。允许另模型研究，但需要新的硬件问题与AEE Pareto，禁止偷 ep34 或启动 H81。"
+    }
+  ],
+  "sources": [
+    {
+      "id": "FINN2017",
+      "title": "FINN",
+      "year": 2017,
+      "venue": "FPGA",
+      "url": "https://arxiv.org/html/1612.07119",
+      "access": "primary full text, §4.2.2 read",
+      "finding": "固定BN+sign折成阈值，包含负γ方向；不能宣称BN阈值折叠是新贡献。"
+    },
+    {
+      "id": "VSA2022",
+      "title": "VSA: Reconfigurable Vectorwise Spiking Neural Network Accelerator",
+      "year": 2022,
+      "venue": "preprint version checked",
+      "url": "https://arxiv.org/pdf/2205.00780",
+      "access": "primary full text, §II-B equations3–4 read",
+      "finding": "running均值/方差折入IF偏置和阈值；不等于当前域BN的动态索引服务。"
+    },
+    {
+      "id": "INSTA2023",
+      "title": "INSTA-BNN",
+      "year": 2023,
+      "venue": "ICCV",
+      "url": "https://arxiv.org/pdf/2204.07439",
+      "access": "primary author preprint, §3 read; CVF PDF direct open failed",
+      "finding": "实例均值/高阶统计控制二值阈值；动态阈值自身已有先验。"
+    },
+    {
+      "id": "DELTACNN2022",
+      "title": "DeltaCNN",
+      "year": 2022,
+      "venue": "CVPR",
+      "url": "https://arxiv.org/html/2203.03996v2",
+      "access": "primary full text, §3 and evaluation setup read",
+      "finding": "缓存非线性输入并传播差分；原文训练后融合BN。作者代码DCBatchNorm2d初始化转静态scale/offset。"
+    },
+    {
+      "id": "SPIKON2026",
+      "title": "SpikON",
+      "year": 2026,
+      "venue": "arXiv, venue not inferred",
+      "url": "https://arxiv.org/html/2606.30926v1",
+      "access": "primary full text, §3.1–3.2 and §4.3 read",
+      "finding": "LTTT/sWCTT替代BN；CTCR复用相邻时间的卷积/FC与差分。不能把这种签名修正再叫新代数。"
+    },
+    {
+      "id": "PARQUET",
+      "title": "Parquet Page Index",
+      "year": null,
+      "venue": "official format documentation",
+      "url": "https://parquet.apache.org/docs/file-format/pageindex/",
+      "access": "primary official documentation read",
+      "finding": "min/max目录直接定位可能满足范围谓词的数据页；本候选索引原语的通用已有部分。"
+    },
+    {
+      "id": "LOAS2024",
+      "title": "LoAS",
+      "year": 2024,
+      "venue": "MICRO",
+      "url": "https://arxiv.org/html/2407.14073v3",
+      "access": "primary full text, §III/IV-C/IV-D read",
+      "finding": "时间fiber压缩、全时间并行、全1伪累加和每时间修正；其神经元为LIF。"
+    },
+    {
+      "id": "SPIKEPACK2025",
+      "title": "SpikePack",
+      "year": 2025,
+      "venue": "ICCV",
+      "url": "https://openaccess.thecvf.com/content/ICCV2025/papers/Shen_SpikePack_Enhanced_Information_Flow_in_Spiking_Neural_Networks_with_High_ICCV_2025_paper.pdf",
+      "access": "primary CVF paper and arXiv §3.2 read",
+      "finding": "全局膜wS q，时间压码和动态阈值解码；不是任意full-rank PSN的等价实现。"
+    },
+    {
+      "id": "RSR2025",
+      "title": "An Efficient Matrix Multiplication Algorithm for Accelerating Inference in Binary and Ternary Neural Networks",
+      "year": 2025,
+      "venue": "version3 checked; venue not inferred",
+      "url": "https://arxiv.org/html/2411.06360v3",
+      "access": "primary full text, §4.3 read",
+      "finding": "RSR++不是flat相同签名合组，而有递归两两折叠的更强分发阶段。"
+    },
+    {
+      "id": "SUMMERGE2021",
+      "title": "SumMerge",
+      "year": 2021,
+      "venue": "ICS",
+      "url": "https://cwfletcher.github.io/content/research/2021.ics.summerge.paper.pdf",
+      "access": "primary full text, §3.3.2 and example read",
+      "finding": "递归共享非原始行的交集DAG，支持通用权重重复组；虚拟基数学不新。"
+    },
+    {
+      "id": "UCNN2018",
+      "title": "UCNN",
+      "year": 2018,
+      "venue": "ISCA",
+      "url": "https://arxiv.org/html/1804.06508",
+      "access": "primary full text and NVIDIA author page read",
+      "finding": "权重重复与组内/跨组子和复用已做；8bit下元数据不能免费。"
+    },
+    {
+      "id": "BISHOP2025",
+      "title": "Bishop",
+      "year": 2025,
+      "venue": "ISCA",
+      "url": "https://arxiv.org/html/2505.12281v1",
+      "access": "primary full text, §4.2 and §5 read",
+      "finding": "TTB分层、权重复用与二值注意力有界剪枝；不支持把一般bundle/二值bound直接宣称新发明。"
+    },
+    {
+      "id": "COMPERITY2026",
+      "title": "Comperity",
+      "year": 2026,
+      "venue": "TACO",
+      "url": "https://doi.org/10.1145/3828526",
+      "access": "full text gap inherited from previous audit; no new claim of exclusion",
+      "finding": "差分基/AND-XOR方向强先验；未取得完整正文不能断言排除了多基覆盖。"
+    }
+  ],
+  "read_fingerprints": {
+    "research/01_ann_sparsity_mechanisms.md": "92abf869ee0d3ece75940d84fe5b6ef47a014f995abe3a5006863f69cf248931",
+    "research/02_snn_atlif_realvalued_mechanisms.md": "2a0c873cb843d6149cc9c35cd65c3d9ef1d62df25dd6e6646625761bcb5c0cb5",
+    "research/07_transformer_attention_accelerators.md": "b584e10bbeec11724003bbd569f0448455e88bb4add587753a339b17f9dc86ce",
+    "research/13_isscc_vlsi_hotchips_edge_npus.md": "d8221c69f451f6abe3d09ba71c201a3b8265620aee800812fcf82927d1c4f2ca",
+    "research/15_CROSS_AI_READ_GROK46_CODEX_VS_GROKBOT.md": "21adf1c21bc9526c53583146aebc831441156d28a18f265ed2ba1d7eeafd89bd",
+    "research/16_ATLIF_IDENTITY_VERDICT_GROKBOT.md": "c7335895f3f0a2c943e3f76c49815ef81f23b6c71840db020da3930b437e79b5",
+    "research/innovation_first_audit_20260906/synthesis.md": "6bb9d2ab9ef202f170ffeeb1c076fe9d02a10b73c1bc68199d9bac5c0dac2177"
+  },
+  "root_reconstruction": {
+    "proposed_by": "root; received after author NDS v1; no new author score",
+    "mechanism": "旧阈值两侧最近值证书替代全U值域缓存。每tile每channel/t存 a=max inactive U,b=min active U，以及旧bits和source epoch。gamma正时新τ在(a,b]则旧bits全部不变；否则精确回退。",
+    "delta_extension": "若相对证书源锚点可证明每个旧inactive的ΔU≤E0、每个旧active的ΔU≥−E1，则足够稳定区间为(a+E0,b−E1]。空inactive/active集合分别用−∞/+∞，gamma负先统一比较方向。",
+    "critical_epoch_rule": "E必须对证书source epoch计算或保守累计。不能每帧只计算相邻delta，再把同一旧margin反复当新margin；未刷新证书的误差会累积。",
+    "stats_not_free": "当前μ/σ仍需真实生产者。可把源Gram矩统计作为同一因果机制前段，与上轮V2合并收费；不得边称去掉Y又免费取得Y的统计。",
+    "boundary": "该改动消除了v1全U索引的主要状态成本，也放弃按值精确枚举crossings；无效tile需要重算当前全部Y/fullrankPSN，E过松会令全部证书失效。",
+    "review_status": "root另交gh独立评审，本代理未为该root方案打独立分。"
+  },
+  "reconstruction_rejected": {
+    "variant": "仅按coarse stage逐通道组驻留，旧Y从binary source重算",
+    "reason": "只降低峰值SRAM，若持久化U仍要支付全域U外存和目录。删Ycache后需对每dirty输出位置重算旧Y；C×T fan-in大时极小逐bit变化也可能让所有空间位置dirty。未比root最近界证书版更强，不单独列候选。",
+    "illustrative_not_measured": "若单bit变化彼此独立，某位置在C=768,T=10任一bit改变的概率为1−(1−q)^7680；q=0.001时已约99.95%。这只是反例分布，不能当ep34实测。"
+  }
+}

@@ -1,0 +1,19 @@
+default: slow
+INCLUDES = -I ../src/static/ap_types -I ../src/static/ -I ../src
+CXXFLAGS = -fPIC
+CFLAGS = -std=c++17 -fPIC
+LIBNAME = lib$(PRJ_NAME)_$(STAMP).so
+
+fast: CXXFLAGS += -O3
+fast: $(LIBNAME)
+
+slow: CXXFLAGS += -O
+slow: $(LIBNAME)
+
+$(LIBNAME): $(PRJ_NAME)_bridge.cc
+	$(CXX) $(INCLUDES) $(CXXFLAGS) -shared -o $@ $(PRJ_NAME)_bridge.cc $(EXTRA_CXXFLAGS)
+
+clean:
+	rm -f $(LIBNAME) $(PRJ_NAME)_$(STAMP).o
+
+.PHONY: clean

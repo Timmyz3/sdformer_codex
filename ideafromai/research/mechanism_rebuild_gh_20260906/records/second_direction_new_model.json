@@ -1,0 +1,105 @@
+{
+  "reviewer": "event_flow_mechanisms",
+  "date": "2026-09-06",
+  "status": "BOUNDED_SEARCH_COMPLETE_NO_SECOND_DIRECTION_PROMOTED",
+  "scope": "只审一个另模型解码候选；不重复投影上界、哈希或阈值证书，不启动训练、捕获、EDA或生产RTL。",
+  "verdict": "本轮不新增二号主候选。边界差分解码虽有算术因果，但尚无胜过强小波/逐行合成基线的电路增量；保留排除记录。",
+  "rejected_attempt": {
+    "id": "EF2",
+    "working_description": "把大支持域流场系数写成四角差分脉冲，再逐行积分输出稠密光流",
+    "status": "REJECT_AS_MAIN_TCASII_CONTRIBUTION",
+    "scores": {
+      "N": 4,
+      "F_integer_synthesis": 8,
+      "F_new_model_AEE": 3,
+      "H": 3,
+      "T": 3
+    },
+    "motivation": "多尺度skip/ConvTranspose存在，但无完整解码回放证明占比。另模型可直接预测流场系数，减少高维特征上采样；事件稀疏不保证系数稀疏。",
+    "explicit_model_change": [
+      "事件体素/编码器、时间汇聚和四级系数头全部收费，输出量化二维系数c、支持域id、valid与epoch。即使采用H67编码器也已改变解码函数，须另checkpoint与AEE Pareto。",
+      "最窄版本用固定矩形/Haar基。若需动态位置、运动分割或全分辨率残差CNN，新增producer和状态均收费；不默认已有RAFT、warp或固定滚动bin。"
+    ],
+    "execution_contract": {
+      "input": "有限列表 (epoch,x0,x1,y0,y1,cu,cv)，半开矩形[x0,x1)×[y0,y1)，每epoch封存后才可完成输出；输入可为系数全量，也可为有明确旧表的带符号delta。",
+      "output": "同一整数算术合同下完整H×W、两分量的flow。若改成只在事件处查询，属于另一输出任务，不能与DSEC稠密输出吞吐直接比。",
+      "algebra": [
+        "F(x,y)=Σ_i c_i·1[x0_i≤x<x1_i]·1[y0_i≤y<y1_i]。",
+        "令D=ΔxΔyF。每个系数仅在(x0,y0),(x1,y0),(x0,y1),(x1,y1)分别加c,−c,−c,c。",
+        "逐行令r(x,y)=r(x−1,y)+D(x,y)，F(x,y)=F(x,y−1)+r(x,y)。零边界下精确恢复各矩形叠加。",
+        "一个矩形位置迁移可删旧四角、加新四角；这只说明差分表示的更新复杂度，并不免去新位置生产或最终稠密输出。"
+      ],
+      "toy_and_counterexample": [
+        "4×4内c=(2,−1)、[1,3)×[1,3)：四角写+c,−c,−c,+c；前缀和只使中间2×2得到c。右移一格可删旧四角、加新四角，但仍要输出完整栅格。",
+        "逐像素正负交替需Θ(HW)细尺度系数；斜边需要许多轴对齐块。加入仿射基会增加状态，并进入meshflow/分片仿射先验范围。"
+      ],
+      "numeric_rule": "角脉冲和前缀累加须无中间溢出/饱和，否则加减抵消失效。最终量化位置固定后才有整数合同，并非ep34等价证明。"
+    },
+    "actual_performance_cause": "对总支持面积A=Σ_i area(R_i)的大块散射，逐像素更新需Θ(A)，四角差分更新只需Θ(M)，再加Θ(HW)输出扫描。这个因果相对朴素块散射成立；相对已经Θ(HW)的逐行Haar/分层合成，不存在自动成立的渐近优势。",
+    "producer_state_ports": {
+      "producer": "事件聚合、编码、时间汇聚、系数/valid头收费。四级240×320、120×160、60×80、30×40共102000候选位置；先稠密预测再阈值化只省合成。",
+      "dense_difference_option": "480×640、两分量各24位时D表为1,843,200 B；列前缀状态至少640×2×24/8=3840 B。还需epoch/valid、清零、输出缓冲和源系数。这里只是裸位数，不能作为宏面积。",
+      "sparse_event_option": "将每角记录为(x10,y9,du24,dv24)需67位，按72位记；未合并时四角共36 M字节。M=10000已需360000 B，M≈HW则超过11 MB。可以存矩形记录后流式生成两条边，但要保存尚未到达的结束边和有序/分桶目录。",
+      "source_order": "多尺度producer未必按最终y行有序；行桶、排序合并、future-edge保留、满队列反压及epoch封存必须计费。",
+      "ports": "四角同bank/同word冲突需要串行或合并；单1RW表每次角RMW至少读写两次，不能把四个角当一个周期。前缀列状态也需每输出读旧值再写新值，可分bank或乒乓实现，但均收费。",
+      "temporal_version": "跨帧delta须旧系数/D表和删除项，计冷启动、出生消亡与失配。整数地址平移并未生产真实运动对应。",
+      "dense_output_floor": "480×640、两个16位分量，仅最终输出就是1,228,800 B/epoch。任何整幅DSEC结果仍有Θ(HW)写出下界，不能以系数数M代替输出量。"
+    },
+    "strongest_baselines": [
+      "同一已训练系数模型，采用已优化的固定网格/Haar逐行逆变换或分层广播合成；共享同一系数producer和量化，提供相同SRAM、端口、带宽。这才隔离新电路增量。",
+      "如果改用可变矩形，同函数的扫描线区间累加/矩形批处理是强基线；不能只比较逐系数逐像素散射。",
+      "WaveletVFI式稀疏系数decoder和EEMFlow+式紧凑mesh/detail模型作为AEE/资源Pareto比较；不能拿不同函数的旧大U-Net当唯一效率分母。"
+    ],
+    "remaining_circuit_problem_and_rejection": "角事件合并、结束边存储及行封存需要工程设计，但未发现使其在强扫描线/IDWT基线上净胜的新调度或表示性质。常规队列与RMW不足以作为主创新，故不晋级。",
+    "minimal_falsification_gate": [
+      "先做不训练的容量上界：在允许访问的稠密GT有效域上，对固定支持字典求最佳可表示误差与系数数下界；DSEC无效像素不能补零当真实稠密GT。若理想oracle已经不能达到预声明AEE目标，立即杀掉。",
+      "再用相同系数列表比较角事件路径与强流式IDWT/扫描线参考，计producer顺序、合并后唯一角字、bank冲突、future-edge峰值、行封存等待及完整输出字节。若连理想producer顺序下都不胜，停止且不启动训练。",
+      "只有前两关通过才值得训练系数头，并测小物体/遮挡/转弯/高事件率与冷启动的AEE和真实M；必须证明producer+合成整体超过紧凑decoder Pareto。本轮未执行这些新统计或训练。"
+    ]
+  },
+  "nearest_prior_checks": [
+    {
+      "title": "Dynamic Frame Interpolation in Wavelet Domain, TIP 2023",
+      "url": "https://byjiang.com/assets/pdf/WaveletVFI.pdf",
+      "access": "PRIMARY_PDF_READ_III_C_ALGORITHM1",
+      "finding": "已用稀疏多尺度Haar系数、稀疏卷积decoder、逐级IDWT及输入相关压缩阈值。不能把低频背景/高频边界或稀疏解码本身算新。"
+    },
+    {
+      "title": "Efficient Meshflow and Optical Flow Estimation from Event Cameras, CVPR 2024",
+      "url": "https://openaccess.thecvf.com/content/CVPR2024/html/Luo_Efficient_Meshflow_and_Optical_Flow_Estimation_from_Event_Cameras_CVPR_2024_paper.html",
+      "access": "PRIMARY_CVF_SEARCH_PDF_SECTIONS_AND_ABSTRACT; direct open failed",
+      "finding": "稀疏meshflow、紧凑encoder/decoder及Confidence-induced Detail Completion已有；另读作者扩展https://arxiv.org/html/2510.04111v1。稀疏网格加边界补偿不是空白。"
+    },
+    {
+      "title": "Deep Neural Networks with Box Convolutions, NeurIPS 2018",
+      "url": "https://proceedings.neurips.cc/paper/7859-deep-neural-networks-with-box-convolutions.pdf",
+      "access": "PRIMARY_PDF_READ_SECTION3",
+      "finding": "可训练矩形尺寸/偏移和积分图大支持计算已有，也给出输入梯度的翻转核相关。四角差分合成是本文评审推导的伴随/前缀和实现，不将其归成该论文已经发表的同一decoder；但也不据此声称新代数。"
+    },
+    {
+      "title": "Analysis and VLSI Architecture for 1-D and 2-D Discrete Wavelet Transform, TSP 2005",
+      "url": "https://scholars.nthu.edu.tw/esploro/outputs/journalArticle/Analysis-and-VLSI-architecture-for-1-D/9957775244206774",
+      "access": "PRIMARY_AUTHOR_INSTITUTION_ABSTRACT",
+      "finding": "已有IDWT架构、内部缓冲与外存扫描方法分析；以全帧中间存储和通用乘法IDWT作为唯一基线不公平。"
+    },
+    {
+      "title": "An Efficient Architecture for Lifting-based Two-Dimensional Discrete Wavelet Transforms, GLSVLSI 2004",
+      "url": "https://www.cs.york.ac.uk/rts/docs/SIGDA-Compendium-1994-2004/papers/2004/glsvlsi04/pdffiles/p061.pdf",
+      "access": "PRIMARY_PDF_SEARCH_FULL_FIRST_PAGE; direct open failed",
+      "finding": "已把line/block扫描、内存端口、访问次数与利用率作为硬件问题。本文只用来约束基线设计，不移用其吞吐数字。"
+    }
+  ],
+  "why_other_generic_routes_not_promoted": "运动delta已有上述先验，事件增量CNN另有EvConv https://arxiv.org/abs/2303.04670；本轮没有形成进一步的具体有限状态电路机制，不强列弱候选。",
+  "admission": {
+    "PPA_ADMISSION": 0,
+    "RTL_SPEEDUP_ADMISSION": 0,
+    "AEE_NEW_MODEL_ADMISSION": 0
+  },
+  "mandatory_contrasts": {
+    "reference": "此前逐项来源及访问状态见同目录event_flow_candidates.json。",
+    "EVA2": "ISCA 2018已做运动补偿激活缓存；EF2是当前epoch输出合成，函数不同并非优势证据。https://capra.cs.cornell.edu/pubs/eva2-isca2018.pdf",
+    "MotionDeltaCNN": "ICCV 2023已做环形buffer、地址平移、未见区域padding/init；若EF2改卖运动缓存将重新落入近邻。https://openaccess.thecvf.com/content/ICCV2023/papers/Parger_MotionDeltaCNN_Sparse_CNN_Inference_of_Frame_Differences_in_Moving_Camera_ICCV_2023_paper.pdf",
+    "ESF": "轨迹占据搜索和增量打分已有；EF2不做搜索。https://arxiv.org/html/2605.28312v1",
+    "ASNA": "未获取出版方全文，不以Grok转述证明其PPA或技术缺失。https://doi.org/10.1109/TVLSI.2025.3600953"
+  }
+}
