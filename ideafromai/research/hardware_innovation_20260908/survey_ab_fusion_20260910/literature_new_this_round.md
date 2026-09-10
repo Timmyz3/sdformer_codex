@@ -1,0 +1,291 @@
+# 本轮新增条目（开源 + arXiv）
+
+共 287 条
+
+- **GustavSNN-public-mirror**｜open-source/local-mirror｜`open_source`｜
+- **FlexSpIM**｜open-source/author-pdf｜`open_source`｜
+- **LoopTree**｜open-source/author-pdf｜`open_source`｜
+- **RISCSparse**｜open-source/author-pdf｜`open_source`｜
+- **ISSCC2025-ConvFormer**｜ISSCC 2025｜`open_source`｜
+- **da4ml**｜open-source/tooling｜`open_source`｜
+- **OpenROAD**｜open-source/EDA｜`open_source`｜https://github.com/The-OpenROAD-Project/OpenROAD
+- **snntorch**｜open-source｜`open_source`｜https://github.com/jeshraghian/snntorch
+- **spikingjelly**｜open-source｜`open_source`｜https://github.com/fangwei123456/spikingjelly
+- **lava-nc**｜open-source｜`open_source`｜https://github.com/lava-nc/lava
+- **norse**｜open-source｜`open_source`｜https://github.com/norse/norse
+- **brainchip-akida-docs**｜open-source/platform｜`open_source`｜
+- **timm-optical-flow-baselines**｜open-source｜`open_source`｜https://github.com/princeton-vl/RAFT
+- **spike-flow-net**｜open-source｜`open_source`｜
+- **MemFlow**｜CVPR 2024 / open-source｜`open_source`｜https://github.com/DQiaole/MemFlow
+- **SEA-RAFT**｜open-source｜`open_source`｜https://github.com/princeton-vl/SEA-RAFT
+- **Taming-Event-Cameras**｜ICCV / open-source｜`open_source`｜https://github.com/tub-rip/event_flow
+- **v2e**｜open-source｜`open_source`｜https://github.com/SensorsINI/v2e
+- **rpg_e2vid**｜open-source｜`open_source`｜https://github.com/uzh-rpg/rpg_e2vid
+- **spikingjelly**｜open-source｜`open_source`｜https://github.com/fangwei123456/spikingjelly
+- **snntorch**｜open-source｜`open_source`｜https://github.com/jeshraghian/snntorch
+- **lava**｜open-source｜`open_source`｜https://github.com/lava-nc/lava
+- **norse**｜open-source｜`open_source`｜https://github.com/norse/norse
+- **bindsnet**｜open-source｜`open_source`｜https://github.com/BindsNET/bindsnet
+- **sinabs**｜open-source｜`open_source`｜https://github.com/synsense/sinabs
+- **nir**｜open-source｜`open_source`｜https://github.com/neuromorphs/NIR
+- **sparseml**｜open-source｜`open_source`｜https://github.com/neuralmagic/sparseml
+- **sparsity**｜open-source｜`open_source`｜https://github.com/pytorch/ao
+- **DeepCompression-arxiv**｜open-source｜`open_source`｜
+- **CUTLASS**｜open-source｜`open_source`｜https://github.com/NVIDIA/cutlass
+- **SparseDNN-accel-survey-repos**｜open-source｜`open_source`｜
+- **OpenRAM**｜open-source｜`open_source`｜https://github.com/VLSIDA/OpenRAM
+- **OpenROAD**｜open-source｜`open_source`｜https://github.com/The-OpenROAD-Project/OpenROAD
+- **OpenLane**｜open-source｜`open_source`｜https://github.com/The-OpenROAD-Project/OpenLane
+- **Vitis-AI**｜open-source｜`open_source`｜https://github.com/Xilinx/Vitis-AI
+- **finn**｜open-source｜`open_source`｜https://github.com/Xilinx/finn
+- **hls4ml**｜open-source｜`open_source`｜https://github.com/fastmachinelearning/hls4ml
+- **verilator**｜open-source｜`open_source`｜https://github.com/verilator/verilator
+- **FireSim**｜open-source｜`open_source`｜https://github.com/firesim/firesim
+- **Chipyard**｜open-source｜`open_source`｜https://github.com/ucb-bar/chipyard
+- **Gemmini**｜open-source｜`open_source`｜https://github.com/ucb-bar/gemmini
+- **NVDLA**｜open-source｜`open_source`｜https://github.com/nvdla/hw
+- **Scale-Sim**｜open-source｜`open_source`｜https://github.com/scalesim-project/scale-sim-v2
+- **Timeloop**｜open-source｜`open_source`｜https://github.com/NVlabs/timeloop
+- **Accelergy**｜open-source｜`open_source`｜https://github.com/Accelergy-Project/accelergy
+- **ZigZag**｜open-source｜`open_source`｜https://github.com/KULeuven-MICAS/zigzag
+- **MAESTRO**｜open-source｜`open_source`｜https://github.com/maestro-project/maestro
+- **SPARSEBACKBONE-OF**｜open-source｜`open_source`｜
+- **BitNet-style**｜open-source｜`open_source`｜https://github.com/microsoft/BitNet
+- **GPT-Q/AWQ family**｜open-source｜`open_source`｜https://github.com/mit-han-lab/llm-awq
+- **SmoothQuant**｜open-source｜`open_source`｜https://github.com/mit-han-lab/smoothquant
+- **SparseGPT**｜open-source｜`open_source`｜https://github.com/IST-DASLab/SparseGPT
+- **Wanda**｜open-source｜`open_source`｜https://github.com/locuslab/wanda
+- **2:4-sparse-stack**｜open-source｜`open_source`｜https://github.com/NVIDIA/apex
+- **FlexGen**｜open-source｜`open_source`｜https://github.com/FMInference/FlexGen
+- **vLLM**｜open-source｜`open_source`｜https://github.com/vllm-project/vllm
+- **FlashAttention**｜open-source｜`open_source`｜https://github.com/Dao-AILab/flash-attention
+- **xformers**｜open-source｜`open_source`｜https://github.com/facebookresearch/xformers
+- **DeepSpeed**｜open-source｜`open_source`｜https://github.com/microsoft/DeepSpeed
+- **Megatron-LM**｜open-source｜`open_source`｜https://github.com/NVIDIA/Megatron-LM
+- **Aquatic Neuromorphic Optical Flow**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.07653v2
+- **Unbiased Gradient Estimation for Event Binning via Functional Backpropagation**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2602.12590v1
+- **Benchmarking Microsaccade Recognition with Event Cameras: A Novel Dataset and Ev**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2510.24231v1
+- **Context-aware Sparse Spatiotemporal Learning for Event-based Vision**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2508.19806v1
+- **Inference-Time Gaze Refinement for Micro-Expression Recognition: Enhancing Event**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2506.12524v3
+- **A VCSEL based Photonic Neuromorphic Processor for Event-Based Imaging Flow Cytom**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2505.12026v1
+- **Neural Ganglion Sensors: Learning Task-specific Event Cameras Inspired by the Ne**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2504.13457v1
+- **UCF-Crime-DVS: A Novel Event-Based Dataset for Video Anomaly Detection with Spik**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2503.12905v1
+- **ST-FlowNet: An Efficient Spiking Neural Network for Event-Based Optical Flow Est**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2503.10195v2
+- **eCARLA-scenes: A synthetically generated dataset for event-based optical flow pr**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2412.09209v1
+- **TSkips: Efficiency Through Explicit Temporal Delay Connections in Spiking Neural**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2411.16711v2
+- **Event-based vision on FPGAs -- a survey**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2407.08356v1
+- **SCSim: A Realistic Spike Cameras Simulator**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2405.16790v1
+- **Photonic Neuromorphic Accelerators for Event-Based Imaging Flow Cytometry**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2404.10564v1
+- **Chasing Day and Night: Towards Robust and Efficient All-Day Object Detection Gui**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2309.09297v2
+- **Unsupervised Optical Flow Estimation with Dynamic Timing Representation for Spik**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2307.06003v1
+- **S-TLLR: STDP-inspired Temporal Local Learning Rule for Spiking Neural Networks**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2306.15220v4
+- **Training a spiking neural network on an event-based label-free flow cytometry da**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2303.10632v1
+- **Dynamic Event-based Optical Identification and Communication**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2303.07169v4
+- **Anti-Gravity Walking by a Flying Humanoid Robot via Thrust-Rate Input Whole-Body**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.07544v1
+- **Noise-Resilient Detection of Neuronal Spikes by a Hopf-Bifurcation Device**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.04949v1
+- **Current-Limiting Control for Fault Ride-Through of LLC-based Solid-State Transfo**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.26595v2
+- **Event-triggered Implicit Perturbation for Zeroth-Order Fine-Tuning of Spiking Tr**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.21223v1
+- **Robust and Efficient Feature Extraction for Spike Sorting via the Walsh-Hadamard**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.19048v1
+- **The Sparsity Ceiling: Where Spiking Networks Can and Cannot Trade Activity for E**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.26648v1
+- **From Bit-Position Sensitivity to Unequal Error Protection for DNN Inference Memo**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.19623v1
+- **SpikeDS: Dual Sparsity Spikformer for Perineural Invasion Prediction in 3D MRI**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.11986v1
+- **Intrinsically Stable Spiking Neural Networks: Overcoming the Performance Barrier**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.31695v1
+- **Solar Radio Burst Fine Structures**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.25469v1
+- **End-to-End Radar and Communication Modulation Recognition with Neuromorphic Comp**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.24075v1
+- **Otters++: A Time-to-first-spike Based Energy Efficient Optical Spiking Transform**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.13016v1
+- **SNN-MLIR: An MLIR Dialect for Compiling Neuromorphic SNNs from NIR to Bare-Metal**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.09213v1
+- **MOSAIC: A Workload-Driven Simulation and Design-Space Exploration Framework for **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.05362v2
+- **BIDENT: Heterogeneous Operator-level Mapping for Efficient Edge Inference**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.05271v1
+- **PrimeSVT: An Automated Memory-aware Pruning Framework with Prioritized Compressi**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.03428v1
+- **PSViT: A Methodology for Structurally Pruning Spiking Vision Transformers**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.03257v1
+- **SpikingMoE: SDPrompt-Guided Dynamic Expert Fusion in Spiking Neural Networks**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.23188v1
+- **SymbolicLight V1: Spike-Gated Dual-Path Language Modeling at High Encoder Spike **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.21333v3
+- **Q-SpiRL: Quantum Spiking Reinforcement Learning for Adaptive Robot Navigation**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.20801v2
+- **Leveraging Non-Equilibrium ECRAM Dynamics for Short-Term Plasticity in Neuromorp**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.11243v1
+- **Encoding and Decoding Temporal Signals with Spiking Bandpass Wavelets**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.09770v1
+- **Non-Monotonic Latency in Apple MPS Decoding: KV Cache Interactions and Execution**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.08913v2
+- **Elastic Spiking Transformers for Efficient Gesture Understanding**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.13869v1
+- **Phase-Stable Self-Modulation for GHz Continuous-Wave Ultrafast X-Ray Free-Electr**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.27347v1
+- **Robust and Sparse Group Dynamic Causal Modeling via Student-t Parametric Empiric**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.06379v1
+- **A Symmetric Random Scan Collapsed Gibbs Sampler for Fully Bayesian Variable Sele**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2601.07864v1
+- **Sparsity-Aware Streaming SNN Accelerator with Output-Channel Dataflow for Automa**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2601.02613v1
+- **Otters: An Energy-Efficient SpikingTransformer via Optical Time-to-First-Spike E**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2509.18968v1
+- **Sigma-Delta Neural Network Conversion on Loihi 2**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2505.06417v2
+- **Timely and Painless Breakups: Off-the-grid Blind Message Recovery and Users' Dem**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2406.17393v2
+- **Equation Discovery with Bayesian Spike-and-Slab Priors and Efficient Kernels**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2310.05387v2
+- **Bayesian Sparse Gaussian Mixture Model in High Dimensions**｜arXiv 2022｜`paper`｜https://arxiv.org/abs/2207.10301v3
+- **Sparse Compressed Spiking Neural Network Accelerator for Object Detection**｜arXiv 2022｜`paper`｜https://arxiv.org/abs/2205.00778v1
+- **Routing brain traffic through the von Neumann bottleneck: Parallel sorting and r**｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2109.11358v3
+- **Training for temporal sparsity in deep neural networks, application in video pro**｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2107.07305v1
+- **IMPULSE: A 65nm Digital Compute-in-Memory Macro with Fused Weights and Membrane **｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2105.08217v1
+- **Bayesian Linear Regression for Multivariate Responses Under Group Sparsity**｜arXiv 2018｜`paper`｜https://arxiv.org/abs/1807.03439v3
+- **Detection limits in the high-dimensional spiked rectangular model**｜arXiv 2018｜`paper`｜https://arxiv.org/abs/1802.07309v3
+- **At-the-Roofline Sparse Tensor Contractions on Vector Processors for Transformer **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.25504v1
+- **SegFold: Accelerating Sparse GEMM with a Fine-Grained Dynamic Dataflow**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.26701v1
+- **Systolic Array Acceleration of Diagonal-Optimized Sparse-Sparse Matrix Multiplic**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2510.14172v2
+- **MAGNUS: Generating Data Locality to Accelerate Sparse Matrix-Matrix Multiplicati**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2501.07056v2
+- **NeuraChip: Accelerating GNN Computations with a Hash-based Decoupled Spatial Acc**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2404.15510v3
+- **RAMAN: A Re-configurable and Sparse tinyML Accelerator for Inference on Edge**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2306.06493v1
+- **Flexagon: A Multi-Dataflow Sparse-Sparse Matrix Multiplication Accelerator for E**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2301.10852v1
+- **GROW: A Row-Stationary Sparse-Dense GEMM Accelerator for Memory-Efficient Graph **｜arXiv 2022｜`paper`｜https://arxiv.org/abs/2203.00158v4
+- **FSpGEMM: An OpenCL-based HPC Framework for Accelerating General Sparse Matrix-Ma**｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2112.10037v1
+- **Static in Frames, Dynamic in Events: Rethinking Features in Event Cameras as Mot**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.11075v1
+- **On the Geometry of Learned Representations in Event-Based Multi-Modal Egomotion **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.15794v1
+- **LC-Flow: Learning Local Continuous Optical Flow and Confidence from events**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.24604v1
+- **Event-based Motion & Appearance Fusion for 6D Object Pose Tracking**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2603.08264v2
+- **Autonomous Navigation at the Nano-Scale: Algorithms, Architectures, and Constrai**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2601.13252v2
+- **Learning Efficient Meshflow and Optical Flow from Event Cameras**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2510.04111v1
+- **Deep Visual Odometry for Stereo Event Cameras**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2509.08235v1
+- **Beyond conventional vision: RGB-event fusion for robust object detection in dyna**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2508.10704v1
+- **Event-Based De-Snowing for Autonomous Driving**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2507.20901v2
+- **Machine Learning Tools for the IceCube-Gen2 Optical Array**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2507.07844v1
+- **Spatio-Temporal State Space Model For Efficient Event-Based Optical Flow**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2506.07878v1
+- **EV-LayerSegNet: Self-supervised Motion Segmentation using Event Cameras**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2506.06596v1
+- **eStonefish-Scenes: A Sim-to-Real Validated and Robot-Centric Event-based Optical**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2505.13309v2
+- **Hierarchical Sparse Attention Framework for Computationally Efficient Classifica**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2505.07661v1
+- **Nonlinear Motion-Guided and Spatio-Temporal Aware Network for Unsupervised Event**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2505.05089v1
+- **Perturbed State Space Feature Encoders for Optical Flow with Event Cameras**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2504.10669v1
+- **Unsupervised Joint Learning of Optical Flow and Intensity with Event Cameras**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2503.17262v2
+- **EVLoc: Event-based Visual Localization in LiDAR Maps via Event-Depth Registratio**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2503.00167v1
+- **DFSC: Error-Controlled Differentiable Mittag-Leffler Propagation for Fractional **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.29038v1
+- **Provably Lossless Acceleration of DNN Mutation Testing via Memoization**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.18582v1
+- **Coevolution of self-replication and function in a digital primordial soup**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.09211v2
+- **FPGA-Accelerated Real-Time Diagnostics at DIII-D Using the SLAC Neural Network L**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.26042v1
+- **Tessera: Secure, Near-Line-Rate Weight Streaming for UMA Edge Accelerators**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.23205v1
+- **Accelerating CRONet on AMD Versal AIE-ML Engines**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.14700v1
+- **Device-Conditioned Neural Architecture Search for Efficient Robotic Manipulation**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.10170v1
+- **Bridging Efficiency and Safety: Formal Verification of Neural Networks with Earl**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2512.20755v1
+- **AFarePart: Accuracy-aware Fault-resilient Partitioner for DNN Edge Accelerators**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2512.07449v1
+- **Efficient and Distortion-less Spectrum Multiplexer via Neural Network-based Filt**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2507.17106v1
+- **Surrogate modeling of Cellular-Potts Agent-Based Models as a segmentation task u**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2505.00316v4
+- **Deep RC: A Scalable Data Engineering and Deep Learning Pipeline**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2502.20724v2
+- **Privacy preserving layer partitioning for Deep Neural Network models**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2404.07437v1
+- **Leveraging Prior Mean Models for Faster Bayesian Optimization of Particle Accele**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2403.03225v4
+- **Understanding the Effects of Permanent Faults in GPU's Parallelism Management an**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2306.10856v2
+- **Marsellus: A Heterogeneous RISC-V AI-IoT End-Node SoC with 2-to-8b DNN Accelerat**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2305.08415v3
+- **User-Conditioned Neural Control Policies for Mobile Robotics**｜arXiv 2022｜`paper`｜https://arxiv.org/abs/2211.12181v4
+- **A Survey of Deep Learning Techniques for Dynamic Branch Prediction**｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2112.14911v1
+- **Dynamic Reliability Management in Neuromorphic Computing**｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2105.02038v1
+- **SoCRATES: System-on-Chip Resource Adaptive Scheduling using Deep Reinforcement L**｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2104.14354v3
+- **Always-On 674uW @ 4GOP/s Error Resilient Binary Neural Networks with Aggressive **｜arXiv 2020｜`paper`｜https://arxiv.org/abs/2007.08952v1
+- **Dynamic Group Convolution for Accelerating Convolutional Neural Networks**｜arXiv 2020｜`paper`｜https://arxiv.org/abs/2007.04242v2
+- **Improving Dependability of Neuromorphic Computing With Non-Volatile Memory**｜arXiv 2020｜`paper`｜https://arxiv.org/abs/2006.05868v1
+- **Privacy-Preserving Inference in Machine Learning Services Using Trusted Executio**｜arXiv 2019｜`paper`｜https://arxiv.org/abs/1912.03485v1
+- **LookThere! Sparse Vision by Reinforced Selection**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.04698v1
+- **Anchoring Instruction Outside Mask: Exact Reference Caching for Efficient In-Con**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.21229v1
+- **Partition the Support, Reconstruct the Residual: Training-Free Sparse Attention **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.18484v1
+- **Development of Different Algorithms for Drone-Based Antenna Measurement Systems **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.16518v1
+- **FluxBin: Flexible LUT-based Ultra-low-bit LLM Inference by Algorithm-Kernel Syne**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.15602v1
+- **AudioTQ: A Data-Oblivious 6-Bit CPU Audio Codec via Randomized Hadamard Rotation**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.15369v1
+- **LoSA: Near-Lossless Sparse Attention for Training-Free Video Diffusion Accelerat**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.12032v1
+- **BRACE: Taming Sharp Irregularities via Barycentric Rational Forecasting for Fast**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.07572v2
+- **SPADE: An Input-Adaptive Sparse Attention Engine for Fast Video Diffusion Models**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.03335v1
+- **MatCreatioNN: Machine learning-guided computational discovery of photocatalysts **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.27295v1
+- **Sol-Attn: Accelerating Video Generation Inference via On-the-Fly Attention Spars**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.24027v1
+- **SANA-Video 2.0: Hybrid Linear Attention with Attention Residuals for Efficient V**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.21553v1
+- **Adaptive Depth Sparse Framework: Similarity-Driven Resource Allocation for Pre-T**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.21291v1
+- **Opto-ViT-v2: Noise-Resilient On-Chip Fine-Tuning for Photonic Near-Sensor Vision**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.19421v1
+- **Toward a Stable and Deployable Adaptive Chirplet Transform: Residual Projection,**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.16629v2
+- **DSTAR: Accelerating Diffusion Transformers via Spatial and Temporal Redundancy R**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.15846v1
+- **Realizable N:M Sparse Transformer Inference via Search-Kernel Co-Design**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.12505v2
+- **Geometry-Aware MCTS for Extremal Problems in Combinatorial Geometry**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.26399v1
+- **A sparse spectral method on a class of domains bounded by planar algebraic curve**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.24423v1
+- **ScalingAttention: Discovering Intrinsic Sparse Attention Topology for Video Diff**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.23019v1
+- **SCENIC: Semantic-Conditioned Edge-Aware Neural Framework for Structured IoT Comm**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.22296v1
+- **Exploratory Modelling of Multi-System Transformation Pathways from Real-World Da**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.21530v1
+- **Trustworthy MRI Reconstruction via Bayesian Uncertainty Quantification with Spar**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.17343v2
+- **Layerwise Tunable Lifting Scheme for the Convolutional Neural Network**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.09827v1
+- **Data-driven Koopman mode approximation: A neural power iteration algorithm**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.26943v1
+- **Convex Networks Remain Hard to Certify: Dimension-Accuracy Barriers for Lipschit**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.16150v1
+- **Tube MPC for Bilinear Koopman Models using Robust Control Contraction Metrics**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.29538v1
+- **LiNO: Lifting based multiresolution neural operator**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.02715v1
+- **Variational Inference via Entropic Transport Descent**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.25265v1
+- **Geometric Prototype Learning in Quantum Hilbert Space with Matrix Product States**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.17895v1
+- **SACK : Safe Active Continual Koopman Learning for Uncertain Systems with Contrac**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.09659v2
+- **A Neural Tension Operator for Curve Subdivision across Constant Curvature Geomet**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2603.28937v1
+- **Learning Monge maps with constrained drifting models**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2603.25182v3
+- **Structure-Aware Epistemic Uncertainty Quantification for Neural Operator PDE Sur**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2603.11052v1
+- **Weisfeiler and Lehman Go Categorical**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2602.06787v1
+- **Cross-Dialect Bird Species Recognition with Dialect-Calibrated Augmentation**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2509.22317v1
+- **Explicit and Effectively Symmetric Schemes for Neural SDEs on Lie Groups**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2509.20599v2
+- **Multimodal Spiking Neural Network for Space Robotic Manipulation**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2508.07287v1
+- **Sheaf Graph Neural Networks via PAC-Bayes Spectral Optimization**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2508.00357v2
+- **Biorthogonal Tunable Wavelet Unit with Lifting Scheme in Convolutional Neural Ne**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2507.00739v1
+- **A Mesh-Adaptive Hypergraph Neural Network for Unsteady Flow Around Oscillating a**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2503.22252v2
+- **Lift-and-Embed Learning Methods for Solving Scalar Hyperbolic Equations with Dis**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2411.05382v2
+- **Distributed Koopman Learning with Incomplete Measurements**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2409.11586v2
+- **Obfuscation Based Privacy Preserving Representations are Recoverable Using Neigh**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2409.11536v2
+- **Self-tuning moving horizon estimation of nonlinear systems via physics-informed **｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2408.03653v2
+- **Multimodal Reaching-Position Prediction for ADL Support Using Neural Networks**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2406.18162v1
+- **Finite-difference least square methods for solving Hamilton-Jacobi equations usi**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2406.10758v4
+- **Lift Your Molecules: Molecular Graph Generation in Latent Euclidean Space**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2406.10513v1
+- **FlexSpIM: An Event-Based Digital Compute-In-Memory Accelerator with Flexible Ope**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.08446v1
+- **Neuromorphic architectures as numerical solvers for computational neuroscience**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.28387v1
+- **Beyond Edge Cuts: Activity-Weighted Multicast Hypergraph Mapping for Spiking Neu**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.26223v1
+- **Lonic: Algorithm-Hardware Co-Design for Energy-Efficient Fully Local Online SNN **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.12500v1
+- **A Time-Multiplexed Spiking Neural Network Accelerator with Pipelined Readout for**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.00595v1
+- **The SpiNNaker2 chip: a many-core platform for flexible and scalable brain-inspir**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.24396v1
+- **The Sparsity Tax: Weight Sparsity Trade-offs in Event-Driven SIMD and SIMT Neuro**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.22790v1
+- **AIGOR: A Modular, Event-Driven Neuromorphic Architecture for Configurable SNN In**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.03191v1
+- **SpikON: A Dual-Parallel and Efficient Accelerator for Online Spiking Neural Netw**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.30926v1
+- **Mega: A 22 nm Convolutional Spiking Neural Network Accelerator Achieving 0.375 p**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.30039v1
+- **VQ4SNN: Vector Quantization for Memory-Efficient FPGA Spiking Neural Networks**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.20675v1
+- **ReSCom: A Reconfigurable Spiking Neural Network Accelerator Using Stochastic Com**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.13560v1
+- **SupraSNN: Exploiting Synapse-Level Parallelism in Spiking Neural Network Acceler**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.13354v1
+- **UniSpike: Accelerating Spiking Neural Networks on Neuromorphic Systems via Elimi**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.23796v1
+- **Heterogeneous SoC Integrating an Open-Source Recurrent SNN Accelerator for Neuro**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.12217v1
+- **A PVT-Resilient Subthreshold SRAM-Based In-Memory Computing Accelerator with In-**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2605.00319v1
+- **NeuroRing: Scaling Spiking Neural Networks via Multi-FPGA Bidirectional Ring Top**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.28059v2
+- **Hardware-Software Co-Design for Event-Driven SNN Deployment on Low-Cost Neuromor**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.22179v2
+- **Focus Session: Hardware and Software Techniques for Accelerating Multimodal Foun**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2604.21952v1
+- **Spiking Neural Networks for Energy-Efficient Object Detection in Forward-Looking**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.22072v1
+- **SU-YOLO: Spiking Neural Network for Efficient Underwater Object Detection**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2503.24389v1
+- **Neuromorphic Optical Tracking and Imaging of Randomly Moving Targets through Str**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2501.03874v2
+- **Spike-NeRF: Neural Radiance Field Based On Spike Camera**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2403.16410v1
+- **Event-Driven Imaging in Turbid Media: A Confluence of Optoelectronics and Neurom**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2309.06652v1
+- **You Only Charge Once 2.0 : A End-to-End Analog Computing-in-Memory Architecture **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.11116v1
+- **bitSMM: A bit-Serial Matrix Multiplication Accelerator**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2603.14988v1
+- **GAVINA: flexible aggressive undervolting for bit-serial mixed-precision DNN acce**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2511.23203v1
+- **Platinum: Path-Adaptable LUT-Based Accelerator Tailored for Low-Bit Weight Matri**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2511.21910v1
+- **Segmented Exponent Alignment and Dynamic Wordline Activation for Floating-Point **｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2511.12624v1
+- **BitWave: Exploiting Column-Based Bit-Level Sparsity for Deep Learning Accelerati**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2507.12444v1
+- **Energy-Efficient Supervised Learning with a Binary Stochastic Forward-Forward Al**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2507.06461v1
+- **A Flexible Precision Scaling Deep Neural Network Accelerator with Efficient Weig**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2502.00687v1
+- **$SpikePack$: Enhanced Information Flow in Spiking Neural Networks with High Hard**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2501.14484v2
+- **DSLR-CNN: Efficient CNN Acceleration using Digit-Serial Left-to-Right Arithmetic**｜arXiv 2025｜`paper`｜https://arxiv.org/abs/2501.01737v1
+- **IMAGINE: An 8-to-1b 22nm FD-SOI Compute-In-Memory CNN Accelerator With an End-to**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2412.19750v1
+- **BF-IMNA: A Bit Fluid In-Memory Neural Architecture for Neural Network Accelerati**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2411.01417v1
+- **Design and Implementation of Hardware Accelerators for Neural Processing Applica**｜arXiv 2024｜`paper`｜https://arxiv.org/abs/2402.00051v1
+- **ReDy: A Novel ReRAM-centric Dynamic Quantization Approach for Energy-efficient C**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2306.16298v1
+- **BRAMAC: Compute-in-BRAM Architectures for Multiply-Accumulate on FPGAs**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2304.03974v1
+- **AGNI: In-Situ, Iso-Latency Stochastic-to-Binary Number Conversion for In-DRAM De**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2302.07746v1
+- **Bit-balance: Model-Hardware Co-design for Accelerating NNs by Exploiting Bit-lev**｜arXiv 2023｜`paper`｜https://arxiv.org/abs/2302.00201v1
+- **Accelerating Neural Network Inference with Processing-in-DRAM: From the Edge to **｜arXiv 2022｜`paper`｜https://arxiv.org/abs/2209.08938v2
+- **Bit-serial Weight Pools: Compression and Arbitrary Precision Execution of Neural**｜arXiv 2022｜`paper`｜https://arxiv.org/abs/2201.11651v1
+- **SWIS -- Shared Weight bIt Sparsity for Efficient Neural Network Acceleration**｜arXiv 2021｜`paper`｜https://arxiv.org/abs/2103.01308v2
+- **Ax-BxP: Approximate Blocked Computation for Precision-Reconfigurable Deep Neural**｜arXiv 2020｜`paper`｜https://arxiv.org/abs/2011.13000v3
+- **Dense Structural Compression of Transformers via Gauge-Correct Channel Removal**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.07264v1
+- **Practical Threshold-based Tree Edit Distance Lower-Bounds**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.03078v1
+- **Debias-SparseGPT: Bias-Aware Pruning for Large Language Models**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2609.02496v1
+- **Accelerating Unified Multimodal Models with Core-Expansion Routing and Unified C**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.29291v3
+- **Reservoir of Importance: Learning Semi-Structured Sparsity with Differentiable S**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.23048v1
+- **Macro-Operator Generation and Predicate Selection for TAMP Operator Learning**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.23629v2
+- **NestyNet. III. Symbolic Regression from Analytic Neural Surrogates**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.21051v2
+- **Exploring the Performance Frontier of Compact Unified Image Generation Models**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.20334v2
+- **ReCache: Efficient KV Cache Reuse and Compression for Tool-Augmented LLM Agents**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.19662v1
+- **CoverPrune: Coverage-Driven Token Pruning for 3D VLMs via Optimal Transport**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.13226v1
+- **MoE Proxy Models for Low-Cost Failure Reproduction and Diagnosis in LLM RL Post-**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.10823v1
+- **Local Epistemic Uncertainty Guided Active Sampling for Plug-and-play Diffusive I**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.06981v2
+- **HiSC: Hierarchical Spatial Clustering Token Compression for Efficient 3D Scene U**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.04610v1
+- **Logic Before Language: Pre-pretraining on Formal Derivations Fosters Skill Acqui**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.03930v1
+- **When Do Fewer Visual Tokens Accelerate Multimodal Inference? A Break-Even Study **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2608.03649v1
+- **WIDE: Boosting Adaptive LLM Inference via Token-level Dynamic Width Pruning**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.28418v1
+- **A Flexible Sparsity-Aware FPGA Accelerator with Column-Wise Compression for Effi**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.19248v1
+- **SPARE-GS: Structural Parsimony and Resource Efficiency for 3D Gaussian Splatting**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.16624v1
+- **Constraint-Driven Model Optimization: An Industry Framework for Selecting Compre**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.13735v2
+- **SpeedyGS: Content-Aware 3D Gaussian Splatting Compression via Two-Stage Optimiza**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.12656v1
+- **Unlocking Parallelism in Autoregressive Language Models via Speculative Decoding**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.10661v1
+- **Combating Textual Noise and Redundancy: Entropy-Aware Dense Visual Token Pruning**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.02484v1
+- **GES-TSP: Graph Edge Sparsification for TSP**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2607.09708v1
+- **Can Aggregate Invariants Accelerate Continuous Subgraph Matching? Limits, Laws, **｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.24421v1
+- **Spectral Evolution-Guided Token Pruning in Multimodal Large Language Models**｜arXiv 2026｜`paper`｜https://arxiv.org/abs/2606.24165v1

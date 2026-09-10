@@ -1,6 +1,8 @@
 # 当前推进：多先验融合的实际训练与完整对照（2026-09-09）
 
-**9月10日最新工单：** 先完成的[Prosperity/Gustav融合探针](prosperity_gustav_reopen_20260910/README.md)已收口，完整训练捕获下产品费用选mask相对普通活动控制仅少0.09045%逻辑项，未证明新性能。该家族及未试联合图/有限执行接口保留为第二队列。下一主实验锁定lifting40的Stage B同端口/同状态/同背压排程，只比较ordinary dense/raw与fast_raw_diagonal；shared仅可作同框架消融，不开训练、量化、RTL或主稿修改。相对AEE红灯及单一布局负结果不淘汰整个lifting家族。输入已[定位](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/implementation_inputs.md)，完整链仍需补当前两学生逐位置三源gate捕获。
+**9月10日本轮结果：** [lifting40 Stage B](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/README.md)已完成真实同帧捕获、源核逐槽载荷回放和完整K864整数消费者切片。源核同资源always-ready为6914→6170服务槽（−10.76%），固定长背压均8088；后端独立服务模型少5.784%，两轴实际门和连续输出均零差。两种资源模型不能相加，完整链尚未PASS，lifting家族保留在灰区。下一次只检验计入全部费用的两级RNE/sat写回接口，继续保持同等编译权限；不启动训练、量化、RTL或主稿修改。[Prosperity/Gustav融合探针](prosperity_gustav_reopen_20260910/README.md)已收口为第二队列，保留该家族及未试联合图/有限执行接口。
+
+**收到的外部调研：** [A+B融合文献盘点](survey_ab_fusion_20260910/sources_read.md)按原稿归档；其状态审阅基于22fc4aa1，早于本轮Stage B结果，里面“Stage B未开工”等判断仅对应当时快照。文献数量包含题名/摘要及开源目录，不等于逐篇全文核验；当前执行优先级以上面的Stage B结果为准。
 
 **当前研究线与准入补正：** [9月10日路线、融合去留与详细计划](CURRENT_LINES_AND_PLAN_20260910.md)。lifting仅通过1.259绝对精度预算，对同预算dense/raw的AEE增量0.013178仍超过原定0.005；尚未晋级性能RTL。先做共同完整执行比较，再按机会门决定精度恢复。下文历史“过门”不得解释为全部准入条件通过。
 

@@ -1,5 +1,7 @@
 # 当前研究线、融合取舍与推进计划（2026-09-10）
 
+**Stage B 执行补充（9月10日）：** 已完成[源核与整数双消费者子链](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/README.md)。源核同资源无背压少10.7608%、长背压持平，后端独立模型少5.784%；两表不能合成完整链。主候选保留灰区资格，完整链/强对照及相对AEE门仍未通过。下一项只考虑带费用的两级RNE/sat写回接口及其共同排程，暂不开训练、量化、RTL或贡献句更新。
+
 当前只确定了研究优先级，没有确定论文标题贡献。主候选为敏感 patch 链中的结构化 T10 PSN；共享坐标和纯门按需计算为条件支线；Gustav 供数、常量编译、普通量化与剪枝为共同对照底座。旧 C1/C2 尚未完成创新重构，生产树和 TCAS-II 主稿未改。本页汇总已有结果，本次没有启动训练或 RTL。
 
 ## 1. 必须补正的晋级条件
