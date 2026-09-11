@@ -1,5 +1,7 @@
 # 当前研究线、融合取舍与推进计划（2026-09-10）
 
+**2026-09-11 两级写回已完成：** 同一两级资源点，ordinary为6938槽，lifting不融合／融合为6194／5354槽；融合后的源程序少22.831%，其中6194→5354属于通用指令融合收益。固定长背压四臂均8088；真实RF／门载荷核验零差，独立审阅未发现功能或公平性错误。共同新增50B流水态，全部操作两槽后可读；这与旧单槽模型是不同资源点。保留该源接口，下一项只接真实前后继的完整完成／ready依赖，不扫流水参数；完整链仍未PASS，也不据源收益启动精度恢复。10–15%只指服务灰区，AEE增量门仍为+0.005。 [新结果](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/two_stage_writeback/README.md)。
+
 **Stage B 执行补充（9月10日）：** 已完成[源核与整数双消费者子链](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/README.md)。源核同资源无背压少10.7608%、长背压持平，后端独立模型少5.784%；两表不能合成完整链。主候选保留灰区资格，完整链/强对照及相对AEE门仍未通过。下一项只考虑带费用的两级RNE/sat写回接口及其共同排程，暂不开训练、量化、RTL或贡献句更新。
 
 当前只确定了研究优先级，没有确定论文标题贡献。主候选为敏感 patch 链中的结构化 T10 PSN；共享坐标和纯门按需计算为条件支线；Gustav 供数、常量编译、普通量化与剪枝为共同对照底座。旧 C1/C2 尚未完成创新重构，生产树和 TCAS-II 主稿未改。本页汇总已有结果，本次没有启动训练或 RTL。

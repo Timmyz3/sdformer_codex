@@ -1,5 +1,7 @@
 # 当前推进：多先验融合的实际训练与完整对照（2026-09-09）
 
+**2026-09-11 两级写回已完成：** 同一两级资源点，ordinary为6938槽，lifting不融合／融合为6194／5354槽；融合后的源程序少22.831%，其中6194→5354属于通用指令融合收益。固定长背压四臂均8088；真实RF／门载荷核验零差，独立审阅未发现功能或公平性错误。共同新增50B流水态，全部操作两槽后可读；这与旧单槽模型是不同资源点。保留该源接口，下一项只接真实前后继的完整完成／ready依赖，不扫流水参数；完整链仍未PASS，也不据源收益启动精度恢复。10–15%只指服务灰区，AEE增量门仍为+0.005。 [新结果](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/two_stage_writeback/README.md)。
+
 **9月10日本轮结果：** [lifting40 Stage B](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/README.md)已完成真实同帧捕获、源核逐槽载荷回放和完整K864整数消费者切片。源核同资源always-ready为6914→6170服务槽（−10.76%），固定长背压均8088；后端独立服务模型少5.784%，两轴实际门和连续输出均零差。两种资源模型不能相加，完整链尚未PASS，lifting家族保留在灰区。下一次只检验计入全部费用的两级RNE/sat写回接口，继续保持同等编译权限；不启动训练、量化、RTL或主稿修改。[Prosperity/Gustav融合探针](prosperity_gustav_reopen_20260910/README.md)已收口为第二队列，保留该家族及未试联合图/有限执行接口。
 
 **收到的外部调研：** [A+B融合文献盘点](survey_ab_fusion_20260910/sources_read.md)按原稿归档；其状态审阅基于22fc4aa1，早于本轮Stage B结果，里面“Stage B未开工”等判断仅对应当时快照。文献数量包含题名/摘要及开源目录，不等于逐篇全文核验；当前执行优先级以上面的Stage B结果为准。
