@@ -1,5 +1,7 @@
 # ideafromai — AI idea drop zone (Codex reads here)
 
+**2026-09-11 Pro/Grok新调研已审阅并测量：** [逐路线复审、采用/修订理由及后续顺序](research/hardware_innovation_20260908/PRO_GROK_REVIEW_20260911.md)。源核8088确认来自指定FIFO背压；整数双消费者的原字最后读与输出完成已分开测，通用门提前对照暂无净服务增量；Pro空间P2舍入证书真实数据零新增命中。lifting主家族与物理源事务闭包候选保留，完整Stage B及相对AEE门仍未过。
+
 **2026-09-11 用户最新更正：AT-LIF = {0,θ} 二电平；推理固定θ可折入下一层W。** 硬件发放接口可只传g，不能据θ是实数就要求逐事件幅度MAC。PSN发放前和连续残差仍另计。[当前推理合同与候选影响](ATLIF_INFERENCE_CONTRACT.md)。本条优先于下方及外部包的旧“不可折权/任意实值发放”前提。
 
 **2026-09-11 目录迁移：本目录现由主仓直接管理。** 唯一实际位置为 /home/zhumd/work/sdformer_codex/ideafromai/；旧 /home/zhumd/work/ideafromai 是兼容链接。整个研究树已搬入，不再维护筛选同步副本。[Git与本地数据说明](README_SYNC.md)。

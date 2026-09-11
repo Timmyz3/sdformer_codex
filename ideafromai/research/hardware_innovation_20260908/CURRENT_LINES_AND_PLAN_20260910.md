@@ -1,5 +1,7 @@
 # 当前研究线、融合取舍与推进计划（2026-09-10）
 
+**2026-09-11 最新：** [Pro/Grok逐路线复审与测量反馈](PRO_GROK_REVIEW_20260911.md)已完成。8088是指定源FIFO背压；整数双消费者已区分最后读与最终输出。门提前对照无当前串行服务增量，空间P2舍入证书零新增命中；各只停具体布局。主家族继续，下一工单补preview→sn2→消费者的同资源载荷/ready时间线与原生动态BN完成边界，完整Stage B仍NOT_CLOSED。旧“两级RNE/sat”工单已完成，不再重复；相对AEE+0.005门不放宽，尚不启动新训练/量化/生产RTL。
+
 **2026-09-11 用户最新合同：** AT-LIF输出为 `{0,θ}` 二电平，推理固定θ可折入下一层权重，硬件可传1-bit g。[合同及候选影响](../../ATLIF_INFERENCE_CONTRACT.md)。下文连续消费者指PSN发放前/残差/连续PED，不指AT-LIF逐事件任意幅值；Gustav/Prosperity/LoAS支持机制不能因“θ是实数”被否决。
 
 **2026-09-11 两级写回已完成：** 同一两级资源点，ordinary为6938槽，lifting不融合／融合为6194／5354槽；融合后的源程序少22.831%，其中6194→5354属于通用指令融合收益。固定长背压四臂均8088；真实RF／门载荷核验零差，独立审阅未发现功能或公平性错误。共同新增50B流水态，全部操作两槽后可读；这与旧单槽模型是不同资源点。保留该源接口，下一项只接真实前后继的完整完成／ready依赖，不扫流水参数；完整链仍未PASS，也不据源收益启动精度恢复。10–15%只指服务灰区，AEE增量门仍为+0.005。 [新结果](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/two_stage_writeback/README.md)。
