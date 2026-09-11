@@ -42,7 +42,7 @@
 
 ## 仍缺的完成边界
 
-1. 原生投影BN使用完整192000值/通道的动态域。当前止于写出原始投影，没有把捕获均值方差当免费硬件输入；仍需完整域归约、规范化、PED合并和提交。
+1. 原生投影BN使用完整192000值/通道的动态域。局部连接器止于写出原始投影；本轮随后已独立执行完整BN域，自己归约统计并规范化18432000值/学生，没有读取捕获均值方差。树归约后均值/方差最大差7.45e-9，输出最大差3.81e-6/4.77e-6，正常/背压输出逐位相同。输入仍是捕获的完整原生投影域，尚未重算其余全图投影、连接最终PED；不能将此算子槽数加到局部表。[全域BN实现与数值修正](global_bn_plan.md)、[结果](global_bn_pairwise.json)。
 2. 此前数值验证过的“保留U32跨BN、延后V展开”尚未接入同一机器。它应作为双方共同对照，当前direct-V不是最强完整消费者控制。
 3. 仍需跨算子条带的完整层排程，计halo、权重驻留和原I24重复输入。输入声明空间/T/C连续packed24，source读后留在外存、后继另付重读；未称整窗I24驻留。两个预选窗口不代表整帧吞吐。
 4. Gustav式活动列共享只是已借部分。官方CPTB/NRV∩W/完整分块重叠未全部迁入，不能称完整Gustav，更没有相对它的实测优势。
@@ -58,6 +58,8 @@ python3.12 connected_chain.py --source --forward --native
 python3.12 connected_chain.py --source --forward --native --stress
 python3.12 latent_gate_probe.py
 python3.12 read_obligations.py
+python3.12 run_global_bn.py --pairwise
+python3.12 run_global_bn.py --pairwise --stress
 ```
 
 输入为上级capture中既有两学生参数/轨迹；NPZ是本地大工件。machine.py提供同一端口机器，source_program.py/run_windows.py/integer_chain.py/native_projection.py顺次执行各段。旧单P2、系数编码及无操作数直送结果保留为明确消融，最新状态以上述两份完整局部JSON为准。
