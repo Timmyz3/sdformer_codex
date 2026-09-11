@@ -1,6 +1,6 @@
 # 当前研究线、融合取舍与推进计划（2026-09-10）
 
-**2026-09-11 最新：** [Pro/Grok逐路线复审与测量反馈](PRO_GROK_REVIEW_20260911.md)已完成。8088是指定源FIFO背压；整数双消费者已区分最后读与最终输出。门提前对照无当前串行服务增量，空间P2舍入证书零新增命中；各只停具体布局。主家族继续，下一工单补preview→sn2→消费者的同资源载荷/ready时间线与原生动态BN完成边界，完整Stage B仍NOT_CLOSED。旧“两级RNE/sat”工单已完成，不再重复；相对AEE+0.005门不放宽，尚不启动新训练/量化/生产RTL。
+**2026-09-11 最新：** [局部源→最终PED及跨BN延后V](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/full_chain/preview_sn2_chain/deferred_ped_result.md)已执行。双方共同deferred控制后净服务正常约6.57%/6.87%、背压约6.08%/6.41%，连续和最终值两臂/两压力逐位一致。全域BN已独立执行，完整层生产者/统计等待尚未闭合；A800已补原两学生完整I24、三源门字和PED捕获，与旧数值/同帧AEE一致。完整K864空源解释全部约57%的整向量零，但这些位置BN后及PED均非零。当前不重复8088/延后V、不用低于15%的局部数字触发恢复；F1保留改变真实共同依赖的接口，F2不重复已失败的三公共列/旧界。新增零投影跨动态BN只作来源/默认值机会探针，通用fill编译不能当X。
 
 **2026-09-11 用户最新合同：** AT-LIF输出为 `{0,θ}` 二电平，推理固定θ可折入下一层权重，硬件可传1-bit g。[合同及候选影响](../../ATLIF_INFERENCE_CONTRACT.md)。下文连续消费者指PSN发放前/残差/连续PED，不指AT-LIF逐事件任意幅值；Gustav/Prosperity/LoAS支持机制不能因“θ是实数”被否决。
 

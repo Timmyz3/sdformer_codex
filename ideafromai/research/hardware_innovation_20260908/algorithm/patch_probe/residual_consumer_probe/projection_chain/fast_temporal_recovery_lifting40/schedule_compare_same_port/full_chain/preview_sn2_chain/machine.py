@@ -103,6 +103,11 @@ class Machine:
                 assert self.ready[src]<=self.time
                 scalar=np.frombuffer(self.cword,'<f4',count=1,offset=coef_offset)[0]
                 value=vector_fma(self.rf[src],scalar,self.rf[dst])
+            elif kind in ('mul_reg','add_reg','sub_reg'):
+                assert self.ready[args]<=self.time
+                a,b=self.rf[dst].astype(np.float32),self.rf[args].astype(np.float32)
+                value=np.float32(a*b if kind=='mul_reg' else a+b if kind=='add_reg' else a-b)
+            elif kind=='i24_to_float': value=self.rf[dst].astype(np.float32)
             elif kind=='compare': value=(self.rf[dst]>=0).astype(np.float32)
             else: raise ValueError(kind)
             self.pending[self.time+latency]=(dst,value.copy())

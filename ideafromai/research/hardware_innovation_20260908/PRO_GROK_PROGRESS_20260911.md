@@ -1,5 +1,8 @@
 # 新调研纳入及本轮硬件推进
 
+**本次继续推进：** [延后V与实际最终PED](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/full_chain/preview_sn2_chain/deferred_ped_result.md)已完成正常/背压两臂，最终输出逐位一致；双方共同优化后局部lifting少约6.08%–6.87%，全域生产者/统计等待仍未闭合。A800补采全层生产者，发现约57%的零投影全部可由真实空源提前证明，但对应BN/PED均仍非零。[新机会及先验边界](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/full_chain/preview_sn2_chain/bn_zero_interface.md)。普通默认值压缩/BN拆分已有Finch和MLSys先验，只保留待证执行接口，不宣布标题赢家；未训练/量化/开生产RTL。
+
+
 **结论：本轮已从分开的小核推进到同一有限机器上的source→preview→双消费者→原生投影。局部服务少约7%，还不是可投稿的完整优势。** [代码、真实载荷检查与净服务表](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/full_chain/preview_sn2_chain/README.md)。不把结果提升成RTL、PPA或强接收证据。
 
 随后继续补了完整动态BN算子：每学生18432000个真实输入值，自己求统计，固定树归约在同一容量/端口下把长累加输出误差约0.0026降到最高4.77e-6，正常/背压输出逐位一致。它独立从捕获的全域投影输入开始，尚不能拼接局部链成完整帧。需继续连接全层投影、延后V和最终PED，Stage B仍NOT_CLOSED。

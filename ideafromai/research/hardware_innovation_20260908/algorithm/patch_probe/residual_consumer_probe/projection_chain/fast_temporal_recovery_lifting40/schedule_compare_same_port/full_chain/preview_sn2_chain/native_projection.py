@@ -59,11 +59,13 @@ def run(m,data,p,label):
                 for t in range(10):
                     for hg in range(4):
                         r=(ip*10+t)*4+hg
-                        value[t,h0+hg*8:h0+hg*8+8,dy,dx]=m.rf[r]
                         m.store_reg(r,OUTPUT+((ip*10+t)*32+hg*8)*4)
             m.phase='native_projection_to_global_BN_buffer'
             for off in range(0,2560,32):
                 payload=b''.join(m.read_word(OUTPUT+off+j) for j in range(0,32,8));assert len(payload)==32
+                tp,hh=divmod(off//4,32);ip,t=divmod(tp,10)
+                y,x=group['positions'][ip];dy,dx=y//2-out_y,x//2-out_x
+                value[t,h0+hh:h0+hh+8,dy,dx]=np.frombuffer(payload,'<f4')
                 for _ in range(5):m.advance(tag='native_DMA_output_slots')
     report=dict(service_slots=m.time-start,counts={k:v-counts.get(k,0) for k,v in m.count.items() if v-counts.get(k,0)},
         stages={k:v-stages.get(k,0) for k,v in m.stages.items() if v-stages.get(k,0)},
