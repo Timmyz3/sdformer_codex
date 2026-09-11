@@ -1,5 +1,7 @@
 # ideafromai — AI idea drop zone (Codex reads here)
 
+**2026-09-11 用户最新更正：AT-LIF = {0,θ} 二电平；推理固定θ可折入下一层W。** 硬件发放接口可只传g，不能据θ是实数就要求逐事件幅度MAC。PSN发放前和连续残差仍另计。[当前推理合同与候选影响](ATLIF_INFERENCE_CONTRACT.md)。本条优先于下方及外部包的旧“不可折权/任意实值发放”前提。
+
 **2026-09-11 目录迁移：本目录现由主仓直接管理。** 唯一实际位置为 /home/zhumd/work/sdformer_codex/ideafromai/；旧 /home/zhumd/work/ideafromai 是兼容链接。整个研究树已搬入，不再维护筛选同步副本。[Git与本地数据说明](README_SYNC.md)。
 
 **Canonical path:** `/home/zhumd/work/sdformer_codex/ideafromai/`
@@ -37,7 +39,7 @@
 | Grok Bot (`iscas_ssh`) | 2026-09-05 | C1\*/C2\* remake: OP-STW, HBG-RP **int8 ATLIF payload**, pyramid residual, occlusion |
 | Grok 4.6 | 2026-09-05 | New-mechanism survey: **Motion-XOR triple-popcount + dirty-lane score memo + mixed-T binary ATLIF**. C1/C2 demoted. |
 
-**冻结数值语义（Motion C12 ep34）：** 93 个调用出口的发放支持为二值，完整数值为 `z = θ × g`，不能把 θ 当成 1 或抹掉。当前 checkpoint 的 θ 为逐模块连续值标量；Grok Bot HBG-RP 的任意逐事件 `{g, int8 p}` 属于另一份共设提案，不由这个事实自动成立。
+**冻结数值语义（Motion C12 ep34）：** 93 个调用出口为 `{0,θ}` 二电平，`z = θ × g`。固定θ可吸入下游线性层权重，以 `W'g` 保持数值；当前 checkpoint 的 θ 为逐模块实数标量。Grok Bot HBG-RP 的任意逐事件 `{g, int8 p}` 属于另一份共设提案。
 
 ## Codex read order
 

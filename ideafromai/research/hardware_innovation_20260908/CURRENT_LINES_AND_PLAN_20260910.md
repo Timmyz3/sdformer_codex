@@ -1,5 +1,7 @@
 # 当前研究线、融合取舍与推进计划（2026-09-10）
 
+**2026-09-11 用户最新合同：** AT-LIF输出为 `{0,θ}` 二电平，推理固定θ可折入下一层权重，硬件可传1-bit g。[合同及候选影响](../../ATLIF_INFERENCE_CONTRACT.md)。下文连续消费者指PSN发放前/残差/连续PED，不指AT-LIF逐事件任意幅值；Gustav/Prosperity/LoAS支持机制不能因“θ是实数”被否决。
+
 **2026-09-11 两级写回已完成：** 同一两级资源点，ordinary为6938槽，lifting不融合／融合为6194／5354槽；融合后的源程序少22.831%，其中6194→5354属于通用指令融合收益。固定长背压四臂均8088；真实RF／门载荷核验零差，独立审阅未发现功能或公平性错误。共同新增50B流水态，全部操作两槽后可读；这与旧单槽模型是不同资源点。保留该源接口，下一项只接真实前后继的完整完成／ready依赖，不扫流水参数；完整链仍未PASS，也不据源收益启动精度恢复。10–15%只指服务灰区，AEE增量门仍为+0.005。 [新结果](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/two_stage_writeback/README.md)。
 
 **Stage B 执行补充（9月10日）：** 已完成[源核与整数双消费者子链](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/README.md)。源核同资源无背压少10.7608%、长背压持平，后端独立模型少5.784%；两表不能合成完整链。主候选保留灰区资格，完整链/强对照及相对AEE门仍未通过。下一项只考虑带费用的两级RNE/sat写回接口及其共同排程，暂不开训练、量化、RTL或贡献句更新。
@@ -58,7 +60,7 @@
 - **完整剪枝与稀疏前端：** 敏感patch上的HiNM/VENOM、QP-SNN式联合量化剪枝、S3Net式稀疏stem尚未完整任务训练。当前已有普通2:4/hidden50和其他挂点OBS，不能说完全没碰剪枝，也不能说已抄完整。
 - **更完整的表示量化：** V上的DeepShift Q5已试并作为底座；source/lifting系数的含零PoT训练尚未做。SmartExchange完整训练/权重重建硬件、SpinQuant/QuaRot完整配方也未迁入。当前40系数仅80B，不能凭减少其存储构造大瓶颈。
 - **因果运动调度：** 未训练固定tile差分比bit-skip多52.93%工作并需大连续基值；仅此版本停止。事件/前帧/TDE驱动唤醒、改变生产相关性的任务训练仍未完成，不能用本网当前最终flow作为免费先验。
-- **浅层源统计与双轨幅度：** 浅层Gram曾有局部服务机会，深层很差；固定BN后必要性降低。保留必须动态BN的挂点。θg仍含连续幅值；HBG/幅度通路应按真实θ变化和消费者算术证明费用，不能从“非单位θ”直接推任意逐事件载荷。
+- **浅层源统计与幅度通路：** 浅层Gram曾有局部服务机会，深层很差；保留必须动态BN的挂点。AT-LIF是可折权的θg二电平，不能据此要求独立幅度MAC；幅度通路只在真实连续膜/残差等消费者上论证，取消“θ不可折权”的HBG前提。
 - **注意力：** 行内复用、K=0只跳输出乘积保留；K=0直接删除归一化质量不合法。旧捕获窗口覆盖、份额及新学生身份都须单独补齐，当前不排主岛RTL。
 
 逐篇出处及读/试/未试状态见[文献清单](../literature_audit_20260909/LITERATURE_INVENTORY.md)，Grok并行审阅目录未覆盖。
