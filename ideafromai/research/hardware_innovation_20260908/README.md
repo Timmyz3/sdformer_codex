@@ -1,5 +1,7 @@
 # 当前推进：多先验融合的实际训练与完整对照（2026-09-09）
 
+**2026-09-12 最新执行：** [公开idea统一目录与四家族真实尝试](open_fusion_execution/README.md)、[按会议期刊/缺读项](open_fusion_execution/catalog/VENUES.md)、[后续接口](open_fusion_execution/EXECUTION_QUEUE.md)。本轮完成相位H8的64步匹配恢复、真实新U/F的完整局部消费者回放、水平P2共mask试验、NRV列流父匹配RTL及完整动态BN四臂。公共供数/压缩有明显组件收益，新增机制的精度或相对强对照增量仍不足；没有强接收或新ASIC PPA。用户已授权直接写隔离原型和算法试验，下方历史“不启动训练/RTL、只做Stage B”等时点限制不再适用于早期探索。生产nts07与主稿继续只读。
+
 **2026-09-11 AT-LIF 身份更正：** `{0,θ}` 二电平、推理θ固定且可折入下游W，执行接口可只传g。[最新合同](../../ATLIF_INFERENCE_CONTRACT.md)。取消“不可折权实值发放”作为幅度MAC的创新前提；连续PSN/残差仍计费。完整消费者最新结果见[Stage B实际BN边界与预取小核](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/full_chain/README.md)，完整链尚未闭合。
 
 **2026-09-11 两级写回已完成：** 同一两级资源点，ordinary为6938槽，lifting不融合／融合为6194／5354槽；融合后的源程序少22.831%，其中6194→5354属于通用指令融合收益。固定长背压四臂均8088；真实RF／门载荷核验零差，独立审阅未发现功能或公平性错误。共同新增50B流水态，全部操作两槽后可读；这与旧单槽模型是不同资源点。保留该源接口，下一项只接真实前后继的完整完成／ready依赖，不扫流水参数；完整链仍未PASS，也不据源收益启动精度恢复。10–15%只指服务灰区，AEE增量门仍为+0.005。 [新结果](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/two_stage_writeback/README.md)。

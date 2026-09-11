@@ -1,5 +1,7 @@
 # ideafromai — AI idea drop zone (Codex reads here)
 
+**2026-09-12 统一公开idea入口并实际试做：** [全部工作/仓库/候选](research/hardware_innovation_20260908/open_fusion_execution/catalog/README.md) · [四家族融合、训练与RTL结果](research/hardware_innovation_20260908/open_fusion_execution/README.md) · [后续接口](research/hardware_innovation_20260908/open_fusion_execution/EXECUTION_QUEUE.md)。相位H8已做64步成对恢复及实际U/F消费者重执行；NRV列流精确父匹配RTL已用真实捕获验证；连续PED位面和完整动态BN四臂均已执行。公共源驻RF、code0压缩/默认传播有效，新增X仍未形成强接收证据。CICC遗漏补表已纳入，共16项并保留阅读层级。当前授权是适配组合先试原型，历史“先等某门才实验”不再限制早期尝试；负结果停具体布局，生产与主稿尚未重构。
+
 **2026-09-11 Pro/Grok新调研已审阅并测量：** [逐路线复审、采用/修订理由及后续顺序](research/hardware_innovation_20260908/PRO_GROK_REVIEW_20260911.md)。源核8088确认来自指定FIFO背压；整数双消费者的原字最后读与输出完成已分开测，通用门提前对照暂无净服务增量；Pro空间P2舍入证书真实数据零新增命中。lifting主家族与物理源事务闭包候选保留，完整Stage B及相对AEE门仍未过。
 
 **2026-09-11 用户最新更正：AT-LIF = {0,θ} 二电平；推理固定θ可折入下一层W。** 硬件发放接口可只传g，不能据θ是实数就要求逐事件幅度MAC。PSN发放前和连续残差仍另计。[当前推理合同与候选影响](ATLIF_INFERENCE_CONTRACT.md)。本条优先于下方及外部包的旧“不可折权/任意实值发放”前提。
