@@ -1,0 +1,616 @@
+                                          Efficient Synaptic Delay Implementation in Digital
+                                                     Event-Driven AI Accelerators
+                                                  Roy Meijerb , Paul Dettererc , Amirreza Yousefzadehc, d , Alberto Patiño-Saucedoa , Guanghzi Tangc ,
+                                                             Kanishkan Vadivelc , Yinfu Xuc , Manil-Dev Gomonyb , Federico Corradib ,
+                                                                         Bernabé Linares-Barrancoa , and Manolis Sifalakisc
+                                                      a
+                                                        Instituto de Microelectrónica de Sevilla, CSIC/Universidad de Sevilla, Seville, Spain,
+                                                   b
+                                                     Eindhoven University of Technology, Dept. Electrical Engineering, Eindhoven, Netherlands,
+                                                                            c
+                                                                               IMEC-Netherlands, Eindhoven, Netherlands,
+                                                                              d
+                                                                                University of Twente, Twente, Netherlands
+                                                                       Corresponding author email: manolis.sifalakis@imec.nl
+arXiv:2501.13610v1 [cs.NE] 23 Jan 2025
+
+
+
+
+                                            Abstract—Synaptic delay parameterization of neural network        and complexity grow; and (ii) the efficiency of incorporating
+                                         models have remained largely unexplored but recent literature        synaptic delay structures in hardware, considering factors such
+                                         has been showing promising results, suggesting the delay parame-     as memory, IC area and inference latency, which are relevant
+                                         terized models are simpler, smaller, sparser, and thus more energy
+                                         efficient than similar performing (e.g. task accuracy) non-delay     in edge AI applications.
+                                         parameterized ones. We introduce Shared Circular Delay Queue            In this paper we introduce a new synaptic delay structure
+                                         (SCDQ), a novel hardware structure for supporting synaptic           and its implementation in a digital circuit design for multicore
+                                         delays on digital neuromorphic accelerators. Our analysis and        neuromorphic accelerators. It is based on a circular shared-
+                                         hardware results show that it scales better in terms of memory,      queue and its operation is leveraged by a simple extension of
+                                         than current commonly used approaches [1]–[3], and is more
+                                         amortizable to algorithm-hardware co-optimizations, where in         the Address Event Representation (AER) packet format [11],
+                                         fact, memory scaling is modulated by model sparsity and not          commonly used in neuromorphic systems for communicating
+                                         merely network size. Next to memory we also report performance       events. Compared to existing approaches [1]–[3], our approach
+                                         on latency area and energy per inference.                            is more memory and area efficient because its overhead does
+                                            Index Terms—Spiking Neural Networks, Synaptic Delays,             not increase with the size of the network models, but rather
+                                         Hardware Acceleration
+                                                                                                              with the neural network’s activation density. This activation
+                                                                                                              density can be minimized during training, thus, allowing
+                                                               I. I NTRODUCTION                               for a hardware-algorithm co-optimization. Importantly, the
+                                            In biological neural networks synaptic delays are known           introduction of synaptic delays has minimal impact on power,
+                                         to be subject to learning and play an important role in the          area, and energy requirements of the accelerator.
+                                         propagation and processing of information [4]. Hence, config-           We have evaluated our hardware implementation on the
+                                         urable delays are a basic feature offered in many neuromorphic       Seneca neuromorphic platform [12]. We report on inference
+                                         neural-network accelerators [1]–[3], [5]. However, up until          fidelity, hardware metrics (energy per inference, latency, area),
+                                         recently synaptic delays have rarely been used in practice,          and some comparisons with other reference digital neuromor-
+                                         because (i) it has been unclear how to parameterize and              phic systems that implement delays [1], [2].
+                                         optimize them in models and (ii) because their use has been
+                                         assumed expensive and in terms of memory and complicated                        II. BACKGROUND AND R ELATED W ORK
+                                         in digital accelerators.                                                In Spiking Neural Networks (SNNs), information is con-
+                                            Interestingly, in the last couple of years, progress has been     veyed through pulses that travel between the presynaptic and
+                                         made with effectively training models parameterized with             postynaptic neurons. These pulses encode a specific weight
+                                         synaptic delays [6]–[10], which shows that these models are          associated with the synaptic connection, and if there are
+                                         more compact, and have simpler structure [6], [10], while            synaptic delays incorporated into the model, these pulses
+                                         achieving comparable or higher performance [6], [8], than their      require some time to propagate from the presynaptic neuron
+                                         counterparts with memoryless synapses. They have also been           to the postynaptic one.
+                                         observed to exhibit sparser activation patterns [6]. This raises        In [6], Patino et al. introduced a simple (i.e. hardware-
+                                         the question whether the compactness and sparseness of the           friendly) framework for parameterizing and training models
+                                         model outweigh the speculated memory, energy, and latency            with synaptic delays, whereby for each discrete delay level D,
+                                         costs of the synaptic delay implementation in hardware. The          there is an additional synapse between each presynaptic neuron
+                                         study in [6] confirmed that this appears to be indeed the case       and postynaptic neuron pair, each with a unique trainable
+                                         when comparing the memory and energy estimates of the                weight. Spikes from presynaptic neurons are received by
+                                         models with and without synaptic delays. These estimates were        postynaptic neurons over D discrete time steps, with varying
+                                         obtained by considering synaptic activity in recurrent and feed-     weights. The number of delay levels determines how many
+                                         forward models trained with and without synaptic delays, and         times a postynaptic neuron receives the same repeated spike
+                                         when using common hardware structures for synaptic delays            from a presynaptic neuron. In this case, delay parameterization
+                                         that are used in Loihi [2] and TrueNorth [1].                        involves extending the weight matrix structure from 2D to 3D
+                                            The questions that emerged and motivated this work, con-          (2D weight matrix for each delay value). It has dimensions
+                                         cern: (i) the scalability of delay structures as model size          D ×I ×J, where D is the delay resolution (that is, the number
+                                                                     and therefore an event enters and exist the Shared Delay Queue
+                            SCDQ SDQ   RB
+                                                                     only once.
+                       A                    C                                     III. S YNAPTIC D ELAY A RCHITECTURE
+                                                                     A. Shared Circular Delay Queue Structure
+                       B                    D                            The proposed synaptic delay structure draws inspiration
+                                                                     from the shared queue model in [1] and incorporates the
+Fig. 1. Example of two SNN delay models with two presynaptic         concept of “double-buffering”. Instead of a linear chain of
+neurons, two postynaptic neurons, and three levels of delay.         FIFOs (one per delay level), it simplifies the design to only
+                                                                     two FIFOs: the pre-processing queue (PRQ) and the post-
+of distinct discrete values), I is the number of presynaptic         processing queue (POQ). These two FIFOs are interconnected
+neurons, and J is the number of postynaptic neurons. Figure          in a circular arrangement (see Figure 2), which is why we refer
+1 illustrates such a delay-parameterized network with D = 3.         to this configuration as the “Shared Circular Delay Queue”
+The weight matrix has dimensions 3×2×2. Dots in the middle           (SCDQ) in this paper.
+of connections between neuros symbolize synapses, and on                 There is an SCDQ module at every compute core of a neural
+their left and right are, respectively, axons from presynaptic       network accelerator. Conceptually it is positioned between a
+neurons and dendrites to postynaptic neurons. Color coding           presynaptic and a postsynaptic layer, with the input of the
+represents the delay levels. Each delay axon combined with           SCDQ queue facing the presynaptic layer and the output of
+a weighted dendritic branch defines a delay synapse making           the SCDQ facing the postsynaptic layer, and is shared across
+a total of 3 × 2 × 2 = 12 weights. Pruning an axon removes           all synapses between neuron pairs. If multiple layers can be
+a set of delay synapses towards postynaptic layer neurons,           mapped in the same compute core then an SCDQ can also be
+and pruning a dendritic branch alone removes an individual           shared across layers. As a result the memory complexity is
+synaptic connection between a pre-post neuron pair.                  not a function of the number of layers in a model, but rather
+   In most neuromorpchic architectures, delays are imple-            a function of the number of compute cores in use (and the
+mented as FIFO queues or delay lines placed either at every          aggregate activation traffic).
+neuron or shared among synaptic connections.                             When an event packet (AER) is received at the SCDQ input,
+   For example, in [2], [3], [13] a Ring Buffer is a circu-          a delay counter will be added to it, which counts the maximum
+lar FIFO queue placed at each postsynaptic neuron where              number of algorithm timesteps by which the event should be
+dendritic weights accumulate. Each slot of the Ring Buffer           delayed. The event then traverses the PRQ and arrives at the
+accumulates weights for a different timestep. At the end of          output if delivery to some postsynaptic neuron is expected
+a timestep, the slot corresponding to the current timestep           at the current algorithm timestep. It will (also) be pushed
+is added to the membrane potential of the corresponding              to the POQ if it is expected to be delayed for delivery at
+postsynaptic neuron. Subsequently, the Ring Buffer shifts to         a future timestep. At the POQ the delay counter of events
+the next timestep, and the slot from the current timestep            is decremented for one timestep. At some point, a special
+becomes the slot for the maximum delay. The number of delay          event packet signaling the end of the algorithmic timestep
+levels is constrained by the size (number of slots) of the Ring      intercepted at the output, will trigger a buffer-swap between
+Buffer. With only one Ring Buffer per postynaptic neuron,            POQ and PRQ. When this happens, the events previously held
+the total memory overhead is the product of the number of            in POQ will be propagated through PRQ towards the output (if
+postynaptic neurons J and the number of delay levels D,              their delay counter has reached a delay value due for delivery
+scaling with O(J · D) [6].                                           in this new timestep) and/or will be pushed back again to the
+                                                                     POQ for further delay and delivery in a future timestep. When
+   On the other hand, a Shared Delay Queue [1] is a structure
+                                                                     the delay counter of an event expires, this event will no longer
+comprising multiple FIFOs in a linear cascade arrangement
+                                                                     be pushed to the POQ and will only be forwarded to the output.
+shared across the synapses (presynaptic and postynaptic neu-
+                                                                     Figure 2 illustrates an example of the flow of events through
+ron pairs of two layers). The number of FIFOs in the cascade
+                                                                     the SCDQ across two layers of an SNN network with delays
+equals the maximum number of discrete delay levels D. Every
+                                                                     in three timesteps.
+event triggered at a presynaptic neuron from an axon with a
+                                                                         It is important to note that by contrast to its predecessor [1],
+given delay, enters the Shared Delay Queue at the FIFO cor-
+                                                                     SCDQ makes it possible for an event to “orbit” and exit the
+responding to the number of timesteps it needs to wait before
+                                                                     queue at several timepoints. This way it can support event
+delivery. At the end of a timestep, all events in every FIFO shift
+                                                                     delays not only per axon but also per axon-dendrite pair
+to the next FIFO in the cascade belonging to the next relative
+                                                                     (i.e. per individual synapse), which we will discuss further
+timestep, and all events in the FIFO belonging to the current
+                                                                     in sectionIV.
+timestep are transmitted to the postynaptic neurons. The total
+                                                                         SCDC consists of six functional submodules shown in the
+memory usage depends on the minimum activation sparsity of
+                                                                     block diagram of Figure ??: the write controller and read
+the network (which may be biased through model training).
+                                                                     controller which get triggered by external transactions, the
+Assuming a minimum activation sparsity of α, where α = 1
+                                                                     PRQ and POQ, the pruning filter, and memory. The pruning
+implies that every presynaptic neuron is activated and α = 0
+                                                                     filter and memory will be discussed in more detail in sections
+implies that none are activated, the
+                                     total memory overhead is
+                    PD                                               III-B and IV-C respectively. The write controller is responsible
+calculated as α·I ·    d=1  (D − d)    = 12 ·α·I ·(D2 +D), where     for reading the events from the input and writing them to
+I is the number of presynaptic neurons and D is the number           the PRQ and adding to them an initialized delay counter
+of delay levels. This memory overhead scales as O(α · I · D2 ).      value. Additionally, it is responsible for swapping the PRQ
+In this synaptic delay model only axonal delays are supported        and POQ buffers when a special end-of-timestep (EOT) event
+                                                                                       a delayed axon. W V U has two dimensions: dimension I rep-
+                A                                POQ   A0                    A,0
+                                                                             B,0
+                                                                                       resenting every presynaptic neuron, and dimension D repre-
+                                                            B0
+     t=0
+                      A
+                          B       A              PRQ             B0 A0       A,1
+                                                                             B,1   C   senting every delay level. If W V Ui,d = 1, this means that for
+                      B
+                                                                             A,2       the current delay value d and the presynaptic neuron address i,
+                B                                                            B,2
+                                                                                       at least one of the weights is a non-zero value. If W V Ui,d = 0,
+                                                                                       this means that for all i and d, the weights are 0 (which implies
+                                                                                       that event delivery can be skipped in this timestep). Using this
+                A                     A1   B1    POQ   A1 B 1                A,0
+                      A                                     B0
+                                                                             B,0       method, the SCDQ can determine for every event in the PRQ
+     t=1                      B                  PRQ             B0 B1 A 1   A,1
+                                                                             B,1   C   if it is useful for the postsynaptic layer (or if it should be
+                      B
+                                                                             A,2
+                B                                                            B,2
+                                                                                       ignored). Figure 3 shows an example of a network with some
+                                                                                       pruned delayed axons and the corresponding W V U matrix.
+                                                                                          To determine when an event should be removed from the
+                A                       B 2 B1   POQ   B1                    A,0
+                                                                             B,0       delay queue (i.e. every next timestep of the event, W V Ui,d
+                                      A2
+                      A
+
+     t=2                                         PRQ             B1 B2 A 2   A,1
+                                                                             B,1   C   will be 0), a row of W V U , which corresponds to some
+                      B
+                                                                             A,2
+                B                                                            B,2       presynaptic neuron i, can be treated as a binary number.
+                                                                                       If we count the number of leading zeros (clz(x)) of this
+                                                                                       binary number, we know for which delay counter value d
+Fig. 2. An example of the event flow over three timesteps in a two-                    the event does not have to move from the PRQ to the POQ
+layer SNN with synaptic delays. The maximum delay is 2, and the                        anymore. For example, in Figure 3, clz(W V UA ) = 1 and
+Shared Circular Delay Queue is positioned between the two layers.                      clz(W V UB ) = 0, which means events from neuron A have
+In timestep t = 0, neurons A and B spike, and neuron C receives                        to stay for 2 timesteps (can be removed at delay counter 1)
+spikes from neurons A and B with a delay value of 0. In timestep                       and events from neuron B do not have to stay for 3 timesteps
+t = 1, neuron B spikes, and neuron C receives a spike from neuron
+A with a delay value of 0, from neuron B with a delay value of 0,                      (can be removed at delay counter 0).
+and from neuron B with a delay value of 1. In timestep t = 2, no
+neuron spikes, and neuron C receives a spike from neuron A with a
+delay value of 2, from neuron B with a delay value of 2, and from
+neuron B with a delay value of 1.                                                         A                      A,0
+                                                                                                                 B,0
+                                                                                                                          C                            
+                                                                                                 A     Delay     A,1                           1   1   0
+                                                                                                        IP       B,1                WV U =
+                                                                                                 B
+                                                                                                                 A,2                           0   0   1
+is intercepted at the output. The read controller is responsible                          B                      B,2     D
+for reading events from the PRQ and writing them to the
+output and the POQ while decreasing the delay counter. It                              Fig. 3. Example of W V U for a network where delayed axons A, 2,
+will also signal the write controller to start the EOT sequence                        B, 0 and B, 1 are skipped.
+when there is an EOT event at the output. The PRQ and POQ
+are FIFO abstractions around memory buffers available in the
+memory module, and thereby implement the actual data-path                              C. Hardware IP in Seneca Neuromorphic processor
+through the SCDQ.                                                                         To evaluate the SCDQ structure, we implemented a hard-
+                                                                                       ware IP block (Delay IP) and integrated it in the Seneca [12]
+B. Zero-Skipping Delay-Forwarding                                                      neuromorphic processor. We also implemented a software
+   One observes in Figure 1 that the network structure can                             version of it that could be run on the RISC-V controller of a
+become quite intricate due to the presence of numerous                                 Seneca core (NCC).
+synapses. The number of synapses increases linearly with the                              Seneca is a fully digital time-multiplexed multicore accel-
+maximum number of delay steps, D, which we aim to accom-                               erator similar to Loihi [2], SpiNNaker [3] and TrueNorth [1].
+modate. In practical scenarios, weight training, quantization,                         While SpiNNaker and Loihi use ring buffers to support synap-
+and the potential use of suitable regularization techniques, can                       tic delays, TrueNorth and Seneca (through the Delay IP of
+efficiently remove a substantial number of synapses [6]. This                          SCDQ) use variations of the general shared queue structure
+results in a much sparser or pruned model that is well suited                          explained in section II.
+for effective inference in applications.                                                  A simplified version of a Seneca core (NCC) [12] is shown
+   In a zero-skipping capable accelerator (typically most neu-                         in Figure 4. It includes a RISC-V controller of pre- and post-
+romorphic, but also several conventional accelerators) a zero                          processing events (multiplexing/demultiplexing them from/to
+weight or activation will skip loading weights from memory                             neurons), the Axon Message Interface (AMI) for input/output
+and carrying out the partial MAC, thereby saving energy                                buffering of events, a vector of 8 Neuro-Processing Elements
+and likely improving latency. When accommodating synaptic                              (NPEs) that execute SIMD operations for neurons and other
+delays this decision is to be taken after an event exits the                           functions in parallel, local SRAM memory for storing neuron
+shared delay queue and is about to be received by the postsy-                          and other state variables. Typically, each layer of a neural
+naptic neurons. This can unnecessarily occupy FIFO memory,                             network model is mapped to one or more NCCs, although
+consume power for repeated lookups in weight-memory, and                               if a layer is sufficiently small, then multiple layers can
+affect latency in SCDQ; if some or all of the postsynaptic                             also be mapped onto one NCC. NCCs communicate through
+neuron connection have zero weights.                                                   a Network-on-Chip (NoC). The RISC-V controller is pro-
+   To reduce this overhead a zero-skiping delay-forwarding                             grammable in C, while NPE are programmable in Assembly-
+capability is implemented in the pruning filter of SCDQ. A                             style microcode.
+binary matrix called W V U (which stands for “weight value                                In this architecture and for the testing purposes of this
+useful”) is maintained locally, where every element represents                         work, the Delay IP has been integrated at every core between
+                  Hidden layer 1                        Hidden layer 2                              Output layer
+                                                                                                                                                                                                                                 TABLE I
+                              1                                        1                                        1                                F IDELITY OF INFERENCE BETWEEN SOFTWARE (P Y T ORCH )                                                                                                                        AND
+                                                                                                                                                       ON - HARDWARE (S ENECA ) SYNAPTIC DELAY MODELS
+Input sample
+
+
+
+
+                                                                                                                                 Prediction
+                              2                                        2                                       2
+                                                60×                                      60×
+                                                Delay                                    Delay                                                                                                   Network      PyTorch Seneca
+                              3                                        3                                        3
+                                                                                                                                                                                                        Model accuracy
+                                                                                                                                                                                                 48-48-20       87%        86%
+                              48                                       48                                      20
+                                                                                                                                                                                                 32-32-20       82%        81%
+                                                                                                                                                                                                 24-24-20       83%        82%
+                         Hidden layer 1                 Hidden layer 2                    Output layer                                                                                         48-48-20 Ax      76%        76%
+                                              H1                                H2                                                                                                                Consistency against PyTorch
+               Input spikes                 spikes      Delay                 spikes     Delay                 Output spikes
+                                   NCC
+                                                         IP
+                                                                     NCC
+                                                                                          IP
+                                                                                                       NCC                                                                                       48-48-20      100%        93%
+                                                                                                                                                                                                 32-32-20      100%        97%
+                                                                                                                                                                                                 24-24-20      100%        98%
+                                    Delay IP                                                     NCC                                                                                           48-48-20 Ax     100%        94%
+                                                                                       Pre / post processing
+                                         SRAM                      L i-1
+     L i-1                                                                                  Mux / demux                                                              Activations H1 PyTorch                                           Activations H2 PyTorch                                     Activations output PyTorch
+                                                                   spikes Input buffer                    Output buffer L i                            47                                                          47                                                              19
+                                                                                     L                                                                 44                                                          44
+     spikes          Write                              Read       + delay             i-1spk         Li spk            spikes
+                                                                                                                                                       40                                                          40
+                                                                              AMI                              AMI                                                                                                                                                                 16
+                   controller                         controller                                                                                       36                                                          36
+                                         POQ                                                                                                           32                                                          32
+                                                                                                 RISC-V L spk Neurons                                  28                                                          28                                                              12
+
+
+
+
+                                                                                                                                              Neuron
+
+
+
+
+                                                                                                                                                                                                          Neuron
+
+
+
+
+                                                                                                                                                                                                                                                                          Neuron
+                                                                                                         i                                                                                                         24
+                                                                                                                                                       24
+                                                     Pruning                                                                                           20                                                          20
+                                         PRQ                                                           Li-1spk NPEs                                    16                                                          16
+                                                                                                                                                                                                                                                                                   8
+                                                      filter                                                                                           12                                                          12
+                                                                                                                                                        8                                                           8                                                              4
+                                                                                                                                                        4                                                           4
+                                                                                                                                                        0                                                           0
+                                                                                                                                                                                                                                                                                   0
+                                                                                                                                                            0   8   16   24      32 40    48    56   63                 0    8   16      24      32 40     48   56   63                 0   8   16    24     32     40   48   56   63
+Fig. 4. A mapping on the Seneca platform of a three-layer SNN with                                                                                                            Timestep                                                        Timestep                                                     Timestep
+                                                                                                                                                                    Activations H1 SENeCA                                             Activations H2 SENeCA                                     Activations output SENeCA
+700 wide input samples, 48 neurons in both hidden layers, 20 neurons                                                                                   47
+                                                                                                                                                       44
+                                                                                                                                                                                                                   47
+                                                                                                                                                                                                                   44                                                              19
+in the output layer, and 60 delays between the hidden layers                                                                                           40
+                                                                                                                                                       36
+                                                                                                                                                                                                                   40
+                                                                                                                                                                                                                   36
+                                                                                                                                                                                                                                                                                   16
+                                                                                                                                                       32                                                          32
+                                                                                                                                                       28                                                          28                                                              12
+
+
+
+
+                                                                                                                                              Neuron
+
+
+
+
+                                                                                                                                                                                                          Neuron
+
+
+
+
+                                                                                                                                                                                                                                                                          Neuron
+                                                                                                                                                       24                                                          24
+                                                                                                                                                       20                                                          20                                                              8
+the AMI and the NoC (Figure 4). A full and more compact                                                                                                16
+                                                                                                                                                       12
+                                                                                                                                                                                                                   16
+                                                                                                                                                                                                                   12
+                                                                                                                                                        8                                                           8                                                              4
+integration could make it part of the AMI or part of the NoC                                                                                            4
+                                                                                                                                                        0
+                                                                                                                                                                                                                    4
+                                                                                                                                                                                                                    0
+                                                                                                                                                                                                                                                                                   0
+                                                                                                                                                            0   8   16   24      32 40    48    56   63                 0    8   16      24      32 40     48   56   63                 0   8   16    24     32     40   48   56   63
+since there are queues already in both components, thereby                                                                                                                    Timestep                                                        Timestep                                                     Timestep
+
+
+leading to more memory/latency improvements (than what is
+                                                                                                                                              Fig. 5. Activations of a datapoint in all layers for 48-48-20 network
+shown in the results).                                                                                                                        on Seneca, Loihi and PyTorch
+D. Experimental Setup
+                                                                                                                                              of removing individual synapses, we removed entire groups of
+   The models used for the tests in this section undergo initial                                                                              synapses per axon until only 15 delay axons remained (700-
+training and testing in PyTorch. Next, they are mapped to                                                                                     48-48-20 Ax). The goal here was to understand the trade-
+Seneca (bfloat16 quantization) and Loihi (int8 quantization)                                                                                  off in hardware resource savings between these two pruning
+for measuring latency, energy consumption, area utilization,                                                                                  strategies.
+and memory usage.                                                                                                                                For each model on Seneca, we occupied 3 NCCs, one
+   Since Seneca is not taped out yet, we have estimated its                                                                                   projection per core (as shown in Figure 4), while on Loihi we
+power consumption by using power estimations based on a                                                                                       could fit each model in 1 core. Additionally, in Seneca, tests
+netlist provided by Imec, in a 22 nm process from Global                                                                                      were done with the Delay IP and without the Delay IP (where
+Foundry. Energy and area measurements are acquired using                                                                                      the SCDQ was implemented in C on the RISC-V controller).
+the Cadence Joules and Genus tools, respectively. The Joules
+tool provides accuracy within 15% of the sign-off power. The                                                                                                                                                                IV. R ESULTS
+Genus tool is used to estimate the area. Latency, memory, and                                                                                 A. Software-Hardware Model Fidelity
+fidelity measurements are obtained from hardware test bench
+simulations. The same models are run in PyTorch to assert                                                                                        Table I reports on the fidelity between the software run
+fidelity between hardware and software.                                                                                                       model and the hardware model deployed on Seneca. The
+   We trained three different SNN models featuring LIF neu-                                                                                   results confirm the consistency between PyTorch, and Seneca.
+rons, on the Spiking Heidelberg Digits benchmark [14] (input                                                                                  This consistency is further visualized in Figures 5 and 6, which
+size 700, and 20 output classes). To optimize simulation time,                                                                                show for one data point the evolution of the neuron activations
+we carefully designed a test set comprising 100 unique data                                                                                   and the neuron membrane state. The accuracy of 48-48-20
+points, allowing us to individually assess each class with the                                                                                Ax (axonal delay pruning) is decreased because of the axon
+networks we examined.                                                                                                                         grouping constraint that does include in an axon group the
+   Each model consists of four layers of neurons, with synaptic                                                                               15 smallest weights. However, it will show improvements in
+delays between each pair of layers, except for the first layer                                                                                energy and latency.
+(input-hidden1). The structure of the neuron/layer configu-
+rations for these three models is as follows: 700-48-48-20,                                                                                   B. Energy, Latency & Memory
+700-32-32-20, and 700-24-24-20. We set a maximum delay                                                                                           Table II reports (average) hardware measurements per in-
+of 60 discrete time steps with a stride of 2, i.e. pruning every                                                                              ference in Loihi, in Seneca with Delay IP, and without Delay
+second delay axon. Furthermore, we applied per-synapse delay                                                                                  IP. Energy is calculated using dynamic power consumption, to
+pruning during training, based on the approach outlined in [6],                                                                               exclude the high static power consumption of the Latermont of
+effectively reducing the number of synapses to only 15 per pair                                                                               Loihi of 74.4 mW. The static power consumption of Seneca is
+of neurons.                                                                                                                                   462 µW . Comparing the middle and right columns justifies the
+   For the 700-48-48-20 model, we also explored a variation                                                                                   circuit-based implementation of SCDQ as it improves energy
+involving axonal-only delay pruning. This means that instead                                                                                  efficiency and latency by a significant amount. The energy
+               Membrane potentials H1 PyTorch                           Membrane potentials H2 PyTorch                             Membrane potentials output PyTorch                                                        Scaling number of delay levels (Neurons=8)                                                      Scaling number of neurons (Delay levels=8)
+       0                                                       0                                                         0.0                                                                                                                                                                                           600
+                                                                                                                         2.5
+                                                                                                                                                                                                                                  Shared Delay Queue                                                                              Shared Delay Queue
+       1                                                       2                                                                                                                                                      1000        Shared Circular Delay Queue                                                                     Shared Circular Delay Queue
+
+
+
+
+                                                                                                                                                                                   Required queue capacity [events]
+
+
+
+
+                                                                                                                                                                                                                                                                                    Required queue capacity [events]
+       2                                                                                                                 5.0                                                                                                                                                                                           500
+                                                               4
+       3                                                                                                                 7.5                                                                                          800
+                                                               6                                                                                                                                                                                                                                                       400
+Vmem
+
+
+
+
+                                                       Vmem
+
+
+
+
+                                                                                                                Vmem
+       4                                                                                                                10.0
+       5                                                       8                                                        12.5                                                                                          600
+       6
+                                                                                                                                                                                                                                                                                                                       300
+                                                               10                                                       15.0
+       7                                                                                                                17.5                                                                                          400
+                                                               12                                                                                                                                                                                                                                                      200
+       8
+           0   8   16   24      32 40   48   56   63                0   8   16   24      32 40   48   56   63                  0    8   16   24      32 40   48   56    63
+                             Timestep                                                 Timestep                                                    Timestep                                                            200                                                                                              100
+               Membrane potentials H1 SEneCA                            Membrane potentials H2 SEneCA                              Membrane potentials output SEneCA
+                                                               0                                                          0                                                                                             0                                                                                               0
+       0
+                                                               1                                                                                                                                                              2        4      6        8      10     12   14   16                                             2        4      6      8     10   12   14   16
+       1                                                                                                                  2                                                                                                                       Delay levels [#]                                                                                Neurons [#]
+                                                               2
+       2                                                       3                                                          4
+Vmem
+
+
+
+
+                                                        Vmem
+
+
+
+
+                                                                                                                 Vmem
+                                                               4                                                          6
+       3
+                                                               5
+                                                                                                                          8
+                                                                                                                                                                             Fig. 7. Required memory for shared delay queue vs shared circular
+       4                                                       6
+       5
+                                                               7                                                         10                                                  delay queue
+                                                               8
+           0   8   16   24      32 40   48   56   63                0   8   16   24      32 40   48   56   63                  0    8   16   24      32 40   48   56    63
+                             Timestep                                                 Timestep                                                    Timestep
+
+                                                                     inference latency. On Seneca, both with the circuit implemen-
+                                                                     tation and the RISC-V implementation of SCDQ, the latency
+Fig. 6. Membrane potentials of a data point in all layers for 48-48-20
+network on Seneca, Loihi and PyTorch                                 decreases with the network size (due to less activations), while
+                              TABLE II                               it, surprisingly, remains constant on Loihi’s Ring Buffers. And
+AVG HARDWARE MEASUREMENTS PER INFERENCE , DIP = D ELAY for the circuit implementation (Delay IP), it is consistently less
+        IP, E NERGY CALCULATED USING DYNAMIC POWER                   than 0.5× that of Loihi, despite the larger number of cores
+                           CONSUMPTION
+                                                                     used and routing between them.
+ Measurement     Loihi (1c)   Seneca (3c) w/ DIP Seneca (3c) w/o DIP     In Section II, we touched upon the better memory scalability
+                            Network: 48-48-20                        of a Shared Delay Queue compared to the Ring Buffer imple-
+     Energy       28.4 µJ          43.6 µJ             152 µJ        mentation of synaptic delays. This is also attested in [6]. To
+    Latency        9.1 ms          4.25 ms            18.3 ms        illustrate how SCDQ improves upon the vanilla Shared Delay
+    Memory        1.96 M b         3.38 M b           3.34 M b       Queue structure [1], in Figure 7, we provide a worst-case
+   DIP energy        NA            0.98 µJ              0 µJ         estimate (assuming dense activations and no delay pruning)
+                            Network: 32-32-20                        between two fully connected layers. The figure illustrates the
+     Energy       18.3 µJ          29.5 µJ             92.4 µJ       buffer capacity required for both a Shared Delay Queue and
+    Latency        9.1 ms          3.34 ms            13.6 ms
+                                                                     SCDQ, as the number of delay levels increases and as the
+    Memory        1.48 M b         2.33 M b           2.29 M b
+   DIP energy        NA            0.77 µJ              0 µJ
+                                                                     number of postsynaptic neurons increases. It is evident that
+                            Network: 24-24-20                        SCDQ exhibits superior scalability (next to being also more
+     Energy       12.5 µJ          23.8 µJ             73.3 µJ       flexible).
+            Latency                           9.1 ms                                    2.81 ms                                                   9.81 ms
+                                                                                                                                                                             C. Area Optimizations
+            Memory                           1.23 M b                                   2.07 M b                                                  2.05 M b
+           DIP energy                           NA                                      0.62 µJ                                                     0 µJ                        Taking EDAP = E · L · A as a performance metric that
+                                                     Network:                           48-48-20 Ax                                                                          combines energy per inference E, latency per inference L, and
+             Energy                          25.2 µJ                                    31.4 µJ                                                        NA                    area A, where lower means better, we find that for the 48-48-
+            Latency                          10.0 ms                                    3.03 ms                                                        NA                    20 model * , Seneca achieves 43.6µJ · 4.25ms · 1.58mm2 ≈
+            Memory                           1.96 M b                                   3.36 M b                                                       NA                    2.93 · 10−13 Jsm2 .
+           DIP energy                           NA                                      0.72 µJ                                                        NA                       In the initial Delay IP implementation of SCDQ, the mem-
+                                                                                                                                                                             ory block in Figure 4 was implemented with flip-flops. To
+efficiency increases between 3.5× (48-48-20) and 3.1× (24-                                                                                                                   reduce the total area, flip-flop memory was replaced with a
+24-20). Similarly, latency decreases between 4.3× (48-48-20)                                                                                                                 2048-word 16-bit SRAM memory, with enough capacity for
+and 3.5× (24-24-20). In other words, the benefits increase with                                                                                                              the observed maximum of 1596 events in the queues. This
+the total activations volume (seen in larger networks). For the                                                                                                              resulted in an 81% reduction in total area, with a total of 15463
+axonal pruned network (48-48-20 Ax), both energy efficiency                                                                                                                  µm2 for the Delay IP (see Table III). In this case EDAP for
+and latency improve by approximately 1.4× compared to the                                                                                                                    Seneca 43.6µJ · 4.25ms · 1.45mm2 ≈ 2.68 · 10−13 Jsm2 for
+synaptic pruned network (48-48-20). This is also expected                                                                                                                    the 48-48-20 network. With this area optimization the Delay
+                                                                                                                                                                                                 81624
+since the activation sparsity is higher for 48-48-20 Ax than                                                                                                                 IP reduces from 472400    = 17% of the area one Seneca core
+for 48-48-20.                                                                                                                                                                                   15463
+                                                                                                                                                                             down to a mere 472400 = 3% only of the size of one core.
+   In comparison to Loihi (Ring Buffer), the energy efficiency
+of Seneca (SCDQ) appears approximately 1.2 − 1.9× lower,                                                                                                                                                                                                                  TABLE III
+but note that this involves 1 core in Loihi versus 3 cores                                                                                                                                                                                        A REA S AVINGS WITH SRAM
+on Seneca. However, the gap is closing as the network size
+                                                                                                                                                                             Memory in Combinatorial     Flip-Flop   SRAM        Total
+increases and that is justified by the costly contribution of the
+                                                                                                                                                                                FF    16885 µm2 21% 64739 µm2 79% 0 µm2    0% 81624 µm2
+RISCV controller (the larger the network, the more compute                                                                                                                    SRAM     2287 µm2 15% 4557 µm2 29% 8618 µm2 56% 15463 µm2
+work can be allocated to the NPEs).                                                                                                                                                               Area saved                     81%
+   In Seneca Delay IPs contribute only 2% - 3% to this energy
+                                                                                                                                                                                         V. D ISCUSSION AND F UTURE W ORK
+consumption, with the remaining 97% - 98% coming from the
+NCCs (of which 67% - 82% of this energy consumption is                                                                                                                         Seneca [12] as an event-driven processor uses source-
+related to pre- and post-processing events in RISC-V cores                                                                                                                   routing of event packets (AER) from a presynaptic neuron to
+for networks with Delay IPs, and 86% - 88% for the networks                                                                                                                      * One Seneca NCC’s area is 472400 µm2 , and one Delay IP’s area is
+without Delay IP).                                                                                                                                                           81624 µm2 without area optimizations, resulting in 1.58 mm2 for running
+   What is more interesting for the role of SCDQ is the                                                                                                                      the network on Seneca.
+                                    Delay IP H1H2 - Synaptic Pruned                                                 Delay IP H1H2 - Axonal Pruned
+                       47                                                                              47                                                     overhead of 126976 bits in this case and when α ≤ 0.5, SCDQ
+                       44                                                                              44
+                       40                                                                              40                                                     is more memory efficient than SpiNNaker.
+                       36                                                                              36                                                        To further improve the memory efficiency of the SCDQ, the
+Pre-synaptic neurons
+
+
+
+
+                                                                                Pre-synaptic neurons
+                       32                                                                              32
+                       28                                                                              28                                                     implementation can be modified to use only one FIFO instead
+                       24                                                                              24
+                       20                                                                              20                                                     of two and to store pointers to shared delay counters in events
+                       16                                                                              16
+                       12                                                                              12                                                     instead of the delay counter itself. Only the D delay counters
+                        8                                                                               8
+                        4                                                                               4                                                     need to be maintained in this case. Utilizing a single FIFO
+                        0                                                                               0
+                            0   8      16    24      32 40   48       56   63                               0   8     16    24      32 40   48      56   63
+                                                                                                                                                              can be achieved by writing incoming events to the FIFO and
+                                                  Timestep                                                                       Timestep                     reading them multiple times until they are no longer used. At
+                                                                                                                                                              the end of a timestep, only the read and write pointers need to
+Fig. 8.  Event trace within a Delay IP of Seneca, showing for a
+datapoint the behavior in both the 48-48-20 synaptic pruned (left)                                                                                            be modified according to the delay values. This improvement
+and axonal pruned (right) network. Each dark dot represents an                                                                                                is currently tested in software and seems to improve memory
+event exiting the queue for the first time, while light dots indicate                                                                                         efficiency by approximately 2×, reducing the total memory
+subsequent exits, with lighter shades denoting it is closer to the                                                                                            requirements to α · I · D (previously α · I · (2 · D − 1).
+termination timestep. In the synaptic pruned network, after an event
+enters the queue, it exits the queue nearly every timestep during                                                                                                                    VI. C ONCLUSION
+inference, and it is terminated at the maximum delay. In the axonal
+pruned network, an event that enters the queue does not exit nearly                                                                                              This work introduces SCDQ, a novel hardware struc-
+every timestep and it is terminated before the maximum delay.                                                                                                 ture for enabling synaptic delays on neuromorphic accel-
+                                                                                                                                                              erators. It builds upon and improves previous designs and
+postsynaptic neurons. A presynaptic event is thus broadcast                                                                                                   approaches [1]–[3]. It scales better in terms of memory and
+to all postsynaptic neurons after exiting the SCDQ. As a                                                                                                      area, and is more amortizable to algorithm-hardware co-
+result, and due to the way we model synaptic delay levels                                                                                                     optimizations; in fact, memory scaling is modulated by model
+using separate axons [6], pruning a single connection to a                                                                                                    sparsity and not merely network size. It has negligible energy
+postsynaptic neuron (synapse) at the model will reduce neither                                                                                                overhead and halves inference latency.
+incoming traffic nor outgoing traffic (and memory use) in
+                                                                                                                                                                                            R EFERENCES
+SCDQ. That is, an event from a presynaptic neuron will remain
+in the queue for delivery to the remaining synapses at other                                                                                                   [1] F. Akopyan, J. Sawada, A. Cassidy, R. Alvarez-Icaza, J. Arthur,
+                                                                                                                                                                   P. Merolla, N. Imam, Y. Nakamura, P. Datta, G. Nam, B. Taba,
+delay steps. However, if all synapses of an axon are pruned,                                                                                                       M. Beakes, B. Brezzo, J. B. Kuang, R. Manohar, W. P. Risk, B. Jackson,
+there is no recipient neuron for an event at a certain delay                                                                                                       and D. S. Modha. Truenorth: Design and tool flow of a 65 mw
+step. In this case, the event can be dropped earlier from the                                                                                                      1 million neuron programmable neurosynaptic chip. IEEE Transac-
+                                                                                                                                                                   tions on Computer-Aided Design of Integrated Circuits and Systems,
+SCDQ, reducing memory use. For this reason, axonal pruning                                                                                                         34(10):1537–1557, 2015.
+may also reduce latency (and energy). This is confirmed in                                                                                                     [2] M. Davies, N Srinivasa, T-H. Lin, G. Chinya, Y. Cao, S.H. Choday,
+TableII and also in Figure 8, where dark dots represent the                                                                                                        G. Dimou, P. Joshi, N. Imam, and S. Jain. Loihi: A neuromorphic
+                                                                                                                                                                   manycore processor with on-chip learning. Ieee Micro, 38(1):82–99,
+times that events are fired from presynaptic neurons and lighter                                                                                                   2018.
+colored dots represent the lifespan of these events in the SCDQ                                                                                                [3] M.M. Khan, D.R. Lester, L.A. Plana, A. Rast, X. Jin, E. Painkras, and
+thereafter (fading based on the counter values).                                                                                                                   S.B. Furber. Spinnaker: mapping neural networks onto a massively-
+                                                                                                                                                                   parallel chip multiprocessor. In 2008 IEEE International Joint Con-
+   In Seneca, it is possible to share a core across network                                                                                                        ference on Neural Networks (IEEE World Congress on Computational
+layers, which would mean that more than one layer can in                                                                                                           Intelligence), pages 2849–2856. Ieee, 2008.
+fact share the same Delay IP. If there is no barrier synchro-                                                                                                  [4] C. Stoelzel, Y. Bereshpolova, J-M. Alonso, and H. Swadlow. Axonal
+                                                                                                                                                                   conduction delays, brain state, and corticogeniculate communication.
+nization between layers (EOT events), this is likely to further                                                                                                    The Journal of Neuroscience, 37, 05 2017.
+improve inference latency in an event-driven accelerator and                                                                                                   [5] J.A Starzyk, L. Maciura, and A. Horzyk. Associative memories with
+also improve the hardware efficiency of the Delay IP. But to                                                                                                       synaptic delays. IEEE Transactions on Neural Networks and Learning
+                                                                                                                                                                   Systems, 31(1), 2020.
+maintain task performance of the model in this case requires a                                                                                                 [6] A. Patiño-Saucedo, A. Yousefzadeh, G. Tang, F. Corradi, B. Linares-
+more sophisticated training procedure and algorithm-hardware                                                                                                       Barranco, and M. Sifalakis. Empirical study on the efficiency of
+co-optimizations, which is left for future work.                                                                                                                   spiking neural networks with axonal delays, and algorithm-hardware
+                                                                                                                                                                   benchmarking. In 2023 IEEE International Symposium on Circuits and
+   SCDQ has memory overhead of α · I · (2 · D − 1), scaling                                                                                                        Systems (ISCAS). IEEE, 2023.
+with O(α · I · D). By reference to TrueNorth’s [1] constraints                                                                                                 [7] M. Zhang, J. Wu, A. Belatreche, Z. Pan, X. Xie, Y. Chua, G. Li, H. Qu,
+of 16 timesteps of delay, 256 neurons, and for sparsity α = 1                                                                                                      and H. Li. Supervised learning in spiking neural networks with synaptic
+                                                                                                                                                                   delay-weight plasticity. Neurocomputing, 409:103–118, 2020.
+(no spasity), TrueNorth’s Shared Delay Queue needs queue                                                                                                       [8] I. Hammouamri, I. Khalfaoui-Hassani, and T. Masquelier. Learning
+capacity for 34816 events, while SCDQ only requires storage                                                                                                        delays in spiking neural networks using dilated convolutions with
+for 7936 events. Each event in the Delay IP instantiation of                                                                                                       learnable spacings. arXiv preprint arXiv:2306.17670, 2023.
+                                                                                                                                                               [9] X. Wang, X. Lin, and X. Dang. A delay learning algorithm based on
+SCDQ has a bit width of 16 bits. With reference to Loihi’s                                                                                                         spike train kernels for spiking neurons. Frontiers in Neuroscience, 13,
+[2] constraints of 64 delay time steps, 48 neurons, and 8 bits                                                                                                     2019.
+per weight, the additional memory overhead of Loihi is only                                                                                                   [10] P. Sun, E. Eqlimi, Y. Chua, P. Devos, and D. Botteldooren. Adaptive
+                                                                                                                                                                   axonal delays in feedforward spiking neural networks for accurate
+24576 bits, which is less than the 97536 bits of the Delay                                                                                                         spoken word recognition. In ICASSP 2023-2023 IEEE International
+IP. However, this comparison assumes no activation sparsity                                                                                                        Conference on Acoustics, Speech and Signal Processing (ICASSP), pages
+(α = 1), and the memory overhead of Loihi does not scale                                                                                                           1–5. IEEE, 2023.
+                                                                                                                                                              [11] J. Lazzaro, J. Wawrzynek, M. Mahowald, M. Sivilotti, and D. Gillespie.
+with activation sparsity. If α ≤ 0.25, the SCDQ has a lower                                                                                                        Silicon auditory processors as computer peripherals. IEEE Transactions
+memory overhead than Loihi. SpiNNaker [3] has a constraint                                                                                                         on Neural Networks, 4(3):523–528, 1993.
+of 16 time steps of delay, 256 neurons, and 16-bit weights                                                                                                    [12] G. Tang, K. Vadivel, Y. Xu, R. Bilgic, K. Shidqi, P Detterer, S. Traferro,
+                                                                                                                                                                   M. Konijnenburg, M. Sifalakis, G-J. van Schaik, and A. Yousefzadeh.
+per neuron, resulting in a memory overhead of 65536 bits for                                                                                                       Seneca: building a fully digital neuromorphic processor, design trade-
+the Ring Buffers. Assuming α = 1, the SCDQ has a memory                                                                                                            offs and challenges. Frontiers in Neuroscience, 17, 2023.
+[13] A. Morrison, C. Mehring, T. Geisel, AD. Aertsen, and M. Diesmann.
+     Advancing the boundaries of high-connectivity network simulation with
+     distributed computing. Neural computation, 17(8), 2005.
+[14] B. Cramer, Y Stradmann, J Schemmel, and F. Zenke. The heidelberg
+     spiking data sets for the systematic evaluation of spiking neural net-
+     works. IEEE Transactions on Neural Networks and Learning Systems,
+     33(7), 2022.
+

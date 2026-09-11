@@ -39,7 +39,7 @@ Full text:
 | Are C1/C2 new? | **No.** Both workflows agree. User agrees. |
 | Is there a new **mechanism**? | **Yes, on the attention/neuron leaves** (Workflow A). Motion-XOR + dual-rate ATLIF are not Prosperity and not TSBG. |
 | Is there a new **system speedup** under frozen C12 same-resource ≥1.20×? | **Unknown, likely no for attention-only.** Workflow B’s envelope caveat must be remeasured on ep34 before RTL. |
-| Should Codex implement Grok Bot C1*/C2* (OP-STW, HBG-RP int8)? | **No** under frozen binary ATLIF. That pack lives in `/home/zhumd/work/ideafromai/` and contradicts capture. |
+| Should Codex implement Grok Bot C1*/C2* (OP-STW, HBG-RP int8)? | **No** under frozen binary ATLIF. That pack lives in `/home/zhumd/work/sdformer_codex/ideafromai/` and contradicts capture. |
 | What to do this week? | Ep34 dirty-rate + attention-share census (`07`). Then user picks: (i) leaf-object paper on MX3P island, or (ii) keep C1/C2 as engineering and hunt a conv/FC mechanism that actually moves the envelope — **without** claiming Prosperity/TSBG as new. |
 
 ## Uncertainties both reports listed (keep fail-closed)

@@ -13,7 +13,7 @@ QK_DIR = Path(
     "system_handoff/received/h67_ep35_system_trace_handoff_20260821/"
     "h67_ep35_system_trace_handoff_20260821/trace_qk_100sample_12block"
 )
-OUT = Path("/home/zhumd/work/ideafromai/research/idea_screen_20260907")
+OUT = Path("/home/zhumd/work/sdformer_codex/ideafromai/research/idea_screen_20260907")
 
 
 def unpack(p: Path):

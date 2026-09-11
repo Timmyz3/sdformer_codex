@@ -1,0 +1,1276 @@
+                                         Preprint
+
+
+
+
+                                         OTTERS : A N E NERGY-E FFICIENT S PIKING
+                                         T RANSFORMER VIA O PTICAL T IME - TO -F IRST-S PIKE
+                                         E NCODING
+                                          Zhanglu Yan1,∗,† , Jiayi Mao2,∗ , Qianhui Liu1 , Fanfan Li2 , Gang Pan4 , Tao Luo3 ,
+                                          Bowen Zhu2 , Weng-Fai Wong1
+                                          Department of Computer Science
+                                          1
+                                            National University of Singapore, 2 Westlake University, 3 A*STAR, 4 Zhejiang University
+arXiv:2509.18968v1 [cs.LG] 23 Sep 2025
+
+
+
+
+                                                                                     A BSTRACT
+
+                                                    Spiking neural networks (SNNs) promise high energy efficiency, particularly with
+                                                    time-to-first-spike (TTFS) encoding, which maximizes sparsity by emitting at
+                                                    most one spike per neuron. However, such energy advantage is often unrealized
+                                                    because inference requires evaluating a temporal decay function and subsequent
+                                                    multiplication with the synaptic weights. This paper challenges this costly ap-
+                                                    proach by repurposing a physical hardware ‘bug’, namely, the natural signal de-
+                                                    cay in optoelectronic devices, as the core computation of TTFS. We fabricated
+                                                    a custom indium oxide optoelectronic synapse, showing how its natural physi-
+                                                    cal decay directly implements the required temporal function. By treating the
+                                                    device’s analog output as the fused product of the synaptic weight and temporal
+                                                    decay, optoelectronic synaptic TTFS (named Otters) eliminates these expensive
+                                                    digital operations. To use the Otters paradigm in complex architectures like the
+                                                    transformer, which are challenging to train directly due to the sparsity issue, we
+                                                    introduce a novel quantized neural network-to-SNN conversion algorithm. This
+                                                    complete hardware-software co-design enables our model to achieve state-of-the-
+                                                    art accuracy across seven GLUE benchmark datasets and demonstrates a 1.77×
+                                                    improvement in energy efficiency over previous leading SNNs, based on a com-
+                                                    prehensive analysis of compute, data movement, and memory access costs using
+                                                    energy measurements from a commercial 22nm process. Our work thus estab-
+                                                    lishes a new paradigm for energy-efficient SNNs, translating fundamental device
+                                                    physics directly into powerful computational primitives. All codes and data are
+                                                    open source1 .
+
+
+                                         1   I NTRODUCTION
+
+                                         Large language models (LLMs) have demonstrated remarkable capabilities, yet their immense com-
+                                         putational and energy costs hinder their deployment in resource-constrained environments such as
+                                         edge devices (Lin et al., 2023; Jegham et al., 2025). This critical challenge has spurred research
+                                         on more efficient, brain-inspired architectures, with spiking neural networks (SNNs) emerging as a
+                                         promising candidate (Tang et al., 2025; Xing et al.). SNNs are known for their potential energy ef-
+                                         ficiency, which stems from sparse, event-driven computations that use addition instead of expensive
+                                         multiplications. However, realizing this efficiency in practice is complex and depends heavily on the
+                                         encoding scheme used (Yan et al., 2024). In conventional rate-coded SNNs, information is encoded
+                                         in the number of spikes in a fixed time window. This approach necessitates multiple memory ac-
+                                         cesses for weights and frequent data movement on each spikes, which may negate the benefits of the
+                                         sparse computation. Temporal coding schemes, specifically, time-to-first-spike (TTFS), offer a po-
+                                         tentially more efficient alternative. By encoding information in the precise timing of a single spike,
+                                         a TTFS-SNN neuron fires at most once per activation cycle. This maximizes sparsity, dramatically
+                                            1
+                                              https://anonymous.4open.science/r/ICLR26Otters-26F1/README.md
+                                         Correspondence to Zhanglu Yan. Email: {zlyan,qhliu, wongwf}@nus.edu.sg, {maojiayi,lifanfan, zhubowen}
+                                         @westlake.edu.cn, gpan@zju.edu.cn,luo tao@ihpc.a-star.edu.sg.
+
+
+                                                                                            1
+Preprint
+
+
+
+
+reducing spike count and the associated data movement costs, making TTFS a theoretically optimal
+encoding for energy efficiency (Yu et al., 2023; Zhao et al., 2025).
+
+
+                      Input                                                     Input
+                    spike train                                               spike train
+                    00100110                                                  00000100
+                t                                                         t                        🌟 Energy efficient potential
+                                                                                                    -- At most one spike
+                                                                                Input                -- Fewer calculations
+                      Input
+                    spike train                                               spike train
+                    11100110                                               00010000                               00000100
+                                                       11100011
+                                                        Output            t                                        Output
+                t
+                                                       spike train                                                spike train
+                      Input                                                     Input
+                    spike train
+                                         ❌ Not energy efficient
+                                                                              spike train
+                                                                                                    ⚠️ Warnings
+                    11100110                                                  00010000                -- Additional function
+                                          -- Multiple weight access
+                                          -- Multiple ACC                                             -- Have MAC operation
+                t                                                         t
+
+                      a) Rate-encoding                                                      b) TTFS-encoding
+
+
+
+                                   Figure 1: Rate encoding vs TTFS encoding
+
+However, there are hidden costs behind this theoretical efficiency. In TTFS, information is encoded
+by mapping a spike’s timing to its importance; typically, the earlier a spike arrives, the larger the
+numerical value it represents. To implement this principle, the network usually need to perform an
+extra computational step to convert the raw arrival time of each spike into a corresponding value.
+This is done using a decay function (e.g., ϵ(t) = e−t or T − t) whose output is then multiplied by
+the synaptic weight (w · ϵ(t)) (Wei et al., 2023; Che et al., 2024b). This conversion process requires
+energy to calculate the decay function itself, and it re-introduces the multiplication operations that
+SNNs are designed to avoid. This practical drawback negates the energy savings from sparsity and
+thus raising a critical question: how can we benefit from the sparsity of TTFS but avoid the costly
+computation? Recognizing that the costly term w·ϵ(t) is a value that predictably decreases over time,
+our answer lies not in optimizing the digital computation but finding a physical analog to simulate
+this process. This approach leads us to optoelectronic synapses, which are attractive for their fJ-level
+energy consumption and high resistance to electromagnetic interference (Li et al., 2024b). Notably,
+while this field has traditionally focused on suppressing their natural signal decay (volatility) to
+create stable memories (Alqahtani et al., 2025), we embrace this decay. We recognize it not as a
+bug, but as the exactly physical implementation of the temporal decay function that TTFS requires.
+To implement this principle, we fabricated a custom In2 O3 optoelectronic synapse. Our method,
+Otters, uses the natural decay of this device’s optical signal to perform the required computation.
+This approach fundamentally integrates storage and computation into a single physical step, solving
+the overhead problem of traditional TTFS.
+While our Otters hardware solves the computational overhead of TTFS, a second major barrier re-
+mains: the inherent difficulty of training such networks, especially for complex architectures like
+the Transformer. Directly training SNNs is challenging. In event-driven learning, error backprop-
+agation depends on spike timing; if a neuron fires too sparsely or not at all, it fails to learn. This
+“over-sparsity” problem can severely limit the model’s performance and even lead to training fail-
+ure (Wei et al., 2023). To sidestep this issue, we employ a quantized neural network(QNN)-to-SNN
+conversion methodology. We first train a QNN and then convert its weights to our Otters SNN,
+avoiding the pitfalls of direct training in the spiking domain. To further maximize efficiency, we use
+knowledge distillation to train a highly compressed model with 1-bit weights and 1-bit key/value
+(KV) projections. Our complete hardware-software co-design, combining the Otters synapse with
+our QNN-to-SNN conversion pipeline, establishes a new state of the art for spiking language models.
+Evaluated on the GLUE benchmark, Otters achieves average accuracy of 3% higher than previous
+leading SNNs while demonstrating a 1.77-3.04× improvement in energy efficiency compared to
+baselines like Sorbet and SpikingLM (Tang et al., 2025; Xing et al.). Notably, this energy efficiency
+gain is validated by a rigorous and comprehensive analysis that moves beyond the simplistic met-
+rics common in prior SNN research. While previous work often only counted compute operations
+(e.g., additions vs. multiplications), our analysis provides a more realistic estimate. It is grounded
+in measurements from a commercial 22nm process and provides a full accounting of compute, data
+movement, and memory access costs, making our efficiency claims robust.
+
+
+                                                                      2
+Preprint
+
+
+
+
+We also investigate the Otters paradigm’s sensitivity to the hardware noise inherent in analog de-
+vices. Our initial analysis shows that, on the SST-2 benchmark, the baseline model’s performance
+begins to degrade with around 5% variation in key physical parameters. To improve the robustness,
+we propose Hardware-Aware Training, a method where we introduce different levels of simulated
+Gaussian noise during the training process. This approach enhances the model’s resilience, enabling
+it to maintain robust performance in noisy conditions, demonstrating a practical path toward robust
+real-world deployment.
+
+
+2     P RELIMINARY
+
+2.1   O PTOELECTRONIC SYNAPSE
+
+An optoelectronic synapse is a neuromorphic device that emulates biological synaptic functions by
+using optical signals to modulate its electrical conductance. These devices are renowned for their
+potential for extreme energy efficiency, broader bandwidth and faster signal transmission in neu-
+romorphic computing, which are key advantages over purely electronic counterparts (Xie et al.,
+2024; Wang et al., 2023). Recent studies have reported energy consumption reaching the femtojoule
+(fJ)/spike level, comparable to biological synapses and substantially lower than conventional CMOS
+neuron devices (Shi et al., 2022; Wang et al., 2024). Among various implementations, oxide thin-
+film transistors (TFT) are regarded as viable candidates for optoelectronic synapses due to their low
+leakage current and capability for large-area, flexible fabrication. Solution-based fabrication further
+offers the advantages of low cost, simplified processing, and facile compositional control. Previous
+reports have shown that solution-processed devices exhibit uniform performance, operational stabil-
+ity, and low energy consumption (Li et al., 2025). Building upon these advances, this work employs
+the mature and reliable oxide-TFT platform to develop the Otters spiking neuron.
+
+
+2.2   T IME TO FIRST SPIKE SNN
+
+In contrast to rate-based encoding, which uses the frequency of spikes to represent information,
+TTFS encoding leverages the precise timing of a single spike. The core principle is that a stronger
+input stimulus causes a neuron’s membrane potential to rise faster, reaching its firing threshold
+sooner. Thus, the information is encoded in the arrival time of the first—and only—spike within a
+given time window, T . This approach maximizes temporal sparsity and is highly efficient, as each
+neuron fires at most once (Che et al., 2024a).
+The operation of a standard TTFS neuron involves two phases. First, the neuron integrates incom-
+ing spikes, updating its membrane potential Vjl (t). Second, it compares this potential to a firing
+threshold θl (t). A spike is generated at the first time step t where the potential meets or exceeds the
+threshold:
+                                                1, if Vjl (t) ≥ θl (t)
+                                             
+                                     l
+                                    sj (t) =                                                         (1)
+                                                0, otherwise
+
+However, the asynchronous nature of SNNs, combined with the “fire-as-early-as-possible” objective
+of TTFS, can lead to another problem. If a presynaptic neuron fires after a postsynaptic neuron
+has already fired, its spike becomes invalid for membrane potential accummalation. To solve this,
+we employ a Dynamic Firing Threshold (DFT) model that enforces a synchronous, layer-by-layer
+processing schedule (Wei et al., 2023). The threshold for any neuron in layer l is set to infinity
+outside of a designated time window, effectively ensuring that layer l is only active from time T · l
+to T · (l + 1):
+                                   (
+                                     l
+                            l       θdynamic (t), if T · l ≤ t ≤ T · (l + 1)
+                           θ (t) =                                                               (2)
+                                    +∞,           otherwise
+
+This scheduling guarantees that all spikes from a preceding layer are processed before the current
+layer can fire, thus preserving the valid causal relationship.
+
+
+                                                   3
+Preprint
+
+
+
+
+3     M ETHODS
+This section details the methodology behind Otters. We first describe the core of our model: the
+optoelectronic synapse and the neuron model that performs the TTFS computation (Section 3.1). We
+then explain how these components are assembled into the complete optimized spiking Transformer
+architecture (Section 3.2), and then, we outline the QNN-to-SNN conversion pipeline used to build
+the Otters model (Section 3.3). Finally, we present the framework for the comprehensive energy
+analysis used to validate our model’s efficiency (Section 3.4).
+
+       a)                       Light
+                                        c)
+                                             Input spike train                   Membrane potential              Step-wise threshold         Output spike train
+
+
+                                                                 Otters neuron   '
+            Cr
+                   In2O3
+           Al2O3
+                                                            0
+                           Au
+                                                        0
+        Si/SiO2
+                                                    1
+                                                0
+                                                                                                          '
+                                                                                     '                        Spike neuron
+                                                                                                                                 Threshold
+        b)                                                       Otters neuron
+
+
+                                                            0                                         '                                                   0
+                                                        1                                                                                             1
+                                                    0                                                                                             0
+                                                0                                                                                             0
+                                                                                                                  d)
+                                                                                 '
+                                                                 Otters neuron
+
+
+                                                            0
+                                                        0
+                                                    0
+                                                0
+
+
+
+
+Figure 2: Device and workflow: (a) the custom-fabricated In2 O3 thin-film transistor (TFT); (b)
+measured decay curve of the device response; (c) Otters neuron workflow.
+
+
+3.1   OTTERS SPIKING NEURON
+
+The core of our method is the Otters optoelectronic synapse, a hardware element that physically
+implements the time-modulated synaptic dynamics required for TTFS computation. Each synapse is
+composed of two main parts: a custom-fabricated Indium Oxide Thin-Film Transistor that provides
+a physical signal decay, and an analog-to-digital converter (ADC) that map and scale the analog
+signal to digital. Fabrication details for the device in Fig. 2(a) are provided in Appendix A.1. To
+ensure a deterministic response, the TFT is operated with a fixed light intensity, yielding a consistent
+                                                                          β
+non-linear decay curve, modeled by the function O(t) = I0 · e−(t/τ ) + Ioffset (Li et al., 2024a;
+Liang et al., 2022) . We fit the model parameters by minimizing the sum of squared residuals
+using the differential evolution algorithm, yielding: I0 = 110.989, τ = 1.3425, β = 0.495, and
+Ioffset = −109.989, showing in Figure 2(b). Thus, the TFT’s current decay over time naturally forms
+the temporal component of the post-synaptic potential (PSP).
+However, the physical non-linearity of the device presents a critical design challenge. For our QNN-
+to-SNN conversion to be lossless, the information encoded by a spike’s timing must map to a set of
+uniformly spaced logical values. Specifically, a spike occurring at a physical time tk must represent
+the quantized value (T − k)/T . The device’s non-linear decay, O(t), means that the physical times
+tk at which the device output naturally equals these target values are themselves non-uniformly
+spaced. A naive approach using a constant threshold and uniform time sampling would therefore
+fail to establish the required functional equivalence.
+Therefore, our solution is to reconcile the non-linear device physics with the linear encoding require-
+ment. Instead of implementing a complex, non-uniform clock, we engineer a dynamic, step-wise
+decreasing firing threshold, θl (t), while operating the system on a standard, uniform physical clock.
+This threshold is designed to change its value only at the pre-calculated time points {tk } which are
+derived from the inverse of the physical decay function. This design ensures that the firing condition
+where the membrane potential exceeding the threshold can only be met at one of these discrete mo-
+ments tk . The neuron fires at the first such time point where its accumulated potential is sufficient.
+Consequently, the output spike time tk can encode the intended quantized value (T − k)/T . Be-
+cause this encoding scheme is applied consistently throughout the network, the output spike of one
+layer provides a correctly timed and valued input to the next, ensuring the integrity of information
+
+
+                                                                          4
+Preprint
+
+
+
+
+propagation across the entire architecture. The full mathematical formulation of this threshold will
+be defined in our conversion methodology in Section 3.3.
+                          l
+The ADC implements a γij     times scaling mapping from the physical decay to a digital post-synaptic
+potential (PSP). Thus, the full PSP ϵ′ generated by a presynaptic spike is therefore the direct analog
+output of the synapse at the time of arrival:
+
+                                                                                           ϵ′ (t) = γij
+                                                                                                     l
+                                                                                                        · O(t)                                                              (3)
+
+The membrane potential Vjl (t) of neuron j accumulates these PSPs. At each discrete physical time
+step t, the potential is updated based on incoming spikes:
+                                                         X
+                                Vjl (t) = Vjl (t − 1) +        ϵ′ (t)                          (4)
+                                                                                                       i s.t. sl−1
+                                                                                                               i   (t)=1
+
+A neuron fires when its membrane potential first meets or exceeds the dynamic threshold. This spike
+time, tlspike,j , corresponds to the first logical timestep k where the condition is met:
+
+                                                                            tlspike,j = min{tk |Vjl (tk ) ≥ θl (tk )}                                                       (5)
+In adherence with the TTFS paradigm, the neuron is deactivated after firing to ensure at most one
+spike per inference cycle. Algorithm 1 in appendix formally describes this forward pass.
+
+3.2   N ETWORK S TRUCTURE
+
+A primary challenge in creating a spiking Transformer is the matrix multiplication required for self-
+attention score calculation (Q · K T ). While some rate-coded SNNs can simplify this by treating
+one matrix as a binary spike train (turning multiplication into selective addition), this approach
+is incompatible with TTFS encoding, which requires decoding spikes into non-binary values. To
+overcome the problem, we quantize the key (K) and value (V ) projections to a single bit, {+1, −1}.
+Consequently, the dot product with a TTFS-encoded query (Q) is computed using only selective,
+additions and subtractions. This allows us to eliminate the multiplication bottleneck while still
+benefiting from the high sparsity of TTFS. To implement this 1-bit attention mechanism efficiently,
+we designed a supporting dataflow architecture inspired by the Canon architecture (Bai et al., 2025),
+as illustrated in Figure 3. During inference, the binary K (or V) vectors are pre-loaded into the
+local memory of a Processing Element (PE) array. The TTFS-encoded input stream (representing
+Q) is broadcast to the PEs. As shown, each PE computes a partial sum by accumulating its local K
+values only at the time steps corresponding to incoming spikes. These partial sums are then passed
+between PEs for final accumulation. This architecture minimizes data movement and leverages the
+spatio-temporal sparsity of the TTFS input for energy efficiency.
+
+                                                                       ACCUMULATION
+                                            64
+                                                                         (From North)
+                                                       To East                                                                Binary Embedding
+                               64
+                                         Decoding        Loading
+                                          position         time        ACC
+                                           of nnZ      Information
+                           From                                                                                                                                    Spike
+                           West                                                                              Spike                 Spike                Spike
+                   T                                                         ACCUMULATION                                                                          Neuron
+                                                                                 (From South)                Neuron                Neuron               Neuron
+                                         PE(0,0) binary kv       PE(0,0) binary kv
+           0   1 0         0                                                                                                                                        Binary
+                                    64
+           0   0 1         0                                                                                Binary                 Binary               Binary      weight
+      64        ...                              ...                    ...                                 weight                 weight               weight     Opto-FC
+                                                                                                           Opto-FC Q              Opto-FC K            Opto-FC V
+                                                                                                                                                                             Feed-Forward
+
+
+
+
+           1   0       0   0    Input
+                               Streams PE(1,0) binary kv         PE(1,0) binary kv                                                     Sign
+           0 0 0           0                                                                                 Spike                                                 Spike
+           0 0 1           0        64
+                                                                                                             Neuron                                         Sign   Neuron
+      64      ...                                ...
+                                                                        ...
+
+
+
+
+           0 1         0   0                                                                                                  Spike
+                                                                                                                                                                    Binary
+                                                 ...                   ...                                                    Neuron
+                                                          psum                                                                                                      weight
+                                                         Streams
+                ...                                                                                                                           Spike                Opto-FC
+                                          PE(-1,0)               PE(-1,1)                                    Self-Attention
+                                                                                                                                              Neuron
+                                           ACTIVATION                ACTIVATION
+
+
+
+
+               Figure 3: Scores calculations                                                            Figure 4: Otters-based transformer structure
+
+This self-attention module, along with feed-forward layers built from our Opto-FC and spiking
+neuron primitives, forms the complete Otters Transformer architecture shown in Figure 4.
+
+
+                                                                                                   5
+Preprint
+
+
+
+
+3.3   QNN- TO -SNN C ONVERSION
+
+To overcome the challenges of direct SNN training, we employ a QNN-to-SNN conversion method-
+ology. We first train a QNN and then map its learned parameters to an equivalent Otters SNN,
+ensuring the two networks are functionally identical. To formalize this relationship, we first de-
+fine the specific QNN layer architecture that enables this equivalence. A compatible QNN layer
+computes its output xlq,j for neuron j as follows:
+                                              X
+                                                   l l−1
+                                        alj =     wij xq,i + blj                               (6)
+                                                i
+
+                                                              alj
+                              xlq,j = Q(alj ) = αl · Clip(⌊       ⌋, 0, 2n − 1)                        (7)
+                                                              αl
+                                   l
+where alj is the pre-activation, wij  are the weights, blj is the bias, and αl is the quantization scaling
+factor for layer l. With this structure established, we can now state the proposition that governs the
+exact conversion from the trained QNN to the Otters SNN:
+Proposition 1. An Otters SNN layer (as defined in Section 3.1) is functionally equivalent to a trained
+n-bit QNN layer (as defined above) if its parameters are constructed as follows:
+
+      1. The number of discrete time steps in the SNN simulation window, T, is set to match the
+         number of positive quantization levels of the n-bit QNN: T = 2n − 1.
+      2. The mapping from a logical time step k ∈ {0, 1, . . . , T − 1} to a physical spike time tk is
+         defined such that the device’s output at that instant, O(tk ), is linearly proportional to the
+         remaining time in the window: O(tk ) = T T−k .
+      3. The SNN’s physical scaling factor for the synapse connecting neuron i in layer l − 1 to
+                               l
+         neuron j in layer l, γij , is set based on the corresponding QNN weight and the quantization
+                                           l      l
+         scale of the previous layer: γij    = wij  · αl−1 · T .
+      4. The SNN’s firing threshold for neuron j in layer l is a step-wise decreasing function of time,
+         defined as: θl (t) = αl · (T − k), for tk ≤ t < tk+1 .
+
+The proof proceeds in two steps. First, during integration, we show that the accumulated membrane
+potential Vjl in an SNN neuron is numerically identical to the corresponding QNN neuron’s pre-
+activation value alj . e binarize weights wij l
+                                                 to reduce energy and increase the reuse factor γij     l
+                                                                                                          .
+                                                                                   l
+Second, during firing, we show that the engineered, time-dependent threshold θj (t) compensates for
+the device’s intrinsic non-linearity by permitting firing only at pre-calculated time points, tk , derived
+from the inverse of the physical decay function. This mechanism ensures the SNN neuron fires at a
+time tlspike,j that precisely encodes the QNN’s quantized output xlq,j . A detailed proof is provided in
+the Appendix A.2.
+
+3.4   E NERGY A NALYSIS
+
+To evaluate the efficiency of our approach, we formulate an analytical energy model. The total in-
+ference energy (E) is decomposed into three primary components: computation energy (ECompute ),
+data movement energy (EData ), and analog energy (EAnalog ). The computation energy, ECompute ,
+accounts for arithmetic operations of additions. The data movement energy, EData , encompasses
+the energy for transferring data, including both dynamic and static power consumption. The final
+component, EAnalog , includes the energy to power the TFT, the sampling energy, and ADC energy
+                                                                                              Read
+required to converted the analog signal to scaled digital value, collectively represented as EAnalog .
+Thus, we have E = ECompute + EData + Eanalog . For our energy calculation, we consider a spatial
+dataflow architecture where information (e.g., spike packets) is communicated over a Network-on-
+Chip (NoC) (Yan et al., 2024). This architecture is representative of modern specialized hardware
+such as neuromorphic chips like Loihi (Lines et al., 2018) and dataflow AI accelerators like Ten-
+storrent (Vasiljevic et al., 2021) and Sambanova (Prabhakar et al., 2022). We consider the control
+logic energy to be negligible as our analysis focuses on specialized accelerator designs where such
+overhead is minimal (Yan et al., 2024).
+
+
+                                                    6
+Preprint
+
+
+
+
+Thus, we model the energy consumption of our Otters-based linear projections and attention op-
+erations. We disregard the computational cost of certain operations, such as Softmax and Layer
+Normalization, as their contribution to the total compute is negligible compared to large-scale ma-
+trix multiplications. The energy to perform a linear projection, EOpto-FC , is modeled by Equation 8.
+The calculation is performed over a batch of size B, a sequence of length S, and for Co output
+channels. The total energy is the sum of the following components per output element:
+
+                                   
+                                                           Read      sparse
+            EOpto-FC = B · S · Co · Ci · T · sr · (EACC + EAnalog + Emove   )
+                       | {z } |                        {z                  }
+                        Total Outputs                   Spike Processing
+                                                                                                         (8)
+                                                                            Read           Write
+                                                
+                                        + Eleakage + T · (ECMP +           Ethreshold ) + Ebinarykv
+                                                     |        {z                    }    | {z }
+                                                                Thresholding             K/V Write
+
+       • Computation Energy: This includes the energy for sparse accumulations. The total number
+         of active accumulate operations is the workload (Ci ) scaled by the average number of spikes
+         (T · sr ), with each operation costing EACC . Additionally, each of the Co output neurons
+         performs T comparisons against its threshold, costing ECMP per comparison.
+       • Data Movement Energy: This is composed of dynamic and static costs. Dynamic energy
+            sparse
+         (Emove    ) is consumed to move spike data and is proportional to the spike rate (sr ). Otters
+         paradigm requires a dynamic, step-wise decreasing threshold, which introduces additional
+                                                    Read
+         dynamic energy of reading operations Ethreshold   which is need for spiking neurons. Static
+         energy (Eleakage ) accounts for constant leakage power over the time window T . After the
+                                                               Write
+         computation completes, an additional energy cost, Ebinarykv , is incurred to write the gener-
+         ated binary Key and Value vectors to SRAM, as described in Section 3.2.
+       • Analog Energy: Each incoming spike initiates two analog operations: first, the optoelec-
+         tronic synapse emits light, and second, the decay function is sampled at a specific time tk .
+         The energy for both the light emission and the sampling event is calculated by integrating
+         the instantaneous power (P = V · I) over the duration of each respective operation. For the
+         readout circuitry, including the amplifier and the look-up-table, we adopt the energy values
+         of a successive approximation register-assisted pipelined ADC (Su et al., 2023). The total
+                                                         Read
+         energy consumed in this process is denoted EAnalog    per spike.
+
+The energy model for attention score calculation, EOpto-score , is analogous to the linear projection,
+with two key differences which lies in the outer dimensions and an additional data movement cost for
+reading the binary Key (or Value) vector from SRAM to determine whether the sampled membrane
+potential should be added to or subtracted from the accumulator, showing in Appendix A.3.
+
+
+4     R ESULTS
+
+In this section, we evaluate Otters on seven datasets from the GLUE benchmark. We compare its
+performance against both standard QNN and SNN baselines, using BERTbase as the teacher model
+for knowledge distillation. We further provide a detailed analysis of the model’s energy efficiency
+and robustness. All experiments were conducted on three NVIDIA A100 GPUs with a fixed 4-bit
+simulation window size recommended by Sorbet (Tang et al., 2025) (In our setting, it is equal to
+timestep T = 15). The training process of Otters is shown in Appendix A.5 and the description of
+dataset we adapted is shown in Appendix A.6.
+
+4.1   GLUE B ENCHMARK P ERFORMANCE
+
+As shown in Table 1, Otters achieves SOTA results among SNNs across all seven evaluated GLUE
+tasks, consistently outperforms larger and more complex SNN models like SpikingBERT and
+SpikeLM. For example, Otters surpasses existing SNNs and achieve an accuracy of 68.95% on
+RTE and 91.28% on SST-2. The average accuracy for Otters is 83.22%, which is 3.42% and 2.98%
+higher than Sorbet and SpikeLM, respectively.
+
+
+                                                    7
+Preprint
+
+
+
+
+Table 1: Performance comparison on the GLUE benchmark. All scores are accuracy, except for
+STS-B (Pearson correlation). “*” indicates that the model size was not reported in the original
+paper. Bold indicates the best performance among SNN models.
+
+Model                                     Size      QQP       MNLI-m      SST-2     QNLI      RTE    MRPC    STS-B      Average
+BERTbase (Devlin et al., 2019)           418M       91.3        84.7      93.3      91.7      72.6   88.2        89.4    87.31
+DistilBERT (Sanh, 2019)                  207M       88.5        82.2      91.3      89.2      59.9   87.5        86.9    83.64
+TinyBERT6 (Jiao et al., 2020)            207M        -          84.6      93.1      90.4      70.0   87.3        83.7    84.85
+Q2BERT (Zhang et al., 2020)              43.0M      67.0        47.2      80.6      61.3      52.7   68.4         4.4    54.51
+BiT (Liu et al., 2022)                   13.4M      82.9        77.1      87.7      85.7      58.8   79.7        71.1    77.57
+SpikingFormer (Zhou et al., 2023)          *        83.8        67.8      82.7      74.6      58.8   74.0        72.3    73.43
+SpikingBERT (Bal & Sengupta, 2024)        50M       86.8        78.1      88.2      85.2      66.1   79.2        82.2    80.83
+SpikeLM (Xing et al., 2024)                *        87.9        76.0      86.5      84.9      65.3   78.7        84.3    80.51
+1-bit SpikeLM (Xing et al., 2024)          *         87.2       74.9       86.6      84.5     65.7    78.9    83.9       80.24
+1-bit Sorbet (Tang et al., 2025)         13.4M       86.5       77.3       90.4      86.1     60.3    79.9    78.1       79.80
+Otters (Ours)                            13.4M      87.67      78.50      91.28     86.42    68.95   84.56   85.19       83.22
+
+
+
+
+4.2     E NERGY E FFICIENCY
+
+We analyzed the energy consumption of Otters on the SST-2 dataset, comparing it against full-
+precision and quantized BERT models we converted from, as well as SOTA SNNs. The 1-bit quan-
+tized BERT is the QNN Otters converted from which sharing the same structure and parameters. As
+detailed in Table 2, Otters is consumes only 4.06 mJ per inference for one attention block. This rep-
+resents a 41.36× energy saving compared to the full BERTbase model and a 2.72× efficient compared
+to the 1-bit quantized BERT. Otters is also more efficient than previous SNNs, taking 3.04× energy
+saving of Sorbet and 1.77× of SpikingLM. The full energy equation, detailed measurements for all
+compared models, and an ablation of traditional TTFS vs Otters are provided in Appendix A.3. All
+energy figures include compute, data movement, and static components.
+
+Table 2: Energy consumption analysis on the SST-2 dataset. Energy is reported for FC layers, QKV
+self-attention score calculation, and the total attention block (all FC and score calculation in Figure4)
+per inference. The Energy Ratio is Energy(Full BERT) / Energy(Model).
+
+             Model                                          FC (mJ)    QKV (mJ)       Total (mJ)     Energy Ratio
+             Full BERT (Devlin et al., 2019)                  50.35        8.41            167.92       1.00x
+             1-bit Quantized BERT                              3.31        0.55             11.03        15.2x
+             Sorbet (Tang et al., 2025)                        3.39        1.08             12.34       13.61x
+             SpikingBERT (Bal & Sengupta, 2024)                6.37        2.05             23.22        7.23x
+             SpikingLM (Xing et al., 2024)                     2.09        0.46              7.2        23.32x
+             Otters (Ours)                                     1.14        0.33              4.06       41.36x
+
+
+
+
+4.3     E FFECT OF KV C ACHE Q UANTIZATION
+
+To further optimize energy, we explored the impact of quantizing the Key and Value projections
+in the self-attention mechanism. Table 3 shows that reducing the KV precision from 4-bit to 1-
+bit (Otters-1bitkv) yields a 10% reduction in total energy consumption (from 4.49 mJ to 4.06 mJ).
+This energy saving comes at the cost of 0.23% drop in accuracy on SST-2, demonstrating a highly
+favorable trade-off between efficiency and performance.
+
+              Table 3: Impact of KV cache quantization on energy and accuracy on SST-2.
+
+                                                            Energy (mJ)
+                                    Model             FC      QKV      Total     Accuracy (%)
+                                    Otters-4bitkv    1.14      0.53    4.49         91.51
+                                    Otters-1bitkv    1.14      0.33    4.06         91.28
+
+
+
+
+                                                                 8
+Preprint
+
+
+
+
+4.4   ROBUSTNESS D ISCUSSION TO H ARDWARE PARAMETER VARIATIONS
+
+The practical deployment of the Otters paradigm hinges on the assumption that the physical decay
+characteristics of all optoelectronic synapses are uniform. However, analog hardware is inevitably
+subject to device-to-device variability from the fabrication process, which is a significant challenge
+for large-scale integration (Garg et al., 2022). Such inherent hardware noise can corrupt the precise
+time-to-value mapping that underpins our conversion method. To evaluate robustness against hard-
+ware variability (Fagbohungbe & Qian, 2021; Xuan & Narayanan, 2022; Su et al., 2024), we injected
+zero-mean standard deviation Gaussian noise, which is commonly used to simulate and represent
+hardware noise, into the physical decay function, O(t), and its parameters, τ and β. The injected
+noise is proportional to parameter magnitude: at level k, each parameter p is scaled as p ← p (1±k).
+As shown in Table 4, the baseline Otters model can tolerate about 5% total output O(t) difference
+with minimal accuracy impact and remains robust.
+To keep improving the robustness, we propose Hardware-Aware Training (HAT), a method that
+builds robustness by simulating hardware non-idealities during training. We introduce two vari-
+ants, HAT1 and HAT2 , by injecting 10% and 20% Gaussian noise, respectively, into the QNN’s
+activations (see Eq. 7). As shown in Table 4, both HAT settings improve noise resilience. The HAT2
+model maintains a stable accuracy of 80.8% even under a 20% noise level. HAT2 , trained with more
+noise, excels in high-noise regimes, whereas HAT1 achieves higher accuracy in low-noise conditions
+while still substantially outperforming the baseline (e.g., a 11.5% accuracy gain with 12% noise in
+O(t)). Thus, HAT-trained models trade a minor drop in peak accuracy for a significant increase in
+resilience against hardware noise. This demonstrates that the model can be regularized to generalize
+across a range of hardware imperfections. Consequently, the HAT noise level can be tuned to the
+manufacturing tolerances of a specific hardware platform, ensuring reliable real-world performance
+and validating the Otters paradigm as a robust and practical approach.
+
+Table 4: Noise Robustness in Physical Decay Function. Bold indicates best performance per noise
+level within each component group. Results: mean ± std over 3 runs.
+
+                Method                              Gaussian Noise Level
+                                    Full Function O(t) Experiments
+                O(t)             0.04        0.08           0.12           0.16      0.20
+                Otters        89.9 ± 0.8   86.1 ± 0.8    73.8 ± 0.9   58.0 ± 0.8   53.3 ± 0.4
+                Otters+HAT1   89.3 ± 0.5   89.0 ± 0.6    85.3 ± 0.6   76.5 ± 0.4   61.0 ± 0.8
+                Otters+HAT2   87.4 ± 0.5   87.2 ± 0.7    85.9 ± 0.7   85.2 ± 0.7   80.8 ± 0.3
+                                        Parameter β Experiments
+                β                0.01        0.02           0.03           0.04      0.05
+                Otters        90.2 ± 0.1   89.5 ± 0.1    87.5 ± 1.8   79.2 ± 3.4   72.5 ± 1.4
+                Otters+HAT1   89.6 ± 0.1   89.2 ± 0.3    89.1 ± 0.4   87.7 ± 1.2   80.6 ± 2.8
+                Otters+HAT2   87.8 ± 0.7   88.1 ± 0.4    87.4 ± 1.0   85.5 ± 1.1   83.8 ± 0.5
+                                        Parameters τ Experiments
+                Otters 0.10      0.20        0.30           0.40           0.50
+                τ + GN        90.3 ± 0.1   90.1 ± 0.5    87.0 ± 1.7   75.0 ± 4.1   67.5 ± 4.8
+                Otters+HAT1   89.6 ± 0.5   89.3 ± 1.2    88.2 ± 0.7   88.2 ± 1.0   76.1 ± 2.8
+                Otters+HAT2   87.8 ± 0.6   87.7 ± 0.8    87.1 ± 0.6   87.2 ± 0.3   83.0 ± 1.4
+
+
+
+5     C ONCLUSION
+
+This paper introduces Otters, a new paradigm for energy-efficient neuromorphic computing that
+challenges this digital-centric approach. Through a hardware-software co-design, we repurpose
+the natural signal decay of a custom-fabricated optoelectronic synapse, transforming this physical
+phenomenon into a computational method. This allows us to eliminate the costly decay function
+evaluation steps inherent in traditional TTFS, fusing computation and memory into the physical
+process. To deploy this paradigm in complex architectures like the Transformer, we developed a
+QNN-to-SNN conversion algorithm that circumvents the challenges of direct SNN training. The Ot-
+ters model achieves state-of-the-art accuracy across seven GLUE benchmark datasets among SNNs,
+
+
+                                                     9
+Preprint
+
+
+
+
+while simultaneously delivering a 1.77× improvement in energy efficiency over previous leading
+spiking models. By directly harnessing fundamental device physics for computation, this work
+demonstrates a new path to a more energy-efficient neuromorphic computing design.
+
+
+
+
+                                             10
+Preprint
+
+
+
+
+R EFERENCES
+Bashayr Alqahtani, Hanrui Li, Abdul Momin Syed, and Nazek El-Atab. From light sensing to
+  adaptive learning: hafnium diselenide reconfigurable memcapacitive devices in neuromorphic
+  computing. Light: Science & Applications, 14(1):30, 2025.
+
+Zhenyu Bai, Pranav Dangi, Rohan Juneja, Zhaoying Li, Zhanglu Yan, Huiying Lan, and Tulika
+  Mitra. A data-driven dynamic execution orchestration architecture. International Conference on
+  Architectural Support for Programming Languages and Operating Systems (ASPLOS), 2025.
+
+Malyaban Bal and Abhronil Sengupta. Spikingbert: Distilling bert to train spiking language models
+ using implicit differentiation. In Proceedings of the AAAI conference on artificial intelligence,
+ volume 38, pp. 10998–11006, 2024.
+
+Kaiwei Che, Wei Fang, Zhengyu Ma, Yifan Huang, Peng Xue, Li Yuan, Timothée Masquelier,
+  and Yonghong Tian. Efficiently training time-to-first-spike spiking neural networks from scratch.
+  arXiv preprint arXiv:2410.23619, 2024a.
+
+Kaiwei Che, Wei Fang, Zhengyu Ma, Li Yuan, Timothée Masquelier, and Yonghong Tian. Ettfs:
+  An efficient training framework for time-to-first-spike neuron. arXiv e-prints, pp. arXiv–2410,
+  2024b.
+
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. Bert: Pre-training of deep
+  bidirectional transformers for language understanding. In Proceedings of the 2019 conference
+  of the North American chapter of the association for computational linguistics: human language
+  technologies, volume 1 (long and short papers), pp. 4171–4186, 2019.
+
+Omobayode Fagbohungbe and Lijun Qian. Benchmarking inference performance of deep learning
+ models on analog devices. In 2021 International Joint Conference on Neural Networks (IJCNN),
+ pp. 1–9. IEEE, 2021.
+
+Sahaj Garg, Joe Lou, Anirudh Jain, Zhimu Guo, Bhavin J Shastri, and Mitchell Nahmias. Dynamic
+  precision analog computing for neural networks. IEEE Journal of Selected Topics in Quantum
+  Electronics, 29(2: Optical Computing):1–12, 2022.
+
+Mark Horowitz. 1.1 computing’s energy problem (and what we can do about it). In 2014 IEEE
+ international solid-state circuits conference digest of technical papers (ISSCC), pp. 10–14. IEEE,
+ 2014.
+
+Nidhal Jegham, Marwan Abdelatti, Lassad Elmoubarki, and Abdeltawab Hendawi. How hun-
+  gry is ai? benchmarking energy, water, and carbon footprint of llm inference. arXiv preprint
+  arXiv:2505.09598, 2025.
+
+Xiaoqi Jiao, Yichun Yin, Lifeng Shang, Xin Jiang, Xiao Chen, Linlin Li, Fang Wang, and Qun Liu.
+  Tinybert: Distilling bert for natural language understanding. In Findings of the Association for
+  Computational Linguistics: EMNLP 2020, pp. 4163–4174, 2020.
+
+Dingwei Li, Yitong Chen, Huihui Ren, Yingjie Tang, Siyu Zhang, Yan Wang, Lixiang Xing,
+  Qi Huang, Lei Meng, and Bowen Zhu. An active-matrix synaptic phototransistor array for in-
+  sensor spectral processing. Advanced Science, 11(39):2406401, 2024a.
+
+Dingwei Li, Guolei Liu, Fanfan Li, Huihui Ren, Yingjie Tang, Yitong Chen, Yan Wang, Rui Wang,
+  Saisai Wang, Lixiang Xing, et al. Double-opponent spiking neuron array with orientation selec-
+  tivity for encoding and spatial-chromatic processing. Science Advances, 11(7):eadt3584, 2025.
+
+Fanfan Li, Dingwei Li, Chuanqing Wang, Guolei Liu, Rui Wang, Huihui Ren, Yingjie Tang, Yan
+  Wang, Yitong Chen, Kun Liang, et al. An artificial visual neuron with multiplexed rate and
+  time-to-first-spike coding. Nature Communications, 15(1):3689, 2024b.
+
+Kun Liang, Rui Wang, Huihui Ren, Dingwei Li, Yingjie Tang, Yan Wang, Yitong Chen, Chunyan
+  Song, Fanfan Li, Guolei Liu, et al. Printable coffee-ring structures for highly uniform all-oxide
+  optoelectronic synaptic transistors. Advanced Optical Materials, 10(24):2201754, 2022.
+
+
+                                                11
+Preprint
+
+
+
+
+Zheng Lin, Guanqiao Qu, Qiyuan Chen, Xianhao Chen, Zhe Chen, and Kaibin Huang. Pushing
+  large language models to the 6g edge: Vision, challenges, and opportunities. arXiv preprint
+  arXiv:2309.16739, 2023.
+Andrew Lines, Prasad Joshi, Ruokun Liu, Steve McCoy, Jonathan Tse, Yi-Hsin Weng, and Mike
+  Davies. Loihi asynchronous neuromorphic research chip. Energy, 10(15):10–1109, 2018.
+Zechun Liu, Barlas Oguz, Aasish Pappu, Lin Xiao, Scott Yih, Meng Li, Raghuraman Krishnamoor-
+  thi, and Yashar Mehdad. Bit: Robustly binarized multi-distilled transformer. Advances in neural
+  information processing systems, 35:14303–14316, 2022.
+Raghu Prabhakar, Sumti Jairath, and Jinuk Luke Shin. Sambanova sn10 rdu: A 7nm dataflow ar-
+  chitecture to accelerate software 2.0. In 2022 IEEE International Solid-State Circuits Conference
+  (ISSCC), volume 65, pp. 350–352. IEEE, 2022.
+V Sanh. Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter. In Proceedings of
+  Thirty-third Conference on Neural Information Processing Systems (NIPS2019), 2019.
+Jialin Shi, Jiansheng Jie, Wei Deng, Gan Luo, Xiaochen Fang, Yanling Xiao, Yujian Zhang, Xiujuan
+   Zhang, and Xiaohong Zhang. A fully solution-printed photosynaptic transistor array with ultralow
+   energy consumption for artificial-vision neural networks. Advanced Materials, 34(18):2200380,
+   2022.
+Qing Su, Dawei Li, Xuan Guo, Heng Zhang, Ben He, Hanbo Jia, Danyu Wu, and Xinyu Liu. A
+  5.3-fj/conv.-step pipelined-sar adc with resistance assisted two-stage dynamic amplifier based on
+  gm-unit. In 2023 8th International Conference on Integrated Circuits and Microsystems (ICICM),
+  pp. 322–325. IEEE, 2023.
+Rui Su, Dunbao Chen, Weiming Cheng, Ruizi Xiao, Yuheng Deng, Yufeng Duan, Yi Li, Lei Ye,
+  Hongyu An, Jingping Xu, et al. Oxygen vacancy compensation-induced analog resistive switch-
+  ing in the srfeo3- δ/nb: Srtio3 epitaxial heterojunction for noise-tolerant high-precision image
+  recognition. ACS Applied Materials & Interfaces, 16(40):54115–54128, 2024.
+Kaiwen Tang, Zhanglu Yan, and Weng-Fai Wong. Sorbet: A neuromorphic hardware-compatible
+  transformer-based spiking language model. In Forty-second International Conference on Machine
+  Learning, 2025.
+Jasmina Vasiljevic, Ljubisa Bajic, Davor Capalija, Stanislav Sokorac, Dragoljub Ignjatovic, Lejla
+  Bajic, Milos Trajkovic, Ivan Hamer, Ivan Matosevic, Aleksandar Cejkov, et al. Compute substrate
+  for software 2.0. IEEE micro, 41(2):50–55, 2021.
+Xiaoyu Wang, Yixin Zong, Duanyang Liu, Juehan Yang, and Zhongming Wei. Advanced optoelec-
+  tronic devices for neuromorphic analog based on low-dimensional semiconductors. Advanced
+  Functional Materials, 33(15):2213894, 2023.
+Yun Wang, Yanfang Zha, Chunxiong Bao, Fengrui Hu, Yunsong Di, Cihui Liu, Fangjian Xing,
+  Xingyuan Xu, Xiaoming Wen, Zhixing Gan, et al. Monolithic 2d perovskites enabled artificial
+  photonic synapses for neuromorphic vision sensors. Advanced Materials, 36(18):2311524, 2024.
+Wenjie Wei, Malu Zhang, Hong Qu, Ammar Belatreche, Jian Zhang, and Hong Chen. Temporal-
+ coded spiking neural networks with dynamic firing threshold: Learning with event-driven back-
+ propagation. In Proceedings of the IEEE/CVF international conference on computer vision, pp.
+ 10552–10562, 2023.
+Pengshan Xie, Dengji Li, SenPo Yip, and Johnny C Ho. Emerging optoelectronic artificial synapses
+  and memristors based on low-dimensional nanomaterials. Applied Physics Reviews, 11(1), 2024.
+Xingrun Xing, Zheng Zhang, Ziyi Ni, Shitao Xiao, Yiming Ju, Siqi Fan, Yequan Wang, Jiajun
+  Zhang, and Guoqi Li. Spikelm: Towards general spike-driven language modeling via elastic
+  bi-spiking mechanisms. In Forty-first International Conference on Machine Learning.
+Xingrun Xing, Boyan Gao, Zheng Zhang, David A Clifton, Shitao Xiao, Li Du, Guoqi Li, and Jiajun
+  Zhang. Spikellm: Scaling up spiking neural network to large language models via saliency-based
+  spiking. arXiv preprint arXiv:2407.04752, 2024.
+
+
+                                                  12
+Preprint
+
+
+
+
+Ziwei Xuan and Krishna Narayanan. Low-delay analog joint source-channel coding with deep
+  learning. IEEE Transactions on Communications, 71(1):40–51, 2022.
+Zhanglu Yan, Zhenyu Bai, and Weng-Fai Wong. Reconsidering the energy efficiency of spiking
+  neural networks. arXiv preprint arXiv:2409.08290, 2024.
+Miao Yu, Tingting Xiang, Srivatsa P, Kyle Timothy Ng Chu, Burin Amornpaisannon, Yaswanth
+ Tavva, Venkata Pavan Kumar Miriyala, and Trevor E Carlson. A ttfs-based energy and utilization
+ efficient neuromorphic cnn accelerator. Frontiers in Neuroscience, 17:1121592, 2023.
+Wei Zhang, Lu Hou, Yichun Yin, Lifeng Shang, Xiao Chen, Xin Jiang, and Qun Liu. Ternary-
+ bert: Distillation-aware ultra-low bit bert. In Proceedings of the 2020 Conference on Empirical
+ Methods in Natural Language Processing (EMNLP), pp. 509–521, 2020.
+Lusen Zhao, Zihan Huang, Jianhao Ding, and Zhaofei Yu. Ttfsformer: A ttfs-based lossless con-
+  version of spiking transformer. In Forty-second International Conference on Machine Learning,
+  2025.
+Chenlin Zhou, Liutao Yu, Zhaokun Zhou, Zhengyu Ma, Han Zhang, Huihui Zhou, and Yonghong
+  Tian. Spikingformer: Spike-driven residual learning for transformer-based spiking neural net-
+  work. arXiv preprint arXiv:2304.11954, 2023.
+
+
+
+
+                                              13
+Preprint
+
+
+
+
+A     A PPENDIX
+
+A.1     FABRICATED I N2 O3 TFT S
+
+To prepare the indium oxide thin-film transistors (In2 O3 TFTs), indium nitrate was first dissolved
+in a mixed solvent of 2-methoxyethanol (2-ME), acetylacetone (AcAc), and ammonium hydroxide
+(NH3 ·H2 O) to form a precursor solution, which was stirred overnight to ensure complete dissolu-
+tion and coordination. Subsequently, gate electrodes were fabricated on a silicon substrate coated
+with a SiO2 insulating layer, followed by sequential deposition of 8 nm chromium and 50 nm gold
+via electron-beam evaporation. A 30 nm-thick Al2 O3 dielectric layer was then uniformly deposited
+over the substrate using atomic layer deposition (ALD). The In2 O3 precursor solution was spin-
+coated onto the dielectric surface, after which the channel regions were defined through standard
+photolithography, and the unprotected areas were removed by hydrochloric acid wet etching. The
+films were annealed in air at 300 ◦ C for 1 hour to enhance crystallinity and improve film quality.
+Portions of the Al2 O3 layer were subsequently etched to expose selected regions of the gate elec-
+trodes. Finally, source and drain electrodes, along with interconnects, were patterned and metallized
+with an additional 8 nm chromium and 50 nm gold layer via electron-beam evaporation. The indium
+oxide thin-film transistor was characterized under a gate bias of 0 V and a drain bias of 5 mV. Upon
+405 nm laser illumination, oxygen vacancies in the channel layer were photoionized, generating free
+electrons and thereby enhancing the channel conductivity.
+
+
+
+                                                                                Gate
+
+
+
+
+                                                                       Drain             Source
+
+
+
+
+               (a) Optical microscope                          (b) Otters under optical microscope
+
+                                   Figure 5: Details design of Otters            Light
+
+
+A.2     P ROOF FOR P ROPOSITION 1
+
+A.2.1      I NTEGRATION P HASE E QUIVALENCE
+                                                           Cr
+The foundation of the proof lies in the relationship between      theIn2O3
+                                                                       QNN’s discrete value and the SNN’s
+spike time. From Section 3.3, we know that the QNN     Al2O3  output activationAufrom the previous layer is
+xl−1
+ q,i = α
+         l−1
+             · qil−1 , where qil−1 is the integer value:
+                                                     Si/SiO2
+                                                     $        %        !
+                                       l−1             al−1
+                                                         i
+                                     qi = Clip                  , 0, T
+                                                       αl−1
+
+We define the TTFS encoding scheme such that this integer value qil−1 is represented by a single
+spike from neuron i at the discrete time step k:
+
+                                             k = T − qil−1
+
+This encoding adheres to the TTFS principle: a larger integer value qil−1 results in a smaller time
+step k, signifying an earlier spike. A value of 0 corresponds to no spike within the active window,
+and the maximum value T corresponds to a spike at k = 0.
+
+
+                                                    14
+Preprint
+
+
+
+
+When a presynaptic neuron i fires at time step k, its contribution to the postsynaptic potential of
+neuron j is given by the Otters PSP function, ϵ′ (·). Using the conditions specified in Proposition 1,
+the normalized value produced by the decay function O(t) at time step tk is:
+                                                           T −k
+                                               O(tk ) =
+                                                             T
+Substituting the encoding relationship from Step 1 (k = T − qil−1 ):
+
+                                               T − (T − qil−1 )  q l−1
+                                    O(tk ) =                    = i
+                                                     T             T
+Thus we find that the normalized output of the physical decay process at the spike time tk is directly
+proportional to the integer value qil−1 it is meant to encode.
+The full PSP contribution from the synapse connecting i to j is the product of this normalized value
+                        l
+and the scaling factor γij . Using the definition of γ from Proposition 1:
+                                            l     l
+                                           γij = wij · αl−1 · T
+The PSP is therefore:
+
+
+                               ϵ′ (wij
+                                    l            l
+                                       , tk ) = γij · O(tk )
+                                                                                 !
+                                               l                         qil−1
+                                                  · αl−1 · T ·
+                                                                     
+                                            = wij
+                                                                           T
+                                               l
+                                            = wij · (αl−1 · qil−1 )
+
+Recognizing that xl−1
+                  q,i = α
+                          l−1
+                              · qil−1 , we find:
+
+                               ϵ′ (wij
+                                    l            l
+                                       , tk ) = wij · xl−1
+                                                       q,i
+
+This shows that the contribution of a single spike in the SNN is exactly equal to the weighted input
+term in the QNN.
+The final membrane potential Vjl is the sum of all such PSPs from incoming spikes, plus the bias
+term:                      X                               X
+                    Vjl =      ϵ′ (wij
+                                     l
+                                       , tl−1          l
+                                          spike,i ) + bj =
+                                                               l
+                                                             (wij · xl−1      l
+                                                                     q,i ) + bj
+                                i                                i
+By comparing this with the definition of the QNN pre-activation from Section 1.2,
+                                            X
+                                                l l−1
+                                      alj =    wij xq,i + blj
+                                                  i
+
+we arrive at the desired equality:
+                                                  Vjl = alj
+
+A.2.2      F IRING PHASE EQUIVALENCE
+In this section, we prove that the integer value encoded by the SNN’s output spike time, tlspike,j , is
+equal to the integer value of the QNN’s output, qjl . That is, if tlspike,j corresponds to time step kfire ,
+we have:                                                $ %             !
+                                             l
+                                                          alj
+                                T − kfire = qj = Clip           , 0, T
+                                                          αl
+
+According to the SNN model definition, the neuron fires at the earliest discrete time step k for which
+its potential Vjl meets or exceeds the threshold θl (tk ).
+
+                                                Vjl ≥ θl (tk )
+
+
+                                                      15
+Preprint
+
+
+
+
+Substituting the result from Part I (Vjl = alj ) and the definition of the time-varying threshold from
+Proposition 1 (θl (tk ) = αl · (T − k)), the firing condition becomes:
+                                            alj ≥ αl · (T − k)
+
+Assuming αl > 0, we can rearrange the inequality to solve for the term (T − k), which represents
+the integer value that would be encoded by a spike at time step k:
+                                               alj
+                                                   ≥T −k
+                                               αl
+
+The threshold θl (tk ) = αl (T − k) is a monotonically decreasing function of the time step k. For a
+fixed membrane potential alj , this means that if the firing condition is met for a certain time step k ∗ ,
+it will also be met for all subsequent time steps k > k ∗ . The TTFS firing rule dictates that the neuron
+fires at the first time step that satisfies the condition. This corresponds to finding the smallest integer
+k that satisfies the inequality (largest T − k ). By the definition of the floor function, the integer
+                                                                                        l
+value encoded by the output spike, which is defined by our encoding scheme as qout,j        = T − kfire , is:
+                                                        $ %
+                                                          alj
+                                                  qjl =
+                                                          αl
+
+The derivation above assumes the result of the floor function falls within the valid range of encodable
+integers. We now analyze the boundary conditions imposed by the finite simulation window.
+
+        • Upper Bound (Clipping at T) If the pre-activation alj is very large such that ⌊alj /αl ⌋ > T ,
+          the condition alj /αl ≥ T − k will be satisfied for all k ∈ T . The neuron will fire at the
+          earliest possible time step, which is k = 0. The value encoded by a spike at k = 0 is
+          T − 0 = T . This naturally implements the upper bound of the clipping function, mapping
+          any integer value greater than T to T .
+        • Lower Bound (Clipping at 0). If the pre-activation alj is such that ⌊alj /αl ⌋ < 0 , then the
+          term alj /αl is negative. Thus, the firing condition alj /αl ≥ T − k can never be satisfied.
+          The neuron will not fire within the time window. The absence of a spike is interpreted as
+          encoding the integer value 0. This naturally implements the lower bound of the clipping
+          function.
+                                                                                 ′
+Combining these cases, the integer value encoded by the SNN’s firing mechanism, qout,j , is:
+                                                 $ %           !
+                                    ′
+                                                  alj
+                                   qout,j = Clip        , 0, T
+                                                  αl
+
+This is identical to the definition of the QNN’s integer output, qjl .
+
+A.3     E NERGY A NALYSIS
+
+A.3.1      E NERGY COMPARISON WITH RELATED WORKS
+We compare our model, Otter, against two classes of baselines: standard Transformers and Spiking
+Transformers.
+For transformer baselines, the energy consumption of a Full BERT (FP32) is dominated by expensive
+32-bit multiply-accumulate (MAC) operations and data movement. Another primary baseline is
+a Quantized BERT (INT4), which shares the same architectural settings as Otter, utilizing 4-bit
+activations and a 1-bit Key-Value (KV) cache.
+Full BERT (FP32)
+                                         Read           sparse                                write
+  EF C = B · S · Co · (γ · Ci · (EMAC + Eweight + 32 · Emove   ) + Ci · Eleakage + 2Eclamp + Ekv    )
+
+    EF C−score = B · h · S 2 · (dk · γ · (Ekv
+                                           Read                sparse
+                                                + EMAC + 32 · Emove   ) + dk · Eleakage + 2Eclamp )
+
+
+                                                     16
+Preprint
+
+
+
+
+Quantized BERT
+                                        Read                  sparse                                write
+EF Cq = B · S · Co · (γ · Ci · (EMAC + Eweight + log2 (T + 1)Emove   ) + Ci · Eleakage + 2Eclamp + Ekv    )
+EF Cq −score = B · h · S 2 · (dk · γ · (Ekv
+                                         Read                          sparse
+                                              + EMAC + log2 (T + 1) · Emove   ) + dk · Eleakage + 2Eclamp )
+
+For Spiking Neural Network Baselines such as Sorbet, SpikingBERT, and SpikingLM, energy cost
+is a function of the spike rate (sr ) and the number of timesteps (T ), with expenses driven by
+accumulation and memory access. To create a fair comparison, we pick the most optimized setting of
+these models (Sorbet, SpikingBERT, and SpikingLM) which match Otter’s performance, resulting
+in required spike rates of 13% for Sorbet, 25% for SpikingBERT, and 33% for SpikingLM. The
+number of timesteps (T) for each model is set to the value from its original paper: 16, 16, and 4,
+respectively.
+Typical SNNs
+                                      Read     sparse                                        Write
+ESNN-FC = B·S·Co ·(Ci ·sr ·T ·(EACC +Eweight +Emove   )+Ci ·T ·Eleakage +T ·(ECMP +s·ESUB )+Ekv    )
+ESNN-score = B · h · S 2 · (dk · sr · T · (Ekv
+                                            Read           sparse
+                                                 + EACC + Emove   ) + dk · T · Eleakage + T · (ECMP + s · ESUB ))
+
+Otters
+
+                                    
+                                                            Read      sparse
+             EOpto-FC = B · S · Co · Ci · T · sr · (EACC + EAnalog + Emove   )
+                        | {z } |                        {z                  }
+                           Total Outputs                        Spike Processing
+                                                                                                              
+                                                                                    Read           Write
+                                                       
+                                               + Eleakage + T · (ECMP +            Ethreshold ) + Ebinarykv
+                                                            |        {z                     }    | {z }
+                                                                        Thresholding             K/V Write
+
+                                         
+                               h · S }2 · dk · T · sr · (EACC + EAnalog
+            EOpto-score = |B · {z                                Read      sparse
+                                                                        + Emove      Read
+                                                                                  + Ebinarykv )
+                           Total Scores
+                                           |                     {z                          }
+                                                                       Spike Processing
+                                                                                 
+                                                                   Read
+                                           
+                              +Eleakage + T · (ECMP +             Ethreshold )
+                                          |        {z                        }
+                                                       Thresholding
+
+
+Key differences between Otters and other typical SNNs include replacing digital weight reads with
+                                              Read
+lower-energy analog reads from the TFT (EAnalog     ) and, for the QKV calculation, using an energy-
+                             Read
+efficient binary KV read (Ebinarykv ). The energy model is configured for a BERT-base architecture
+with a batch size (B) of 64, a sequence length (S) of 128, and input/output channel dimensions
+(Ci , Co ) of 768. The model features 12 attention heads (h), with a per-head dimension (dk ) of
+64. Energy costs are derived from established models. For FP32 operations, we assume that a
+multiply-accumulate (MAC) consumes 4.6 pJ and a clamp operation consumes 0.9 pJ which is
+from (Horowitz, 2014) cause our platform doesn’t support FP calculations. For our INT4 models,
+we differentiate between a 4-4-16bits MAC (0.0848 pJ) and a 1-4-16bits MAC (0.0663 pJ). The
+costs for 4-16-16bits, 2-16-16bits and 1-16-16bits ACC are 0.0502 pJ, 0.0477 pJ and 0.0429 pJ,
+respectively. SNN-specific operations, such as comparison and subtraction, are each modeled at
+0.0502 pJ. The total energy for an analog read operation is 0.0246 pJ (0.00875pJ for power the TFT,
+1.33e-6pJ for sampling, 0.0053pJ for ADC including the amplifier and 0.010505 for the 4bits LUT).
+The model accounts for a static leakage energy Eleakage of 0.002 pJ per cycle, a weight activation
+(read/write) cost of 0.0985 pJ/bit, and a sparse data movement cost of 0.18 pJ per bit. All compute,
+data movement, and memory access costs using energy measurements from a commercial 22nm
+process.
+
+A.3.2      A BLATION STUDY OF USING OTTERS AND TRADITIONAL TTFS METHODS
+Traditional TTFS requires digital encoding, additional MAC operations (Eencoding +EMAC ), and ex-
+tra weight accesses. With T =15 using the simplest T −t encoding (4–4–4-bit ACC, 0.0163 pJ),
+traditional TTFS attention block consumes 5.12 mJ, 26.1% more energy than 1bit Otters.
+
+
+                                                           17
+Preprint
+
+
+
+
+A.4     F ORWARD PROCESS OF OTTERS
+
+The forward process is shown in Algorithm 1:
+
+Algorithm 1 Otters Neuron Forward Pass (TTFS)
+                                       Nin             l Nin
+ 1: Inputs: Presynaptic spikes {sl−1                                   l                       l
+                                 i (t)}i=1 ; weights {γij }i=1 ; bias bj ; threshold function θ (t);
+      total time steps T .
+ 2:   Output: Postsynaptic spike train {slj (t)}Tt=1 .
+ 3:   Vj ← blj {Initialize membrane potential with bias}
+ 4:   slj [1 : T ] ← 0 {Initialize output spike train to zeros}
+ 5:   has fired ← false
+ 6:   for t = 1, 2, . . . , T do
+ 7:       for i = 1, 2, . . . , Nin do
+ 8:          if sl−1
+                  i (t) = 1 then
+                        l
+ 9:              vi ← γij   · O(t) {Compute PSP using the physical decay function O(t)}
+10:              Vj ← Vj + vi {Accumulate potential}
+11:          end if
+12:       end for
+13:       if Vj ≥ θl (t) and not has fired then
+14:          slj (t) ← 1 {Fire a spike at the current time step}
+15:          has fired ← true
+16:          break {TTFS constraint: emit at most one spike and stop}
+17:       end if
+18:   end for
+19:   return slj
+
+
+
+A.5     QNN TRAINING ALGORITHM
+
+                           Table 5: Task-specific training hyperparameters.
+
+                    Task      Max. Seq. Length          Batch Size   Learning Rate
+                    MNLI              128                  80          2 × 10−4
+                    MRPC              128                  80          5 × 10−5
+                    SST-2              64                  80          1 × 10−4
+                    STS-B             128                  80          5 × 10−5
+                    QQP               128                  80          2 × 10−5
+                    QNLI              128                  80          2 × 10−4
+                    RTE               128                  80          5 × 10−5
+
+To mitigate the accuracy degradation from quantization, we employ a knowledge distillation (KD)
+framework for our quantization-aware training (Liu et al., 2022; Tang et al., 2025). This approach
+transfers inductive biases from a pre-trained, full-precision teacher model to the quantized student
+network. Our training objective is a hybrid loss function that aligns both the output distributions
+and the intermediate representations of the student with those of the teacher. The total distillation
+loss LKD is a weighted combination of two components: a logits distillation loss Llogits and a
+representation distillation loss Lreps :
+                                        LKD = Llogits + λLreps                                      (9)
+where λ is a hyperparameter that balances the two terms.
+The first component, Llogits , is the Kullback-Leibler (KL) divergence between the teacher’s soft
+target distribution p and the student’s output distribution q. This loss encourages the student to learn
+the teacher’s predictions and its understanding of inter-class similarities.
+                                            Llogits = KL(p||q)                                     (10)
+
+
+                                                   18
+Preprint
+
+
+
+
+The second component, Lreps , minimizes the Mean Squared Error (MSE) between the intermediate
+feature representations from corresponding transformer blocks of the teacher (rit ) and the student
+(ris ). This forces the student to mimic the teacher’s internal representation structure.
+                                                 X
+                                         Lreps =     ∥rit − ris ∥22                            (11)
+                                               i
+
+
+The student model is trained end-to-end by minimizing LKD using the Adam optimizer, while the
+teacher model’s weights remain frozen. We use task-specific hyperparameters for training, which
+are detailed in Table 5. All models are trained on A100 GPUs.
+
+A.6   E VALUATION B ENCHMARK
+
+We evaluated our model, Otters, on seven datasets from the GLUE benchmark:
+
+      • MNLI (Multi-Genre Natural Language Inference): A large-scale, crowdsourced collection
+        of sentence pairs annotated for textual entailment across multiple genres.
+      • QQP (Quora Question Pairs): A paraphrase identification task to determine if two questions
+        from Quora are semantically equivalent.
+      • QNLI (Question-Answering NLI): A natural language inference task converted from the
+        Stanford Question Answering Dataset (SQuAD), where the goal is natural language infer-
+        ence
+      • SST-2 (Stanford Sentiment Treebank): A single-sentence classification task for sentiment
+        analysis (positive or negative) on movie reviews.
+      • STS-B (Semantic Textual Similarity Benchmark): A regression task to predict the degree
+        of similarity (on a 1–5 scale) between sentence pairs drawn from news headlines, video
+        titles, and image captions.
+      • RTE (Recognizing Textual Entailment): A compilation of data from several textual entail-
+        ment challenges, using text from news articles and Wikipedia.
+      • MRPC (Microsoft Research Paraphrase Corpus): A paraphrase detection task using sen-
+        tence pairs from online news sources. The dataset is imbalanced, with 68% of pairs being
+        paraphrases.
+
+A.7   T HE U SE OF L ARGE L ANGUAGE M ODELS
+
+We use LLMs to aid or polish writing.
+
+
+
+
+                                                   19
+

@@ -1,0 +1,964 @@
+                                                         Learning Normal Flow Directly From Event Neighborhoods
+
+                                                                 Dehao Yuan, Levi Burner, Jiayi Wu, Minghui Liu, Jingxi Chen,
+                                                                           Yiannis Aloimonos, Cornelia Fermüller
+                                                                         University of Maryland, College Park, USA
+                                                                         https://github.com/dhyuan99/VecKM flow
+arXiv:2412.11284v1 [cs.CV] 15 Dec 2024
+
+
+
+
+                                                                 Abstract
+                                             Event-based motion field estimation is an important task.
+                                         However, current optical flow methods face challenges:
+                                         learning-based approaches, often frame-based and relying
+                                         on CNNs, lack cross-domain transferability, while model-
+                                         based methods, though more robust, are less accurate. To
+                                         address the limitations of optical flow estimation, recent
+                                         works have focused on normal flow, which can be more re-
+                                         liably measured in regions with limited texture or strong
+                                         edges. However, existing normal flow estimators are pre-
+                                         dominantly model-based and suffer from high errors.
+                                             In this paper, we propose a novel supervised point-based
+                                         method for normal flow estimation that overcomes the lim-
+                                         itations of existing event learning-based approaches. Us-
+                                                                                                             Figure 1. We propose a point-based network for estimating normal
+                                         ing a local point cloud encoder, our method directly esti-
+                                                                                                             flow from raw event data. We discover multiple key advantages of
+                                         mates per-event normal flow from raw events, offering mul-
+                                                                                                             this point-based approach compared with existing learning-based
+                                         tiple unique advantages: 1) It produces temporally and spa-         approaches. An event and its neighborhood are first encoded as a
+                                         tially sharp predictions. 2) It supports more diverse data          fixed-dimensional vector, which is then input to a network trained
+                                         augmentation, such as random rotation, to improve robust-           in a supervised way to predict normal flow. This approach achieves
+                                         ness across various domains. 3) It naturally supports un-           high accuracy while maintaining strong transferability across dif-
+                                         certainty quantification via ensemble inference, which ben-         ferent domains and datasets. Besides, we demonstrate the useful-
+                                         efits downstream tasks. 4) It enables training and inference        ness of the estimated normal flow in a new egomotion solver that
+                                         on undistorted data in normalized camera coordinates, im-           is shown to remain robust even during aggressive camera motions.
+                                         proving transferability across cameras. Extensive experi-
+                                         ments demonstrate our method achieves better and more                   Most works on image motion focus on estimating opti-
+                                         consistent performance than state-of-the-art methods when           cal flow (OF). Learning-based OF estimators like [20] per-
+                                         transferred across different datasets. Leveraging this trans-       form impressively when evaluated within specific domains
+                                         ferability, we train our model on the union of datasets and         or datasets but suffer from accuracy degradation when ap-
+                                         release it for public use. Finally, we introduce an egomotion       plied across different domains, as shown in [24, 25]. In con-
+                                         solver based on a maximum-margin problem that uses nor-             trast, model-based OF estimators like [44] are more robust
+                                         mal flow and IMU to achieve strong performance in chal-             to domain shifts, but their accuracy is limited, particularly
+                                         lenging scenarios.                                                  in scenarios where the event textures are sparse.
+                                                                                                                 The lack of robustness in optical flow estimators is
+                                         1. Introduction                                                     mainly due to the local aperture problem [2]. In regions
+                                         Event-based motion field estimation is a challenging task           with limited texture or strong linear edges, only the motion
+                                         with significant potential for visual motion interpretation         component perpendicular to the edges (normal flow) can be
+                                         tasks, primarily due to its high temporal resolution, wide          reliably measured, while the motion parallel to the edges
+                                         dynamic range, and low latency. Image motion is critical            remains ambiguous. To address this issue, optical flow esti-
+                                         for various applications, such as egomotion estimation [66],        mators use CNN and RNN to enlarge their receptive fields,
+                                         video interpolation [14, 15], and motion deblurring [52].           which makes the models vulnerable to overfitting.
+
+
+                                                                                                         1
+Taming Contrast Maximization (SSL)   MultiCM (MB)                  Ours (SL)                        Ground-Truth
+
+
+
+
+Figure 2. Our point-based method produces accurate and sharp predictions in the presence of independently moving objects, while other
+methods [34, 44] fail. All models (if learning-based) are trained on DSEC and evaluated on EVIMO2. The flows are displayed in HSV
+color space, where the hue represents the flow direction, and the brightness represents the flow magnitude.
+
+
+   With this observation, some existing methods focus on             normal flow estimation with egomotion estimation. Our
+predicting normal flow (NF) and demonstrate that nor-                contribution can be summarized as follows:
+mal flow is useful for tasks like egomotion estimation               • We propose a learning-based, point-based normal flow
+[23, 28, 41]. However, current NF estimation approaches                estimator that offers multiple advantages over existing
+are predominantly model-based, relying on fitting a plane              learning-based methods. It is more accurate than model-
+to the local space-time event surface [9, 32]. These ap-               based normal flow estimators and more robust and trans-
+proaches suffer from limited accuracy. Furthermore, the                ferable than learning-based optical flow estimators.
+difficulty in obtaining ground-truth normal flow data has            • We introduce a novel geometric-based egomotion solver
+impeded learning-based normal flow estimators.                         only using normal flows and IMU measurements, which
+   As shown in Figure 1 and 2, we explore supervised nor-              remains robust under aggressive egomotion scenarios.
+mal flow estimation while ensuring transferability across            • We extensively evaluate our point-based flow estimator
+domains and datasets. Unlike most OF estimators that use               on multiple datasets and multiple transfer settings.
+CNNs on event frames, we propose a novel approach based
+on encoding 3D point sets and a novel loss function. This            2. Related Work
+framework directly trains a network to estimate per-event
+normal flow from a local event cloud, supervised by ground-          2.1. Event-Based Optical Flow Estimation
+truth optical flow. To efficiently handle large event volumes,       In the early stages, model-based methods were studied for
+we adopt VecKM [58], a scalable and descriptive local point          event-based optical flow estimation. The methodologies in-
+cloud encoder. We identify several unique advantages of es-          clude extensions of the Lucas-Kanade algorithm [5, 8], fea-
+timating normal flow with this point-based network.                  ture matching [26, 27, 43, 56], contrast maximization (CM)
+1. Temporally and Spatially Sharp Predictions. By pre-               [18], Multi-CM [44], plane fitting [3, 9], filter banks [6, 12],
+    dicting per-event flow based on the Euclidean neighbor-          time surface matching [4, 10, 48], iterative deblurring [51].
+    hood of every event, our method produces sharp predic-              Recently, learning-based frame-based methods, such
+    tions, especially for independently moving objects.              as E-RAFT [20], have dominated event-based optical flow
+2. Richer data augmentation. Our point-based approach                estimation by leveraging correlation volumes. Many tech-
+    enables a wider range of augmentations, such as uniform          niques, such as multi-modality [46, 47, 59, 65], motion ag-
+    random rotations, which significantly enhances the esti-         gregation [21, 25, 34, 55], synthetic datasets [24, 29, 30]
+    mator’s accuracy and robustness across various domains.          have improved these models. However, their performance
+3. Uncertainty quantification. Our point-based method                drops significantly when tested across different domains.
+    can compute prediction uncertainty with a simple en-                Meanwhile, spiking neural networks (SNNs) are ap-
+    semble inference, offering valuable insights for down-           plied to event-based optical flow estimation due to their effi-
+    stream tasks like egomotion estimation.                          ciency in processing asynchronous data [16, 22, 36, 53, 61,
+4. Strong transferability. The method uses only event                63]. SNNs offer energy efficiency and compatibility with
+    neighborhoods and we train on undistorted events in nor-         neuromorphic hardware. However, their complex training
+    malized camera coordinates. This improves transferabil-          and dependency on specialized hardware make them less
+    ity when training and testing on different datasets.             practical than conventional neural networks.
+Finally, we show the effectiveness of the predicted normal              Despite the existing research, learning-based point-
+flows through aggressive egomotion estimation. We intro-             based methods remain underdeveloped in the event cam-
+duce a novel geometric-based egomotion solver that utilizes          era community, mainly due to the challenges of training
+normal flows in conjunction with IMU measurements. This              point-based estimators on large event datasets. Our work
+completes the pipeline integrating transferable event-based          addresses this gap.
+
+
+                                                                 2
+2.2. Point-Based Networks for Event Cameras                                                         Case 1                Case 2
+                                                                                1
+Point-based networks have enabled direct processing of                                     2
+point cloud data where PointNet [37] was the pioneering
+work. Subsequently, many feature extractors were devel-
+oped to improve point cloud processing [31, 38, 50, 57, 60,                    3
+62]. All existing point-based networks follow a common                                              Case 3                Case 4
+                                                                                       4
+pipeline that samples and groups input point clouds into
+centered neighborhoods, transforming the data from (n, 3)
+to (n, K, 3), where K is the number of neighboring points.
+However, this method is impractical for event data due to
+the huge values of n and K. Fortunately, with the invention
+of VecKM [58], a descriptive and scalable local point cloud
+encoder that eliminates the need for explicit grouping and             Figure 3. Uncertainty quantification (UQ) is important for per-
+sampling, it is now feasible to apply point-based networks             event normal flow estimation, as it helps filter out less reliable pre-
+to event data. We explore the potential in this paper.                 dictions. For example, the normal flow predictions in Cases 1 and
+   Prior to the introduction of VecKM, several attempts                2 are more reliable compared to those in Cases 3 and 4.
+were made to apply point-based networks to event-based
+                                                                       constraint into optimization frameworks [7], and neural net-
+vision tasks [39, 40, 42, 49, 54]. However, traditional point-
+                                                                       works [33] to estimate 3D motion.
+based networks require downsampling of the local point
+                                                                          The egomotion estimation algorithm proposed in this pa-
+cloud neighborhoods (i.e. reducing K), limiting their use to
+                                                                       per builds on the approach of [7], which also relies on the
+only high-level tasks like action recognition, which do not
+                                                                       depth positivity constraint and optimization. However, we
+demand precise modeling of event geometry. No previous
+                                                                       reformulate the optimization problem as training a support
+work has successfully used point-based networks for low-
+                                                                       vector classifier, enhancing stability and accuracy.
+level tasks such as normal flow prediction, which requires
+an accurate representation of event geometry.
+                                                                       3. Methodology
+2.3. Normal Flow and its Applications
+                                                                       3.1. Problem Definition and Overview
+Normal flow refers to the component of optical flow that is
+                                                                       Point-Based Normal Flow Prediction. The input to our
+perpendicular to the edges or parallel to image gradients:
+                                                                       point-based normal flow estimator is a sequence of events
+                             ∇I · u                                    (e1 , e2 , · · · , eN ), where ek = (tk , xk , yk )1 . We assume
+                      n=−            ∇I                     (1)
+                             ||∇I||2                                   access to GT per-event optical flow (u1 , u2 , · · · , uN ) for
+                                                                       supervision (see Appendix 9 for how to obtain it). The out-
+where ∇I is the image gradient, u is the optical flow vector,
+                                                                       put of the estimator is a sequence of normal flow predictions
+and n is the normal flow. Normal flow can be estimated
+                                                                       (n̂1 , n̂2 , · · · , n̂N ), where n̂k ∈ R2 . Each prediction n̂k is
+from a local neighborhood because it depends only on local
+                                                                       determined by the centered neighboring events of ek :
+spatial-temporal intensity changes. Unlike optical flow, it is
+not affected by the aperture problem [2], as it only captures
+                                                                                                 
+                                                                         n̂k = f N (ek ) , where N (ek ) :=
+motion along the image gradient direction. Because normal                n                    t − t x − x y − y                  o (3)
+                                                                                                 j    k   j    k    j    k
+flow is a projection of optical flow, it satisfies the following           ej − ek :                    ,        ,              <1
+                                                                                                   δt       δx        δy      2
+constraint, which will be used extensively in this paper:
+                                                                       where δt, δx, δy are the hyper-parameters controlling the
+                       n · (u − n) = 0                      (2)        neighborhood size. Note we allow the number of neighbor-
+    Normal flow is typically estimated by fitting planes to            ing events to be different, i.e., |N (ek )| can be different for
+very small event cloud neighborhoods [9, 32, 35, 41], a                different events ek . As discussed in Section 2.3, the neigh-
+simple and reliable method across various datasets. How-               boring events contain sufficient information to estimate nor-
+ever, the approach encounters difficulties when the edge is            mal flow because it is determined by intensity gradients,
+curved, or the local region features a corner.                         which are inherently local.
+    Normal flow has been applied to motion and structure               Uncertainty Quantification (UQ). After predicting the
+estimation [23, 28, 41]. Traditionally, 3D motion has been             per-event normal flows (n̂k )N  k=1 , we estimate uncertainty
+computed from normal flow via classification approaches                scores (σk )N
+                                                                                   k=1 of the predictions, where σk ≥ 0. UQ is cru-
+[11, 17] using the so-called depth positivity constraint, re-          cial in per-event normal flow estimation because, as shown
+lating the 2D to the 3D measurements. Researchers re-                     1 We omit polarity here because we found the polarity does not improve
+
+cently developed ways to incorporate the depth positivity              prediction accuracies.
+
+
+                                                                   3
+in Figure 3, there are neighborhoods where normal flow can                  Case 1                          Case 2
+not be estimated reliably. UQ identifies and removes these
+noisy predictions before passing them to downstream tasks.
+Overview. Our solution to the problem is outlined in Figure
+1. Each component of the pipeline is detailed as followed.
+Section 3.2 introduces the local events encoder, which effi-
+ciently transforms the local events N (ek ) into a representa-
+tive vector. Section 3.3 introduces a novel loss function that
+guides the network to predict normal flows, supervised by
+optical flow ground-truth. Section 3.4 introduces the data
+augmentation tricks used during training, which is a unique             Figure 4. Reconstruction of a density distribution (shown in gray)
+advantage of our point-based method. Section 3.5 intro-                 from VecKM’s local events encoding. The reconstructed 3D dis-
+                                                                        tribution closely aligns with the original (blue and red) events,
+duces how to compute uncertainty scores during inference
+                                                                        demonstrating that VecKM’s encoding effectively represents the
+time. Section 3.6 details an egomotion estimation algorithm             event data. The examples shown are identical to those in Figure 3.
+that uses normal flow inputs, where we enhance the robust-
+ness and stability of the algorithm from [7].
+                                                                        Radial Component                   Angular Component
+3.2. Local Events Encoder
+We introduce how to encode the neighboring events N (ek )
+into a vector representation for each event ek . Given the
+high volume of input events(∼ 80k events every 20 ms), the
+local events encoder must be scalable and efficient.
+    We use a recently developed a local geometry encoder
+named VecKM [58], which is designed to process large
+point clouds efficiently. VecKM models local events as
+samples from a kernel mixture and uses random Fourier fea-
+tures to transform the kernel mixture into a vector represen-           Figure 5. Loss maps and gradient fields of the motion field loss
+tation. Such formulation allows using all neighboring points            function. Our motion field loss function consists of radial and an-
+to compute the local geometric encoding without down-                   gular components. Given the GT optical flow u, the radial compo-
+sampling the neighborhood. Besides, it eliminates the need              nent guides the predicted flow to lie on the circle with u as the di-
+for explicitly grouping and sampling the event neighbor-                ameter. The angular component guides the predicted flow to align
+                                                                        with u, which prevents the trivial prediction of zero flow.
+hoods. These merits make VecKM well-suited for handling
+high-volume event data and dense local event regions.                   Qualitative Evaluation of VecKM Encoding. VecKM [58]
+VecKM Encoding of Local Events. Given the normalized                    proves that G[k, :] ∈ Cd in Eqn. (4) effectively represents
+events XN ×3 = {( tδtk , xδxk , yδyk )}N
+                                       k=1 in Eqn. (3), the VecKM       local events N (ek ). Specifically, the local events distribu-
+local events encoding GN ×d is computed by:                             tion can be reconstructed from the encoding G[k, :]. Figure
+      JN ×N = adjacency matrix(XN ×3 )                                  4 shows examples of local events and the distribution recon-
+      AN ×d = exp(iXN ×3 A3×d )                              (4)        struction from the local events encoding. The strong align-
+                                                                       ment between the events and the reconstructed distributions
+      GN ×d = normalize (JN ×N AN ×d )./AN ×d                           suggests that VecKM generates a representative encoding.
+J is a sparse adjacency matrix where the (j, k)-entry is 1 if           Normal Flow Prediction. After computing the local events
+ej and ek are close, and 0 otherwise. A3×d is a randomized              encoding GN ×d from Eqn. (4), we transform each event’s
+fixed matrix with entries drawn from a normal distribution              encoding G[k, :] to normal flow prediction n̂k using a multi-
+with a mean of 0 and variance of 25. The function exp(i·) is            layer perceptron (MLP) [45]. The MLP is trained by a novel
+the element-wise Euler formula, and ./ denotes the element-             loss function introduced in the next section.
+wise complex number division.
+                                                                        3.3. Normal Flow Learning with a Two-Term Loss
+    The neighbor information is captured in the sparse adja-
+cency matrix J and incorporated into the local event encod-             In frame-based vision, normal flow has been defined as the
+ing G through matrix multiplication. The centralizing step              flow component along the image gradient (or perpendicu-
+is implicitly achieved by the element-wise division. This               lar to the local edge). In event space, however, no obvious
+formulation eliminates the need for explicitly grouping and             definition exists for an image gradient that can be computed
+sampling event neighborhoods, making it descriptive and                 per-event and so obtaining ground truth (GT) normal flow
+scalable. Kindly refer to [58] for detailed derivation.                 for an event camera is challenging. Instead, we use GT op-
+
+
+                                                                    4
+tical flow as supervision, and guide the network to predict           Random Scaling. We scale the event streams by a random
+normal flow (the component of optical flow along some di-             scalar α ∈ (0.75, 1.25). The augmented inputs and targets
+rection) by training with a novel motion field loss function.         are obtained by: X ← X ∗ α, U ← U . This improves the
+This loss function is composed of two components: a radial            estimator’s performance on small and large objects.
+and an angular component, as illustrated in Figure 5.                 Random Sampling. We sample 50% ∼ 100% percentage
+   The radial component guides the predicted flow to sat-             of the events and their corresponding flows. This makes the
+isfy the normal flow magnitude constraint (2). Geometri-              estimator robust to density variation.
+cally, this means the predicted flow lies on a circle where
+the GT optical flow represents the diameter. When the nor-
+                                                                      3.5. Inference with Uncertainty Quantification
+mal flow constraint is satisfied, the radial loss becomes zero.       As explained in Section 3.4 Random Rotation, motion
+   Note that predicting zero flow is a trivial solution for           field estimation is an equivariant task, which we exploit to
+minimizing the radial component. To avoid such prediction,            estimate an uncertainty score based on how well the pre-
+we introduce an angular component, which encourages the               dicted flow remains equivariant to rotation. Specifically, we
+predicted flow to have the same direction as the optical flow.        sample K rotation angles and infer the normal flow with the
+   Heuristically, training on the sum of these two compo-             rotated events. Then we de-rotate the predicted normal flow
+nents allows the network to predict the full optical flow             with the corresponding rotation angle:
+when possible. If the texture information is insufficient to
+                                                                                                        1 0T
+                                                                                                               
+predict the full optical flow, the network resorts to predict-               Û = estimator XN ×3                   R(θ)−1       (8)
+                                                                                                       0 R(θ)
+ing the normal flow. We show that our intention is achieved
+in Figure 9 in Appendix 11.1.                                            By doing so, we obtain an ensemble of K predicted flows
+   Mathematically, given the GT optical flow, the normal              for each event, and can test their consensus to compute an
+flow is predicted using the following loss function:                  uncertainty score. Specifically, we use the circular standard
+                                 ϵ + ||n̂ − u/2|| 2                 deviation [1] of the ensemble as the uncertainty score. The
+          Radial(u, n̂) = log                              (5)        final prediction is given by the average of the ensemble in
+                                  ϵ + ||u/2||                         polar coordinates. Predictions corresponding with uncer-
+                              (n̂ − u/2) · u                          tainty above a threshold are discarded.
+        Angular(u, n̂) = −                                 (6)
+                           ||n̂ − u/2|| · ||u||
+                                                                      3.6. Egomotion Estimation from Normal Flow
+Figure 5 shows the resulting loss map and gradient field.             We demonstrate the usefulness of our normal flow for ego-
+Note, that the two components gradients are orthogonal ev-            motion estimation. We assume within a short time interval,
+erywhere, so the optimization of one component does not               we have normalized the event coordinates, per-event normal
+interfere with the other.                                             flow predictions, and we have a rotational velocity estimate
+                                                                      from the IMU sensor. We solve for the translation direction.
+3.4. Improve Transferability by Data Augmentation                        Our egomotion solver uses the depth positivity constraint,
+Diverse data augmentation is a unique advantage of our                which states that all world points are in front of the camera,
+point-based network, which improves the transferability of            i.e., have positive depth. Existing methods [7, 17, 33] utilize
+the estimator. Below, we enumerate the data augmentation              this constraint by maximizing the negative depths. How-
+tricks applied during training. We denote the input events            ever, the solution to this problem is not unique with respect
+as XN ×3 and their corresponding GT optical flow as UN ×2 .           to normal flow because depth positivity only considers the
+Random Rotation. Motion field estimation is an equiv-                 sign (or the direction) of the normal flow and is thus a weak
+ariant task, meaning that rotating the events on the image            constraint. So, when estimated normal flow is used, errors
+plane causes the motion field to rotate by the same angle.            in the estimated normal flow direction determine the out-
+Thanks to this, we apply a uniformly sampled random rota-             put. Thus we reformulate the problem as maximum margin
+tion angle θ ∈ [0, 2π) to the event cloud and GT flow. The            problem solved by training a support vector classifier, which
+augmented inputs and targets are obtained by:                         results in a robust estimate.
+                                                                          Given an estimate of the angular velocity Ω from the
+                                                                      IMU, we can calculate the rotational component urot
+                                                
+                               1    0        0                                                                                x    =
+           XN ×3 ← XN ×3 0 cos θ − sin θ                            Bx Ω of the optical flow at pixel x = (x, y) where Bx is:
+                               0 sin θ     cos θ        (7)
+                                                                                                       −(x2 + 1) y
+                                                                                                                      
+                                                                                               xy
+                                                                                   Bx =                                           (9)
+                                           
+                             cos θ − sin θ                                                 (y 2 + 1)     −xy        −x
+           UN ×2 ← UN ×2
+                              sin θ   cos θ
+                                                                      Then the magnitude of the derotated normal flow at pixel
+This forces the network to estimate direction without bias.           x, called nx , can be calculated through the relation nx =
+
+
+                                                                  5
+∥n̂x ∥−gxT urot
+            x where gx ∈ R
+                             2×1
+                                  is the direction of normal        (%P os), following the convention in [33], to evaluate the
+flow with unit norm. Then nx is related to translation by:          accuracy of normal flow predictions.
+
+                            1 T                                                                  u · n̂
+                    nx =     (g Ax )V                   (10)                  P EE(u, n̂) =             − ||n̂||             (13)
+                           Zx x                                                                  ||n̂||
+                                                                              %P os(u, n̂) = percentage(u · n̂ > 0)          (14)
+Where V ∈ R3×1 denotes the direction of translation, Zx ∈
+R denotes depth, and Ax is:
+                                                                    PEE measures how well the normal flow magnitude con-
+                                                                  straint (2) is satisfied. It measures the error in the length
+                         −1 0 x
+                  Ax =                                (11)          of the normal flow. %P os measures how well the predicted
+                          0 −1 y
+                                                                    normal flow has correct orientation as determined by the GT
+Since the depth Zx is positive, the following product, de-          optical flow. Note that since the direction of normal flow is
+noted as ρx (V ), should be positive for all x:                     independent of motion, optical flow also satisfies the con-
+                                                                    straint equation (2) and thus also minimizes PEE.
+                ρx (V ) = nx (gxT Ax V ) > 0            (12)        Qualitative Evaluation. In this drive, we include flow pre-
+                                                                    diction videos for every evaluation. Qualitative evaluation
+We impose this constraint by formulating Eqn. (12) into             is crucial for assessing aspects like prediction sharpness and
+a linear support vector classification without intercept,           handling independently moving objects, which are not fully
+namely solving V such that (gxT Ax )V has a target sign de-         captured by quantitative metrics. We strongly encourage
+cided by nx . The pseudo-code is given below. p is the num-         readers to focus on the qualitative results for a comprehen-
+ber of events. A, B are obtained through Eqn. (9) and (11),         sive assessment of model performance. We show visualiza-
+N are the norms of the predicted normal flows, G are the            tions in Figure 6 and upload flow prediction videos to this
+directions of the predicted normal flows with unit lengths,         drive. See Appendix 8 for detailed video descriptions.
+and Ω0 is the rotational estimate from the IMU sensor.              Compared Models. We compare our point-based learning-
+                                                                    based normal flow estimator with state-of-the-art event-
+Algorithm 1 Egomotion Solver                                        based optical flow estimators. We compare against Mul-
+                                                                    tiCM [44], E-RAFT [20], and Taming Contrast Maximiza-
+ 1:   Input: Ap×2×3 , Bp×2×3 , Np×1 , Gp×2 , Ω0 ∈ R3×1 .            tion (TCM) [34], which are all frame-based estimators us-
+ 2:   Output: V ∈ R3×1 .                                            ing model-based, supervised, and self-supervised learning
+ 3:   Qp×3 = batch mat mul(G, A)                                    approaches. Additionally, we compare against two point-
+ 4:   Rp×1 = N− batch mat mul(G, B) × Ω0                            based normal flow estimators: PCA [9] and PointNet [37].
+ 5:   Q2p×3 = concat(Q,−Q)
+                                                                    Implementation details and hyper-parameter setting are
+ 6:   R2p×1 = sign(concat(R,−R))
+                                                                    presented in Appendix 10.
+ 7:   svm = LinearSVM(fit intercept=False)
+ 8:   V3×1 = svm.fit(Q,R).coef                                      4.1. Evaluation on MVSEC
+ 9:   V = V / ||V ||
+                                                                    As shown by the quantitative results in Table 1, our point-
+                                                                    based method is on par with state-of-the-art frame-
+4. Experiments on Normal Flow Estimation                            based methods despite using only local information.
+                                                                    While TCM achieves lower PEE than our method on
+Datasets. We use MVSEC [64], EVIMO2 [13], and DSEC                  MVSEC, this is because MVSEC mainly features slow-
+[19] to evaluate the accuracy and transferability of our nor-       moving, static scenes without independently moving ob-
+mal estimator. We undistort and transform the events to nor-        jects. In these scenarios, TCM and E-RAFT using CNNs,
+malized camera coordinates (focal length one). We train on          can leverage larger receptive fields (through stacked convo-
+each dataset and evaluate the model on all three datasets,          lution and pooling layers) to smooth the flow predictions.
+resulting in nine combinations. Additionally, we train our          As we will show in Section 4.2, TCM and E-RAFT’s per-
+model on the union of the three (and potentially more)              formance deteriorates when scenes include independently
+datasets. We evaluate it and release it for public use.             moving objects, whereas our method remains robust.
+    Note that MVSEC has different camera resolution and             Our method outperforms the point-based estimators,
+distortion compared to EVIMO2 and DSEC. Therefore,                  PCA (MB) and PointNet (SL) by achieving lower PEE
+there is a substantial domain gap among the cameras used            and higher %P os, highlighting the benefits of supervised
+in the three datasets.                                              training. Additionally, PointNet requires explicit group-
+Evaluation Metrics. Quantitatively, we use projection               ing of events into neighborhoods and sampling, while our
+endpoint error (PEE) and percentage of sign correctness             method does not. This allows us to use information from
+
+
+                                                                6
+                                            Training      Indoor Flying 1     Indoor Flying 2     Indoor Flying 3    Outdoor Day 1          Average
+                                    Input
+                                              Set        PEE ↓ % Pos ↑       PEE ↓ % Pos ↑       PEE ↓ % Pos ↑      PEE ↓ % Pos ↑       PEE ↓ % Pos ↑
+               MultiCM        MB     F          -        0.993     97.8%     1.378     98.1%     1.191     98.2%    1.422    93.2%      1.246    96.8%
+               PCA            MB     P          -        1.460     76.2%     1.586     76.3%     1.552     75.0%    1.548    79.9%      1.537    76.9%
+                                               M         1.836     76.1%     2.867     74.7%     1.951     75.4%    0.677    97.8%      1.833    81.0%
+               E-RAFT         SL     F
+                                               D         0.797     92.5%     1.163     91.6%     0.948     92.9%    0.846    97.0%      0.939    93.5%
+                                               M         0.319     95.1%     0.638     91.3%     0.490     94.4%    0.948    97.3%      0.599    94.5%
+               TCM            SSL    F
+                                               D         0.303     93.9%     0.546     92.0%     0.437     93.6%    0.778    97.1%      0.516    94.1%
+               PointNet       SL     P         M         0.973     96.7%     1.428     95.6%     1.224     97.0%    1.032    97.1%      1.164    96.6%
+                                               M         0.970     98.4%     1.090     99.4%     1.040     99.6%    0.880    99.2%      0.995    99.2%
+                                               D         0.922     99.3%     1.216     99.2%     1.282     99.6%    1.004    97.8%      1.106    99.0%
+               Ours           SL     P
+                                               E         1.669     99.0%     1.483     99.6%     1.671     99.7%    0.854    98.6%      1.419    99.2%
+                                            M+D+E        0.968     99.5%     1.057     99.5%     1.065     99.8%    0.879    97.3%      0.992    99.0%
+Table 1. Quantitative results on MVSEC. The estimators are classified into model-based (MB), supervised learning (SL), self-supervised
+learning (SSL), frame-based (F), point-based (P). They are trained on MVSEC (M), DSEC (D), EVIMO-imo (E).
+
+                                Training      Scene    13 00       Scene    13 05       Scene   14 03       Scene   14 04       Scene   14 05     Average (8 scenes)
+                      Input
+                                  Set       PEE ↓      % Pos ↑   PEE ↓      % Pos ↑   PEE ↓     % Pos ↑   PEE ↓     % Pos ↑   PEE ↓     % Pos ↑   PEE ↓ % Pos ↑
+    MultiCM    MB         F         -       1.509       53.2%    4.315       75.7%    1.611      79.2%    1.800      73.2%    2.768      72.9%    1.800     68.5%
+    PCA        MB         P         -       1.573       88.2%    2.035       87.5%    1.580      91.9%    1.784      90.3%    1.823      89.4%    1.712     87.8%
+                                   M        1.370       71.9%    2.406       90.6%    1.356      69.5%    1.458      64.6%    2.186      67.1%    1.470     70.2%
+    E-RAFT     SL         F
+                                   D        0.843       88.9%    1.185       97.5%    0.517      88.1%    0.538      85.9%    0.908      86.3%    0.705     87.9%
+                                   M        0.823       85.6%    3.201       95.3%    1.111      86.3%    1.532      86.0%    2.445      82.2%    1.383     84.6%
+    TCM        SSL        F
+                                   D        0.774       87.3%    2.541       95.1%    0.872      87.8%    1.090      86.5%    1.640      84.1%    1.105     85.3%
+    PointNet   SL         P        E        1.047       88.1%    0.924       97.7%    0.848      98.3%    0.892      96.2%    1.053      96.6%    0.933     95.0%
+                                   M        0.713       95.6%    0.269       99.3%    0.676      98.8%    0.651      98.1%    0.806      98.2%    0.551     97.1%
+                                   D        0.590       96.6%    0.230       99.8%    0.575      99.8%    0.625      99.5%    0.567      99.4%    0.463     97.9%
+    Ours       SL         P
+                                   E        0.497       96.7%    0.399       99.2%    0.478      99.2%    0.515      98.8%    0.584      98.6%    0.423     97.9%
+                                M+D+E       0.465       96.2%    0.308       99.2%    0.544      99.3%    0.467      98.8%    0.568      98.5%    0.396     97.8%
+      Table 2. Quantitative results on the first five scenes of EVIMO2-imo’s evaluation set. The complete table is in Appendix 12.
+
+more neighboring events to predict the flows and yield bet-                               4.3. Evaluation on DSEC
+ter performance. In cross-dataset evaluations, our estimator
+outperforms PCA and PointNet when trained on DSEC and                                     Since DSEC does not provide GT optical flow, we cannot
+evaluated on MVSEC even though PointNet was trained on                                    compute error metrics for normal flow evaluation. We only
+MVSEC. When our method is trained on EVIMO-imo, the                                       provide a qualitative evaluation. The flow prediction videos
+performance remains comparable though the EVIMO-imo                                       in this drive show our method performs equally well even
+train set containing only 2.74 minutes of data.                                           when trained on different datasets. Our method produces
+                                                                                          consistently accurate predictions though the event density
+                                                                                          of MVSEC and the motion type of EVIMO2 are very dif-
+4.2. Evaluation on EVIMO2                                                                 ferent from those in DSEC,
+EVIMO2-imo sequences feature fast independently mov-
+ing objects. Table 2 presents quantitative results on the sam-                            5. Ablation Studies
+sung mono camera and Figure 6 visualizes the flow predic-                                 We perform extensive ablation studies on our proposed
+tion colored in HSV. As shown on the Table 2, our method,                                 method. We summarize the conclusion in this section, leav-
+significantly outperforms all compared estimators in the                                  ing the experiment statistics to Appendix 11.
+presence of independently moving objects even when                                        Effectiveness of motion field loss. We compare the
+trained on other datasets. In addition, as shown in Fig-                                  model’s performance against a baseline trained with con-
+ure 6, our method effectively preserves the boundaries of                                 ventional optical flow loss function. The model trained with
+the IMOs, closely matching the ground truth.                                              our proposed motion field loss achieves significantly lower
+   Our estimator shows highly consistent performance                                      error, highlighting the effectiveness of our loss function.
+and strong generalizability across different scenes, mo-                                  Effectiveness of uncertainty quantification (UQ). We find
+tion types and datasets as shown in Table 2. This is due                                  the flow prediction errors are positively correlated with
+to the model’s use of geometric features from local event                                 the uncertainty scores, highlighting the effectiveness of the
+neighborhoods, which capture domain-invariant patterns es-                                UQ. We also study how many ensembles of predictions are
+sential for normal flow estimation. Besides, our approach                                 needed to generate reliable UQ.
+employs normalized camera coordinates, utilizes extensive                                 Runtime. Our estimator takes about three seconds to pre-
+data augmentation, and prevents global information from                                   dict 80,000 per-event flows on an RTX A5000 GPU with 24
+affecting estimates in regions with independently moving                                  GB of memory, with memory usage below 6 GB. We also
+objects (IMOs), which all lead to the strong performance.                                 include statistics about event density of each dataset.
+
+                                                                                      7
+             ERAFT (SL)                       TCM (SSL)                         MultiCM (MB)                Ours (SL)                Ground Truth
+
+
+
+
+Figure 6. Visualization of flow prediction on EVIMO2-imo. The flows are displayed in HSV color space. Our method effectively preserves
+the boundary of the IMOs, while other methods fail.
+
+                                                                                         6. Experiments on Egomotion Estimation
+                                                                                         We evaluate our egomotion solver on the EVIMO2 sfm
+                                                                                         split, which includes scenes with fast camera motions and a
+                                                                                         focus of expansion far from the camera frame. The normal
+                                                                                         flow is estimated using our method trained on the EVIMO2-
+                                                                                         imo training split. Table 3 and Figure 7 compares our
+                                                                                         solver using SVM, to a method based on [7] that estimates
+                                                                                         translation by maximizing negative depth using rotation es-
+                                                                                         timates from the IMU. The results demonstrate that our nor-
+                                                                                         mal flow predictions and egomotion solver yield more accu-
+                                                                                         rate egomotion estimations. In Figure 7 the estimated trans-
+                                                                                         lation direction is scaled to m/s using ground truth. Plots of
+                                                                                         the predictions for all scenes are provided in Appendix 13.
+
+                                                                                         7. Conclusion and Future Work
+                                                                                         We introduce a point-based method for normal flow esti-
+                                                                                         mation that overcomes limitations in existing model and
+                                                                                         learning based methods by using local information with-
+Figure 7. Comparison of estimated translation velocity produced
+                                                                                         out explicit grouping. This allows improved cross domain
+by maximizing negative depth [7] and our SVM-based method.
+                                                                                         transfer and good performance in the presence of indepen-
+Our approach yields more accurate predictions.
+                                                                                         dently moving objects. While efficient, the method may
+Seq.         sfm 03 04 0   sfm 03 02 0   sfm 03 02 1   sfm 03 00 0   sfm 03 03 0         face computational challenges with higher camera resolu-
+Method                                   RMS V (m/s)                                     tions. Thus, future work can consider optimizing the en-
+Depth Pos.      0.217         0.500         0.243         0.237         0.135            coding and transformation to normal flow. Additionally, our
+SVM             0.136         0.227         0.156         0.141         0.116
+Seq.         sfm 03 01 0   sfm 03 02 2   sfm 03 03 2   sfm 03 02 3   sfm 03 03 1
+                                                                                         method currently depends on ground-truth flow for training.
+Method                                   RMS V (m/s)                                     A self-supervised approach could further improve its usabil-
+Depth Pos.      0.369         0.091         0.137         0.213         0.265            ity. Finally, while our method benefits from using local in-
+SVM             0.219         0.127         0.108         0.279         0.136
+                                                                                         formation, future work can consider careful incorporation
+       Table 3. Egomotion estimation error on EVIMO2-sfm.                                of global information that may be beneficial for tasks such
+                                                                                         as action recognition and object detection.
+
+
+                                                                                     8
+References                                                                      video diffusion models for event-based video interpolation.
+                                                                                arXiv preprint arXiv:2412.07761, 2024. 1
+ [1] scipy.stats.circstd. https://docs.scipy.org/doc/                    [15]   Jingxi Chen, Brandon Y Feng, Haoming Cai, Mingyang Xie,
+     scipy / reference / generated / scipy . stats .                            Christopher Metzler, Cornelia Fermuller, and Yiannis Aloi-
+     circstd.html. Accessed: 2024-11-07. 5                                      monos. Timerewind: Rewinding time with image-and-events
+ [2] The aperture problem.          https : / / elvers . us /                   video diffusion. arXiv preprint arXiv:2403.13800, 2024. 1
+     perception/aperture. Accessed: 2024-09-24. 1, 3                     [16]   Javier Cuadrado, Ulysse Rançon, Benoit R Cottereau, Fran-
+ [3] Himanshu Akolkar, Sio-Hoi Ieng, and Ryad Benosman.                         cisco Barranco, and Timothée Masquelier. Optical flow es-
+     Real-time high speed motion prediction using fast aperture-                timation from event-based cameras and spiking neural net-
+     robust event-driven visual flow. IEEE Transactions on                      works. Frontiers in Neuroscience, 17:1160034, 2023. 2
+     Pattern Analysis and Machine Intelligence, 44(1):361–372,           [17]   Cornelia Fermüller. Passive navigation as a pattern recogni-
+     2020. 2                                                                    tion problem. International journal of computer vision, 14
+ [4] Mohammed Almatrafi, Raymond Baldwin, Kiyoharu                              (2):147–158, 1995. 3, 5
+     Aizawa, and Keigo Hirakawa. Distance surface for event-             [18]   Guillermo Gallego, Henri Rebecq, and Davide Scaramuzza.
+     based optical flow. IEEE transactions on pattern analysis                  A unifying contrast maximization framework for event cam-
+     and machine intelligence, 42(7):1547–1556, 2020. 2                         eras, with applications to motion, depth, and optical flow
+ [5] Francisco Barranco, Cornelia Fermüller, and Yiannis Aloi-                 estimation. In Proceedings of the IEEE conference on
+     monos. Contour motion estimation for asynchronous event-                   computer vision and pattern recognition, pages 3867–3876,
+     driven cameras. Proceedings of the IEEE, 102(10):1537–                     2018. 2
+     1556, 2014. 2                                                       [19]   Mathias Gehrig, Mario Millhäusler, Daniel Gehrig, and Da-
+ [6] Francisco Barranco, Cornelia Fermüller, and Yiannis Aloi-                 vide Scaramuzza. E-raft: Dense optical flow from event cam-
+     monos. Bio-inspired motion estimation with event-driven                    eras. In International Conference on 3D Vision (3DV), 2021.
+     sensors. In Advances in Computational Intelligence: 13th In-               6
+     ternational Work-Conference on Artificial Neural Networks,          [20]   Mathias Gehrig, Mario Millhäusler, Daniel Gehrig, and Da-
+     IWANN 2015, Palma de Mallorca, Spain, June 10-12, 2015.                    vide Scaramuzza. E-raft: Dense optical flow from event cam-
+     Proceedings, Part I 13, pages 309–321. Springer, 2015. 2                   eras. In 2021 International Conference on 3D Vision (3DV),
+ [7] Francisco Barranco, Cornelia Fermüller, Yiannis Aloimonos,                pages 197–206. IEEE, 2021. 1, 2, 6
+     and Eduardo Ros. Joint direct estimation of 3d geometry and         [21]   Mathias Gehrig, Manasi Muglikar, and Davide Scaramuzza.
+     3d motion using spatio temporal gradients. Pattern Recogni-                Dense continuous-time optical flow from event cameras.
+     tion, 113:107759, 2021. 3, 4, 5, 8                                         IEEE Transactions on Pattern Analysis and Machine Intel-
+ [8] Ryad Benosman, Sio-Hoi Ieng, Charles Clercq, Chiara Bar-                   ligence, 2024. 2
+     tolozzi, and Mandyam Srinivasan. Asynchronous frameless             [22]   Jesse Hagenaars, Federico Paredes-Valles, and Guido de
+     event-based optical flow. Neural Networks, 27:32–37, 2012.                 Croon. Self-supervised learning of event-based optical flow
+     2                                                                          with spiking neural networks. In Advances in Neural Infor-
+ [9] Ryad Benosman, Charles Clercq, Xavier Lagorce, Sio-Hoi                     mation Processing Systems, pages 7167–7179. Curran Asso-
+     Ieng, and Chiara Bartolozzi. Event-based visual flow. IEEE                 ciates, Inc., 2021. 2
+     transactions on neural networks and learning systems, 25            [23]   Jinghang Li, Bangyan Liao, Xiuyuan Lu, Peidong Liu,
+     (2):407–417, 2013. 2, 3, 6                                                 Shaojie Shen, and Yi Zhou.             Event-aided time-to-
+[10] Vincent Brebion, Julien Moreau, and Franck Davoine. Real-                  collision estimation for autonomous driving. arXiv preprint
+     time optical flow for vehicular perception with low-and high-              arXiv:2407.07324, 2024. 2, 3
+     resolution event cameras. IEEE Transactions on Intelligent          [24]   Yijin Li, Zhaoyang Huang, Shuo Chen, Xiaoyu Shi, Hong-
+     Transportation Systems, 23(9):15066–15078, 2021. 2                         sheng Li, Hujun Bao, Zhaopeng Cui, and Guofeng Zhang.
+[11] Tomáš Brodskỳ, Cornelia Fermüller, and Yiannis Aloi-                   Blinkflow: A dataset to push the limits of event-based optical
+     monos. Structure from motion: Beyond the epipolar con-                     flow estimation. In 2023 IEEE/RSJ International Conference
+     straint. International Journal of Computer Vision, 37:231–                 on Intelligent Robots and Systems (IROS), pages 3881–3888.
+     258, 2000. 3                                                               IEEE, 2023. 1, 2
+[12] Tobias Brosch, Stephan Tschechne, and Heiko Neumann.                [25]   Haotian Liu, Guang Chen, Sanqing Qu, Yanping Zhang, Zhi-
+     On event-based optical flow detection. Frontiers in neuro-                 jun Li, Alois Knoll, and Changjun Jiang. Tma: Temporal
+     science, 9:137, 2015. 2                                                    motion aggregation for event-based optical flow. In Proceed-
+[13] Levi Burner, Anton Mitrokhin, Cornelia Fermüller, and                     ings of the IEEE/CVF International Conference on Com-
+     Yiannis Aloimonos. Evimo2: an event camera dataset for                     puter Vision, pages 9685–9694, 2023. 1, 2
+     motion segmentation, optical flow, structure from motion,           [26]   Min Liu and Tobi Delbruck. Adaptive time-slice block-
+     and visual inertial odometry in indoor scenes with monoc-                  matching optical flow algorithm for dynamic vision sensors.
+     ular or stereo algorithms. arXiv preprint arXiv:2205.03467,                BMVC, 2018. 2
+     2022. 6                                                             [27]   Min Liu and Tobi Delbruck. Edflow: Event driven opti-
+[14] Jingxi Chen, Brandon Y Feng, Haoming Cai, Tianfu Wang,                     cal flow camera with keypoint detection and adaptive block
+     Levi Burner, Dehao Yuan, Cornelia Fermuller, Christopher A                 matching. IEEE Transactions on Circuits and Systems for
+     Metzler, and Yiannis Aloimonos. Repurposing pre-trained                    Video Technology, 32(9):5776–5789, 2022. 2
+
+
+                                                                     9
+[28] Xiuyuan Lu, Yi Zhou, and Shaojie Shen. Event-based visual                  and Bojun Cheng. Rethinking efficient and effective point-
+     inertial velometer. arXiv preprint arXiv:2311.18189, 2023.                 based networks for event camera classification and regres-
+     2, 3                                                                       sion: Eventmamba. arXiv preprint arXiv:2405.06116, 2024.
+[29] Xinglong Luo, Kunming Luo, Ao Luo, Zhengning Wang,                         3
+     Ping Tan, and Shuaicheng Liu. Learning optical flow from            [41]   Zhongyang Ren, Bangyan Liao, Delei Kong, Jinghang Li,
+     event camera with rendered dataset. In Proceedings of the                  Peidong Liu, Laurent Kneip, Guillermo Gallego, and Yi
+     IEEE/CVF International Conference on Computer Vision,                      Zhou. Motion and structure from event-based normal flow.
+     pages 9847–9857, 2023. 2                                                   arXiv preprint arXiv:2407.12239, 2024. 2, 3
+[30] Xinglong Luo, Ao Luo, Zhengning Wang, Chunyu Lin, Bing              [42]   Yusuke Sekikawa, Kosuke Hara, and Hideo Saito. Eventnet:
+     Zeng, and Shuaicheng Liu. Efficient meshflow and opti-                     Asynchronous recursive event processing. In Proceedings
+     cal flow estimation from event cameras. In Proceedings of                  of the IEEE/CVF conference on computer vision and pattern
+     the IEEE/CVF Conference on Computer Vision and Pattern                     recognition, pages 3887–3896, 2019. 3
+     Recognition, pages 19198–19207, 2024. 2                             [43]   Shintaro Shiba, Yoshimitsu Aoki, and Guillermo Gallego.
+[31] Xu Ma, Can Qin, Haoxuan You, Haoxi Ran, and Yun                            Fast event-based optical flow estimation by triplet matching.
+     Fu. Rethinking network design and local geometry in point                  IEEE Signal Processing Letters, 29:2712–2716, 2022. 2
+     cloud: A simple residual mlp framework. arXiv preprint              [44]   Shintaro Shiba, Yoshimitsu Aoki, and Guillermo Gallego.
+     arXiv:2202.07123, 2022. 3                                                  Secrets of event-based optical flow. In European Conference
+[32] Elias Mueggler, Christian Forster, Nathan Baumli,                          on Computer Vision, pages 628–645. Springer, 2022. 1, 2, 6
+     Guillermo Gallego, and Davide Scaramuzza. Lifetime                  [45]   Chiheb Trabelsi, Olexa Bilaniuk, Ying Zhang, Dmitriy
+     estimation of events from dynamic vision sensors. In 2015                  Serdyuk, Sandeep Subramanian, Joao Felipe Santos,
+     IEEE international conference on Robotics and Automation                   Soroush Mehri, Negar Rostamzadeh, Yoshua Bengio, and
+     (ICRA), pages 4874–4881. IEEE, 2015. 2, 3                                  Christopher J Pal. Deep complex networks. arXiv preprint
+[33] Chethan M Parameshwara, Gokul Hari, Cornelia Fermüller,                   arXiv:1705.09792, 2017. 4
+     Nitin J Sanket, and Yiannis Aloimonos. Diffposenet: Di-             [46]   Zhexiong Wan, Yuchao Dai, and Yuxin Mao. Learning dense
+     rect differentiable camera pose estimation. In Proceedings                 and continuous optical flow from an event camera. IEEE
+     of the IEEE/CVF Conference on Computer Vision and Pat-                     Transactions on Image Processing, 31:7237–7251, 2022. 2
+     tern Recognition, pages 6845–6854, 2022. 3, 5, 6                    [47]   Zhexiong Wan, Yuxin Mao, Jing Zhang, and Yuchao Dai.
+[34] Federico Paredes-Vallés, Kirk YW Scheper, Christophe                      Rpeflow: Multimodal fusion of rgb-pointcloud-event for
+     De Wagter, and Guido CHE De Croon. Taming contrast max-                    joint optical flow and scene flow estimation. In Proceedings
+     imization for learning sequential, low-latency, event-based                of the IEEE/CVF International Conference on Computer Vi-
+     optical flow. In Proceedings of the IEEE/CVF International                 sion, pages 10030–10040, 2023. 2
+     Conference on Computer Vision, pages 9695–9705, 2023. 2,            [48]   Zengyu Wan, Yang Wang, Zhai Wei, Ganchao Tan, Yang
+     6                                                                          Cao, and Zheng-Jun Zha. Event-based optical flow via trans-
+[35] Bas J Pijnacker Hordijk, Kirk YW Scheper, and Guido CHE                    forming into motion-dependent view. IEEE Transactions on
+     De Croon. Vertical landing for micro air vehicles using                    Image Processing, 2024. 2
+     event-based optical flow. Journal of Field Robotics, 35(1):         [49]   Qinyi Wang, Yexin Zhang, Junsong Yuan, and Yilong Lu.
+     69–90, 2018. 3                                                             Space-time event clouds for gesture recognition: From rgb
+[36] Wachirawit Ponghiran, Chamika Mihiranga Liyanagedera,                      cameras to event cameras. In 2019 IEEE Winter Conference
+     and Kaushik Roy. Event-based temporally dense optical flow                 on Applications of Computer Vision (WACV), pages 1826–
+     estimation with sequential learning. In Proceedings of the                 1835. IEEE, 2019. 3
+     IEEE/CVF International Conference on Computer Vision,               [50]   Yue Wu, Jiaming Liu, Maoguo Gong, Zhixiao Liu, Qiguang
+     pages 9827–9836, 2023. 2                                                   Miao, and Wenping Ma. Mpct: Multiscale point cloud trans-
+[37] Charles R Qi, Hao Su, Kaichun Mo, and Leonidas J Guibas.                   former with a residual network. IEEE Transactions on Mul-
+     Pointnet: Deep learning on point sets for 3d classification                timedia, 2023. 3
+     and segmentation. In Proceedings of the IEEE conference             [51]   Yilun Wu, Federico Paredes-Vallés, and Guido CHE
+     on computer vision and pattern recognition, pages 652–660,                 De Croon. Lightweight event-based optical flow estimation
+     2017. 3, 6                                                                 via iterative deblurring. In 2024 IEEE International Con-
+[38] Charles Ruizhongtai Qi, Li Yi, Hao Su, and Leonidas J                      ference on Robotics and Automation (ICRA), pages 14708–
+     Guibas. Pointnet++: Deep hierarchical feature learning on                  14715. IEEE, 2024. 2
+     point sets in a metric space. Advances in neural information        [52]   Tianyi Xiong, Jiayi Wu, Botao He, Cornelia Fermuller, Yian-
+     processing systems, 30, 2017. 3                                            nis Aloimonos, Heng Huang, and Christopher A Metzler.
+[39] Hongwei Ren, Yue Zhou, Yulong Huang, Haotian Fu, Xi-                       Event3dgs: Event-based 3d gaussian splatting for fast ego-
+     aopeng Lin, Jie Song, and Bojun Cheng. Spikepoint: An                      motion. arXiv preprint arXiv:2406.02972, 2024. 1
+     efficient point-based spiking neural network for event cam-         [53]   Yingfu Xu, Guangzhi Tang, Amirreza Yousefzadeh, Guido
+     eras action recognition. arXiv preprint arXiv:2310.07189,                  de Croon, and Manolis Sifalakis. Event-based optical
+     2023. 3                                                                    flow on neuromorphic processor: Ann vs. snn compar-
+[40] Hongwei Ren, Yue Zhou, Jiadong Zhu, Haotian Fu, Yu-                        ison based on activation sparsification. arXiv preprint
+     long Huang, Xiaopeng Lin, Yuetong Fang, Fei Ma, Hao Yu,                    arXiv:2407.20421, 2024. 2
+
+
+                                                                    10
+[54] Jiancheng Yang, Qiang Zhang, Bingbing Ni, Linguo Li,
+     Jinxian Liu, Mengdie Zhou, and Qi Tian. Modeling point
+     clouds with self-attention and gumbel subset sampling. In
+     Proceedings of the IEEE/CVF conference on computer vi-
+     sion and pattern recognition, pages 3323–3332, 2019. 3
+[55] Yaozu Ye, Hao Shi, Kailun Yang, Ze Wang, Xiaoting Yin,
+     Yining Lin, Mao Liu, Yaonan Wang, and Kaiwei Wang. To-
+     wards anytime optical flow estimation with event cameras.
+     arXiv preprint arXiv:2307.05033, 2023. 2
+[56] Hongzhi You, Yijun Cao, Wei Yuan, Fanjun Wang, Ning
+     Qiao, and Yongjie Li. Vector-symbolic architecture for
+     event-based optical flow. arXiv preprint arXiv:2405.08300,
+     2024. 2
+[57] Dehao Yuan, Furong Huang, Cornelia Fermüller, and Yian-
+     nis Aloimonos. Decodable and sample invariant continuous
+     object encoder. arXiv preprint arXiv:2311.00187, 2023. 3
+[58] Dehao Yuan, Cornelia Fermuller, Tahseen Rabbani, Furong
+     Huang, and Yiannis Aloimonos. A linear time and space lo-
+     cal point cloud geometry encoder via vectorized kernel mix-
+     ture (VecKM). In Proceedings of the 41st International Con-
+     ference on Machine Learning, pages 57871–57886. PMLR,
+     2024. 2, 3, 4
+[59] Chi Zhang, Chenxu Jiang, and Lei Yu. Cross-modal learning
+     for optical flow estimation with events. Signal Processing,
+     page 109580, 2024. 2
+[60] Renrui Zhang, Liuhui Wang, Yali Wang, Peng Gao, Hong-
+     sheng Li, and Jianbo Shi. Starting from non-parametric
+     networks for 3d point cloud analysis. In Proceedings of
+     the IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition, pages 5344–5353, 2023. 3
+[61] Yisa Zhang, Hengyi Lv, Yuchen Zhao, Yang Feng, Hailong
+     Liu, and Guoling Bi. Event-based optical flow estimation
+     with spatio-temporal backpropagation trained spiking neural
+     network. Micromachines, 14(1):203, 2023. 2
+[62] Hengshuang Zhao, Li Jiang, Jiaya Jia, Philip HS Torr, and
+     Vladlen Koltun. Point transformer. In Proceedings of
+     the IEEE/CVF international conference on computer vision,
+     pages 16259–16268, 2021. 3
+[63] Rui Zhao, Ruiqin Xiong, Jing Zhao, Zhaofei Yu, Xiaopeng
+     Fan, and Tiejun Huang. Learning optical flow from continu-
+     ous spike streams. Advances in Neural Information Process-
+     ing Systems, 35:7905–7920, 2022. 2
+[64] Alex Zihao Zhu, Dinesh Thakur, Tolga Özaslan, Bernd
+     Pfrommer, Vijay Kumar, and Kostas Daniilidis. The multi-
+     vehicle stereo event camera dataset: An event camera dataset
+     for 3d perception. IEEE Robotics and Automation Letters, 3
+     (3):2032–2039, 2018. 6
+[65] Alex Zihao Zhu, Liangzhe Yuan, Kenneth Chaney, and
+     Kostas Daniilidis. Ev-flownet: Self-supervised optical
+     flow estimation for event-based cameras. arXiv preprint
+     arXiv:1802.06898, 2018. 2
+[66] Alex Zihao Zhu, Liangzhe Yuan, Kenneth Chaney, and
+     Kostas Daniilidis. Unsupervised event-based learning of
+     optical flow, depth, and egomotion. In Proceedings of
+     the IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition, pages 989–997, 2019. 1
+
+
+
+                                                                    11
+               Learning Normal Flow Directly From Event Neighborhoods
+                                           Supplementary Material
+8. List of Flow Prediction Videos                                9. Dataset Preprocessing
+We provide flow prediction videos for each evaluated             In this section, we detail how to preprocess the data to
+dataset—MVSEC, EVIMO2, and DSEC. These visualiza-                obtain undistorted normalized per-event optical flow on
+tions showcase predictions from models trained on each of        MVSEC, EVIMO2, and DSEC.
+the three datasets. Figure 8 shows some screenshots of the       MVSEC & EVIMO2 both provide frame-based forward
+video. The videos are in this link. The enumeration of           optical flows in the distorted camera coordinates. We first
+videos are as followed:                                          interpolate the flow in the time domain. If an event (t, x, y)
+• DSEC eval interlaken 00 a.mov                                  lies between t0 and t1 , the optical flow at this event is com-
+• DSEC eval interlaken 00 b.mov                                  puted as:
+• DSEC eval interlaken 01 a.mov
+• DSEC eval thun 01 a.mov                                                        t − t0                     t1 − t
+                                                                 u(t, x, y) =           f low(t1 , x, y) +         f low(t0 , x, y)
+• DSEC eval thun 01 b.mov                                                       t1 − t0                    t1 − t0
+• DSEC eval zurich city 12 a.mov
+                                                                 After this, we convert the per-event distorted flow in the
+• DSEC eval zurich city 13 a.mov
+                                                                 raw pixel coordinates into undistorted flow in the normal-
+• DSEC eval zurich city 13 b.mov
+                                                                 ized pixel coordinates using cv2.undistortPoints.
+• DSEC eval zurich city 14 a.mov
+• DSEC eval zurich city 14 b.mov
+                                                                 start = cv2.undistortPoints(x, y, K, D)
+• DSEC eval zurich city 14 c.mov
+• DSEC eval zurich city 15 a.mov                                  end = cv2.undistortPoints(x + ux , y + uy , K, D)
+• EVIMO eval scene13 dyn test 00 000000.mov                          out = (end − start)/(t1 − t0 )
+• EVIMO eval scene13 dyn test 05 000000.mov
+• EVIMO eval scene14 dyn test 03 000000.mov                      This will transform the flow into undistorted normalized
+• EVIMO eval scene14 dyn test 04 000000.mov                      camera coordinates, with unit normalized pixel per second.
+• EVIMO eval scene14 dyn test 05 000000.mov                      DSEC, different from the previous two datasets, provides
+• EVIMO eval scene15 dyn test 01 000000.mov                      frame-based forward optical flow and backward optical
+• EVIMO eval scene15 dyn test 02 000000.mov                      flow, which can be used to obtain more accurate per-event
+• EVIMO eval scene15 dyn test 05 000000.mov                      optical flow. Specifically, we let
+• EVIMO sfm scene 03 00 000000.mov
+                                                                                    1
+• EVIMO sfm scene 03 01 000000.mov                               f low(t1 , x, y) =   (
+• EVIMO sfm scene 03 02 000000.mov                                                  2
+• EVIMO sfm scene 03 02 000001.mov                                      f low f orward(t1 , x, y) − f low backward(t1 , x, y)
+• EVIMO sfm scene 03 02 000002.mov                               )
+• EVIMO sfm scene 03 02 000003.mov
+• EVIMO sfm scene 03 03 000000.mov                               The following procedures are the same as the previous two
+• EVIMO sfm scene 03 03 000001.mov                               datasets.
+• EVIMO sfm scene 03 03 000002.mov
+• EVIMO sfm scene 03 04 000000.mov                               10. Implementation Details of Our Model
+• MVSEC eval indoor flying1.mov
+• MVSEC eval indoor flying2.mov                                  We transform the event pixels and flows into undistorted,
+• MVSEC eval indoor flying3.mov                                  normalized camera coordinates as explained in Appendix 9.
+• MVSEC eval outdoor day1.mov                                    The resulting flows are then scaled such that their unit is in
+                                                                 pixels per second. After this scaling, the flow norms fall
+                                                                 within a range of 0 to 3.
+                                                                    During training, we randomly sample an event, using a
+                                                                 uniform distribution over the logarithm of the flow norm,
+                                                                 within the range of 0.01 to 3. We then slice the event stream
+                                                                 around the sampled event to create the training samples. We
+                                                                 apply the data augmentation techniques described in Sec-
+                                                                 tion 3.4. The pixel radius parameters (δx, δy in Eqn. (3))
+
+
+                                                             1
+                                                               MVSEC indoor MVSEC outdoor
+                                                                     EVIMO DSEC
+
+
+
+
+                                                                                            Ground-truth is not available.
+
+
+
+
+Figure 8. Screenshot of the flow prediction videos. Each row displays the norm, angle, and flow fields of both ground-truth and predicted
+flows. The first row visualizes the ground-truth optical flow, while subsequent rows show model predictions trained on each dataset. To
+illustrate the flow field, we sample 5,000 flow points for visualization. If a pixel is gray, it means the flow prediction has a high uncertainty.
+
+
+
+                                                                          2
+                             13 00              13 05              14 03              14 04              14 05              15 01               15 02              15 05           Average
+                         PEE      %Pos      PEE      %Pos      PEE      %Pos      PEE      %Pos      PEE      %Pos      PEE       %Pos      PEE      %Pos     PEE      %Pos     PEE      %Pos
+Norm + Direction Loss   0.972     90.0%    0.912     98.1%    0.749     98.9%    0.762     96.9%     1.150    97.3%    0.559      96.9%    0.610     94.5%    1.274    91.5%    0.87     95.5%
+Ours                    0.497     96.7%    0.399     99.2%    0.478     99.2%    0.515     98.8%     0.584    98.6%    0.286      98.1%    0.274     96.8%    0.354    95.5%    0.42     97.9%
+Difference              ↓ 0.475   ↑ 6.7%   ↓ 0.513   ↑ 1.1%   ↓ 0.271   ↑ 0.3%   ↓ 0.247   ↑ 1.9%   ↓ 0.566   ↑ 1.3%   ↓ 0.273    ↑ 1.2%   ↓ 0.336   ↑ 2.3%   ↓ 0.92   ↑ 4.0%   ↓ 0.45   ↑ 2.4%
+
+
+Table 4. Comparison between the estimator trained with our motion field loss function and the one trained with the standard norm-plus-
+direction loss function. Using our motion field function significantly improves the model’s performance.
+
+Ground-Truth Optical Flow                                                                         Predicted Flow                                                    Predict Normal Flow
+
+
+
+
+                                                                                                                                                                    The model decides
+
+
+
+                                                                                                                                                                    Predict Optical Flow
+
+
+
+
+Figure 9. The model can choose between estimating the full optical flow or normal flow depending on the texture of the local region. If
+the local texture is rich enough (e.g. a corner), the model will estimate full optical flow. If the local texture only contains strong edges, the
+model will estimate normal flow.
+
+are set to 0.02, which correspond to 4.5, 10.4, and 11.1 pix-                                       designed the following norm + direction loss to train our
+els for the MVSEC, EVIMO2, and DSEC datasets, respec-                                               estimator to estimate optical flow, defined as follows:
+tively, measured in terms of raw pixels. The time radius (δt                                                                                    ϵ + ||u|| 2
+in Eqn. (3)) is 20 ms. The parameter ϵ in Eqn. (5) is set                                                                        L1 = log
+to 0.1. The dimension of the local event encoding is 384.                                                                                  ϵ + ||û||
+We remove the predictions with circular standard deviation                                                                                 u · û
+                                                                                                                                 L2 = −
+larger than 0.3 (Section 3.5). If the events size within 20 ms                                                                          ||u|| · ||û||
+is larger than 80,000, we randomly sample 80,000 events                                                                           L = L1 + L2
+from the 20 ms interval.
+                                                                                                    Where û is the output of our method when being trained
+11. Ablation Studies                                                                                with this optical flow loss.
+                                                                                                        As shown in Table 4, our motion field loss function sig-
+We use the EVIMO2-imo dataset for our ablation stud-                                                nificantly enhances the estimator’s performance in terms of
+ies because it presents challenging scenarios with inde-                                            PEE and %P os.
+pendently moving objects. The models are trained on                                                     In addition, we analyze the behavior of our estimator
+EVIMO2-imo training set to better capture the impact of                                             qualitatively in Figure 9. After the model is trained using
+the ablated factors.                                                                                our motion field loss function, the model can choose be-
+                                                                                                    tween estimating full optical flow or normal flow depending
+11.1. Effect of Motion Field Loss                                                                   on the texture of the local regions. This further justifies the
+We show that our estimator benefits from being trained on                                           effect of our motion field loss function.
+the novel motion field loss by comparing to an optical flow
+                                                                                                    11.2. Effect of Uncertainty Quantification
+loss. While variations on average end-point error (AEE) are
+typically used for supervised training of optical flow estima-                                      Table 5 provides a comprehensive analysis of the estima-
+tors, our method, which is designed to estimate normal flow,                                        tor’s performance, showing prediction errors alongside the
+does not converge when trained with such losses. Thus, we                                           percentage of confident predictions across various ensemble
+
+
+                                                                                              3
+sizes and uncertainty thresholds. The positive correlation
+observed between prediction errors and uncertainty scores
+underscores the effectiveness of the uncertainty quantifi-              % Pos           num ensemble=2     num ensemble=4    num ensemble=6   num ensemble=10
+                                                                    conf thres=0.1          97.2%              97.7%             98.4%             98.2%
+cation. Our results indicate that an uncertainty threshold          conf thres=0.2          96.9%              98.0%             98.3%             98.4%
+                                                                    conf thres=0.3          96.5%              97.7%             98.0%             98.1%
+between 0.3 and 0.6 achieves an optimal balance between             conf thres=0.4          96.2%              97.4%             97.7%             97.9%
+valid prediction rates and accuracy. Additionally, the table        conf thres=0.5          95.9%              97.2%             97.5%             97.7%
+                                                                    conf thres=0.6          95.7%              96.9%             97.3%             97.5%
+reveals that 3 to 4 ensemble predictions are sufficient for         conf thres=0.7          95.5%              96.7%             97.1%             97.2%
+                                                                    conf thres=nfty         92.3%              92.6%             92.8%             92.8%
+consistent uncertainty estimation, though larger ensembles
+generally yield improved performance. For scenarios where           conf
+                                                                           PEE
+                                                                           thres=0.1
+                                                                                        num ensemble=2
+                                                                                             0.467
+                                                                                                           num ensemble=4
+                                                                                                                0.529
+                                                                                                                             num ensemble=6
+                                                                                                                                  0.580
+                                                                                                                                              num ensemble=10
+                                                                                                                                                   0.686
+runtime is not a constraint, employing larger ensembles can         conf   thres=0.2         0.461              0.442             0.436            0.436
+                                                                    conf   thres=0.3         0.454              0.436             0.423            0.423
+enhance prediction accuracy.                                        conf   thres=0.4         0.454              0.436             0.423            0.423
+                                                                    conf   thres=0.5         0.454              0.436             0.423            0.423
+                                                                    conf   thres=0.6         0.454              0.436             0.423            0.429
+11.3. Runtime and Memory Usage                                      conf   thres=0.7         0.454              0.436             0.423            0.423
+                                                                    conf   thres=nfty        0.442              0.423             0.411            0.411
+Table 6 reports the computational cost of our estimator. Ta-
+                                                                      Valid Pct.        num ensemble=2     num ensemble=4    num ensemble=6   num ensemble=10
+ble 7 reports the statistics about the event density of some        conf thres=0.1          45.0%              17.4%              4.3%             1.6%
+                                                                    conf thres=0.2          66.8%              53.3%             49.6%             47.9%
+selected scenes from each dataset.                                  conf thres=0.3          74.9%              66.6%             65.0%             63.3%
+                                                                    conf thres=0.4          78.8%              72.2%             70.6%             68.8%
+                                                                    conf thres=0.5          81.1%              75.1%             73.4%             71.5%
+12. Per-Scene Normal Flow Evaluation on                             conf thres=0.6          82.7%              77.0%             75.3%             73.6%
+                                                                    conf thres=0.7          83.9%              78.5%             76.9%             76.8%
+    EVIMO2                                                          conf thres=nfty         100%               100%              100%              100%
+
+
+We present the per-scene normal flow evaluation on                 Table 5. Performance of the estimator under varying ensemble
+EVIMO2-imo, as shown in Table 8.                                   sizes and uncertainty thresholds. Increasing the ensemble size
+                                                                   generally enhances results, with 4 to 6 ensembles already provid-
+13. Per-Scene Egomotion Evaluation on                              ing sufficiently stable outcomes.
+    EVIMO2
+We present the per-scene egomotion evaluation on
+EVIMO2, as shown in Figure 10.
+
+                                                                                              Inference Time (5 ensembles)     Max GPU Memory Allocation
+                                                                    num     events = 10k                 0.111 s                       0.70 GB
+                                                                    num     events = 20k                 0.287 s                       1.36 GB
+                                                                    num     events = 40k                 0.910 s                       2.71 GB
+                                                                    num     events = 80k                 3.138 s                       5.39 GB
+
+                                                                           Table 6. Computational cost of our normal flow estimator.
+
+
+
+
+                                                                                                                 #events every 20 ms – quantile
+                                                                                                     min          25%           50%           75%       max
+                                                                   MVSEC – indoor flying1             85        2396.25        3720.0      5376.0      16177
+                                                                   MVSEC – indoor flying2             78        3157.0         5297.5      7987.5      23890
+                                                                   MVSEC – indoor flying3             78        2746.0         4850.0      6845.0      17476
+                                                                   MVSEC – outdoor day1               58         4412.0        6903.0     10646.75     96327
+                                                                   EVIMO – IMO          13   00     7954        23564.5       35535.0     46824.5       68946
+                                                                   EVIMO – IMO          13   05     10806       55951.0       78963.0     87891.0      120730
+                                                                   EVIMO – SFM          03   00      2962       15766.0       76979.0     88460.5      105177
+                                                                   EVIMO – SFM          03   01     15315       41049.0       80223.0     94096.0      118441
+                                                                   DSEC – interlaken 00 a           123449      133520.0     146397.0     157920.0     165356
+                                                                   DSEC – interlaken 00 b           183286     187122.75     189133.5    196445.75     209048
+                                                                   DSEC – thun 01 a                  66476      83569.25     101858.5    117016.75     121001
+                                                                   DSEC – zurich city 12 a          116746     138822.0      167154.0    196738.5      228827
+
+                                                                               Table 7. Statistics of event density of each dataset.
+
+
+
+
+                                                               4
+                         Training     Scene   13 00           Scene   13 05       Scene    14 03       Scene   14 04
+                 Input
+                           Set      PEE ↓     % Pos ↑       PEE ↓     % Pos ↑   PEE ↓      % Pos ↑   PEE ↓     % Pos ↑
+MultiCM    MB     F          -      1.509      53.2%        4.315      75.7%    1.611       79.2%    1.800      73.2%
+PCA        MB     P          -      1.573      88.2%        2.035      87.5%    1.580       91.9%    1.784      90.3%
+                            M       1.370      71.9%        2.406      90.6%    1.356       69.5%    1.458      64.6%
+E-RAFT     SL     F
+                            D       0.843      88.9%        1.185      97.5%    0.517       88.1%    0.538      85.9%
+                            M       0.823      85.6%        3.201      95.3%    1.111       86.3%    1.532      86.0%
+TCM        SSL    F
+                            D       0.774      87.3%        2.541      95.1%    0.872       87.8%    1.090      86.5%
+PointNet   SL     P         E       1.047      88.1%        0.924      97.7%    0.848       98.3%    0.892      96.2%
+                            M       0.713      95.6%        0.269      99.3%    0.676       98.8%    0.651      98.1%
+                            D       0.590      96.6%        0.230      99.8%    0.575       99.8%    0.625      99.5%
+Ours       SL     P
+                            E       0.497      96.7%        0.399      99.2%    0.478       99.2%    0.515      98.8%
+                         M+D+E      0.465      96.2%        0.308      99.2%    0.544       99.3%    0.467      98.8%
+
+                         Training     scene   14 05           scene   15 01       scene    15 02       scene   15 05
+                           Set      PEE ↓     % Pos ↑       PEE ↓     % Pos ↑   PEE ↓      % Pos ↑   PEE ↓     % Pos ↑
+MultiCM    MB     F          -      2.768      72.9%        0.852      68.0%    0.802       66.2%    0.744      59.8%
+PCA        MB     P          -      1.823      89.4%        1.467      92.1%    1.612       78.2%    1.821      84.7%
+                            M       2.186      67.1%        0.899      72.7%    0.980       67.1%    1.100      57.9%
+ERAFT      SL     F
+                            D       0.908      86.3%        0.432      91.3%    0.541       90.9%    0.674      73.9%
+                            M       2.445      82.2%        0.588      85.4%    0.556       87.7%    0.811      68.0%
+TCM        SSL    F
+                            D       1.640      84.1%        0.523      85.5%    0.528       87.9%    0.871      68.1%
+PointNet   SL     P         E       1.053      96.6%        0.765      96.1%    0.752       95.1%    1.185      91.5%
+                            M       0.806      98.2%        0.470      96.6%    0.433       95.8%    0.392      94.3%
+                            D       0.567      99.4%        0.391      98.1%    0.298       97.1%    0.424      93.2%
+Ours       SL     P
+                            E       0.584      98.6%        0.286      98.1%    0.274       96.8%    0.354      95.5%
+                         M+D+E      0.568      98.5%        0.319      97.8%    0.300       97.0%    0.201      95.7%
+
+                          Table 8. Per-scene normal flow evaluation on EVIMO2-imo split.
+
+
+
+
+                                                        5
+scene_03_00_0            scene_03_01_0                              scene_03_02_0
+
+
+
+
+scene_03_02_2            scene_03_02_3                              scene_03_03_0
+
+
+
+
+scene_03_03_1            scene_03_03_2                              scene_03_04_0
+
+
+
+                Figure 10. Per-scene egomotion evaluation on EVIMO2 sfm split.
+
+
+
+
+                                              6
+

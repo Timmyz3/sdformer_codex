@@ -1,0 +1,1716 @@
+                                                                                  To appear on ASPLOS’23. This paper is a draft.
+
+
+
+                                         Flexagon: A Multi-Dataflow Sparse-Sparse Matrix Multiplication Accelerator for
+                                                                   Efficient DNN Processing
+                                              Francisco Muñoz-Martínez∗                                 Raveesh Garg†                                             José L. Abellán∗
+                                              Manuel E. Acacio∗                                        Tushar Krishna†                                            Michael Pellauer‡
+
+                                                                        ∗ Universidad     de Murcia,        † Georgia                 Tech,     ‡ NVIDIA
+
+
+                                                                              Contact author: francisco.munoz2@um.es
+arXiv:2301.10852v1 [cs.AR] 25 Jan 2023
+
+
+
+
+                                                                   Abstract                                       Accelerator                    Architectural Features     IP    OP     Gust
+                                                                                                                   TPU [15]                       Dense Systolic Array      N/A   N/A    N/A
+                                                                                                                                                                            D
+                                            Sparsity is a growing trend in modern DNN models. Exist-
+                                                                                                                  SIGMA [5]                     Configurable Reduce Tree           7      7
+                                                                                                                                                                            D
+                                         ing Sparse-Sparse Matrix Multiplication (SpMSpM) accelera-
+                                                                                                                 ExTensor [12]                       Intersection Unit             7      7
+                                                                                                                                                                                          D
+                                         tors are tailored to a particular SpMSpM dataflow (i.e., Inner
+                                                                                                                 MatRaptor [31]                           Merger             7     7
+                                                                                                                                                                                          D
+                                         Product, Outer Product or Gustavson’s), that determines their            Gamma [34]                       Fiber Cache, Merger       7     7
+                                         overall efficiency. We demonstrate that this static decision            Outerspace [25]                          Merger             7    D       7
+                                         inherently results in a suboptimal dynamic solution. This is             SpArch [35]                   Matrix condenser, merger     7    D       7
+                                         because different SpMSpM kernels show varying features (i.e.,             Flexagon                      Flexible Merge/Reduce      D     D       D
+                                         dimensions, sparsity pattern, sparsity degree), which makes                 (ours)                    tree and memory controller
+                                         each dataflow better suited to different data sets.                    Table 1: Comparison of Flexagon with prior Sparse DNN ac-
+                                            In this work we present Flexagon, the first SpMSpM re-              celerators in terms of supported dataflows. IP=Inner Product,
+                                         configurable accelerator that is capable of performing SpM-            OP=Outer Product, Gust=Gustavson’s (Row-wise Product).
+                                         SpM computation by using the particular dataflow that best
+                                                                                                                                                                                  IP
+                                                                                                                      A
+
+
+
+
+                                         matches each case. Flexagon accelerator is based on a novel
+                                                                                                                                                                                  OP
+                                         Merger-Reduction Network (MRN) that unifies the concept of
+                                                                                                                      V
+
+
+
+
+                                                                                                                                                                                  Gust
+                                         reducing and merging in the same substrate, increasing effi-
+                                                                                                                      SQ
+
+
+
+
+                                         ciency. Additionally, Flexagon also includes a 3-tier memory
+                                                                                                                      R
+
+
+
+
+                                         hierarchy, specifically tailored to the different access charac-
+                                                                                                                      MB DB S-M S-R
+
+
+
+
+                                         teristics of the input and output compressed matrices. Using
+                                         detailed cycle-level simulation of contemporary DNN models
+                                         from a variety of application domains, we show that Flexagon
+                                         achieves average performance benefits of 4.59×, 1.71×, and
+                                         1.35× with respect to the state-of-the-art SIGMA-like, Sparch-                               0   10      20      30    40     50   60
+                                                                                                                                                       Layer ID
+                                         like and GAMMA-like accelerators (265% , 67% and 18%,
+                                         respectively, in terms of average performance/area efficiency).        Figure 1: Dataflow that obtains the best performance per
+                                                                                                                layer across the DNN models (see Table 2 that includes their
+                                         1. Introduction                                                        sparsity ratios). IP=Inner Product, OP=Outer Product and
+                                         Sparsity in tensors is an emerging trend in modern DNN work-           Gust=Gustavson’s.
+                                         loads [30, 21, 23]. These workloads have diverse sparsity              values. This allows to significantly reduce both the memory
+                                         ratios, ranging from 0.04% to 90%, and are used in vari-               footprint and the number of operations, which in turn translates
+                                         ous applications, ranging from personalized recommenda-                into significant energy savings. However, these accelerators
+                                         tions [23] to Natural Language Processing [3]. Sparsity in             vary widely in their hardware implementation and in the ex-
+                                         weights stems from pruning [11] and sparsity inside acti-              ploited dataflow. The dataflows used by these accelerators in
+                                         vations stems from nonlinear functions such as ReLU. As a              terms of the loop order of computation have been broadly clas-
+                                         result, exploiting the benefits of sparsity by directly imple-         sified into Inner Product (IP), Outer Product (OP) and
+                                         menting sparse matrix-matrix multiplication (SpMSpM) has               Row-wise-Product, often called Gustavson’s (Gust) [9].
+                                         become an important target for customized DNN accelera-                   Table 1 shows prior sparse accelerators and the dataflows
+                                         tors [5, 12, 35, 25, 34, 31, 26].                                      they support. While state-of-the-art sparse accelerators such
+                                            The most common way for these accelerators to exploit spar-         as SIGMA [5], Sparch [35] and GAMMA [34] have been
+                                         sity is using compressed formats like Bitmap, CSR and CSC to           optimized for a fixed dataflow (IP, OP and Gust, respectively),
+                                         store and operate (multiply and accumulate) only the non-zero          in this paper, we make the important observation that the
+
+
+                                                                                                            1
+optimal dataflow changes from a DNN model to another, and               up the random accesses caused mainly by the Gust dataflow.
+even within a DNN model, from one layer to another, so that             Finally, a customized memory structure called PSRAM is
+contemporary fixed-dataflow accelerators cannot adapt well to           specifically designed to store and read psums, which is es-
+maximize DNN application performance.                                   sential for both OP and Gust dataflows. These memory
+   To back up our observation, Fig. 1 shows the dataflow that           structures allow us to support all the three dataflows with
+obtains the best performance per layer given the execution              minimal area and power overheads. Further, our accelerator
+of 8 entire DNN models obtained from MLPerf benchmark                   also prevents the hardware from requiring explicit expensive
+suite [30] as well as some extra models (details in Table 2).           conversions of compression formats (i.e., from CSR to CSC
+Observe that we consider heterogeneous models from different            or vice-versa) [27] between layers as it is possible to easily
+domains, sizes and sparsity ratios. For MB, we only show the            switch among the most convenient dataflow given a particular
+first 60 layers, which represent 20% out of the total number            compression format (details discussed in Section 3).
+of layers. To model the three dataflows, the executions have               We summarize our key contributions:
+been performed on a 64-Multiplier SIGMA-like, Sparch-like                  (1) We demonstrate that each SpMSpM operation in modern
+and GAMMA-like architectures (further details in Section 4).            sparse DNN layers presents different memory access patterns
+The NLP models DB and MB present a clear trend towards                  according to matrix dimensions and sparsity patterns. As a
+Gust. On the other hand, extremely sparse models, such as               consequence, the dataflow that maximizes the performance of
+S-R and V, benefit from OP in 73% and 75% of the layers,                a particular SpMSpM operation not only can change between
+respectively. The rest of the DNN models present a high vari-           DNN models, but also from layer to layer within a particular
+ability across layers, and the most efficient dataflow changes          DNN model.
+given the different features of each layer. This highlights that           (2) We present a new inter-layer dataflow mechanism that
+one dataflow does not fit all, and so there is an opportunity to        enables compression format conversions without explicit hard-
+increase efficiency via dynamic adaptation of the architectural         ware modules.
+components to the most suitable dataflow.                                  (3) We design Flexagon, which hinges on a novel network
+   The value of supporting flexible dataflows has been explored         topology (called MRN) that allows, for the first time, support
+extensively for dense DNNs [18, 4, 19, 2]. However, support             for the three dataflows, and a new L1 on-chip memory organi-
+for flexible dataflow acceleration for sparse workloads is much         zation to effectively capture the memory access patterns that
+more challenging because of different ways in which these               each dataflow exhibits for input, output and partial sums.
+accelerators handle sparsity. For example, the IP dataflow                 (4) We extensively evaluate Flexagon using cycle-level sim-
+implemented in SIGMA [5] implements a reduction network                 ulations of several contemporary DNN models from different
+called FAN to reduce the generated partial sums at once, as             application domains, and RTL implementation of its principal
+well as the capacity to perform intersections to execute a sparse       elements. Our results demonstrate that Flexagon achieves av-
+dot product. On the contrary, the OP and Gust dataflows im-             erage performance benefits of 4.59× (ranges between 2.09×
+plemented in accelerators like Sparch [35] and GAMMA [34]               and 7.41×), 1.71× (ranges between 1.04× and 4.87×), and
+produce partial sums instead of complete sums, and hence,               1.35× (ranges between 1× and 2.13×) with respect to the
+require merging the non-zero partial sums and use merger                state-of-the-art SIGMA-like, Sparch-like and GAMMA-like
+trees for this purpose. A naive implementation using separate           accelerators (265% , 67% and 18%, respectively, in terms of
+hardware widgets for reductions and merges would lead to                average performance/area efficiency).
+significant area overhead (see Section 5.3).
+                                                                        2. Background
+   To efficiently support different SpMSpM workloads to run
+modern sparse DNNs, we present Flexagon, the first (to our              2.1. Compression formats
+knowledge) reconfigurable sparse and homogeneous DNN ac-                Following the same taxonomy used in ExTensor [12], the SpM-
+celerator that can be dynamically adapted to execute the most           SpM operation computes the operation CM,N = AM,K × BK,N ,
+suited SpMSpM dataflow on a per DNN layer basis. Flexagon               where the three matrices are 2-dimensional tensors. Since
+features a novel unified Merger-Reduction Network (MRN)                 these matrices are typically sparse (see Table 2), they are com-
+that supports both reduction of dot products and merging of             pressed to encode the non-zero values while preserving the
+partial sums. We propose a tree-based topology where the                computation intact (lossless compression) [17]. In our work,
+nodes are configured to act either as accumulators or com-              we focus on the widely used unstructured compression for-
+parators, as explained in Section 3. Flexagon also features             mats CSR and CSC. A matrix encoded in CSR format employs
+a new L1 on-chip memory organization composed of three                  three 1-dimensional tensors to store the non-zero values in a
+customized memory structures that are able to capture the               row-major data layout: a data vector to represent the non-
+memory access pattern of each dataflow. The first memory                zero values, a row pointer vector to store the index position
+structure is a simple read-only FIFO, which is designed for the         where each row begins within the data vector, and a column
+sequential accesses that occur during some stages in the three          index vector to store the column of each non-zero value. Simi-
+dataflows. The second one is a low-power cache used to back-            larly, the CSC uses column-major data layout: a data vector,
+
+
+                                                                    2
+          DNN           Appl     nl   AvSpA     AvSpB     AvCsA      AvCsB       MinCsA              MinCsB             MaxCsA                     {MaxCsB          Cycles(106 ) CPU
+      Alexnet (A)        CV      7      70        48       0.56       13.6         0.02                0.18               1.01                       63.41                3804
+     Squeezenet (S)      CV     26      70        31       0.05       1.54        0.001                0.02               0.58                        26.6                2751
+      VGG-16 (V)         CV      8      90        80       0.55       2.90         0.02                0.15              10.42                        0.90                6012
+     Resnets-50 (R)      CV     54      89        52       0.19       1.30        0.001               0.007               1.0                        26.64                4185
+   SSD-Resnets (S-R)     OR     37      89        49       0.12       3.60        0.003               0.003               10.1                        0.50                6429
+ SSD-Mobilenets (S-M)    OR     29      74        35       0.16       0.31        0.002              0.0004               1.0                         1.65                5379
+    DistilBERT (DB)     NLP     36      50       0.04      2.25       0.35         1.12                0.23               4.5                         0.94                5748
+  MobileBERT (MB)       NLP     316     50        11       0.10       0.07         0.03               0.003              0.125                        0.01                4893
+
+Table 2: DNN models used in this work. Appl=Application domain. CV=Computer Vision, OR=Object Recognition, NLP=Natural
+Language Processing, nl=Number of layers, AvSp{A,B}=Average sparsity of the matrices {A,B} (in %), AvCs{A,B}=Average com-
+pressed matrix size for the matrices {A,B} (in MiB). MinCs{A,B}=Minimum compressed matrix size for the matrices {A,B} (in MiB).
+MaxCs{A,B}=Maximum compressed matrix size for the matrices {A,B} (in MiB). Cycles(106 ) CPU = Number of cycles obtained
+after running the benchmarks using MKL in a CPU system.
+a column pointer vector to store the index position of start of                                                                             B                C
+column, and a row index vector to store the row index of each                a) Inner-Product(M)           A                                               2 (N)
+                                                                                    Dataflow
+
+
+
+
+                                                                                                                                 1 (K)
+                                                                               for m in 0 to M:                         X                           =                 3 (M)
+non-zero data value. Observe that both CSR and CSC employ                         for n in 0 to N:       1 (K)
+                                                                                     for k in 0 to K:
+the same compression method, and thus, can be seen as a                                C[m,n] += A[m,k] * B[k,n]
+                                                                                                                3 (K)                      1 (N)
+single compression format. This is important as an accelerator               b) Outer-Product(M)                                                           1 (N)
+
+
+
+
+                                                                                                                         3 (K)
+                                                                                                                                                                      3 (K)
+
+
+
+
+                                                                                                      2 (M)
+                                                                                   Dataflow
+would use the same control logic needed to handle both of                     for k in 0 to K:                          X                           =
+                                                                                for m in 0 to M:                                                                         2 (M)
+them. This facilitates the implementation of the control logic                     for n in 0 to N:
+                                                                                       C[m,n] += A[m,k] * B[k,n]
+(further details in Section 3.5) in our accelerator.                           c) Gustavson(M)                                             1 (N)            1 (N)
+                                                                                   Dataflow    3 (M)                                                                 2 (K)
+   As in previous works (e.g. [34]), we will use the term fiber                for m in 0 to M:            2 (K)        X                           =                         3 (M)
+                                                                                 for k in 0 to K:
+to denote each compressed row or column. Each fiber contains                        for n in 0 to N:
+                                                                                       C[m,n] += A[m,k] * B[k,n]
+a list of duples (coordinate, value), sorted by coordinate. We               d) Inner-Product(N)                                                           3 (N)
+                                                                                   Dataflow
+use the term element to refer to one duple in the fiber.
+
+
+
+
+                                                                                                                                 1 (K)
+                                                                              for n in 0 to N:                          X                           =                 2 (M)
+                                                                                for m in 0 to M:          1 (K)
+                                                                                   for k in 0 to K:
+2.2. SpMSpM dataflows                                                                 C[m,n] += A[m,k] * B[k,n]
+                                                                             e) Outer-Product(N)                3 (K)                      2 (N)           2 (N)
+
+
+
+
+                                                                                                                         3 (K)
+SpMSpM operation is based on a triple-nested for-loop that                        Dataflow                                                                            3 (K)
+                                                                                                      1 (M)
+
+
+
+
+                                                                               for k in 0 to K:                         X                           =
+iterates over A’s and B’s independent dimensions M and N, and                    for n in 0 to N:
+                                                                                    for m in 0 to M:
+                                                                                                                                                                         1 (M)
+
+co-iterates over their shared dimension K. Depending upon                               C[m,n] += A[m,k] * B[k,n]
+                                                                                                                                           3 (N)
+                                                                               f) Gustavson(N)                1 (M)                                         2 (N)
+the level of the co-iteration in the loop nesting, three differ-                   Dataflow
+                                                                                 for n in 0 to N:                       X                           =
+ent dataflows have been identified for SpMSpM computation:                         for k in 0 to K:                                      2 (K)                        1 (M)
+
+                                                                                      for m in 0 to M:
+IP (co-iteration at the innermost loop), OP (co-iteration at the                         C[m,n] += A[m,k] * B[k,n]                                 2 (K)
+outermost loop) and Gust (co-iteration at the middle loop).
+                                                                         Figure 2: Dataflow combinations for matrix multiplication. For
+Additionally, these dataflows result in six possible variants
+                                                                         simplicity, non-compressed (dense) matrices are shown.
+according to how the independent dimensions (M and N) are
+ordered for each of them (two variants per dataflow). Notice             lows the intersection to be done in leader-follower style, where
+that each variant favors the stationarity of one of the dimen-           the effectual coordinates of the stationary tensor retrieve entire
+sions (the outermost one) over the other. This way, we distin-           fibers of the other operand. This requires merge hardware, but
+guish each variant by (M) if the computation is M-stationary             only into the current fiber rather than entire matrices.
+or (N) if it is N-stationary. Fig. 2 shows the resulting six                For the rest of the paper, we will pedagogically use
+dataflow variants. Each dataflow defines how the elements                M-stationary dataflows during the explanations, although ev-
+flow during execution, and thus, the opportunities for data              erything would apply for the N-stationary dataflows as well.
+reuse. Table 3 gives a detailed taxonomy of each approach,
+which we summarize as follows:                                           3. Flexagon Design
+   Inner Product (IP): A single full sum at a time is generated,         Fig. 3a shows a high-level overview of the architecture of the
+with no merging of partial sums. This requires a hardware                Flexagon accelerator. As observed, Flexagon consists of a set
+intersection unit to align effectual inputs.                             of multipliers, adders and comparators, as well as three on-
+   Outer Product (OP): A single input scalar at a time is con-           chip SRAM modules specifically tailored to the storage needs
+sumed, generating many partial sums. This does not require               of matrices A, B and C for the three SpMSpM dataflows. In
+intersection but does require merging hardware, and possibly             addition, in order to allow for the highest flexibility, all the on-
+extra memory traffic.                                                    chip components are interconnected by using a general three-
+   Gustavson’s (Gust): A single input at a time is consumed,             tier reconfigurable network-on-chip (NoC) composed of a
+but only to generate partial sums into the current fiber. This al-       Distribution Network (DN), a Multiplier Network (MN), and a
+
+
+                                                                     3
+       Dataflow         Informal Name                Stationary       Stationary     Streaming       A format   B format   C format      Intersection        Merging
+                                                       Tensor           Fiber          Tensor
+          MNK       Inner Product(M)                      C                A             B             CSR        CSC        CSR      Scalar A vs Scalar B     N/A
+          KMN       Outer Product(M)                      A                B             C             CSC        CSR        CSR              N/A             Scalar
+          MKN        Gustavson’s(M)                       A                C             B             CSR        CSR        CSR      Scalar A vs Fiber B    Fiber(M)
+          NMK       Inner Product(N)                      C                B             A             CSR        CSC        CSC      Scalar B vs Scalar A     N/A
+          KNM       Outer Product(N)                      B                A             C             CSC        CSR        CSC              N/A             Scalar
+          NKM        Gustavson’s(N)                       B                C             A             CSC        CSC        CSC      Scalar B vs Fiber A    Fiber(N)
+
+            Table 3: Taxonomy of dataflow properties. Traversal order is given outermost-to-innermost in loop order.
+                   Control logic                                                                     to give support to the six possible dataflows (three SpMSpM
+            Reduction/Merging Network (MRN)                                                          dataflows, two variants, M or N-stationary, each) over the
+                               +/>
+                                                                      Offline
+                                                                                                     same hardware substrate. We leave the study of the tool re-
+                  +/>          ...        +/>
+                                                                                                     quired for dataflow analysis, tiling selection and generation of
+                                                              1. Dataflow Analysis
+                                                                                                     the configuration file for the accelerator (phase 1 in the Offline
+             MS         MS     ...   MS         MS       Runtime                                     part in Fig. 3b) for future work.
+                                                              2. Stationary Phase
+                                                                                                     3.1. On-chip Networks
+             Distribution Network (DN)
+                                                                                                     One of the main novelties of Flexagon is its ability (through
+                                                              3. Streaming Phase
+            FIFO for         cache for     PSRAM for
+                                                                                                     proper configuration) to support the six dataflows described
+            matrix A         matrix B       matrix C                                                 in Section 2 using the same hardware substrate. To do so,
+                                                                  4. Merging Phase
+                                                                                                     the accelerator is equipped with a three-tier configurable NoC
+                         DRAM                                                                        able to adapt to the communication features of each dataflow.
+                    a) Architecture                          b) Execution flow                       Next, we describe each subnetwork in detail:
+           Figure 3: Flexagon high-level overview.                                                      Distribution network (DN): This module is used to deliver
+                                                                                                     data from the SRAM structures to the multipliers. In order to
+Merger-Reduction Network (MRN), inspired by the taxonomy                                             enable the high flexibility that the three SpMSpM dataflows
+of on-chip communication flows within AI accelerators [19].                                          require, the DN needs to support unicast, multicast and broad-
+These components are controlled by the control unit which is                                         cast data delivery. To achieve this, and at the same time ensure
+configured by the mapper/compiler before the execution.                                              high energy efficiency, we utilize a Benes network similar to
+   Flexagon’s execution phases are shown in Fig. 3b. The                                             previous designs like SIGMA [5]. This network is an N-input,
+process begins with a dataflow analysis (phase 1), which is                                          N-output non-blocking topology with 2 × log(N) + 1 levels,
+carried out offline. Here, a mapper/compiler examines the                                            each with N tiny 2×2 switches.
+features of the SpMSpM operation to be executed (i.e., matrix                                           Merger-Reduction network (MRN): Previous designs like
+dimensions and sparsity patterns) and decides the dataflow                                           MAERI [19] or SIGMA [5] have used specialized tree-based
+(between the six available described in Section 2) that best                                         reduction networks (RNs) such as ART or FAN to enable non-
+matches the operation, generating the tiling scheme and the                                          blocking reduction of multiple clusters of psums. These RNs
+particular values for the signals that configure the operation of                                    provide high flexibility for the IP dataflow as its purpose is to
+the accelerator for the rest of the phases.                                                          reduce a cluster of psums. In case of OP and Gust dataflows,
+   The next three phases are performed during runtime ac-                                            other works such as [34, 35] employ a tree-based topology
+cording to these generated signals and are repeated several                                          to perform the merge operation of the psums once they are
+times according to the number of execution tiles. The first                                          generated. In our design, we have, for the first time, unified
+runtime phase is called stationary phase (phase 2), which                                            this concept, and have designed a merger-reduction network
+delivers data that will be kept stationary in the multipliers to                                     able to both reduce and merge psums. Figure 4a shows the
+reduce the numer of costly memory accesses. According to the                                         microarchitecture overview of a 16-wide MRN. As it may
+dataflows description presented in Section 2 for M-stationary                                        be observed, similar to previous designs, we also employ an
+dataflows, this stationary data belongs to matrix A, while                                           augmented tree-based topology because this is the fastest way
+matrix B is streamed during the streaming phase (phase 3).                                           to perform both the reduction and merging operations. Differ-
+For N-stationary dataflows this happens in the reverse order.                                        ently to previous designs, the MRN topology augments the
+These two phases generalize for the three dataflows. The                                             nodes with comparators and switching logic able to exchange
+merging phase (phase 4) is only necessary for both OP and                                            the mode of operation (see Figure 4b). This allows to perform
+Gust dataflows and is the one in charge of merging the fibers                                        both operations while keeping low area and power overheads
+of partial sums that have been previously generated during the                                       (details in Section 5.3) and, as we describe later, enables di-
+streaming phase. This phase is skipped in the IP dataflow as                                         rect support for the three SpMSpM dataflows. Furthermore,
+no merging is required.                                                                              we employ a connection with two links between the nodes,
+   In this work, we focus our attention on the accelerator de-                                       allowing the MRN to traverse not only data values but also
+sign as well as on the way the three phases operate in order                                         the coordinates needed in both OP and Gust dataflows. The
+
+
+                                                                                                 4
+selection of the configuration is done by the mapper/compiler,         we will explain in Section 3.4, this structure stores blocks of
+which generates the control signals that feed the configuration        elements (coordinate, value).
+logic module (Control Logic in Fig. 3a) of the accelerator,               Stationary phase: During the stationary phase, the fibers
+which in turns routes the appropriate signals to the nodes, con-       of matrix A (i.e., columns of A) are delivered to the multipliers
+figuring its operation modes according to the dataflow and             sequentially following the CSC compression format. In our
+layer dimensions.                                                      particular case, the four multipliers store the elements A1,0 ,
+    Multiplier network (MN): Similar to other designs such as          A0,1 , A1,2 , and A1,3 .
+MAERI, this network is composed of independent multipliers                Streaming phase: During the streaming phase, each multi-
+that can operate in two different modes: i) Multiplier mode:           plier keeps stationary an element Am,k , given m in range [0,M)
+the unit performs a multiplication and sends the result to the         and k in range [0,K), in order to linearly combine the non-zero
+MRN. This mode is used during the entire execution when                elements Bk,0:N−1 , generating a psum fiber where all the ele-
+the IP dataflow is configured, and during the streaming phase          ments share the row (m) and a particular k iteration (i.e., the
+when either the OP or Gust dataflows are configured; ii) For-          partial matrix where these elements belong to). Consecutive
+warder mode: the multiplier forwards directly the input, which         multipliers generating psums for different rows for the same k
+is typically a psum, to the MRN. As we will clarify in the exam-       iteration, do not need the psum to be merged together. Thus,
+ples presented next, this mode is essentially configured during        the generated psums must be sent out to the SRAM structure,
+the merging phase in both the OP and Gust dataflows. The               in order to be merged in a third phase. Also, since multiple
+microarchitecture of the multipliers is depicted in Figure 4c.         rows can run in parallel, the PSRAM ’s set is indexed by rows.
+3.2. Walk-through Examples                                             Furthermore, since the number of non-zeros in matrix A is
+                                                                       not known a priori, it might happen that multiple fibers from
+Next, we illustrate how Flexagon works when running the                matrix A may fit in a single iteration, causing that multiple
+three dataflows for the multiplication of matrices A and               partial outputs for the same row, but for different k iterations,
+B from Fig. 2, considering the runtime phases explained                may run in parallel. Since the number of psums for a particular
+earlier. We pedagogically assume the IP(M), OP(M) and                  row and for a particular k iteration is not known at runtime,
+Gust(M) dataflows. Note that, the IP(N), OP(N) and                     we must assign static space in the PSRAM to store the psums
+Gust(N) dataflows could be executed in the same manner                 from different k iterations that may be running in parallel and
+by exchanging matrices A and B. To ease the explanation, we            being kept in the same row. To do so, we divide each row in
+assume a simple 4-multiplier accelerator, and we walk through          the PSRAM in blocks, and each block contains a valid bit to
+the activity of the three sub-networks. In the explanation,            indicate the validity of the data, a k value, indicating the k iter-
+we mention the on-chip SRAM modules needed for storing                 ation that belongs to that group of partial sums and the block
+matrices A, B, C and psums (see the yellow boxes in Fig. 3b).          of data. By doing this, each block can hold, at a particular
+Section 3.4 provides an in-depth description of these memory           time, psums for different k iterations for a particular row. This
+structures.                                                            way, if the number of psums for a particular iteration exceeds
+3.2.1. Example of Inner-Product dataflow. Fig. 5 shows the             the block size, it may use another block from the row, even if
+IP(M) dataflow. In the figure, we represent with “*” the psums         the next block is already being used by another k iteration. The
+that need to be reduced by the adders in the tree to produce           details about the organization and operation of the PSRAM
+the final values for matrix C.                                         are given in Section 3.4.
+   Stationary phase: First, during the stationary phase, the              In the example of Fig. 6, we see three steps regarding the
+controller maps as many fibers of matrix A (i.e., rows of A)           streaming phase. In the first step, the controller sends the
+as possible to the multipliers, reading all the elements se-           first element of the four fibers (across the K-dimension) to
+quentially from the dedicated SRAM structure called FIFO               its corresponding multiplier. For example, the first multiplier
+for matrix A. Each cluster of multipliers will perform the dot         which keeps stationary the element A1,0 receives the first el-
+product operation.                                                     ement of the fiber for the row (i.e., iteration k) 0. In step 2,
+   Streaming phase: After filling the multipliers with the             each multiplier generates a psum (indicated by the symbol *),
+fibers of A, the controller multicasts each fiber of matrix B          which is the first element for the 4 fibers generated across the
+(i.e., each column) to the configured clusters in the MN. To do        K-dimension. These psums are then stored in the PSRAM .
+so, the controller uses the row coordinate of each element in          The first psum *C1,1 is allocated in set 1, as it is indexed by its
+the fiber of B to detect whether it intersects with the column         row coordinate. Use of sets allows us to execute multiple rows
+coordinate in the fiber of A. If this happens, the value is sent       in parallel. Then, since the first line is free, the psum is stored
+out to the corresponding multiplier.                                   there, enabling the valid bit and indicating that the element be-
+3.2.2. Example of Outer-Product dataflow. Fig. 6 shows the             longs to K0. Dividing rows into blocks allows holding psums
+same example as before but now assuming the OP(M) dataflow.            corresponding to different K for a particular row. The second
+We also show the customized SRAM structure for C called                psum, *C0,0 is allocated to the set 0 (its row coordinate) and
+PSRAM that is utilized for storing the psums for matrix C. As          since the first line is here, the cache enables the valid bit and
+
+
+                                                                   5
+                                                                                 Configuration logic (Adder/Comparator mode)
+                                                                                                                                                                                              Val_In_Left
+                                                                                                                                                                                                                                             val_out
+
+
+
+
+                                                                                                                                                                                                                                      MUX
+                 Tree
+                 Level                                                                                                                                                                       Val_In_right
+                                  V Value
+                 Lv 4                                                                                    +/>
+                                  C Coordinate                                                                                                                                             Coord_In_Left
+                                                                                                                                                                                                                    >                        coord_out
+
+
+
+
+                                                                                                                                                                                                                               MUX
+                                                                                                                                                                                           Coord_In_right
+                                  +/> Adder/Comparator
+
+                   Lv 3
+                                        Multiplier
+                                                               +/>                                                                                 +/>                                            b) Adder/Comparator Microarchitecture
+
+
+
+                   Lv 2                    +/>                                      +/>                                          +/>                                   +/>
+
+                                                                                                                                                                                                Val_In
+                                                                                                                                                                                                                      x                     val_out
+
+
+
+
+                                                                                                                                                                                                                                     MUX
+                   Lv 1           +/>                  +/>                 +/>                  +/>                  +/>                     +/>               +/>                 +/>
+                                                                                                                                                                                             Coord_In
+                                                                                                                                                                                                              Val Coord
+                                                                                                                                                                                                                                            coord_out
+
+
+
+
+                                                                                                                                                                                                                                MUX
+                           V C       V C         V C     V C         V C     V C          V C     V C          V C     V C             V C     V C       V C     V C         V C     V C                    Sta register
+                   Lv 0
+
+                                                                                           a) MRN Microarchitecture                                                                                  c) Multiplier Microarchitecture
+
+   Figure 4: a) MRN topology. b) µarchitecture of the MRN’s nodes (Adder/Comparator nodes). c) µarchitecture of Multipliers.
+
+                                                     +/>                   +/>                        +/>                    +/>                          The 4 first steps (Merging phase step 1 to step 4) merge the
+                                                       Node configured Node configured Node compares
+          Multiplier
+       not configured
+                              Multiplier      Node
+                            keeping data not configured as an adder    as a comparator    and adds
+                                                                                                                                                          first row. In the second row, there are 3 psum fibers ready to
+             Stationary phase                        Streaming phase step 1                           Streaming phase step 2                              be merged. In step 5, the first elements for the three fibers (K0,
+                                                                                                        C00
+                   +/>                                             +/>                                               +/>                                  K2 and K3) are sent to the MRN. In step 6, the psums *C1,1
+       +/>                   +/>                     +/>                     +/>                       +/>                         +/>                    and *C1,0 compare their column coordinate. Since they do not
+                                                                                                            *C10            *C10        *C10
+                                              A01                                               A01
+                                                                                                                                                          match, and element *C1,0 has a lowest column coordinate, this
+                                                             A10      A12            A13                       A10         A12           A13
+         Distribution Network                          Distribution Network                              Distribution Network                             element is sent up to the MRN first. The same procedure is
+ A01          A10     A12               A13   B10                   B20              B30         B12          B01                         B31
+      Streaming phase step 3                         Streaming phase step 4
+                                                                                                                                                          executed in a pipelined-manner for the rest of the elements in
+                                                                                                      Streaming phase step 5
+                                                                    C10                                              C11                                  the fiber until all the psums have been merged in a single fiber
+ C02     *C10      +/>     *C10                         *C11    +/>      *C11                            *C12    +/>        *C12
+                                                                                                                                                          and sent to DRAM. In case the number of fibers in a row is
+       +/>                   +/>                     +/>                     +/>                      +/>                        +/>
+          *C11            *C11    *C11                   *C12            *C12      *C12                                                                   greater than the number of multipliers (i.e., leaves in the tree),
+A01          A10      A12           A13       A01            A10      A12            A13        A01            A10         A12           A13              the controller needs to perform multiple passes to complete
+       Distribution Network                            Distribution Network                             Distribution Network
+            B02      B12            B32                                                                                                                   the final merge.
+Figure 5: Example of Flexagon running SpMSpM using an                                                                                                     3.2.3. Example of Gustavson’s dataflow. Finally, for the
+Inner-Product(M) dataflow. “*” indicates psums.                                                                                                           same example matrices, Fig. 7 illustrates how Flexagon pro-
+                                                                                                                                                          ceeds when the Gust(M) dataflow is selected. Similarly, the
+tags the line with K1. The last two elements share coordinates                                                                                            operation in this case proceeds in three well-differentiated
+(i.e., s *C1,0 ), but belong to a different partial matrix (K2 and                                                                                        phases.
+K3). These two elements go to the same set in the PSRAM                                                                                                      Stationary phase: First, during the stationary phase, as
+but to different lines, each tagged with its iteration k (i.e., K2                                                                                        many fibers of A (i.e., rows in matrix A) as possible are mapped
+and K3). This allows to locate the psum fibers in the correct                                                                                             spatially and sequentially in the multipliers. The multipliers,
+order during the merging phase.                                                                                                                           then keep two clusters, each in charge of calculating the psums
+   In step 3, the second elements for the four fibers are pro-                                                                                            for a different output row (i.e., rows 0 and 1 in the example).
+duced, following the same execution scheme. For the sake of                                                                                                  Streaming phase: In the streaming phase, for each multi-
+brevity, we do not show how the last element from the longest                                                                                             plier, the memory controller fetches and delivers the fiber of
+psum fiber (i.e., fiber K3) is produced, and directly show the                                                                                            B (i.e., row of B) that corresponds to the column coordinate
+contents of the PSRAM just before starting the merging phase                                                                                              (i.e., k-iteration) associated to the mapped element of A in the
+(merging phase step 1). We can see in the PSRAM figure from                                                                                               multiplier. Every multiplier generates a partial output fiber
+the merging phase step 1 that the element has been stored in                                                                                              which is merged with the rest of partial output fibers generated
+the last line within the first set, as the third line is already full.                                                                                    by the other multipliers allocated to the same fiber of A. An
+   Merging phase: The merging phase proceeds row by row.                                                                                                  example of this generation is shown in Fig. 7. Here, we depict
+For each row, the controller fetches the elements for the dif-                                                                                            6 streaming steps. The first multiplier keeps stationary the
+ferent k-iteration fibers from the PSRAM . These elements                                                                                                 only one element in matrix A (A0,1 ) so it receives the fiber of B
+are stored in different blocks and can be identified by their                                                                                             indexed by column 1 (i.e., row 1). The second, third and fourth
+tags, consuming the elements and sending them to the MRN                                                                                                  multipliers keep the elements A1,0 , A1,2 and A1,3 , respectively,
+in order to be merged. Each unit in the MRN compares the                                                                                                  so they receive the fibers of B 0, 2 and 3, respectively. The
+column coordinate (i.e., the N-dimension). If the coordinates                                                                                             first 3 steps show how the elements from the fibers of B are
+match, then the values of the elements are accumulated. Oth-                                                                                              delivered cycle by cycle.
+erwise, the node sends up the tree the element with the lowest                                                                                               Merging phase: Similar to the OP dataflow, the merging
+coordinate. The last two rows in Fig. 6 show 8 merging steps.                                                                                             phase combines both the accumulation and the merging opera-
+
+
+                                                                                                                                                     6
+                                                                                                                                      +/>               +/>                         +/>                  +/>
+                                                                                       Multiplier            Multiplier      Node     Node configured Node configured Node compares
+                                                                                    not configured         keeping data not configured as an adder     as a comparator   and adds
+                                                                Stationary phase step 1                      Streaming phase step 1                                            Streaming phase step 3
+                                                                                                                                                Streaming phase step 2
+                                                      V0          V0         V0          V0             V0          V0         V0          V0           V1*C00 V0               V0          V0               V1 *C00 V0           V0             V0
+                                                      K-          K-         K-          K-             K-          K-         K-          K-           K1     K-               K-          K-               K1 *C02 K-           K-             K-
+                                                      V0          V0         V0          V0             V0          V0         V0          V0           V1*C11 V1 *C10 V1 *C10 V0                            V1 *C11 V0 *C10 V1 *C10 V0
+                                                      K-          K-         K-          K-             K-          K-         K-          K-           K0     K2      K3      K-                            K0 *C12 K2      K3 *C11 K-
+                                                                            SRAM for matrix C
+                                                                       +/>                                                  +/>                                            +/>                                               +/>
+                                                          +/>                     +/>                          +/>                        +/>                  +/>                         +/>                     +/>                      +/>
+                                                                                                                                                        *C11            *C00        *C10         *C10    *C12             *C02                        *C11
+
+                                                                                                        A10              A01        A12          A13     A10             A01        A12          A13         A10           A01        A12             A13
+                                                         Distribution Network                                      Distribution Network                            Distribution Network                              Distribution Network
+                                                     A10      A01     A12                 A13           B01             B10      B20             B30    B02             B12                      B31                                                  B32
+
+                                                          Merging phase step 1                               Merging phase step 2                              Merging phase step 3                                Merging phase step 4
+                                                     V1 *C00 V0      V0      V0                    V0          V0          V0          V0              V0          V0          V0          V0           V0           V0          V0         V0
+                                                     K1 *C02 K-      K-      K-                    K-          K-          K-          K-              K-          K-          K-          K-           K-           K-          K-         K-
+                                                        *C
+                                                     V1 11 V0   *C10 V1 *C10 V1*C12                V1 *C11 V0 *C10 V1 *C10 V1*C12                      V1 *C11 V0 *C10 V1 *C10 V1*C12                   V1 *C11 V1 *C10 V1 *C10 V1*C12
+                                                     K0 *C12 K2      K3 *C11 K3                    K0 *C12 K2      K3 *C11 K3                          K0 *C12 K2      K3 *C11 K3                       K0 *C12 K2      K3 *C11 K3
+
+                                                                       +/>                                   C00
+                                                                                                                         +/>                     To DRAM C00              +/>                        To DRAM C02            +/>
+                                                                                                                                                                   C02
+                                                           +/>                     +/>                     +/>                        +/>                    +/>                      +/>                      +/>                      +/>
+
+
+                                                            Distribution Network                             Distribution Network                              Distribution Network                                Distribution Network
+                                                    *C00                                          *C02
+                                                                Merging phase step 5                           Merging phase step 6                             Merging phase step 7                            Merging phase step 8
+                                                     V0          V0          V0          V0           V0           V0          V0         V0            V0          V0         V0           V0          V0          V0       V0             V0
+                                                     K-          K-          K-          K-           K-           K-          K-         K-            K-          K-         K-           K-          K-          K-       K-             K-
+                                                     V1 *C11 V1 *C10 V1 *C10 V1*C12                   V1      V0               V1      V1*C12           V0          V0         V0           V1*C12      V0          V0       V0             V0
+                                                     K0 *C12 K2      K3 *C11 K3                       K0 *C12 K-               K3 *C11 K3               K-          K-         K-           K3          K-          K-       K-             K-
+                                                                                                                                                                                                  To DRAM C10
+                                                                        +/>                                                +/>                                     *C10    +/>            *C10
+                                                                                                                                                                                                                            +/>        *C11
+                                                                                                                                                                                                                    *C11
+                                                           +/>                     +/>                        +/>                      +/>                     +/>                         +/>                 +/>                      +/>
+                                                                                                                                    *C10                    *C11                     *C11
+                                                                                                        *C11        *C10                                                                                 *C12
+
+
+                                                            Distribution Network                               Distribution Network                             Distribution Network                               Distribution Network
+                                                    *C11        *C10 *C10                             *C12                  *C11                       *C12
+
+
+Figure 6: Example of Flexagon running SpMSpM using an Outer-Product(M) dataflow. “*” indicates that the outputs produced
+by the accelerator are psums and not final outputs. “V ” in the PSRAM represents the valid bit and “K ” indicates the k iteration
+tagged for a particular block.
+
+                                                   +/>                 +/>                      +/>                      +/>                                               Layer 1                                   Layer 2                                 Layer 3
+            Multiplier    Multiplier      Node     Node configured Node configured Node compares
+         not configured keeping data not configured as an adder    as a comparator    and adds                                                                          CSR                CSC                 CSC                CSR                    CSR       CSR        CSR
+      Streaming phase step 1           Streaming phase step 2               Streaming phase step 3
+                                                                                                                                                                     Matrix A          Matrix B              Matrix C/A Matrix B                       Matrix C/A Matrix B   Matrix C
+                 +/>                                        +/>                                                       +/>                                            Inner-Product(N)                         Outer-Product(M)                               Gustavson(M)
+                                                                                                              *C11             *C10
+       +/>                   +/>         To DRAM +/>                        +/>           To DRAM
+                                                                                                        +/>                         +/>
+                                             C00
+                                                    *C11              *C10        *C10
+                                                                                               C02
+                                                                                                              *C12                        *C11
+                                                                                                                                                         Figure 8: Example of three DNN layers being executed by run-
+ A01         A10       A12         A13       A01          A10         A12          A13           A01               A10     A12             A13           ning the combination Inner-Product, Outer-Product and
+        Distribution Network                        Distribution Network                                   Distribution Network
+ B10         B01      B20          B30       B12          B02                     B31                                                      B32           Gustavson dataflows.
+   Streaming phase step 4                       Streaming phase step 5                              Streaming phase step 6
+           To DRAM                         To DRAM                                            To DRAM C
+                                                                                                                                                         in A exceeds the number of multipliers, the output fiber will be
+       C10                                          C11
+                                                         +/> *C12                                             12
+                                                                                                                      +/>
+        *C11 +/>                                                                                                                                         a partial fiber as multiple iterations are required, and therefore
+                 *C11                                *C    12
+       +/>                   +/>                    +/>                      +/>                        +/>                         +/>
+          *C12                 *C12
+                                                                                                                                                         the fiber will require to be stored in the PSRAM, similar to
+A01          A10   A12             A13        A01          A10         A12          A13           A01              A10     A12             A13           what happens in the OP dataflow.
+       Distribution Network                          Distribution Network                                  Distribution Network
+
+                                                                                                                                                         3.3. Combinations of inter-layer dataflows
+Figure 7: Example of Flexagon running SpMSpM using the
+Gustavson(M) dataflow. “*” indicates that the outputs pro-                                                                                               As Table 3 shows, M-stationary dataflows output the elements
+duced by the accelerator are psums and not final outputs.                                                                                                in CSR format while N-stationary dataflows output the ele-
+                                                                                                                                                         ments in CSC format. Flexagon supports the six dataflows and
+tion, accumulating the elements (i.e., its values) in a certain                                                                                          takes advantage of this observation to appropriately execute ev-
+node if their column coordinates match, or sending the element                                                                                           ery possible sequence of DNN layers without requiring costly
+with the lowest column coordinate value. On the other hand,                                                                                              explicit hardware format conversions and is the first work
+in Gust dataflow, we can merge the psums immediately after                                                                                               to support compressed outputs without explicit conversions.
+their generation, as a cluster of multipliers always generates                                                                                           Fig. 8 shows an example of a DNN composed of three layers,
+fibers for the same row, but for different k iterations. When                                                                                            demonstrating this feature. The first and the second layer are
+the number of elements in A fits into a cluster of multipliers,                                                                                          configured to execute inner and outer products respectively.
+the output fiber generated by that cluster will be a final fiber,                                                                                        Since second layer needs activation in CSC, first layer is Inner
+and the outputs can be sent directly to DRAM without being                                                                                               Product (N). The weights are assumed to be stored offline in
+stored in the SRAM. Otherwise, when the number of elements                                                                                               both formats. The second layer produces the matrix in CSR
+
+
+                                                                                                                                                   7
+            IP(M)   OP(M)    Gust(M)    IP(N)   OP(N)    Gust(N)              Tile filler STA       Tile filler STR
+
+              D                D          D
+                                                                                  Push ()         Fetch (Offset STR)                                                        To DRAM
+  IP(M)              EC                          EC        EC                                                          To DRAM
+
+              D                D          D
+                                                                           To DRAM
+
+
+
+
+                                                                                                                          Response
+                                                                                                                           Request
+                                                                                                            Addr STR                          DRAM Memory Address             non-
+ OP(M)               EC                          EC        EC
+              D                D          D
+                                                                                                                                                                  Addr C    lineartiy
+                                                                              Addr STA             Miss?                                                                    function
+ Gust(M)             EC                          EC        EC
+  IP(N)      EC      D         EC        EC      D         D              1                                     Store                                                             E
+
+ OP(N)       EC      D         EC        EC      D         D                                             SET-ASSOCIATIVE
+
+
+                     D                           D         D
+                                                                                                              CACHE                              PSRAM
+                                                                                                 Miss
+ Gust(N)     EC                EC        EC                                                                 Read                                 Write       Read
+                                                                                                            Hit
+                                                                                  Pop ()           Read (Offset STR)                 PartialWrite (...)     Consume (...)   Write (...)
+Table 4: Dataflow transitions allowed without requiring Ex-
+                                                                           Tile reader STA         Tile reader STR                                        Tile writer C
+plicit format Conversion (EC). Different rows represent the dif-
+ferent outputs of the first layer and different columns repre-                             Figure 9: Memory structures in Flexagon.
+sent the corresponding input to the second layer.
+                                                                        cache. However, we implement this cache to operate on a
+format if it uses M-stationary. As a result it could choose from        virtual address space relative to the beginning of the stream-
+inner product or Gustavsons(M).                                         ing matrix, which let us use shorter memory addresses and
+   Table 4 shows the transitions for each dataflow combination          therefore save bandwidth and reduce the tag lengths.
+that do not require an explicit format conversion (green tick)             Memory structure for matrix C (PSRAM): To store the
+and those that do (Explicit Conversion or EC). These combi-             psums, we have designed a new buffer idiom called PSRAM ,
+nations can utilized by the mapper/compiler to generate the             which is used for both OP and Gust dataflows. Fig. 6 shows
+best sequence of dataflows that lead to the best performance            the way this memory structure works, Fig. 9 shows a high-
+and energy efficiency for a particular DNN execution.                   level diagram, and Fig. 10 delves into detail. The memory is
+                                                                        organized into sets corresponding to different rows and each
+3.4. Memory organization                                                set into blocks for different K dimension within a row. Each
+In order to capture all dataflows, we have designed a cus-              block has a valid bit. Besides, we use a register as a line tag to
+tomized L1 memory level specifically tailored for the common            keep the column coordinate (i.e., the k-iteration) assigned to
+and different patterns among the three dataflows. Fig. 9 shows          that line. Since the length of the output fiber is undetermined,
+a schematic design for this L1 memory level. We use a sep-              it may occupy several (and non-consecutive) lines in the same
+arate memory structure and a different buffer idiom for data            row. This is essentially a way-combining scheme tagged by the
+movement from/to each structure. To do so, every memory                 k-iteration. The register is used by the row to locate whether
+structure is operated by two controllers, the tile filler inter-        a certain output fiber is still placed in the PSRAM. In order
+facing with the DRAM, and the tile reader interfacing the               to read several fibers in parallel from the same set (i.e., to
+datapath of the accelerator (i.e., the multipliers). Next, we           merge a particular row or column) we implement a multi-bank
+describe each memory structure in detail:                               scheme organized across the lines within a set. Finally, we
+   Memory structure for the stationary matrix (FIFO):                   also include two registers to keep the byte location where the
+The elements of the stationary matrix are always read once and          first and last elements are in the line.
+sequentially for the three dataflows, as they are kept stationary          PartialWrite(row, k, E): This operation is used to place an
+in the multipliers. To hide the access latency, we implement            element in the PSRAM. The logic, indexes the element by the
+a 512-byte read-only FIFO.In order to save bandwidth and                row argument and then searches in parallel the line where is
+reduce the complexity: (1) the memory structure keeps the               being stored the output fiber with the k identifier. If the output
+DRAM location of the stationary matrix in a register, so that           fiber exists (i.e., the k tags match), the PSRAM places the
+the fibres are pushed implicitly into FIFO, (2) we employ a             new element E into the last available position (indicated by
+single-port for read and write.                                         the register Last in the metadata) of the last line. If the fiber
+   Memory structure for the streaming matrix (Cache):                   does not exist, the logic searches the first available line and
+The streaming matrix presents a more heterogeneous memory               stores the element E in the first position of the line, enabling
+access pattern. In IP, every stationary-phase (i.e., every itera-       the valid bit and updating the K, First and Last registers in
+tion) causes the streaming of the entire matrix. In other words,        order to continue storing elements for the same K identifier in
+there is significant spatial locality and temporal locality every       future accesses.
+time the matrix is re-loaded. In the OP dataflow, the fibers of            Consume(Row, k): The elements within a partial output
+the streaming matrix are read just once and sequentially. In            fiber are placed in the PSRAM temporarily. They are read
+Gust dataflow, every fiber of the stationary matrix gathers F           once to feed the accelerator and are no longer used again. This
+fibers of the streaming matrix, F being the number of non-              allows us to incorporate the consume operation, which reads
+zero elements in the fiber of the stationary matrix which are           and erases a particular element from the memory structure.
+typically scattered all over the matrix, causing an irregular           In particular, the controller merges the partial output fibers
+and unpredictable memory access pattern. To factor the worst-           row by row. To do so, the controller needs to read as many
+case Gust dataflow, we implement the memory structure for               fibers as possible for the same row and for each fiber it uses
+the streaming matrix as a traditional read-only set-associative         the consume operation indicating the row and the fiber k to
+
+
+                                                                    8
+                          Consume (row=0, K=1)                                               the tile reader STA), two memory controllers to orchestrate
+
+
+
+
+                                                                             V
+                  index
+                                      Search
+
+
+
+
+                                                                             K
+                                                                                             the memory structure for the streaming matrix (i.e., the tile
+               Row 0
+
+
+
+
+                                                            Fiber Block
+
+
+                                                                                 First
+                                                                          Last
+                                                                                             filler STR and the tile reader STR) and a single controller to
+               Row 1
+                                                                                             orchestrate the memory structure for C (i.e., the tile writer C).
+
+
+
+
+                                                                            Fibers
+              Row ...
+                                                                                             Fig. 11 shows the code of these unified memory controllers.
+              Row n-1
+
+                           Figure 10: PSRAM overview.                                        4. Experimental Methodology
+                                         Inputs                                              Simulation Infrastructure: For a detailed evaluation of
+- p_A: Row Pointer Vector STA - i_A: Col Pointer Vector STA - d_A: Data Vector STA           Flexagon, we have implemented a cycle-level microarchitec-
+- p_B: Row pointer vector STR - i_B: Col Pointer Vector STR - d_B: Data Vector STR
+- p_C: Row pointer vector C    - i_C: Col Pointer Vector C - d_C: Data Vector C              tural simulator of all on-chip components of our accelerator
+                             Tile Filler/Reader STA                                          by leveraging the STONNE framework [22]1 . To faithfully
+1: for (int i=0; i<p_A.size; i++) {                                                          model the whole memory hierarchy including an HBM 2.0
+2: for (int j=p_A[i]; j<p_A[i+1]; j++):
+3:       mem.push() / mem.pop()                                                              off-chip DRAM, we have connected the simulated accelerator
+                                Tile Filler/Reader STR                                       to the Structural Simulation Toolkit [14]. Table 5 shows the
+1: int high_L1=(gustavsons||inner_product) : p_A.size ? 1                                    main parameters of the architecture we have configured for the
+2: for (int i=0; i<n_high_L1; i++):
+3: int low_L2=(gustavsons) : p_A[i] ? 0                                                      rest of the evaluation. We compare our results against three
+4: int high_L2=(gustavsons) : p_A[i+1] ? p_B.size                                            state-of-the-art accelerators: SIGMA-like as an example of an
+5: for (int j=low_L2; j<high_L2; j++):
+6:       curr_pointer=(gustavsons) : receive(i_A[j]) ? j                                     IP accelerator, Sparch-like as an example of an OP accelerator
+7:       int low_L3 = p_B[curr_pointer]
+8:       int high_L3 = p_B[curr_pointer+1]                                                   and GAMMA-like as an example of a Gust accelerator.
+9:       for (int k=low_L3; k<high_L3; k++):
+10:          mem.fetch[k] / mem.read[k]                                                         We use the term -like in GAMMA-like, SIGMA-like and
+                                     Tile Writer C
+                                                                                             SpArch-like to reflect the fact that we capture their most rele-
+1: int rcv_elems=0
+2: while (pck=pending_element()):                                                            vant characteristics (i.e., their essence) in our simulator in a fair
+3:      value=pck.data()
+4:      row=pck.row()                                                                        and normalized fashion. Specifically, we focus on the dataflow,
+5:      col=pck.col()
+6:      if(pck.is_partial_sum()):                                                            which is a critical part for the efficiency of the accelerator; the
+7:         PartialWrite(row, col, value);
+8:      else:                                                                                DN, MN and RN components, which define the accelerator
+9:         d_c[rcv_elems]=value                                                              size and bandwidth; and the on-chip memory structures, which
+10:        i_C[rcv_elems]=col
+11:        if(new_row(row)):                                                                 determine the capacity of the accelerator to store data close to
+12:           p_C[row]=rcv_elems
+                                                                                             the processing elements. We note that these are given extra
+Figure 11: Pseudo-code of the tile filler STA, tile reader STA,
+                                                                                             on-chip area as appropriate. The main sources of efficiency
+tile filler STR, tile reader STR and the tile writer C. We fuse the
+                                                                                             in SIGMA, SpArch and GAMMA are the FAN reduction net-
+fillers and readers in the same text box. STA: Stationary, STR:
+                                                                                             work, merge network and the fiber cache respectively rather
+Streaming.
+                                                                                             than a specifically engineered design-point. Thus, we believe
+search. If there is an active line keeping the k fiber, the struc-                           that the comparison against the key features of these designs
+ture reads the next element from that fiber (indicated by the                                captured by SIGMA-like, SpArch-like and GAMMA-like is
+register First) and consumes it by increasing by one element                                 justifiable, since our aim is to establish the advantages of flexi-
+this register. When the First and Last registers store the same                              bility and our ability to achieve it without major area overhead
+value, the PSRAM detects that the line has been consumed                                     rather than obtain a specifically engineered design point.
+and invalidates the line by setting the valid bit to 0.                                         For the three accelerators, we model the same parameters
+   Write(Offset, E): Apart from the PSRAM which is used                                      presented in Table 5, and we only change the memory con-
+to store partial output fibers, we also augment our memory                                   trollers to deliver the data in the proper order according to
+structure with a FIFO which is used as a write buffer to hide                                its dataflow. We also compare Flexagon against the imple-
+the latency of sending out final output fibers to DRAM. This                                 mentation from Intel MKL [32] running on a 4-core 8-thread
+structure is employed by the Write operation.                                                Intel(R) Core(TM) i5-7400 CPU @ 3.00 GHz. Each core
+3.5. Memory controllers                                                                      implements a 128 KiB L1 cache, a 1 MiB L2 cache and a
+                                                                                             shared 6 MiB L3 cache. We do not include GPU results be-
+Having one memory controller for each combination of                                         cause existing GPU SpMSpM implementations do not support
+dataflow and memory structure would be very costly in terms                                  sparse weights+activations natively [36, 33], thus performing
+of area and power as it would require 30 logic modules to                                    similarly to CPU MKL as reported in [35, 34].
+orchestrate the data (6 dataflows × 5 memory controllers). In                                   To demonstrate the benefits of Flexagon, our evaluation
+our design, we have unified the logic and each controller is                                 methodology considers the following three different angles:
+able to be configured according to the memory access pat-                                       End-to-End Evaluation: To truly prove the performance
+tern of each dataflow. This way, as shown in Fig. 9, we only                                 benefits of Flexagon, we have carried out end-to-end execution
+need two controllers to orchestrate the data for the memory
+structure which is kept stationary (i.e., the tile filler STA and                               1 We   plan to open-source the framework after the revision of the paper.
+
+
+                                                                                         9
+                   Parameter                      Value                                    SIGMA-    Sparch-    GAMMA-      Flexagon
+              Number of Multipliers                 64                                       like      like        like
+               Number of Adders                     63                              DN       Tree      Tree        Tree       Tree
+             Distribution bandwidth          16 elems/cycle                         MN      Linear    Linear      Linear     Linear
+          Reduction/Merging bandwidth        16 elems/cycle                         RN       FAN     MergerS     MergerG     MRN
+       Total Word Size (Value+Coordinate)        32 bits
+               L1 Access Latency                 1 cycle                     Table 7: Main building blocks to model the SIGMA-like, Sparch-
+               L1 STA FIFO Size                 256 bytes                    like, GAMMA-like and Flexagon accelerators. DN=Distribution
+               L1 STR cache Size                  1MiB                       Network, RN=Reduction Network and MN= Multiplier Network.
+             L1 STR Cache Line Size             128 bytes
+           L1 STR Cache Associativity               16                       64-MS distribution network and the multiplier network. In
+         L1 STR Cache Number of Banks               16                       addition, we have implemented in RTL a 64-wide merger and
+                     PSRAM                      256 KiB                      our MRN. We use Synopsys Design Compiler and Cadence
+                   DRAM size                     16 GiB
+         DRAM access time / Bandwidth       100 ns / 256 GB/s
+                                                                             Innovus Implementation System for synthesis and place-and-
+                                                                             route, respectively, using TSMC 28nm GP standard LVT li-
+       Table 5: Configuration parameters of Flexagon.                        brary at 800 MHz. To obtain the area and power numbers of
+ Layer         M, N, K        spA    spB    csA      csB         csC         the memory structures, we have used CACTI 7.0 [13] for the
+  SQ5        64, 2916, 16      68     11    1.2     162          728         same technology node and frequency.
+ SQ11        128, 729, 32      70     10    4.8       82         364
+   R4       256, 3136, 64      88     9     7.6     709          3136        5. Results
+   R6       64, 2916, 576      89     53     16     3086         728
+  S-R3      64, 5329, 576      89     46     16     6422         1332        5.1. End-to-end results
+   V0      128, 12100, 576     90     61     29    21357        12321
+ MB215       128, 8, 512       50     0     128       16          4          Figure 12 compares the performance obtained with the
+   V7       512, 144, 4608     90     94    921     177          288         CPU MKL, the three contemporary fixed-dataflow acceler-
+   A2       384, 121, 1728     70     54    777     373          181         ators (SIGMA-like, Sparch-like and GAMMA-like) and with
+Table 6:    Representative DNN layers selected for the                       Flexagon when running the 8 DNN models (speed-ups with
+evaluation.    sp{A,B}=sparsity of matrix {A,B} (in %),                      respect to the results obtained with the CPU MKL). The to-
+cs{A,B,C}=compressed size of matrix {A,B,C} (in KiB).                        tal numbers of cycles for CPU MKL are reported in the last
+                                                                             column of Table 2.
+of complete DNN models (see Table 2) in our simulated accel-                    The first observation is that there is no fixed-dataflow ac-
+erators. These models are present in the MLPerf benchmark                    celerator that can obtain the highest performance for all the
+suite [29] and we take other models for completeness. As it                  8 DNN models. In particular, for Alexnet (A), VGG-16 (V),
+may be appreciated, we consider very diverse DNN models in                   Resnets-50 (R) and SSD-Resnets (S-R) the Sparch-like accel-
+terms of number of layers and sizes. The matrices involved in                erator is 5.26× and 1.49× on average faster than the SIGMA-
+the execution of each DNN layer range from 0.003 MiB up to                   like and GAMMA-like architectures, respectively. Conversely,
+63.41 MiB (see average compressed sizes in Table 2), thereby                 for Squeezenet (SQ), SSD-Mobilenets (SM), DistilBert (DB) and
+our evaluation is comprehensive as there are many situations                 MobileBert (MB), the GAMMA-like accelerator obtains the
+where matrices cannot completely fit on chip (Flexagon uses a                best performance (average improvements of 3.28× and 2.41×
+total of 1 MiB SRAM memory for storing input matrices).                      against the SIGMA-like and Sparch-like, respectively).
+   Layer-wise evaluation: Since explaining the results re-                      The second and most noteworthy observation is that
+quires delving into a finer-grained detail, we have selected                 Flexagon can outperform the other three fixed-dataflow ac-
+9 representative layers extracted from the execution of the                  celerators in all cases, attaining average speed-ups of 4.59×
+DNN models. Table 6 shows these layers together with the                     (vs. SIGMA-like), 1.71× (vs. Sparch-like) and 1.35× (vs.
+characteristics of each layer.                                               GAMMA-like). This is due to the combination of its flexible
+   RTL results: We implemented the main building blocks                      interconnects, explicitly decoupled memory structures and
+(i.e., the DN, MN, RN and the on-chip memory) of the ac-                     unified memory controllers that enable using the most efficient
+celerators considered in this work (shown in Table 7). For                   dataflow for each layer.
+an apples-to-apples comparison of overheads, the four archi-                    Finally, we observe that Flexagon significantly outper-
+tectures use the same tree topology for the DN, the same                     forms the CPU MKL as the hardware is specifically designed
+linear array of multipliers for the MN and vary the RN. For                  to perform the SpMSpM operation. Overall, we find that
+the SIGMA-like architecture, we utilize the FAN network [5]                  Flexagon obtains a speed-up of 31× on average (benefits from
+as the RN for flexible-sized reductions. For the Sparch-like                 13× up to 163× are observed).
+and GAMMA-like architectures, we use a merger [35, 25]
+to merge the partial sums produced after the multiplications.                5.2. Layer-wise results
+Finally, for Flexagon we utilize the unified MRN explained in                Detailing the reasons behind the benefit observed for some
+Section 3.                                                                   DNN models for a particular dataflow requires a deeper delve
+   For synthesis, we use MAERI BSV [1] to generate the                       into every DNN layer execution. To make the study feasible
+
+
+                                                                        10
+                         A                   V               SQ                 R                S-R               S-M                 DB                 MB          GEOMEAN                                                   SQ5           SQ11               R4              R6            S-R3              V0           MB215               V7              A2
+                                                                                                                                                                                                                        400
+
+
+
+
+                                                                                                                                                                                          On-chip memory traffic (MB)
+           160                                                                                                                                                                                                                                                                                                                                                                Component
+           120                                                                                                                                                                                                          300                                                                                                                                                     STA matrix
+                                                                                                                                                                                                                                                                                                                                                                                STR matrix
+            80                                                                                                                                                                                                          200                                                                                                                                                     Psums
+Speed-up
+
+
+
+
+            40                                                                                                                                                                                                          100
+
+
+
+
+                0                                                                                                                                                                                                         0
+                       Flexagon
+
+
+
+
+                                       Flexagon
+
+
+
+
+                                                          Flexagon
+
+
+
+
+                                                                              Flexagon
+
+
+
+
+                                                                                               Flexagon
+
+
+
+
+                                                                                                                 Flexagon
+
+
+
+
+                                                                                                                                    Flexagon
+
+
+
+
+                                                                                                                                                         Flexagon
+
+
+
+
+                                                                                                                                                                         Flexagon
+                     SIGMA-like
+                     Sparch-like
+                    GAMMA-like
+
+
+
+                                     SIGMA-like
+                                     Sparch-like
+                                    GAMMA-like
+
+
+
+                                                        SIGMA-like
+                                                        Sparch-like
+                                                       GAMMA-like
+
+
+
+                                                                            SIGMA-like
+                                                                            Sparch-like
+                                                                           GAMMA-like
+
+
+
+                                                                                             SIGMA-like
+                                                                                             Sparch-like
+                                                                                            GAMMA-like
+
+
+
+                                                                                                               SIGMA-like
+                                                                                                               Sparch-like
+                                                                                                              GAMMA-like
+
+
+
+                                                                                                                                  SIGMA-like
+                                                                                                                                  Sparch-like
+                                                                                                                                 GAMMA-like
+
+
+
+                                                                                                                                                       SIGMA-like
+                                                                                                                                                       Sparch-like
+                                                                                                                                                      GAMMA-like
+
+
+
+                                                                                                                                                                       SIGMA-like
+                                                                                                                                                                       Sparch-like
+                                                                                                                                                                      GAMMA-like
+                       CPU MKL
+
+
+
+
+                                       CPU MKL
+
+
+
+
+                                                          CPU MKL
+
+
+
+
+                                                                              CPU MKL
+
+
+
+
+                                                                                               CPU MKL
+
+
+
+
+                                                                                                                 CPU MKL
+
+
+
+
+                                                                                                                                    CPU MKL
+
+
+
+
+                                                                                                                                                         CPU MKL
+
+
+
+
+                                                                                                                                                                         CPU MKL
+
+
+
+
+                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                                                                                                                              Flexagon-like
+                                                                                                                                                                                                                                                                                                                                                                 SIGMA-like
+                                                                                                                                                                                                                                                                                                                                                                Sparch-like
+                                                                                                                                                                                                                                                                                                                                                               GAMMA-like
+                                                                                                                                                                                                                                                                                                                                                              Flexagon-like
+Figure 12: Performance comparison between CPU MKL,
+SIGMA-like, Sparch-like, GAMMA-like and Flexagon architec-                                                                                                                                Figure 14: Memory traffic (MB) that flows through the on-chip
+tures across the 8 DNN models (speed-up against SIGMA-like).                                                                                                                              memory hierarchy for SIGMA-like, Sparch-like, GAMMA-like
+                 SQ5           SQ11              R4            R6            S-R3             V0         MB215              V7             A2 GEOMEAN                                     and Flexagon architectures across our 9 DNN layers.
+           8                                                                                                                                                               Mult
+           6                                                                                                                                                               Merg
+
+           4
+                                                                                                                                                                                          memory hierarchy (i.e., the reads from the STA FIFO and
+Speed-up
+
+
+
+
+           2
+                                                                                                                                                                                          from the STR cache and the reads/writes from/to the PSRAM
+                                                                                                                                                                                          ) and the distribution network after running the SIGMA-like,
+                                                                                                                                                                                          Sparch-like, GAMMA-like and Flexagon architectures across
+           0                                                                                                                                                                              our nine DNN layers. Figure 15 plots the cache miss rate
+                  Flexagon
+
+
+
+                                 Flexagon
+
+
+
+                                                Flexagon
+
+
+
+                                                               Flexagon
+
+
+
+                                                                              Flexagon
+
+
+
+                                                                                             Flexagon
+
+
+
+                                                                                                            Flexagon
+
+
+
+                                                                                                                           Flexagon
+
+
+
+                                                                                                                                          Flexagon
+
+
+
+                                                                                                                                                          Flexagon
+                SIGMA-like
+                Sparch-like
+               GAMMA-like
+
+                               SIGMA-like
+                               Sparch-like
+                              GAMMA-like
+
+                                              SIGMA-like
+                                              Sparch-like
+                                             GAMMA-like
+
+                                                             SIGMA-like
+                                                             Sparch-like
+                                                            GAMMA-like
+
+                                                                            SIGMA-like
+                                                                            Sparch-like
+                                                                           GAMMA-like
+
+                                                                                           SIGMA-like
+                                                                                           Sparch-like
+                                                                                          GAMMA-like
+
+                                                                                                          SIGMA-like
+                                                                                                          Sparch-like
+                                                                                                         GAMMA-like
+
+                                                                                                                         SIGMA-like
+                                                                                                                         Sparch-like
+                                                                                                                        GAMMA-like
+
+                                                                                                                                        SIGMA-like
+                                                                                                                                        Sparch-like
+                                                                                                                                       GAMMA-like
+
+                                                                                                                                                        SIGMA-like
+                                                                                                                                                        Sparch-like
+                                                                                                                                                       GAMMA-like
+
+
+
+
+                                                                                                                                                                                          of the STR cache after running the layers, and Figure 16
+                                                                                                                                                                                          shows the amount of off-chip traffic (expressed in KBs) that in
+Figure 13: Performance comparison between SIGMA-like,                                                                                                                                     consequence, flows between this STR cache and the DRAM.
+Sparch-like, GAMMA-like and Flexagon architectures across                                                                                                                                    The first observation that we would like to make from Fig-
+our 9 DNN layers (speed-up against the SIGMA-like one).                                                                                                                                   ure 14 is the negligible traffic that is fetched from the memory
+                                                                                                                                                                                          structure for the STA matrix (inappreciable fractions of the
+(we run over a hundred of layers), next, we present a compre-                                                                                                                             bars in blue color). This is basically due to the fact that the
+hensive study for a selected set of nine representative DNN                                                                                                                               stationary data is kept stationary in the multipliers once it is
+layers (Table 6). These layers are chosen according to the                                                                                                                                read for the rest of the execution, as it is explained in Sec-
+dataflow from which they benefit the most –The first three                                                                                                                                tion 3. For this reason, this memory structure does not have a
+layers in the table benefit from IP (SQ5, SQ11 and R4), the                                                                                                                               significant impact on the final performance of the executions
+second ones from OP (R6, S-R3 and V0), and the third ones                                                                                                                                 regardless of the dataflow that is configured. In contrast, the
+from Gust (MB215, V7 and A2).                                                                                                                                                             amount of traffic required to fill the structure for the STR ma-
+   Figure 13 shows a performance comparison running these                                                                                                                                 trix and the PSRAM heavily varies layer by layer and across
+selected layers using our simulated accelerators (again, speed-                                                                                                                           dataflows (fractions of the bars in orange and green colors
+ups are computed with respect to SIGMA-like). As expected,                                                                                                                                respectively), hence determining the final performance of the
+as shown in the figure, in case of the first group of IP-friendly                                                                                                                         layer execution.
+layers, the SIGMA-like architecture obtains average speed-ups                                                                                                                                Since the IP dataflow does not require to merge the partial
+of 1.53× and 1.40× against the Sparch-like and the GAMMA-                                                                                                                                 sums as they are internally accumulated (observe the num-
+like architectures, respectively. The next three OP-friendly                                                                                                                              ber of partial sums sent to the PSRAM for the SIGMA-like
+layers (i.e., R6, S-R3 and V0), the Sparch-like architecture ob-                                                                                                                          architecture is always 0) this dataflow obtains the best perfor-
+tains an average increased performance of 5.07× and 2.66×                                                                                                                                 mance. An outlier for this behaviour is observed for the V0
+against the SIGMA-like and GAMMA-like architectures. Fi-                                                                                                                                  layer. Here, the traffic generated for the STR matrix in the
+nally, the last three Gust-friendly layers, the best performance                                                                                                                          SIGMA-like architecture is lower than the traffic generated
+is obtained by the GAMMA-like architecture, experimenting                                                                                                                                 in the Sparch-like and GAMMA-like architectures. However,
+4.37× and 3.19× faster executions than the SIGMA-like and                                                                                                                                 this workload experiences higher runtime. The reason of this
+the Sparch-like architectures, respectively. More remarkable                                                                                                                              is the large size of the matrix B (21.3 MiB) which causes that
+is that Flexagon beats all of them, always reaching the per-                                                                                                                              it has to be reloaded several times, experimenting a L1 miss
+formance of the best case. Overall, by properly configuring                                                                                                                               rate of 3.13% (see Figure 15), significantly higher than the
+the control logic of Flexagon according to the most suitable                                                                                                                              L1 miss rates obtained for the Sparch-like and GAMMA-like
+dataflow for each layer, our accelerator is able to attain 2.81×,                                                                                                                         architectures (i.e., 0.36% and 2.30%) which translates into
+1.69×, and 1.55× speed-ups against the SIGMA-like, Sparch-                                                                                                                                increased off-chip memory traffic (see Figure 16). This higher
+like and GAMMA-like accelerators.                                                                                                                                                         traffic provokes that the multiplying phase takes longer for
+   Figures 14, 15 and 16 help us understand these results.                                                                                                                                the SIGMA-like architecture than for both the multiplying
+Specifically, Figure 14 shows the amount of on-chip memory                                                                                                                                and merging phase for the Sparch-like architecture. When the
+traffic (expressed in MBs) that relays between our on-chip                                                                                                                                number of intersections is low, the SIGMA-like architecture
+
+
+                                                                                                                                                                                     11
+                                   SQ5           SQ11            R4             R6            S-R3            V0          MB215             V7             A2                    Component      SIGMA-      Sparch-    GAMMA-   Flexagon
+                        3.5%
+                        3.0%                                                                                                                                                                      like        like       like
+                        2.5%                                                                                                                                                                            Area Results
+STR cache Miss rate
+
+
+
+
+                        2.0%
+                                                                                                                                                                                  DN (mm2 )       0.04        0.04      0.04      0.04
+                        1.5%
+                                                                                                                                                                                  MN (mm2 )       0.07        0.07      0.07      0.07
+                        1.0%
+                                                                                                                                                                                  RN (mm2 )       0.17        0.07      0.07      0.21
+                        0.5%                                                                                                                                                     Cache (mm2 )     3.93        3.93      3.93      3.93
+                                                                                                                                                                                PSRAM (mm2 )        -         1.03      0.51      1.03
+                                                                                                                                                                                 Total (mm2 )     4.21        5.14      4.62      5.28
+                        0.0%                                                                                                                                                                           Power Results
+                                  Flexagon
+
+
+
+
+                                                 Flexagon
+
+
+
+
+                                                                Flexagon
+
+
+
+
+                                                                               Flexagon
+
+
+
+
+                                                                                              Flexagon
+
+
+
+
+                                                                                                             Flexagon
+
+
+
+
+                                                                                                                            Flexagon
+
+
+
+
+                                                                                                                                           Flexagon
+
+
+
+
+                                                                                                                                                          Flexagon
+                                SIGMA-like
+                                Sparch-like
+                               GAMMA-like
+
+
+                                               SIGMA-like
+                                               Sparch-like
+                                              GAMMA-like
+
+
+                                                              SIGMA-like
+                                                              Sparch-like
+                                                             GAMMA-like
+
+
+                                                                             SIGMA-like
+                                                                             Sparch-like
+                                                                            GAMMA-like
+
+
+                                                                                            SIGMA-like
+                                                                                            Sparch-like
+                                                                                           GAMMA-like
+
+
+                                                                                                           SIGMA-like
+                                                                                                           Sparch-like
+                                                                                                          GAMMA-like
+
+
+                                                                                                                          SIGMA-like
+                                                                                                                          Sparch-like
+                                                                                                                         GAMMA-like
+
+
+                                                                                                                                         SIGMA-like
+                                                                                                                                         Sparch-like
+                                                                                                                                        GAMMA-like
+
+
+                                                                                                                                                        SIGMA-like
+                                                                                                                                                        Sparch-like
+                                                                                                                                                       GAMMA-like
+                                                                                                                                                                                  DN (mW)         2.18        2.18      2.18     2.18
+                                                                                                                                                                                  MN (mW)         3.29        3.29      3.29     3.29
+                                                                                                                                                                                  RN (mW)         248        64.48      64.48    312
+                                                                                                                                                                                 Cache (mW)       2142        2142      2142     2142
+Figure 15: STR cache miss rate for the SIGMA-like, Sparch-                                                                                                                      PSRAM (mW)          -         538        269     538
+                                                                                                                                                                                 Total (mW)       2396        2750      2481     2998
+like, GAMMA-like and Flexagon architectures across 9 DNN
+layers.                                                                                                                                                                    Table 8: Post-layout area and power obtained for SIGMA-like
+                                  SQ5           SQ11             R4             R6           S-R3             V0          MB215             V7             A2
+                                                                                                                                                                           Sparch-like, GAMMA-like and Flexagon accelerators.
+                        4.0k
+
+                        3.0k                                                                                                                                               5.3. RTL results
+Off-chip traffic (KB)
+
+
+
+
+                        2.0k                                                                                                                                               Table 8 shows a breakdown of the total amount of area (mm2 )
+                        1.0k
+                                                                                                                                                                           and power (mW) obtained for the 64-MS SIGMA-like, Sparch-
+                                                                                                                                                                           like, GAMMA-like and Flexagon accelerators. For each case,
+                                                                                                                                                                           we show the results for the main architectural components:
+                        0.0k
+                                                                                                                                                                           Distribution Network (DN), Multiplier Network (MN), Re-
+                                  Flexagon
+
+
+
+
+                                                 Flexagon
+
+
+
+
+                                                                Flexagon
+
+
+
+
+                                                                               Flexagon
+
+
+
+
+                                                                                              Flexagon
+
+
+
+
+                                                                                                             Flexagon
+
+
+
+
+                                                                                                                            Flexagon
+
+
+
+
+                                                                                                                                           Flexagon
+
+
+
+
+                                                                                                                                                          Flexagon
+                                SIGMA-like
+                                Sparch-like
+                               GAMMA-like
+
+
+                                               SIGMA-like
+                                               Sparch-like
+                                              GAMMA-like
+
+
+                                                              SIGMA-like
+                                                              Sparch-like
+                                                             GAMMA-like
+
+
+                                                                             SIGMA-like
+                                                                             Sparch-like
+                                                                            GAMMA-like
+
+
+                                                                                            SIGMA-like
+                                                                                            Sparch-like
+                                                                                           GAMMA-like
+
+
+                                                                                                           SIGMA-like
+                                                                                                           Sparch-like
+                                                                                                          GAMMA-like
+
+
+                                                                                                                          SIGMA-like
+                                                                                                                          Sparch-like
+                                                                                                                         GAMMA-like
+
+
+                                                                                                                                         SIGMA-like
+                                                                                                                                         Sparch-like
+                                                                                                                                        GAMMA-like
+
+
+                                                                                                                                                        SIGMA-like
+                                                                                                                                                        Sparch-like
+                                                                                                                                                       GAMMA-like
+
+
+
+
+                                                                                                                                                                           duction/Merger Network (RN), the cache structure for the
+                                                                                                                                                                           streaming matrix (Cache) and the PSRAM .
+                                                                                                                                                                              In terms of area, we observe that Flexagon introduces an
+Figure 16: Off-chip data traffic for the SIGMA-like, Sparch-like,                                                                                                          overhead of 25%, 3% and 14% with respect to the area of
+GAMMA-like and Flexagon architectures across 9 DNN layers.                                                                                                                 the SIGMA-like, Sparch-like and GAMMA-like accelerators,
+                                                                                                                                                                           respectively. As we can see, the area of the four accelerators
+experiments higher number of cycles overheads due to this                                                                                                                  is mostly dominated by the memory structures. Specifically,
+architecture accesses to many more data elements. This is                                                                                                                  we observe that the cache for the streaming matrix represents
+also observed in the six layers that do not benefit from the                                                                                                               a 93%, 76%, 85% and 74% of the total amount of area for
+SIGMA-like architecture (i.e., R6, S-R3, V0, MB215, V7 and                                                                                                                 the SIGMA-like, Sparch-like, GAMMA-like and Flexagon ar-
+A2), experiencing on average 5.68× and 2.27× higher on-chip                                                                                                                chitectures, respectively. Besides, the area of the PSRAM
+traffic than the Sparch-like and GAMMA-like architectures.                                                                                                                 represents a 20%, 11% and 19% with respect to the Sparch-
+   On the other hand, out of these six layers, the main differ-                                                                                                            like, GAMMA-like and Flexagon accelerators, respectively.
+ence of performance that defines them comes from the size                                                                                                                  Since the SIGMA-like architecture employs an IP dataflow,
+of the matrix B. The second group of layers (i.e., R6, S-R3                                                                                                                this accelerator does not need this structure, which explains
+and V0) that benefit from the Sparch-like architecture have                                                                                                                the reason of having the lowest area. Also, the area of the
+a large size of matrix B (see Table 6). This implies that the                                                                                                              PSRAM is the GAMMA-like accelerator is half the area in the
+GAMMA-like architecture cannot fit the rows of B entirely in                                                                                                               Sparch-like and Flexagon accelerators as it requires to store
+the memory structure for the STR matrix, causing higher L1                                                                                                                 less partial sums, which explains the area reduction. Obvi-
+miss rates. Observe the average L1 miss rate (see Figure 15)                                                                                                               ously, Flexagon needs support for the worst-case OP dataflow
+experimented in the execution of these three layers is 0.39%                                                                                                               and needs the highest PSRAM overhead. Finally, note that
+for the Sparch-like architecture and 2.43% for the GAMMA-                                                                                                                  our MRN is 28% and 128% larger than the area of the FAN
+like architecture. This translates into 6.25× more traffic for                                                                                                             and the merger, but this does not translates into high overall
+GAMMA which causes the degradation in performance.                                                                                                                         overhead as the MRN takes only a 4% out of the total area for
+   In the last group of layers (i.e., MB215, V7 and A2) the size                                                                                                           Flexagon.
+of matrices B are much smaller (up to 373KB as observed                                                                                                                       Figure 17 proves the area benefits of unifying the RN and
+in Table 6) and therefore both Sparch-like and GAMMA-like                                                                                                                  the merger into a single network (MRN). To do so, we have
+architectures experience the same L1 miss rates and off-chip                                                                                                               sketched a 64-MS naive accelerator design similar to Flexagon,
+data traffic. In this scenario, the GAMMA-like architecture                                                                                                                but utilizing separate networks for each dataflow (see Fig-
+is more efficient as it is able to compute the merging phase                                                                                                               ure 17a). We use the term naive here to emphasize the fact
+and the merging phase at the same time –Observe the orange                                                                                                                 that the design simply replicates the reduction network 3 times
+bar for the GAMMA-like cases in the Figure 13 is not signif-                                                                                                               (one per each dataflow). As it may be seen, the reduction and
+icant as the merge phase is computed in parallel within the                                                                                                                merger networks share the same multiplier and distribution
+multiplying phase (i.e., blue bar).                                                                                                                                        networks as well as the same SRAM capacity. The design
+
+
+                                                                                                                                                                      12
+                                                                               7                                                 A              V             SQ              R            S-R            S-M            DB             MB          GEOMEAN
+                                                                                                                        6
+                          To DRAM
+                                                                               6                                        5
+
+
+
+
+                                                                                                   Performance / Area
+                         PSRAM (write)
+                                                                               5
+
+
+
+
+                                                                  Area (mm²)
+                                                                                                                        4
+
+                          3 x (64:1 Mux)                                       4                                        3
+
+                                                                                                                        2
+              64-wide
+                                                                               3
+                             64-wide        64-wide
+             Reduction                                                                                                  1
+                             Merger S       Merger G
+              Network                                                          2
+                                                                                                                        0
+                                                                               1
+
+
+
+
+                                                                                                                               Flexagon
+
+
+
+
+                                                                                                                                              Flexagon
+
+
+
+
+                                                                                                                                                             Flexagon
+
+
+
+
+                                                                                                                                                                            Flexagon
+
+
+
+
+                                                                                                                                                                                           Flexagon
+
+
+
+
+                                                                                                                                                                                                          Flexagon
+
+
+
+
+                                                                                                                                                                                                                         Flexagon
+
+
+
+
+                                                                                                                                                                                                                                        Flexagon
+
+
+
+
+                                                                                                                                                                                                                                                       Flexagon
+                                                                                                                             SIGMA-like
+                                                                                                                             Sparch-like
+                                                                                                                            GAMMA-like
+
+
+                                                                                                                                            SIGMA-like
+                                                                                                                                            Sparch-like
+                                                                                                                                           GAMMA-like
+
+
+                                                                                                                                                           SIGMA-like
+                                                                                                                                                           Sparch-like
+                                                                                                                                                          GAMMA-like
+
+
+                                                                                                                                                                          SIGMA-like
+                                                                                                                                                                          Sparch-like
+                                                                                                                                                                         GAMMA-like
+
+
+                                                                                                                                                                                         SIGMA-like
+                                                                                                                                                                                         Sparch-like
+                                                                                                                                                                                        GAMMA-like
+
+
+                                                                                                                                                                                                        SIGMA-like
+                                                                                                                                                                                                        Sparch-like
+                                                                                                                                                                                                       GAMMA-like
+
+
+                                                                                                                                                                                                                       SIGMA-like
+                                                                                                                                                                                                                       Sparch-like
+                                                                                                                                                                                                                      GAMMA-like
+
+
+                                                                                                                                                                                                                                      SIGMA-like
+                                                                                                                                                                                                                                      Sparch-like
+                                                                                                                                                                                                                                     GAMMA-like
+
+
+                                                                                                                                                                                                                                                     SIGMA-like
+                                                                                                                                                                                                                                                     Sparch-like
+                                                                                                                                                                                                                                                    GAMMA-like
+                         64 x (1:3 Demux)
+
+                                                                               0
+
+
+
+
+                                                                                   Flexagon
+                                                                                      Naive
+                     64-MS Multiplier Network
+
+
+                                                                                                   Figure 18: Performance/Area obtained after running the
+                    64-DS Distribution Network
+                                                                                                   SIGMA-like, Sparch-like, GAMMA-like and Flexagon architec-
+                                                        mponent
+                    Cache +PSRAM (read)                           Datapath                         tures across our 8 DNN models.
+                                                                  Mux/Demux
+                             DRAM                                 SRAM                             ter with the Gustavson dataflow, making the area overhead
+                 a) Naive Design                       b) RTL Results                              introduced by the Flexagon accelerator unnecessary. Conse-
+Figure 17: a) High-level overview of a non-unified naive design.                                   quently, we can clearly see that, overall, Flexagon reaches the
+b) Area comparison between Flexagon and the naive design.                                          best compromise between performance and area consumption
+                                                                                                   (the higher Speed-up/Area values). In comparison, we find
+requires extra links, muxes and demuxes to connect the pieces.                                     that, on average, our accelerator obtains 18%, 67% and 265%
+At the bottom side, the MN connects to three different net-                                        better performance/area efficiency across the execution of our
+works, and therefore, requires 64 (1:3) demultiplexers. At the                                     8 DNN models with respect to the GAMMA-like, Sparch-like
+top side, each node from the merger and reduction network                                          and SIGMA-like accelerators. This makes Flexagon the best
+has to be connected to memory requiring 3 costly (64:1) mul-                                       candidate for running heterogeneous sparse DNN workloads.
+tiplexers and connections. Figure 17b shows the inefficiencies
+of this naive design. As we can see, the three separate net-                                       6. Related work
+works (i.e., RNs and mergers) introduce an area overhead of                                        Sparse DNN Accelerators: Sparse matrix multiplications
+just 2% as the designs are dominated by the SRAM area (e.g.,                                       have been prime targets of acceleration for AI and HPC
+74% of area for Flexagon). The significant area penalty intro-                                     workloads. Several sparse DNN accelerators have been
+duced by the naive design comes from the extra multiplexers,                                       proposed for SpMM, SpGEMM and Sparse convolution
+demultiplexers and corresponding connections, introducing                                          [10, 25, 12, 31, 2, 20, 8, 5, 16, 26]. These accelerators have
+an area overhead of 25% over Flexagon. Note that in larger                                         support for sparse execution via compression of one or both
+configurations (i.e., greater number of multipliers) this area                                     operands into formats like CSR, CSC, bitmap, CSF etc. This
+overhead would even increase.                                                                      reduces the memory footprint and the number of multiplica-
+   In terms of power, we observe the same trends. We find that                                     tions. As Table 1 shows, prior sparse accelerators have picked
+the Flexagon accelerator consumes 25%, 9% and 21% more                                             either one of IP, OP and Gust(row-wise product) dataflows.
+power than the SIGMA-like, Sparch-like and GAMMA-like                                              We show that flexibility to support multiple dataflows is bene-
+accelerators. The slightly higher overhead of Flexagon against                                     ficial for performance and performance per area.
+the aforementioned area results comes mostly from the Merg-                                           Frameworks for flexible accelerators: Prior works in the
+er/RN as this module represents a larger fraction of total con-                                    direction of flexibility include hardware widgets and design-
+sumption (10%, 2.34%, 2.60% and 10.41% out of the SIGMA-                                           space exploration tools for CGRAs. MINT [28] is a format
+like, Sparch-like, GAMMA-like and flexagon accelerators are                                        converter widget that supports multiple sparse formats. Prior
+observed, respectively). This, together with the fact that the                                     works Garg et al. [7], coSPARSE [6] and SparseAdapt [24]
+MRN consumes 25% and 284% more than the FAN RN and                                                 propose frameworks for efficient sparse execution on CGRAs.
+the merger, explains the results. In spite of the overhead intro-                                  However, to the best of our knowledge, this is the first work
+duced, in Figure 18 we illustrate that Flexagon is still more                                      that proposes an accelerator for Sparse DNNs which exploits
+performance/area efficient. Specifically, we consider both                                         all the three dataflows.
+achieved speed-ups and area requirements of each design. The
+area requirements are normalized with respect to the SIGMA-                                        7. Conclusion
+like case, which is also the reference for the calculation of                                      This work proposes Flexagon, the first SpMSpM accelerator
+the speed-ups. Note that the NLP models like MobileBert                                            design that offers IP, OP and Gust dataflows on a homoge-
+(MB) and DistilBert (DB) achieves a better efficiency with                                         neous hardware substrate. Flexagon revolves around a novel
+the GAMMA-like accelerator. Nevertheless, this is due to as                                        tree-based network (MRN) that supports both reduction of dot
+explained before, most of the layers (84% in DistilBert (DB)                                       products and merging of partial sums, and a special L1 on-
+and 100% in MobileBert (MB)) for these models work bet-                                            chip memory organization, specifically tailored to the differ-
+
+
+                                                                                              13
+ent access characteristics of the input and output compressed                       [19] Hyoukjun Kwon, Ananda Samajdar, and Tushar Krishna. MAERI:
+matrices. By using the dataflow that best matches the char-                              Enabling flexible dataflow mapping over dnn accelerators via reconfig-
+                                                                                         urable interconnects. Int’l Conf. on Architectural Support for Program-
+acteristics of each DNN layer, we show that Flexagon brings                              ming Languages and Operating Systems, March 2018.
+significant improvements in performance/area efficiency over                        [20] Ching-En Lee, Yakun Sophia Shao, Jie-Fang Zhang, Angshuman
+                                                                                         Parashar, Joel Emer, Stephen W Keckler, and Zhengya Zhang. Stitch-x:
+SOTA fixed-dataflow sparse accelerators.                                                 An accelerator architecture for exploiting unstructured sparsity in deep
+                                                                                         neural networks. In SysML Conference, volume 120, 2018.
+References                                                                          [21] Peter Mattson, Christine Cheng, Cody Coleman, Greg Diamos, Paulius
+                                                                                         Micikevicius, David Patterson, Hanlin Tang, Gu-Yeon Wei, Peter
+ [1] MAERI code v1. https://github.com/hyoukjun/MAERI.                                   Bailis, Victor Bittorf, et al. Mlperf training benchmark. arXiv preprint
+ [2] Yu-Hsin Chen, Tien-Ju Yang, Joel Emer, and Vivienne Sze. Eyeriss v2:                arXiv:1910.01500, 2019.
+     A flexible accelerator for emerging deep neural networks on mobile             [22] F. Muñoz-Martínez et al. STONNE: Enabling cycle-level microarchi-
+     devices. IEEE Journal on Emerging and Selected Topics in Circuits                   tectural simulation for dnn inference accelerators. In IISWC, 2021.
+     and Systems, 9(2):292 – 308, June 2019.                                        [23] Maxim Naumov, Dheevatsa Mudigere, Hao-Jun Michael Shi, Jianyu
+ [3] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.                   Huang, Narayanan Sundaraman, Jongsoo Park, Xiaodong Wang, Udit
+     Bert: Pre-training of deep bidirectional transformers for language                  Gupta, Carole-Jean Wu, Alisson G. Azzolini, Dmytro Dzhulgakov,
+     understanding. arXiv preprint arXiv: 1810.04805v2 (2019), May                       Andrey Mallevich, Ilia Cherniavskii, Yinghai Lu, Raghuraman Kr-
+     2019.                                                                               ishnamoorthi, Ansha Yu, Volodymyr Kondratenko, Stephanie Pereira,
+ [4] A. Parashar et al. Timeloop: A systematic approach to dnn accelera-                 Xianjie Chen, Wenlin Chen, Vijay Rao, Bill Jia, Liang Xiong, and
+     tor evaluation. Int’l Symp. on Performance Analysis of Systems and                  Misha Smelyanskiy. Deep learning recommendation model for per-
+     Software, March 2019.                                                               sonalization and recommendation systems. CoRR, abs/1906.00091,
+ [5] Eric Qin et al. SIGMA: A sparse and irregular gemm accelerator                      2019.
+     with flexible interconnects for dnn training. Int’l Symp. on High-             [24] Subhankar Pal, Aporva Amarnath, Siying Feng, Michael O’Boyle,
+     Performance Computer Architecture, March 2020.                                      Ronald Dreslinski, and Christophe Dubach. Sparseadapt: Runtime
+ [6] Siying Feng, Jiawen Sun, Subhankar Pal, Xin He, Kuba Kaszyk, Dong-                  control for sparse linear algebra on a reconfigurable accelerator. In
+     hyeon Park, Magnus Morton, Trevor Mudge, Murray Cole, Michael                       MICRO-54: 54th Annual IEEE/ACM International Symposium on
+     O’Boyle, Chaitali Chakrabarti, and Ronald Dreslinski. Cosparse: A                   Microarchitecture, MICRO ’21, page 1005–1021, New York, NY,
+     software and hardware reconfigurable spmv framework for graph ana-                  USA, 2021. Association for Computing Machinery.
+     lytics. In 2021 58th ACM/IEEE Design Automation Conference (DAC),              [25] Subhankar Pal, Jonathan Beaumont, Dong-Hyeon Park, Aporva Amar-
+     pages 949–954, 2021.                                                                nath, Siying Feng, Chaitali Chakrabarti, Hun-Seok Kim, David Blaauw,
+ [7] Raveesh Garg, Eric Qin, Francisco Muñoz-Martínez, Robert Guirado,                   Trevor Mudge, and Ronald Dreslinski. Outerspace: An outer product
+     Akshay Jain, Sergi Abadal, José L Abellán, Manuel E Acacio, Eduard                  based sparse matrix multiplication accelerator. In ISCA, 2018.
+     Alarcón, Sivasankaran Rajamanickam, and Tushar Krishna. Under-                 [26] Angshuman Parashar, Minsoo Rhu, Anurag Mukkara, Antonio
+     standing the design-space of sparse/dense multiphase gnn dataflows                  Puglielli, Rangharajan Venkatesan, Brucek Khailany, Joel Emer,
+     on spatial accelerators. In 2022 IEEE International Parallel and Dis-               Stephen W. Keckler, and William J. Dally. SCNN: An accelerator
+     tributed Processing Symposium (IPDPS), 2022.                                        for compressed-sparse convolutional neural networks. International
+ [8] Ashish Gondimalla, Noah Chesnut, Mithuna Thottethodi, and TN Vi-                    Symposium on Computer Architecture (ISCA), pages 27–40, June 2017.
+     jaykumar. Sparten: A sparse tensor accelerator for convolutional neural        [27] Eric Qin, Geonhwa Jeong, William Won, Sheng-Chun Kao, Hy-
+     networks. In Proceedings of the 52nd Annual IEEE/ACM International                  oukjun Kwon, Sudarshan Srinivasan, Dipankar Das, Gordon E Moon,
+     Symposium on Microarchitecture, pages 151–165, 2019.                                Sivasankaran Rajamanickam, and Tushar Krishna. Extending sparse
+ [9] Fred G. Gustavson. Two fast algorithms for sparse matrices: Mul-                    tensor accelerators to support multiple compression formats. In 2021
+     tiplication and permuted transposition. ACM Trans. Math. Softw.,                    IEEE International Parallel and Distributed Processing Symposium
+     4(3):250–269, sep 1978.                                                             (IPDPS), pages 1014–1024. IEEE, 2021.
+[10] S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. A. Horowitz, and W. J.            [28] Eric Qin, Geonhwa Jeong, William Won, Sheng-Chun Kao, Hy-
+     Dally. Eie: Efficient inference engine on compressed deep neural                    oukjun Kwon, Sudarshan Srinivasan, Dipankar Das, Gordon E. Moon,
+     network. In 2016 ACM/IEEE 43rd Annual International Symposium                       Sivasankaran Rajamanickam, and Tushar Krishna. Extending sparse
+     on Computer Architecture (ISCA), pages 243–254, June 2016.                          tensor accelerators to support multiple compression formats. In 2021
+[11] Song Han, Huizi Mao, and William J. Dally. Deep compression:                        IEEE International Parallel and Distributed Processing Symposium
+     Compressing deep neural networks with pruning, trained quantization                 (IPDPS), pages 1014–1024, 2021.
+     and huffman coding. arXiv preprint arXiv: 1510.00149v5 (2016),                 [29] V. J. Reddi et al. MLPerf inference benchmark. 47th Int’l Symp. on
+     February 2016.                                                                      Computer Architecture (ISCA), May 2020.
+[12] Kartik Hegde, Hadi Asghari-Moghaddam, Michael Pellauer, Neal                   [30] Vijay Janapa Reddi, Christine Cheng, David Kanter, Peter Mattson,
+     Crago, Aamer Jaleel, Edgar Solomonik, Joel Emer, and Christopher W                  Guenther Schmuelling, Carole-Jean Wu, Brian Anderson, Maximilien
+     Fletcher. Extensor: An accelerator for sparse tensor algebra. In                    Breughe, Mark Charlebois, William Chou, et al. Mlperf inference
+     Proceedings of the 52nd Annual IEEE/ACM International Symposium                     benchmark. In 2020 ACM/IEEE 47th Annual International Symposium
+     on Microarchitecture, pages 319–333, 2019.                                          on Computer Architecture (ISCA), pages 446–459. IEEE, 2020.
+[13] HP Laboratories. CACTI 7.0: A Tool to Model Caches/Memories, 3D                [31] Nitish Srivastava, Hanchen Jin, Jie Liu, David Albonesi, and Zhiru
+     stacking, and off-chip IO. https://github.com/HewlettPackard/cacti.                 Zhang. Matraptor: A sparse-sparse matrix multiplication accelerator
+[14] Janssen, Curtis L., and et al. A simulator for large-scale parallel                 based on row-wise product. In 2020 53rd Annual IEEE/ACM Inter-
+     computer architectures. IJDST vol.1, no.2, pages 57–73, 2010.                       national Symposium on Microarchitecture (MICRO), pages 766–780.
+[15] Norman P. Jouppi et al. In-datacenter performance analysis of a tensor              IEEE, 2020.
+     processing unit. In 44th Int’l Symp. on Computer Architecture, 2017.           [32] Endong Wang, Qing Zhang, Bo Shen, Guangyong Zhang, Xiaowei
+[16] Konstantinos Kanellopoulos, Nandita Vijaykumar, Christina Gian-                     Lu, Qing Wu, and Yajuan Wang. Intel math kernel library. High-
+     noula, Roknoddin Azizi, Skanda Koppula, Nika Mansouri Ghiasi,                       Performance Computing on the Intel Xeon Phi, June 2014.
+     Taha Shahroodi, Juan Gomez Luna, and Onur Mutlu. Smash: Co-                    [33] Ziheng Wang. Sparsert: Accelerating unstructured sparsity on gpus for
+     designing software compression and hardware-accelerated indexing                    deep learning inference. arXiv preprint arXiv: 2008.11849v1 (2020),
+     for efficient sparse matrix operations. In Proceedings of the 52nd An-              August 2020.
+     nual IEEE/ACM International Symposium on Microarchitecture, pages              [34] Guowei Zhang, Nithya Attaluri, Joel S Emer, and Daniel Sanchez.
+     600–614, 2019.                                                                      Gamma: Leveraging gustavson’s algorithm to accelerate sparse matrix
+[17] Fredrik Kjolstad, Stephen Chou, David Lugato, Shoaib Kamil, and                     multiplication. In Proceedings of the 26th ACM International Con-
+     Saman Amarasinghe. taco: a tool to generate tensor algebra kernels.                 ference on Architectural Support for Programming Languages and
+     Proceedings of the 32nd IEEE/ACM International Conference on Auto-                  Operating Systems, pages 687–701, 2021.
+     mated Software Engineering, pages 943–948, October 2017.                       [35] Zhekai Zhang, Hanrui Wang, Song Han, and William J. Dally. SpArch:
+[18] Hyoukjun Kwon et al. Understanding reuse, performance, and hard-                    Efficient architecture for sparse matrix multiplication. International
+     ware cost of dnn dataflow: A data-centric approach. Int’l Symp. on                  Symposium on High Performance Computer Architecture (HPCA),
+     Microarchitecture (MICRO), October 2019.                                            pages 261–274, February 2020.
+
+
+                                                                               14
+[36] Maohua Zhu and Yuan Xie. Taming unstructured sparsity on gpus via
+     latency-aware optimization. 2020 57th ACM/IEEE Design Automation
+     Conference (DAC), October 2010.
+
+
+
+
+                                                                         15
+

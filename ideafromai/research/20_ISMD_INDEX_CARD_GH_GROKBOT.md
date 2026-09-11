@@ -72,18 +72,18 @@
 
 ### ideafromai（调研 + 卡片指针）
 ```
-/home/zhumd/work/ideafromai/research/15_CROSS_AI_READ_GROK46_CODEX_VS_GROKBOT.md
-/home/zhumd/work/ideafromai/research/16_ATLIF_IDENTITY_VERDICT_GROKBOT.md
-/home/zhumd/work/ideafromai/research/17_OPENROAD_PNR_SCOREBOARD_GROKBOT.md
-/home/zhumd/work/ideafromai/research/18_CARD_G_TDE3_TMA_GROKBOT.md
-/home/zhumd/work/ideafromai/research/18_POST_TDE3_TMA_HARD_KNIVES.md
-/home/zhumd/work/ideafromai/research/19_CARD_H_IF_SKETCH_RED4.md
-/home/zhumd/work/ideafromai/research/19b_CARD_H_CFP_SCI_GROKBOT_POINTER.md
-/home/zhumd/work/ideafromai/research/19c_CARD_H_BISAT_BUI_GROKBOT_POINTER.md
-/home/zhumd/work/ideafromai/research/20_ISMD_INDEX_CARD_GH_GROKBOT.md
-/home/zhumd/work/ideafromai/docs/CARD_G_TDE3_TMA_GROKBOT.md
-/home/zhumd/work/ideafromai/docs/CARD_H_CFP_SCI_GROKBOT.md
-/home/zhumd/work/ideafromai/docs/CARD_H_BISAT_BUI_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/15_CROSS_AI_READ_GROK46_CODEX_VS_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/16_ATLIF_IDENTITY_VERDICT_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/17_OPENROAD_PNR_SCOREBOARD_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/18_CARD_G_TDE3_TMA_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/18_POST_TDE3_TMA_HARD_KNIVES.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/19_CARD_H_IF_SKETCH_RED4.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/19b_CARD_H_CFP_SCI_GROKBOT_POINTER.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/19c_CARD_H_BISAT_BUI_GROKBOT_POINTER.md
+/home/zhumd/work/sdformer_codex/ideafromai/research/20_ISMD_INDEX_CARD_GH_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/docs/CARD_G_TDE3_TMA_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/docs/CARD_H_CFP_SCI_GROKBOT.md
+/home/zhumd/work/sdformer_codex/ideafromai/docs/CARD_H_BISAT_BUI_GROKBOT.md
 ```
 
 ### sdformer_c1c2star_grokbot（RTL / TB / flows / OR）

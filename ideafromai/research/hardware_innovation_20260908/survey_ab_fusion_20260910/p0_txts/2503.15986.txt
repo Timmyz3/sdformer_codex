@@ -1,0 +1,1010 @@
+                                                 SpiLiFormer: Enhancing Spiking Transformers with Lateral Inhibition
+
+                                                              Zeqi Zheng1,2* , Yanchen Huang2,3* , Yingchao Yu4,2 , Zizheng Zhu2,5 ,
+                                                                           Junfeng Tang1,2 , Zhaofei Yu6 , Yaochu Jin2†
+                                                 1                        2
+                                                   Zhejiang University      Westlake University 3 Nanjing University 4 Donghua University
+                                                       5
+                                                         University of Electronic Science and Technology of China 6 Peking University
+                                                                          {zhengzeqi, huangyanchen, jinyaochu}@westlake.edu.cn
+arXiv:2503.15986v2 [cs.NE] 23 Jul 2025
+
+
+
+
+                                                                       Abstract                                       various visual tasks [7, 33, 38, 48]. The success of Trans-
+                                                                                                                      formers has driven the exploration of their integration with
+                                         Spiking Neural Networks (SNNs) based on Transformers                         SNNs, with the objective of enhancing SNN models’ per-
+                                         have garnered significant attention due to their superior                    formance across various tasks and progressively bridging
+                                         performance and high energy efficiency. However, the spik-                   the performance gap with ANNs, particularly in image clas-
+                                         ing attention modules of most existing Transformer-based                     sification [35, 36, 43, 44], object detection [14, 22], action
+                                         SNNs are adapted from those of analog Transformers, fail-                    recognition [19, 32], and semantic segmentation [21, 35].
+                                         ing to fully address the issue of over-allocating attention                      The attention module plays a crucial role in Transformer-
+                                         to irrelevant contexts. To fix this fundamental yet over-                    based SNNs, significantly influencing model performance.
+                                         looked issue, we propose a Lateral Inhibition-inspired Spik-                 Recent research advancements in spiking attention mod-
+                                         ing Transformer (SpiLiFormer). It emulates the brain’s                       ules can be broadly classified into three categories: 1) Self-
+                                         lateral inhibition mechanism, guiding the model to en-                       Spiking Attention (SSA) [42, 44, 45], which directly con-
+                                         hance attention to relevant tokens while suppressing atten-                  verts the Query (Q), Key (K), and Value (V ) into sparse
+                                         tion to irrelevant ones. Our model achieves state-of-the-                    spikes; 2) Spike-Driven Self-Attention (SDSA) [35, 36]
+                                         art (SOTA) performance across multiple datasets, includ-                     and Spiking RWKV (S-RWKV) [46], which replace the
+                                         ing CIFAR-10 (+0.45%), CIFAR-100 (+0.48%), CIFAR10-                          dot product in SSA with the Hadamard product, achiev-
+                                         DVS (+2.70%), N-Caltech101 (+1.94%), and ImageNet-1K                         ing linear complexity while reducing both energy consump-
+                                         (+1.6%) 1 . Notably, on the ImageNet-1K dataset, SpiLi-                      tion and computational cost; 3) Spatial-Temporal Attention
+                                         Former (69.9M parameters, 4 time steps, 384 resolution)                      (STA) [17, 34], which refines traditional spatial attention by
+                                         outperforms E-SpikeFormer (173.0M parameters, 8 time                         explicitly modeling the key temporal dependencies intrinsic
+                                         steps, 384 resolution), a SOTA spiking Transformer, by                       to spike-based processing.
+                                         0.46% using only 39% of the parameters and half the time                         However, we observe that most Transformer-based
+                                         steps. The code and model checkpoints are publicly avail-                    SNNs exhibit a phenomenon referred to as attention dis-
+                                         able at https://github.com/KirinZheng/SpiLiFormer.                           traction. As illustrated in Fig. 1(a), the model dispropor-
+                                                                                                                      tionately assigns high attention weights to background in-
+                                                                                                                      formation during decision-making, leading to the neglect
+                                         1. Introduction                                                              of critical object-related features and ultimately impair-
+                                                                                                                      ing classification performance. This issue stems from the
+                                         Spiking Neural Networks (SNNs), regarded as the third                        fact that spiking attention largely inherits the traditional
+                                         generation of neural networks [23], are seen as a poten-                     attention forward propagation paradigm. Previous stud-
+                                         tial alternative to Artificial Neural Networks (ANNs) due to                 ies [1, 27, 40] suggest that traditional attention mecha-
+                                         their biological interpretability and high energy efficiency,                nisms process Q, K, and V uniformly in the mapping
+                                         which stem from their event-driven properties. Trans-                        sof tmax(QK ⊤ )V , thereby limiting their capacity to regu-
+                                         former [31], originally designed for natural language pro-                   late contextual sparsity and relevance. Therefore, we posit
+                                         cessing tasks, has now become a dominant neural network                      that constructing additional pathways to process Q, K, and
+                                         architecture, demonstrating remarkable performance across                    V separately is essential for mitigating attention distraction
+                                             ∗
+                                                                                                                      in Transformer-based SNNs and enhancing model perfor-
+                                               Equal contribution. † Corresponding author.
+                                            1 These results are obtained by comparing with state-of-the-art spiking
+                                                                                                                      mance.
+                                         neural network models that have a similar number of parameters.                  By contrast, the natural lateral inhibition mechanism in
+                        Original                  Spike-Driven                  SpikingFormer                   QKFormer                       SpiLiFormer
+                                                  Transformer
+                                                                                                                                                                                                     Light
+                                                                                                                                                                                                                              Excitatory center
+
+
+
+
+                                                                                                                                                                                Photoreceptors
+                     Label: Scorpion               Pred: Tick   �           Pred: Wolf spider       �           Pred: Tick       �            Pred: Scorpion       �                                                         Inhibitory surround
+
+
+
+
+                                                                                                                                                                                                 Horizontal cells            Center-surround RF
+
+                   Label: Indio bunting           Pred: Coucal    �             Pred: Coucal       �        Pred: Coucal             �    Pred: Indio bunting       �
+                                   (a) Classification results and attention heatmaps for different baseline models                                                                        (b) Lateral inhibition process in the retina
+
+                                                                           Spike neuron                Row summation                                   Element-wise difference                      Matrix multiplication               Column mask
+                      Input
+
+
+
+
+                                                                                             Spike input                                                           Spike input
+                                                                                                                                                                                                                 Sharing
+                                                                                    Conv1d                                  Conv1d                      Conv1d           Conv1d                       Conv1d               Conv1d
+                                     Downsampling                                                                                                                                                                weights
+ FF-LiDiff block
+
+
+
+
+                                                                                      BN                                        BN                         BN              BN                                                         BN
+                                                                                                                                                                                                         BN
+    Stage 1:
+
+
+
+
+                                   FF-LiDiff attention                                                                                                                                                                               Linear
+                                                                                                                                                                                                                             Clamp             Clamp
+                                        SpMLP
+                                                                            …                      …                            …                          …               …                             …
+
+
+
+
+                                                                                                                                            Token: N
+                                                                Token: N
+
+
+
+
+                                                                                        Token: N
+
+
+
+
+                                                                                                                 Token: N
+
+
+
+                                                                           …                       …                            …                          …               …                             …                       Prompt1
+                                     Downsampling
+ FF-LiDiff block
+
+
+
+
+                                                                                                                                                       …
+
+
+                                                                                                                                                               …
+
+
+
+
+                                                                                                                                                                       …
+
+
+                                                                                                                                                                                …
+                                                                 …
+
+
+                                                                                …
+
+
+
+
+                                                                                         …
+
+
+                                                                                                       …
+
+
+
+
+                                                                                                                                                                                                     …
+
+
+                                                                                                                                                                                                             …
+                                                                                                                            …
+
+
+                                                                                                                                    …
+                                                                                                                                                                                                                                           …
+                                                                           …                       …                            …                          …               …                             …
+                                   FF-LiDiff attention
+    Stage 2:
+
+
+
+
+                                                            Channel: D/2                Channel: D/2                        Channel: D             Channel: D
+                                                                                                                                                                   Transpose D × N                 N×D                           Prompt2
+                                        SpMLP                                                                                                                                                                                              …
+                                                                            N×1                    N×1                                                             N×D              D×D
+                                                                           3 1 7 … 5               1 9 3 … 2
+                                     Downsampling
+ FB-LiDiff block
+
+
+
+
+                                                                                                                                                                    N×D                                                    Feedback spike input
+                                   FB-LiDiff attention                                             N×1          N×D
+    Stage 3:
+
+
+
+
+                        Feedback
+
+
+
+
+                                                                                                            N×D
+                                        SpMLP                                                          Conv1d                                                          Conv1d
+
+                                                                                                           BN                                                              BN
+
+                                   Classification head
+
+
+              (c) The framework of SpiLiFormer                                      (d) FF-LiDiff attention                                                                                 (e) FB-LiDiff attention
+
+
+Figure 1. Illustration of the severe attention distraction phenomenon in Transformer-based SNNs, the architecture of the Lateral Inhibition-
+inspired Spiking Transformer (SpiLiFormer), and the detailed processing mechanism of Feedfoward-pathway Lateral Differential Inhibi-
+tion (FF-LiDiff) attention and Feedback-pathway Lateral Difference Inhibition (FB-LiDiff) attention. (a) refers to the attention distraction
+in mainstream Transformer-based SNNs, where models excessively focus on irrelevant background information, leading to misclassifica-
+tion. (b) denotes the retinal lateral inhibition mechanism, illustrating how horizontal cells regulate neural responses to enhance contrast
+and suppress noise. (c) presents the architecture of SpiLiFormer. (d) and (e) represent the information processing flows of FF-LiDiff and
+FB-LiDiff attention, respectively.
+
+
+the visual system enables the brain to focus on important ar-                                                                            processing by suppressing irrelevant stimuli and selectively
+eas, thereby improving perception and reducing visual over-                                                                              enhancing salient features [47, 49].
+load [4, 25, 28]. Specifically, when neurons within a given
+area are strongly activated, adjacent neurons are inhibited.                                                                                Based on the short-range and long-range lateral inhibi-
+This principle is first observed in the retina, where horizon-                                                                           tion mechanisms discussed above, we propose the Lateral
+tal cells receive input from photoreceptors and inhibit both                                                                             Inhibition-inspired Spiking Transformer (SpiLiFormer) to
+the stimulated photoreceptors and their neighbors, forming                                                                               address the attention distraction issue in Transformer-based
+a center-surround receptive field (RF), as shown in Fig. 1(b).                                                                           SNNs, as shown in Fig. 1(c). This model consists of two
+In higher visual areas, such as the primary (V1) and sec-                                                                                types of stacked modules: 1) Feedforward-pathway Lateral
+ondary (V2) visual cortices, a similar mechanism operates                                                                                Differential Inhibition (FF-LiDiff) blocks and 2) Feedback-
+through long-range connections, which contrasts with the                                                                                 pathway Lateral Differential Inhibition (FB-LiDiff) blocks.
+short-range inhibition in the retina, helping to refine visual                                                                           Moreover, it introduces the following innovations: 1) In the
+                                                                                                                                         shallow blocks (i.e., Stage 1 and Stage 2), it explicitly in-
+corporates an inhibition differential attention mechanism        former [36] replaced the dot product with a Hadamard prod-
+by emulating the retinal short-range lateral inhibition pro-     uct and reshaped the spike residual connection based on
+cess (see Fig. 1(d) for details); 2) In the deep blocks (i.e.,   the membrane potential to further minimize energy con-
+Stage 3), it employs feedback-driven processing based            sumption and leverage the event-driven property. Addition-
+on differential attention to simulate the long-range lat-        ally, Spiking RWKV [46] and QKFormer [43] introduced
+eral inhibition mechanism observed in the cerebral cor-          linear attention into SNNs to reduce computational com-
+tex (see Fig. 1(e) for details). We evaluate our proposed        plexity. Meanwhile, STA-Transformer [17] effectively inte-
+SpiLiFormer on five image classification datasets, includ-       grated both spatial and temporal dynamics of spike trains
+ing CIFAR-10 [15], CIFAR-100 [15], CIFAR10-DVS [18],             to enhance model performance. However, most existing
+N-Caltech101 [26], and ImageNet-1K [5], demonstrating            Transformer-based SNNs still adhere to the traditional at-
+superior performance over current SOTA models. Addi-             tention propagation paradigm of ANNs, which results in the
+tionally, adversarial testing and attention heatmap visual-      severe phenomenon of attention distraction, thereby limit-
+izations on the ImageNet-1K test set and noise-augmented         ing model performance.
+datasets (i.e., CIFAR-10-C and ImageNet-1K-C [10]) show
+that SpiLiFormer effectively suppresses attention on irrele-     2.2. Models with Lateral Inhibition
+vant areas and background noise. The main contributions          Lateral inhibition mechanisms have been widely adopted in
+of this work are:                                                various SNN applications. In speech recognition, Spiking-
+• We propose SpiLiFormer, which incorporates a brain-            LEAF [29] emulated inner hair cell functionality and lever-
+  inspired lateral inhibition mechanism and introduces two       aged lateral inhibition feedback to enhance the neuron
+  novel attention paradigms: FF-LiDiff attention and FB-         model, significantly improving the efficiency and noise ro-
+  LiDiff attention. This model effectively mitigates the at-     bustness of spike encoding. In the object recognition,
+  tention distraction issue common in current Transformer-       LISNN [2] modeled lateral inhibition by establishing spa-
+  based SNNs, thereby enhancing image classification per-        tial neighbor-order relationships between neurons, thereby
+  formance.                                                      enhancing the model’s ability to focus on important fea-
+• We evaluate SpiLiFormer across multiple datasets,              tures. In the image classification, Zhang et al. [39] pro-
+  achieving new SOTA performance on CIFAR-10, CIFAR-             posed an adaptive self-organizing lateral inhibition strategy,
+  100, CIFAR10-DVS, N-Caltech101, and ImageNet-1K.               where inhibition strength was adjusted according to the Eu-
+  Specifically, on ImageNet-1K, SpiLiFormer (69.9M pa-           clidean distance between neurons. This approach addressed
+  rameters, 4 time steps) outperforms the optimal SOTA           the issue of inefficient feature clustering and reduced re-
+  model, E-SpikeFormer (173.0M parameters, 8 time                dundancy in neuron activation. However, existing research
+  steps), by 0.46% in top-1 accuracy, while using only 0.39      on lateral inhibition has predominantly focused on small-
+  times the number of parameters and half the time steps.        scale datasets for validating model feasibility, with limited
+• We comprehensively evaluate the robustness of SpiLi-           exploration of its applicability to larger and more complex
+  Former through attention heatmap visualizations and ad-        datasets. Furthermore, its integration with Transformer-
+  versarial testing, and find that SpiLiFormer achieves more     based SNNs remains largely unexplored.
+  effective attention allocation and enhanced robustness
+  compared to other baseline spiking models.                     3. Method
+
+2. Related Work                                                  This section details the proposed SpiLiFormer model, cov-
+                                                                 ering the spiking neuron layer, overall architecture, and two
+2.1. Transformer-based SNNs                                      lateral inhibition-inspired attention mechanisms. Addition-
+                                                                 ally, we outline the training strategy and loss function.
+Although convolution-based SNNs exhibit high energy ef-
+ficiency, they still demonstrate a significant performance       3.1. Spiking Neuron Layer
+gap compared to ANNs. To address this challenge, re-
+searchers have explored integrating Transformer architec-        The spiking neuron layer relies on cumulative firing to in-
+tures with SNNs. Spikformer [44] was the first to incorpo-       tegrate spatio-temporal information into the membrane po-
+rate the Transformer attention into SNNs, cleverly replac-       tential, which is then converted into binary spikes to drive
+ing the Softmax operation by leveraging the binary char-         computation in the next layer. We adopt the widely used
+acteristic of spike representations to encode Query, Key,        Leaky Integrate-and-Fire (LIF) spiking neuron layer, as es-
+and Value. Building upon this, Spikingformer [42] intro-         tablished in previous studies [36, 37, 43], with the following
+duced a pre-activation shortcut to avoid floating-point mul-     dynamics:
+tiplication while simultaneously reducing the spike firing
+rate. Inspired by SEW-ResNet [8], Spike-driven Trans-                       U [t] = H[t](1 − S[t]) + Ureset S[t],          (1)
+                                                                  Given a spike input X ∈ RN ×D (N is the token number,
+                                                                  D is the channel number), Query (Q) and Key (K) can be
+                       1
+  H[t] = U [t − 1] +     (X[t] − (U [t − 1] − Ureset )), (2)      computed through learnable matrices:
+                       τ
+                                                                             Q = BN (XWQ ), K = BN (XWK ),                    (4)
+                   S[t] = Θ(H[t] − Uth ),                  (3)
+                                                                  where WQ , WK ∈ RD×D and Q, K ∈ RN ×D .
+where Ureset represents the reset potential, and X[t] and U [t]
+                                                                     To implement the lateral inhibition mechanism, we first
+denote the current input and membrane potential at timestep
+                                                                  split Q along the channel dimension into two parts, ob-
+t, respectively. Θ(·) is the Heaviside step function, which
+                                                                  taining Q1 and Q2 , before computing the attention matrix.
+outputs 1 if x ≥ 0 and 0 otherwise. When H[t] exceeds the
+                                                                  Then, all of Q1 , Q2 , and K are transformed into spike trains
+firing threshold Uth , the spiking neuron fires a spike S[t],
+                                                                  via their respective spiking neuron layers:
+and U [t] is reset to Ureset at that moment. Additionally, τ
+represents the membrane time constant, which controls the           Qs1 = SN (Q1 ), Qs2 = SN (Q2 ), Ks = SN (K),              (5)
+rate of membrane potential leakage.
+                                                                                             D
+
+3.2. Overall Architecture                                         where Qs1 , Qs2 ∈ RN × 2 , Ks ∈ RN ×D . Next, we sum
+                                                                  along the channel dimension to obtain the excitatory atten-
+The overall architecture of SpiLiFormer is illustrated            tion Ae and inhibitory attention Ai . Specifically, Ae and
+in Fig. 1(c), which consists of three stages: Stage 1, Stage      Ai are N × 1 token attention vectors, representing the im-
+2, and Stage 3, forming a three-level hierarchical structure.     portance of different tokens from the perspectives of exci-
+The input data is represented as I ∈ RT ×N ×H×W , where           tation and inhibition, respectively. Finally, we compute the
+N = 3 for static image data and N = 2 for neuromor-               element-wise difference between Ae and Ai , and pass the
+phic data. In Stage 1, a 4 × 4 patch size is utilized, map-       aggregated attention through a spiking neural layer to ob-
+ping each patch’s input feature dimension (4 × 4 × N ) to         tain binary attention Acombined . This attention is then applied
+a spike-form representation of arbitrary dimension (C) via        as a token-wise mask to Ks via the Hadamard product ⊗.
+the Downsampling module. This process reduces the num-            The above process can be described as:
+ber of tokens to H     W
+                  4 × 4 . The transformed features are then
+processed through FF-LiDiff attention and a Spiking Multi-                              2
+                                                                                        X
+                                                                                         D                  D
+                                                                                                            2
+                                                                                                            X
+Layer Perceptron (SpMLP). FF-LiDiff attention introduces                         Ae =        Qi,j
+                                                                                              s1 , Ai   =       Qi,j
+                                                                                                                 s2 ,         (6)
+an additional forward pathway and employs a differential                                 j                  j
+approach to mitigate attention distraction in the network’s
+shallower layers (see Sec. 3.3 for details). In Stage 2, the
+                                                                                   Acombined = SN (Ae − Ai ),                 (7)
+processing mechanism is similar to Stage 1, but with a 2 × 2
+patch size, an expanded channel dimension of 2C, and the
+number of tokens reduced to H        W
+                                 8 × 8 . Finally, in Stage 3,                         X ′ = Acombined ⊗ Ks .                  (8)
+we retain the 2 × 2 patch size, expand the channel dimen-
+                                                    H
+sion to 4C, and reduce the number of tokens to 16      × W16 .
+                                                                  3.4. Feedback-pathway Lateral Differential Inhibi-
+Additionally, a more complex FB-LiDiff attention module                 tion Attention
+with feedback loops is introduced (see Sec. 3.4 for details)
+                                                                  FB-LiDiff attention requires two forward propagations as
+to replace the previous FF-LiDiff attention, further mitigat-
+                                                                  shown in Figure 1(e). Specifically, during the first forward
+ing attention distraction in the model.                                                                                   Ds
+                                                                  propagation, FB-LiDiff attention takes spike-form Sstage3
+   The number of spiking blocks (either FF-LiDiff block
+                                                                  from the Downsampling module in Stage 3 or takes spike-
+or FB-LiDiff block) in each stage is denoted as N1 , N2 ,                 i
+                                                                  form Sstage3 (i ∈ [1, N3 ]) from the i-th preceding FB-LiDiff
+and N3 , respectively. Since the Downsampling, SpMLP
+                                                                  block as input. Given an input X1m to the m-th FB-LiDiff
+and classification head modules are based on prior research
+                                                                  attention, the first forward propagation can be described as
+works [35, 37, 43], the following sections will focus on the
+                                                                  follows:
+detailed description of FF-LiDiff attention and FB-LiDiff
+attention.                                                            Ys1,m = SN (BN (X1m WYm )), Y ∈ {Q, K, V },             (9)
+3.3. Feedforward-pathway Lateral Differential In-
+      hibition Attention
+                                                                           Attn1,m = Q1,m
+                                                                                      s   ⊙ ((Ks1,m )⊤ ⊙ Vs1,m ),            (10)
+An overview of FF-LiDiff attention is shown in Figure 1(d).
+For better mathematical description, in subsequent discus-
+                                                                              m
+sion, we assume T = 1 and only use single head attention.                    Ostage3 = SN (BN (Attn1,m Wattn
+                                                                                                        m
+                                                                                                             )),             (11)
+where X1m ∈ RN ×D (X1m ∈ {Sstage3     Ds     i
+                                          , Sstage3 }), and Ys1,m   3.5. Training Strategy and Loss Function
+(Y ∈ {Q, K, V }) represents the corresponding spiking rep-
+                                                                    We employ a surrogate gradient-based method to overcome
+resentation of Q, K and V in the m-th FB-LiDiff attention.
+                                                                    the non-differentiability of the spiking neuron activation in
+Wzm (z ∈ {Q, K, V, attn}) and Ostage3 m
+                                           denote the learnable
+                                                                    Eq. (3), enabling direct training of the model from scratch,
+weight matrix and the spike-form output of the m-th FB-
+                                                                    as demonstrate in previous works [35, 42–44, 46]. In order
+LiDiff attention, respectively. ⊙ refers to the dot product.
+                                                                    to make better use of the spiking representations obtained
+    Before the second forward propagation, we use the out-
+       N3                                                           from two forward propagations, we adjust the model’s loss
+put Ostage3 from the last block of Stage 3 as feedback infor-
+                                                                    function as follows:
+mation and return it to each FB-LiDiff attention. To filter
+the feedback information and further mitigate the attention                                      N3
+                                                                                   L1 = LCE (CH(Ostage3 ), y),               (20)
+distraction problem, we first introduce learnable prompts
+Wp1 and Wp2 , where Wp1 , Wp2 ∈ R1×D . Next, we com-                                                         ′
+                                                                                                 N3
+pute the dot product between Wp1 and Ostage3    N3
+                                                      , and simi-                 L2 = LCE (CH((Ostage3 ) ), y),             (21)
+                             N3
+larly between Wp2 and Ostage3 . These dot products are then
+broadcast along the token dimension. The results are scaled                      LSpiLiFormer = αL1 + (1 − α)L2 ,            (22)
+to the range [0, 1] using the clamp(·) function, forming the
+excitatory feedback attention AFB                                   where α is a hyperparameter that dynamically balances the
+                                    e and inhibitory feedback
+attention AFB                                                       losses from two forward propagations. Unless explicitly
+             i . Subsequently, we compute the element-wise
+difference between AFB             FB                               specified otherwise, α is set to 0.5 in the subsequent ex-
+                        e and Ai to obtain the aggregated
+             FB
+attention Acombined . Finally, we apply a linear transforma-        periments. The choice of this value is validated through an
+tion to AFB                                                         ablation study, as detailed in Appendix A.4. Additionally,
+          combined and pass it through the spiking neuron layer                                   N3           N3      ′
+
+to align it with the feature space of different FB-LiDiff at-       y represents the true label; Ostage3 and (Ostage3 ) denote the
+tentions. These processes are formulated as:                        outputs from the first and second forward propagations of
+                                                                    the last FB-LiDiff block, respectively; CH(·) represents the
+             AFB         N3                                         classification head module, as described in previous stud-
+              e = clamp(Ostage3 ⊙ Wp1 , 0, 1),              (12)
+                                                                    ies [35, 36]; and LCE denotes the cross-entropy loss func-
+                         N3
+                                                                    tion.
+             AFB
+              i = clamp(Ostage3 ⊙ Wp2 , 0, 1),              (13)
+                                                                    4. Experiments
+                   AFB          FB   FB
+                    combined = Ae − Ai ,                    (14)
+                                                                    We first evaluate the classification performance of SpiLi-
+                                                                    Former model on the large-scale ImageNet-1K dataset [5].
+              m                       m
+             XFB = SN (BN (AFB
+                            combined WFB )).                (15)    Next, we assess the performance of SpiLiFormer on
+   The second forward propagation begins by taking the              smaller-scale static datasets, including CIFAR-10 [15] and
+                                       Ds
+processed forward representation Sstage3     and the corre-         CIFAR-100 [15]. Additionally, we evaluate SpiLiFormer
+                                   1
+sponding feedback information XFB as input to the first FB-         on two popular neuromorphic datasets: CIFAR10-DVS [18]
+LiDiff attention. The objective is to reduce model energy           and N-Caltech101 [26]. Finally, we visualize attention
+consumption by eliminating redundant computations in the            heatmaps and conduct adversarial tests to demonstrate
+non-feedback loop (i.e., Stage 1 and Stage 2). A detailed en-       SpiLiFormer’s effectiveness in mitigating attention distrac-
+ergy consumption analysis can be found in Appendix A.3.             tion and enhancing robustness.
+Additionally, during the second forward propagation, we             4.1. Results on ImageNet-1K
+share all parameter weights across the FB-LiDiff blocks to
+minimize the number of model parameters. Given the input            In this experiment, model training is divided into two
+X2m , the process described above can be formulated as:             phases. In the first phase, we use the AdamW optimizer
+                                                                    with a base learning rate of 6 × 10−4 . The actual learning
+                                                                    rate is calculated by multiplying the base rate by the batch
+     Ys2,m = SN (BN (X2m WYm )), Y ∈ {Q, K},                (16)    size divided by 256. Additionally, we apply a layer-wise
+                                                                    learning rate decay strategy with a decay factor of 1.0 and
+         Vs2,m = SN (BN (X2m WVm + XFB
+                                    m
+                                       WVm )),              (17)    weight decay of 0.05 to train SpiLiFormer for 200 epochs.
+                                                                    In the second phase, we decrease the base learning rate to
+                                                                    2 × 10−6 and continue training for an additional 20 epochs
+         Attn2,m = Q2,m
+                    s   ⊙ ((Ks2,m )⊤ ⊙ Vs2,m ),             (18)    using an epoch-wise learning rate decay strategy. Through-
+                   ′
+                                                                    out this entire experiment, we incorporate several data aug-
+            m
+          (Ostage3 ) = SN (BN (Attn2,m Wattn
+                                        m
+                                             )).            (19)    mentation techniques in alignment with the DeiT approach
+      Methods            Type           Architecture           Input Size    Param(M)       Power(mJ)      Time Step      Top-1 Acc(%)
+      ViT [7]            ANN              ViT-B/16                384           86.59         254.84            1             77.90
+                         ANN               DeiT-B                 224           86.59          80.50            1             81.80
+     DeiT [30]
+                         ANN               DeiT-B                 384           86.59         254.84            1             83.10
+                         ANN       Swin Transformer-B             224           87.77          70.84            1             83.50
+     Swin [20]
+                         ANN       Swin Transformer-B             384           87.77         216.20            1             84.50
+ SEW ResNet [8]          SNN        SEW-ResNet-152                224           60.19          12.89            4             69.26
+ Spikformer [44]         SNN        Spikformer-8-768              224           66.34          21.48            4             74.81
+Spikingformer [42]       SNN       Spikingformer-8-768            224           66.34          13.68            4             75.85
+                         SNN       S-Transformer-8-512            224           29.68          1.13             1             71.68
+S-Transformer [36]       SNN       S-Transformer-8-512            224           29.68          4.50             4             74.57
+                         SNN       S-Transformer-8-768            288           66.34          6.09             4             77.07
+                         SNN           HST-10-768                 224           64.96          38.91            4             84.22
+  QKFormer [43]          SNN           HST-10-768∗                288           64.96         64.27             4             85.25
+                         SNN           HST-10-768                 384           64.96         113.64            4             85.65
+                         SNN          E-SpikeFormer               224           173.0          35.6            4⋆              84.7
+E-SpikeFormer [37]       SNN          E-SpikeFormer               224           173.0          54.7            8⋆              85.1
+                         SNN          E-SpikeFormer               384           173.0           -              8⋆              86.2
+                         SNN      SpiLiFormer-10-768              224           69.10          11.77            1             81.54
+   SpiLiFormer           SNN      SpiLiFormer-10-768              224           69.10          44.17            4             85.82
+      (Ours)             SNN      SpiLiFormer-10-768∗             288           69.10          73.52            4             86.62
+                         SNN      SpiLiFormer-10-768∗∗            384           69.10         129.45            4             86.66
+
+Table 1. Performance comparison on ImageNet-1K. "SpiLiFormer-L-D" represents Lateral Inhibition-inspired Transformer with L blocks
+and a D-dimensional channel. ∗ and ∗∗ denote input resolutions of 2882 and 3842 during inference, respectively. ⋆ denotes an integer-
+valued quantized training approach [22], in which activation values are restricted to integers during training and later expanded into spike
+trains during inference.
+
+
+[30]. These techniques include RandAugment [3], random                   time steps, 384 resolution), the current SOTA Transformer-
+erasing [41], and stochastic depth [13]. The architecture of             based SNNs model. It achieves a 0.46% improvement with
+SpiLiFormer is composed of 1, 2, and 7 blocks across its                 only 39% of parameters and half the time steps.
+three stages, respectively.                                                 Finally, compared to the mainstream ANN-based Swin
+    Tab. 1 demonstrates the superior performance of our                  Transformer-B (384 resolution), SpiLiFormer achieves a
+proposed SpiLiFormer, significantly outperforming cur-                   2.16% performance improvement while reducing energy
+rent SNNs models. Specifically, SpiLiFormer (69.10M)                     consumption by 40% and decreasing the number of param-
+achieves 86.66% top-1 accuracy and 98.116% top-5 accu-                   eters by 18.67M.
+racy on ImageNet-1K. To our best knowledge, SpiLiFormer
+is currently the SOTA model for Transformer-based SNNs                   4.2. Results on CIFAR Datasets
+with direct training.                                                    In this experiment, we use the AdamW optimizer with a
+    We compare SpiLiFormer against several baseline spik-                learning rate of 1 × 10−3 and apply a cosine learning rate
+ing models under the same image resolution of 224, a time                decay strategy. The weight decay is 6×10−2 , the number of
+step of 4, and a comparable number of model parame-                      time steps is 4, and SpiLiFormer is trained for 400 epochs
+ters. SpiLiFormer outperforms Spikformer (66.34M), Spik-                 with a batch size of 64. The network architecture consists
+ingformer (66.34M), and QKFormer (64.96M) by 11.01%,                     of 1, 1, and 2 blocks across its three stages, respectively.
+9.97%, and 1.6%, respectively. Moreover, at a higher input                  The performance of SpiLiFormer on CIFAR datasets is
+resolution of 288, SpiLiFormer outperforms S-Transformer                 shown in the upper part of Tab. 2. For CIFAR-10, our
+and QKFormer by 9.55% and 1.37%, respectively. Sim-                      proposed model achieves 96.63% accuracy with 7.04M pa-
+ilarly, at a resolution of 384, it surpasses QKFormer by                 rameters. Compared to QKFormer, the suboptimal SOTA
+1.01%. Additionally, we compare SpiLiFormer (69.10M, 4                   model, SpiLiFormer improves performance by 0.45% while
+time steps, 384 resolution) with E-SpikeFormer (173.0M, 8                increasing the parameters by only 0.04%. Similarly, for
+         Datasets                Methods                  Architecture       Param(M)      Time Step      Top-1 Acc(%)
+                            Spikformer [44]            Spikformer-4-384        9.32             4             95.51
+                           Spikingformer [42]        Spikingformer-4-384       9.32             4             95.81
+        CIFAR-10           S-Transformer [36]        S-Transformer-2-512       10.28            4             95.60
+                             QKFormer [43]                HST-4-384            6.74             4             96.18
+                          SpiLiFormer (Ours)          SpiLiFormer-4-384        7.04             4             96.63
+                            Spikformer [44]            Spikformer-4-384        9.32             4             78.21
+                           Spikingformer [42]        Spikingformer-4-384       9.32             4             79.21
+       CIFAR-100           S-Transformer [36]        S-Transformer-2-512       10.28            4              78.4
+                             QKFormer [43]                HST-4-384            6.74             4             81.15
+                          SpiLiFormer (Ours)          SpiLiFormer-4-384        7.04             4             81.63
+                            Spikformer [44]            Spikformer-2-256         2.57           16              80.9
+                           Spikingformer [42]        Spikingformer-2-256        2.57           16              81.3
+     CIFAR10-DVS           S-Transformer [36]        S-Transformer-2-256        2.57           16              80.0
+                             QKFormer [43]                HST-2-256             1.50           16              84.0
+                          SpiLiFormer (Ours)          SpiLiFormer-2-256         1.57           16              86.7
+                            Spikformer [44]            Spikformer-2-256         2.57           16              83.6
+                           Spikingformer [42]        Spikingformer-2-256        2.57           16             85.91
+      N-Caltech101         S-Transformer [36]        S-Transformer-2-256        2.57           16              86.3
+                             QKFormer [43]                HST-2-256             1.50           16             87.24
+                          SpiLiFormer (Ours)          SpiLiFormer-2-256         1.57           16             89.18
+
+               Table 2. Performance comparison on CIFAR-10, CIFAR-100, CIFAR10-DVS, and N-Caltech101 datasets.
+
+
+CIFAR-100, our proposed model achieves 81.63% accu-               sue. Specifically, we examine the attention heatmap of the
+racy with 7.04M parameters. Specifically, it outperforms          last FB-LiDiff block in SpiLiFormer Stage 3 under two con-
+QKFormer by 0.48% while requiring just 0.04% more pa-             ditions: standard dataset evaluation and noisy dataset test-
+rameters.                                                         ing.
+4.3. Results on Neuromorphic Datasets                                In the standard dataset evaluation, the two sets of im-
+In this experiment, we use a smaller SpiLiFormer archi-           ages in Fig. 1(a) show examples that are misclassified by
+tecture, structured with 0, 1, and 1 blocks across its three      the baseline model but correctly classified by SpiLiFormer
+stages, respectively. Similarly, we adopt the AdamW opti-         on the ImageNet-1K test set. We observe that our proposed
+mizer with an initial learning rate of 5×10−3 , apply a learn-    model effectively eliminates the attention distraction phe-
+ing rate decay strategy, and set the weight decay to 0.06.        nomenon, thereby improving classification accuracy. More
+The number of time steps is set to 16, and SpiLiFormer is         comparison images are provided in Fig. 4 within the ap-
+trained for 120 epochs.                                           pendix.
+    The experimental results of the model on the neuromor-
+phic datasets are presented in the lower half of Tab. 2.             In noisy dataset testing, we evaluate model atten-
+Compared to the suboptimal model, QKFormer, SpiLi-                tion heatmaps using two noisy datasets: CIFAR10-C and
+Former significantly improves performance by 2.7% on the          ImageNet-1K-C, as shown in Fig. 2. Compared to other
+CIFAR10-DVS dataset and 1.94% on the N-Caltech101                 baseline models, SpiLiFormer correctly classifies objects
+dataset, with only a 0.13% increase in parameters. Ad-            or significantly increases confidence in the correct category
+ditionally, we compare the proposed model with other              by focusing on object-relevant information while remaining
+baseline models (i.e., Spikformer, Spikingformer, and S-          unaffected by background noise.
+Transformer). It achieves performance gains of up to 5.8%
+on CIFAR10-DVS and 5.55% on N-Caltech101 while re-                    In addition, we employ white-box adversarial attacks,
+ducing the parameter count by 0.87M.                              including FGSM and PGD, to assess the model’s robust-
+                                                                  ness across the four datasets mentioned above. As shown in
+4.4. Visualization and Model Robustness Analysis                  Fig. 3, we find that SpiLiFormer not only enhances model
+We visualize the attention heatmap of SpiLiFormer to assess       performance but also improves robustness against adversar-
+whether it effectively alleviates the attention distraction is-   ial and common noise attacks, outperforming QKFormer.
+    Impulse                                                                      35                  SpiLiFormer                                 SpiLiFormer
+     Noise
+
+
+
+
+                                                                      Accuracy (%)
+
+
+
+
+                                                                                                                   Accuracy (%)
+                                                                                                     QKFormer                                    QKFormer
+                                                                                 30                                           15
+                   Target: 3   2 (0.42)    3 (0.72)    3 (0.90)
+                                                                                 25
+                                                                                                                              10
+    Noise
+    Shot
+
+
+
+
+                                                                                      0.05    0.1     0.2       0.3                   5   10      30       50
+                                                                                         Maximum Perturbation                             Iterations
+                   Target: 6   2 (0.68)    6 (0.78)    6 (0.85)                  40                  SpiLiFormer              10                 SpiLiFormer
+
+
+
+
+                                                                      Accuracy (%)
+
+
+
+
+                                                                                                                   Accuracy (%)
+                                                                                 35                  QKFormer                                    QKFormer
+                                                                                                                                  7
+     Spatter
+
+
+
+
+                                                                                 30                                               5
+                   Target: 8   2 (0.40)  0 (0.41)      8 (0.36)                  25                                               2
+                                (a) CIFAR-10-C                                     0.05       0.1     0.2       0.3                   5   10      30       50
+                                                                                         Maximum Perturbation                             Iterations
+    Impulse
+     Noise
+
+
+
+
+                                                                       Figure 3. Adversarial robustness comparison between QKFormer
+                                                                       and our proposed model on CIFAR-100 (first row) and ImageNet-
+                  Target:268 190 (0.17) 227 (0.53) 268 (0.75)          1K (second row). For PGD, the attack strength is set to 8/255, with
+                                                                       a step size of 2/255 per iteration. The comparison results on other
+     Spatter
+
+
+
+
+                                                                       datasets are provided in Tab. 6 of within the appendix.
+
+                  Target: 20   20 (0.61)   20 (0.65)   20 (0.98)
+     Brightness
+
+
+
+
+                                                                       cally, performance exhibits a decrease of 0.31% and 0.62%
+                                                                       on the CIFAR-10 dataset, and 1.6% and 3.0% on the
+                                                                       CIFAR10-DVS dataset. These results highlight the effec-
+                  Target: 113 113 (0.40) 749 (0.18) 113 (0.65)         tiveness of FB-LiDiff in mitigating attention distraction and
+                               (b) ImageNet-1K-C                       improving model performance. However, its additional for-
+                                                                       ward pass introduces higher inference latency, particularly
+Figure 2. Visualization of corrupted versions of datasets. From
+left to right, we display the original image, followed by the at-
+                                                                       on static datasets, with a 21–23% increase as shown in
+tention heatmaps obtained from Spike-driven Transformer, QK-           Tab. 5 in the appendix.
+Former, and SpiLiFormer (ours), respectively. The information
+below each image includes the true label, the predicted label for                      Datasets               Methods                      Top-1 Acc(%)
+each model, and the confidence score for the predicted category.                                     w/o FF-LiDiff Attention                   96.32
+Red indicates incorrect classification, while green represents cor-                   CIFAR-10       w/o FB-LiDiff Attention                   96.01
+rect classification. For more visualizations, refer to Fig. 6 and                                      SpiLiFormer(ours)                       96.63
+Fig. 7 in the appendix.
+                                                                                                     w/o FF-LiDiff Attention                    85.1
+                                                                                     CIFAR10-DVS     w/o FB-LiDiff Attention                    83.7
+                                                                                                       SpiLiFormer(ours)                        86.7
+4.5. Ablation Study
+                                                                                         Table 3. Ablation study on two attention modules
+We conduct an ablation study on CIFAR-10 (static) and
+CIFAR10-DVS (neuromorphic) to assess the impact of FF-
+LiDiff and FB-LiDiff attention on model performance and
+inference latency. All ablation experiments follow the train-          5. Conclusion
+ing details in Sec. 4.2 and Sec. 4.3, unless otherwise speci-          In this paper, we identify attention distraction in mainstream
+fied.                                                                  Transformer-based SNNs, a critical issue that limits perfor-
+   Intuitively, we set up two experimental scenarios: 1) For           mance. Inspired by the brain’s lateral inhibition mechanism,
+the case without FF-LiDiffP   attention (w/o FF-LiDiff atten-          we propose SpiLiFormer, incorporating FF-LiDiff and FB-
+                                D
+tion), we use Attn = SN ( j Qi,j ) to replace the steps in             LiDiff attention to simulate the inhibitory-excitatory inter-
+Eq. (6) and Eq. (7); 2) For the case without FB-LiDiff atten-          action process, guiding the model to focus on the object
+tion (w/o FB-LiDiff attention), we perform a single forward            rather than the irrelevant background. Experimental results
+pass with Attn = Q ⊙ (K ⊤ ⊙ V ) to calculate the attention,            show that SpiLiFormer outperforms current Transformer-
+replacing the steps outlined in Eq. (12) to Eq. (19).                  based SNNs, achieving SOTA performance on five image
+   As shown in Tab. 3, we observe that the model ex-                   classification datasets. Additionally, adversarial testing and
+hibits varying degrees of performance degradation on both              attention visualization analysis demonstrate its robustness
+datasets under the two aforementioned scenarios. Specifi-              and effectiveness in alleviating attention distraction.
+6. Acknowledgments                                                           residual networks. IEEE Transactions on Neural Networks
+                                                                             and Learning Systems, 34(8):5200–5205, 2021. 11
+This research was supported in part by Zhejiang Provin-               [13]   Gao Huang, Yu Sun, Zhuang Liu, Daniel Sedra, and Kilian Q
+cial Natural Science Foundation of China under the Grant                     Weinberger. Deep networks with stochastic depth. In Com-
+No. LD25F020006.                                                             puter Vision–ECCV 2016: 14th European Conference, Am-
+                                                                             sterdam, The Netherlands, October 11–14, 2016, Proceed-
+References                                                                   ings, Part IV 14, pages 646–661. Springer, 2016. 6
+                                                                      [14]   Seijoon Kim, Seongsik Park, Byunggook Na, and Sungroh
+ [1] Hila Chefer, Idan Schwartz, and Lior Wolf. Optimizing                   Yoon. Spiking-yolo: spiking neural network for energy-
+     relevance maps of vision transformers improves robustness.              efficient object detection. In Proceedings of the AAAI con-
+     Advances in Neural Information Processing Systems, 35:                  ference on artificial intelligence, pages 11270–11277, 2020.
+     33618–33632, 2022. 1                                                    1
+ [2] Xiang Cheng, Yunzhe Hao, Jiaming Xu, and Bo Xu. Lisnn:           [15]   Alex Krizhevsky et al. Learning multiple layers of features
+     Improving spiking neural networks with lateral interactions             from tiny images. 2009. 3, 5, 11
+     for robust object recognition. In IJCAI, pages 1519–1525.        [16]   Souvik Kundu, Massoud Pedram, and Peter A Beerel. Hire-
+     Yokohama, 2020. 3                                                       snn: Harnessing the inherent robustness of energy-efficient
+ [3] Ekin D Cubuk, Barret Zoph, Jonathon Shlens, and Quoc V                  deep spiking neural networks by training with crafted input
+     Le. Randaugment: Practical automated data augmen-                       noise. In Proceedings of the IEEE/CVF international con-
+     tation with a reduced search space. In Proceedings of                   ference on computer vision, pages 5209–5218, 2021. 11
+     the IEEE/CVF conference on computer vision and pattern           [17]   Donghyun Lee, Yuhang Li, Youngeun Kim, Shiting Xiao,
+     recognition workshops, pages 702–703, 2020. 6                           and Priyadarshini Panda. Spiking transformer with spatial-
+ [4] Joseph Del Rosario, Stefano Coletta, Soon Ho Kim, Zach                  temporal attention. arXiv preprint arXiv:2409.19764, 2024.
+     Mobille, Kayla Peelman, Brice Williams, Alan J Otsuki,                  1, 3
+     Alejandra Del Castillo Valerio, Kendell Worden, Lou T            [18]   Hongmin Li, Hanchao Liu, Xiangyang Ji, Guoqi Li, and
+     Blanpain, et al. Lateral inhibition in v1 controls neural and           Luping Shi. Cifar10-dvs: an event-stream dataset for ob-
+     perceptual contrast sensitivity. Nature Neuroscience, pages             ject classification. Frontiers in neuroscience, 11:309, 2017.
+     1–12, 2025. 2                                                           3, 5, 11
+ [5] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,           [19]   Qianhui Liu, Dong Xing, Huajin Tang, De Ma, and Gang
+     and Li Fei-Fei. Imagenet: A large-scale hierarchical image              Pan. Event-based action recognition using motion informa-
+     database. In 2009 IEEE conference on computer vision and                tion and spiking neural networks. In IJCAI, pages 1743–
+     pattern recognition, pages 248–255. Ieee, 2009. 3, 5, 11                1749, 2021. 1
+ [6] Shikuang Deng, Yuhang Li, Shanghang Zhang, and Shi Gu.           [20]   Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei, Zheng
+     Temporal efficient training of spiking neural network via gra-          Zhang, Stephen Lin, and Baining Guo. Swin transformer:
+     dient re-weighting. arXiv preprint arXiv:2202.11946, 2022.              Hierarchical vision transformer using shifted windows. In
+     11                                                                      Proceedings of the IEEE/CVF international conference on
+ [7] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,                  computer vision, pages 10012–10022, 2021. 6
+     Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner,              [21]   Xianlei Long, Xiaxin Zhu, Fangming Guo, Chao Chen,
+     Mostafa Dehghani, Matthias Minderer, G Heigold, S Gelly,                Xiangwei Zhu, Fuqiang Gu, Songyu Yuan, and Chunlong
+     et al. An image is worth 16x16 words: Transformers for                  Zhang. Spike-brgnet: Efficient and accurate event-based se-
+     image recognition at scale. In International Conference on              mantic segmentation with boundary region-guided spiking
+     Learning Representations, 2020. 1, 6                                    neural networks. IEEE Transactions on Circuits and Systems
+ [8] Wei Fang, Zhaofei Yu, Yanqi Chen, Tiejun Huang, Timothée                for Video Technology, 2024. 1
+     Masquelier, and Yonghong Tian. Deep residual learning in         [22]   Xinhao Luo, Man Yao, Yuhong Chou, Bo Xu, and Guoqi Li.
+     spiking neural networks. Advances in Neural Information                 Integer-valued training and spike-driven inference spiking
+     Processing Systems, 34:21056–21069, 2021. 3, 6                          neural network for high-performance and energy-efficient
+ [9] Ian J Goodfellow, Jonathon Shlens, and Christian Szegedy.               object detection. In European Conference on Computer Vi-
+     Explaining and harnessing adversarial examples. arXiv                   sion, pages 253–272. Springer, 2024. 1, 6
+     preprint arXiv:1412.6572, 2014. 11                               [23]   Wolfgang Maass. Networks of spiking neurons: the third
+[10] Dan Hendrycks and Thomas Dietterich. Benchmarking neu-                  generation of neural network models. Neural networks, 10
+     ral network robustness to common corruptions and perturba-              (9):1659–1671, 1997. 1
+     tions. In International Conference on Learning Representa-       [24]   Aleksander Madry,˛    Aleksandar Makelov, Ludwig Schmidt,
+     tions, 2019. 3                                                          Dimitris Tsipras, and Adrian Vladu. Towards deep learning
+[11] Mark Horowitz. 1.1 computing’s energy problem (and what                 models resistant to adversarial attacks. stat, 1050(9), 2017.
+     we can do about it). In 2014 IEEE international solid-state             11
+     circuits conference digest of technical papers (ISSCC), pages    [25]   James S Magnuson, Anne Marie Crinnion, Sahil Luthra,
+     10–14. IEEE, 2014. 11                                                   Phoebe Gaston, and Samantha Grubb. Contra assertions,
+[12] Yangfan Hu, Huajin Tang, and Gang Pan. Spiking deep                     feedback improves word recognition: How feedback and lat-
+       eral inhibition sharpen signals over noise. Cognition, 242:            Yan. Tokens-to-token vit: Training vision transformers from
+       105661, 2024. 2                                                        scratch on imagenet. In Proceedings of the IEEE/CVF in-
+[26]   Garrick Orchard, Ajinkya Jayawant, Gregory K Cohen, and                ternational conference on computer vision, pages 558–567,
+       Nitish Thakor. Converting static image datasets to spiking             2021. 1
+       neuromorphic datasets using saccades. Frontiers in neuro-       [39]   Geng Zhang, Shuangming Yang, Xuetao Zhang, and Badong
+       science, 9:437, 2015. 3, 5, 11                                         Chen. Biologically plausible unsupervised learning for self-
+[27]   Arda Sahiner, Tolga Ergen, Batu Ozturkler, John Pauly,                 organizing spiking neural networks with dendritic computa-
+       Morteza Mardani, and Mert Pilanci. Unraveling attention via            tion. Neurocomputing, page 129707, 2025. 3
+       convex duality: Analysis and interpretations of vision trans-   [40]   Xuechen Zhang, Xiangyu Chang, Mingchen Li, Amit Roy-
+       formers. In International Conference on Machine Learning,              Chowdhury, Jiasi Chen, and Samet Oymak. Selective atten-
+       pages 19050–19088. PMLR, 2022. 1                                       tion: Enhancing transformer through principled context con-
+[28]   Stephen R Shaw. Retinal resistance barriers and electrical             trol. Advances in Neural Information Processing Systems,
+       lateral inhibition. Nature, 255(5508):480–483, 1975. 2                 37:11061–11086, 2025. 1
+[29]   Zeyang Song, Jibin Wu, Malu Zhang, Mike Zheng Shou, and         [41]   Zhun Zhong, Liang Zheng, Guoliang Kang, Shaozi Li, and
+       Haizhou Li. Spiking-leaf: A learnable auditory front-end               Yi Yang. Random erasing data augmentation. In Proceed-
+       for spiking neural networks. In ICASSP 2024-2024 IEEE                  ings of the AAAI conference on artificial intelligence, pages
+       International Conference on Acoustics, Speech and Signal               13001–13008, 2020. 6
+       Processing (ICASSP), pages 226–230. IEEE, 2024. 3               [42]   Chenlin Zhou, Liutao Yu, Zhaokun Zhou, Zhengyu Ma, Han
+[30]   Hugo Touvron, Matthieu Cord, Matthijs Douze, Francisco                 Zhang, Huihui Zhou, and Yonghong Tian. Spikingformer:
+       Massa, Alexandre Sablayrolles, and Hervé Jégou. Training               Spike-driven residual learning for transformer-based spiking
+       data-efficient image transformers & distillation through at-           neural network. arXiv preprint arXiv:2304.11954, 2023. 1,
+       tention. In International conference on machine learning,              3, 5, 6, 7
+       pages 10347–10357. PMLR, 2021. 6                                [43]   Chenlin Zhou, Han Zhang, Zhaokun Zhou, Liutao Yu, Liwei
+[31]   Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-                Huang, Xiaopeng Fan, Li Yuan, Zhengyu Ma, Huihui Zhou,
+       reit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia             and Yonghong Tian. Qkformer: Hierarchical spiking trans-
+       Polosukhin. Attention is all you need. Advances in neural              former using qk attention. In The Thirty-eighth Annual Con-
+       information processing systems, 30, 2017. 1                            ference on Neural Information Processing Systems, 2024. 1,
+[32]   Alex Vicente-Sola, Davide L Manna, Paul Kirkland, Gaetano              3, 4, 6, 7
+       Di Caterina, and Trevor J Bihl. Spiking neural networks for     [44]   Zhaokun Zhou, Yuesheng Zhu, Chao He, Yaowei Wang,
+       event-based action recognition: A new task to understand               YAN Shuicheng, Yonghong Tian, and Li Yuan. Spikformer:
+       their advantage. Neurocomputing, 611:128657, 2025. 1                   When spiking neural network meets transformer. In The
+[33]   Wenhai Wang, Enze Xie, Xiang Li, Deng-Ping Fan, Kaitao                 Eleventh International Conference on Learning Representa-
+       Song, Ding Liang, Tong Lu, Ping Luo, and Ling Shao.                    tions, 2023. 1, 3, 5, 6, 7, 11
+       Pyramid vision transformer: A versatile backbone for dense      [45]   Zhaokun Zhou, Kaiwei Che, Wei Fang, Keyu Tian, Yuesheng
+       prediction without convolutions. In Proceedings of the                 Zhu, Shuicheng Yan, Yonghong Tian, and Li Yuan. Spik-
+       IEEE/CVF international conference on computer vision,                  former v2: Join the high accuracy club on imagenet with an
+       pages 568–578, 2021. 1                                                 snn ticket. arXiv preprint arXiv:2401.02020, 2024. 1
+[34]   Yuchen Wang, Kexin Shi, Chengzhuo Lu, Yuguo Liu, Malu
+                                                                       [46]   Rui-Jie Zhu, Qihang Zhao, Guoqi Li, and Jason K
+       Zhang, and Hong Qu. Spatial-temporal self-attention for
+                                                                              Eshraghian. Spikegpt: Generative pre-trained language
+       asynchronous spiking neural networks. In IJCAI, pages
+                                                                              model with spiking neural networks.             arXiv preprint
+       3085–3093, 2023. 1
+                                                                              arXiv:2302.13939, 2023. 1, 3, 5
+[35]   Man Yao, JiaKui Hu, Tianxiang Hu, Yifan Xu, Zhaokun
+                                                                       [47]   Shirui Zhu, Tao Xie, Ziyu Lv, Yan-Bing Leng, Yu-Qi Zhang,
+       Zhou, Yonghong Tian, XU Bo, and Guoqi Li. Spike-driven
+                                                                              Runze Xu, Jingrun Qin, Ye Zhou, Vellaisamy AL Roy, and
+       transformer v2: Meta spiking neural network architecture in-
+                                                                              Su-Ting Han. Hierarchies in visual pathway: functions
+       spiring the design of next-generation neuromorphic chips. In
+                                                                              and inspired artificial vision. Advanced Materials, 36(6):
+       The Twelfth International Conference on Learning Represen-
+                                                                              2301986, 2024. 2
+       tations, 2024. 1, 4, 5
+                                                                       [48]   Xizhou Zhu, Weijie Su, Lewei Lu, Bin Li, Xiaogang Wang,
+[36]   Man Yao, Jiakui Hu, Zhaokun Zhou, Li Yuan, Yonghong
+                                                                              and Jifeng Dai. Deformable detr: Deformable transformers
+       Tian, Bo Xu, and Guoqi Li. Spike-driven transformer. Ad-
+                                                                              for end-to-end object detection. In International Conference
+       vances in neural information processing systems, 36, 2024.
+                                                                              on Learning Representations, 2021. 1
+       1, 3, 5, 6, 7, 11
+[37]   Man Yao, Xuerui Qiu, Tianxiang Hu, Jiakui Hu, Yuhong            [49]   Petr Znamenskiy, Mean-Hwan Kim, Dylan R Muir, M Flo-
+       Chou, Keyu Tian, Jianxing Liao, Luziwei Leng, Bo Xu, and               rencia Iacaruso, Sonja B Hofer, and Thomas D Mrsic-Flogel.
+       Guoqi Li. Scaling spike-driven transformer with efficient              Functional specificity of recurrent inhibition in visual cortex.
+       spike firing approximation training. IEEE Transactions on              Neuron, 112(6):991–1000, 2024. 2
+       Pattern Analysis and Machine Intelligence, 2025. 3, 4, 6
+[38]   Li Yuan, Yunpeng Chen, Tao Wang, Weihao Yu, Yujun Shi,
+       Zi-Hang Jiang, Francis EH Tay, Jiashi Feng, and Shuicheng
+A. Appendix                                                         N-Caltech101: N-Caltech101 [26] is a neuromorphic
+                                                                 adaptation of Caltech101, containing 101 classes and 8,709
+A.1. Adversarial Test                                            samples with a spatial resolution of 180 × 240 pixels.
+Our adversarial experiments use two well-established tech-
+niques: Fast Gradient Sign Method (FGSM) and Projected           A.3. Energy Consumption Calculation of SNNs and
+Gradient Descent (PGD).                                                ANNs
+   FGSM [9] is a single-step adversarial attack algorithm        The uniformity of convolution enables the subsequent batch
+designed to generate adversarial examples efficiently. It        normalization (BN) and linear scaling transformations to
+computes the gradient of the loss function with respect to       be seamlessly integrated into the convolutional layer as an
+the input data and adds a small perturbation in the direc-       added bias during deployment [6, 12]. Consequently, when
+tion of the gradient’s sign. The adversarial example xadv is     estimating theoretical energy consumption, the impact of
+generated as:                                                    BN layers can be disregarded. Before computing the theo-
+                                                                 retical energy consumption for SpiLiFormer, we first deter-
+              xadv = x + ϵ · sign(∇x J(x, y))            (23)    mine the number of Synaptic Operations (SOPs) of spikes.
+where x is the original input, ϵ controls the perturbation
+                                                                                    SOPi = fr × T × FLOPsi ,                             (25)
+magnitude, and J(x, y) is the loss function.
+   PGD [24] is an iterative variant of FGSM that gener-          where i denotes the i-th layer module in SpiLiFormer, fr
+ates adversarial examples by repeatedly applying gradient        represents the firing rate of spike trains at the input of the
+updates. Starting from an initial perturbed input, PGD it-       layer module, and T refers to the simulation time step.
+eratively refines the perturbation while projecting the result   FLOPsi represents the number of floating-point operations
+back into a L∞ -norm ball of radius ϵ. The update rule at        in the i-th layer module, measured in terms of multiply-and-
+each iteration t is:                                             accumulate (MAC) operations. SOPi refers to the count of
+                                                                 spike-based accumulate (AC) operations. We assume that
+    xtadv = Clipx,ϵ xt−1                     t−1
+                                                     
+                       adv + γ · sign(∇x J(xadv , y)      (24)   MAC and AC operations are executed on 45nm hardware
+                                                                 [11], where EMAC = 4.6pJ and EAC = 0.9pJ according
+where γ is the step size, and Clipx,ϵ (·) ensures the pertur-    to previous studies [11, 16, 36, 44]. The theoretical energy
+bation remains within the allowed bounds.                        consumption of SpiLiFormer is computed as follows:
+A.2. Datasets
+Our experimental evaluation includes five standard datasets,                                    M
+                                                                                                X                     N
+                                                                                                                      X
+consisting of three static ones (ImageNet-1K, CIFAR-10,            ESpiLiFormer = EAC ×                  SOPiConv +         SOPjFF-LiDiff Attn
+and CIFAR-100) and two event-based neuromorphic ones                                            i=2                   j=1
+(CIFAR10-DVS and N-Caltech101).                                           R
+                                                                                                     !
+                                                                          X
+   ImageNet-1K: ImageNet-1K [5], formally known as                    +         SOPpFB-LiDiff Attn       + EMAC × FLOPs1Conv , (26)
+the ImageNet Large Scale Visual Recognition Challenge                     p=1
+(ILSVRC) dataset, is one of the most influential bench-
+marks in computer vision research. It comprises over 1.28        where FLOPs1Conv represents the floating-point operations in
+million training images across 1,000 classes, along with         the first convolutional layer, which processes the input im-
+50,000 validation images and 100,000 test images.                age in RGB format. Subsequently, the SOPs from M con-
+   CIFAR-10: CIFAR-10 [15] is a fundamental benchmark            volutional layers, N layers of FF-LiDiff attention, and R
+dataset in computer vision research, comprising 60,000           layers of FB-LiDiff attention are summed and multiplied
+color images of size 32 × 32 pixels, distributed across 10       by EAC . For ANNs, the theoretical energy consumption is
+mutually exclusive classes.                                      determined as follows:
+   CIFAR-100: CIFAR-100 [15] builds upon the design
+principles of CIFAR-10 while introducing a more challeng-                             EANN = EMAC × FLOPs.                               (27)
+ing classification task. It consists of 60,000 color images
+of size 32 × 32 pixels, categorized into 100 finer-grained
+                                                                 A.4. Selection of the Optimal α Hyperparameter
+classes.                                                         We perform an ablation study on both static and dynamic
+   CIFAR10-DVS: CIFAR10-DVS [18] represents a neu-               datasets to select the optimal value of the hyperparameter α,
+romorphic adaptation of the original CIFAR-10 dataset,           as shown in Tab. 4. The results show that the model achieves
+specifically designed for the evaluation of SNNs in event-       peak accuracy when α = 0.5, while other values lead to
+based vision tasks. There are 10,000 samples, whose spatial      varying degrees of performance degradation. As a result,
+size is 128 × 128.                                               we set α to 0.5 by default in all subsequent experiments.
+                                      α Value
+      Datasets
+                      0.3      0.4      0.5      0.6     0.7
+    CIFAR-10        96.35     96.40    96.63    96.36   96.16
+  CIFAR10-DVS       86.3      86.4     86.7     86.1    85.6
+
+       Table 4. Ablation Study of the α hyperparameter
+
+
+A.5. Evaluation of Inference Latency
+
+                       Inference Time per Sample (ms)
+      Datasets
+                      w/o FB-LiDiff     w/ FB-LiDiff
+     CIFAR-10               0.7657       0.9322 (+21.7%)
+    CIFAR-100               0.6965       0.8581 (+23.2%)
+   CIFAR10-DVS              9.9433       10.0657 (+1.2%)
+   N-Caltech101             18.4273      19.8113 (+7.5%)
+   ImageNet-1K              58.9901      66.3027 (+12.4%)
+
+    Table 5. Inference time per sample (ms) across datasets.
+
+   We conduct a comprehensive evaluation of the inference
+latency introduced by FB-LiDiff due to its additional for-
+ward pass. As shown in Tab. 5, FB-LiDiff increases in-
+ference time by 1.2% to 23.2%, with over 20% overhead
+observed on static CIFAR datasets.
+A.6. Supplementary Tables and Figures
+                                                                         FGSM                                    PGD
+    Dataset          Methods        Time Step   Clean             Maximum Perturbation                        Iterations
+                                                             0.05     0.1     0.2        0.3       5        10          30       50
+                    QKFormer           4         96.18      68.33    65.67   59.51     53.33    33.94     25.56       17.96     16.8
+   CIFAR-10                                      96.63       68.9    66.05   59.98     54.46    35.43      25.7       18.61    17.13
+                SpiLiFormer(Ours)      4        (+0.45)   (+0.57) (+0.38) (+0.47) (+1.13)      (+1.49)   (+0.14) (+0.65)      (+0.33)
+                    QKFormer           4         81.15      35.45    31.18   26.27     22.07    18.48     13.43       10.09     9.12
+  CIFAR-100                                      81.63      37.33    34.19   29.08      24.3    18.84     14.04       10.43     9.67
+                SpiLiFormer(Ours)      4        (+0.48)   (+1.88) (+3.01) (+2.81) (+2.23)      (+0.36)   (+0.61) (+0.34)      (+0.55)
+                    QKFormer           16        84.00      29.30    17.70   10.50     10.00     2.00     1.20        0.40      0.50
+ CIFAR10-DVS                                     86.70      34.50    23.70   15.60     11.70     3.50      1.40        0.40     0.40
+                SpiLiFormer(Ours)      16       (+2.70)   ( +5.20) (+6.00) (+5.10) (+1.70)     (+1.50)   (+0.20)       0.00    -0.10
+                    QKFormer           1         80.10      37.38    32.39   27.13     23.83     9.49     4.44        2.04      1.81
+ ImageNet-1K                                     81.54      40.17    36.01   30.99     27.45    10.89      5.14        2.43     1.95
+                SpiLiFormer(Ours)      1        +(1.44)   (+2.79) (+3.62) (+3.86) (+3.62)      (+1.40)   (+0.70) (+0.39)      (+0.14)
+
+Table 6. Adversarial robustness comparison between QKFormer and our model across four datasets, including CIFAR-10, CIFAR-100,
+CIFAR10-DVS, and ImagetNet-1K. For PGD, the attack strength is set to 8/255, with a step size of 2/255 per iteration.
+                         Original               Spike-Driven            SpikingFormer                QKFormer                   SpiLiFormer
+                                                Transformer
+
+
+
+
+                      Label: Scorpion            Pred: Tick
+                                                               O        Pred: Wolf Spider    O         Pred: Tick
+                                                                                                                    O         Pred: Scorpion
+                                                                                                                                                P
+
+
+
+                      Label: Pop Bottle      Pred: Traffic Light   O   Pred: Traffic Light   O    Pred: Traffic Light   O     Pred: Pop Bottle
+                                                                                                                                                 P
+
+
+
+                   Label: English Springer      Pred: Hen   O             Pred: Hen     O             Pred: Hen   O         Pred: English Springer   P
+
+
+
+                   Label: Indigo Bunting      Pred: Coucal    O           Pred: Coucal   O          Pred: Coucal    O       Pred: Indigo Bunting
+                                                                                                                                                    P
+
+
+
+                      Label: Corn            Pred: Mashed Potato   O   Pred: Mashed Potato    O   Pred: Mashed Potato   O       Pred: Corn   P
+
+
+
+
+                     Label: Tree Frog           Pred: Sandal   O         Pred: Sandal   O         Pred: Band Aid    O         Pred: Tree Frog    P
+
+
+
+
+                       Label: Vacuum             Pred: Washer   O        Pred: Washer
+                                                                                          O        Pred: Washer    O           Pred: Vacuum
+                                                                                                                                                P
+
+
+
+                       Label: Zebra            Pred: Ostrich   O          Pred: Ostrich  O         Pred: Ostrich
+                                                                                                                   O              Pred: Zebra   P
+
+
+
+
+                       Label: Airship           Pred: Tricycle  O        Pred: Unicycle   O        Pred: Speedboat    O         Pred: Airship
+                                                                                                                                                P
+Figure 4. Comparative visualization of attention heatmaps from ImageNet-1K, with corresponding ground truth labels and model predic-
+tions annotated below each sample.
+                                                Spike-Driven
+                                Original                            QKFormer          SpiLiformer
+                                                Transformer
+
+
+
+
+                                                   Spike Driven        QKFormer           Ours
+
+
+
+
+Figure 5. Representative samples from ImageNet-1K, demonstrating original images and their corresponding attention heatmaps across
+different models.
+                           Brightness Contrast Defocus Elastic            Fog        Frost   Gaussian
+                                                Blur Transform                                 Blur
+
+
+
+
+                           Gaussian       Glass       Impulse       Jpeg         Motion       Pixelate
+                             Blur         Blur          Blur     Compression      Blur
+
+
+
+
+                            Saturate       Shot         Snow        Spatter      Speckle       Zoom
+                                           Noise                                  Noise        Blur
+
+
+
+
+Figure 6. Visualization of CIFAR-10C. For all 19 types of corruptions, each column displays the following cases: the first image is
+the original corrupted image; the second and third images show the attention heatmaps of Spike-Driven Transformer and QKFormer,
+respectively; the last image visualizes the attention of SpiLiFormer.
+                             Brightness Contrast Defocus Elastic             Fog         Frost   Gaussian
+                                                  Blur Transform                                   Blur
+
+
+
+
+                             Gaussian       Glass        Impulse       Jpeg          Motion        Pixelate
+                               Blur         Blur           Blur     Compression       Blur
+
+
+
+
+                              Saturate       Shot          Snow        Spatter       Speckle       Zoom
+                                             Noise                                    Noise        Blur
+
+
+
+
+Figure 7. Visualization of ImageNet-1K-C for all types of corruptions. The layout and image order follow the same structure as illustrated
+in Fig. 6.
+

@@ -1,0 +1,675 @@
+ RISCSparse: Point Cloud Inference Engine on RISC-V Processor∗
+             Shangran Lin                                     Xinrui Zhu                               Baohui Xie                                  Tinghuan Chen+
+            CUHK-Shenzhen                                  CUHK-Shenzhen                             CUHK-Shenzhen                                      CUHK-Shenzhen
+
+                                     Cheng Zhuo                                         Qi Sun+                                       Bei Yu
+                                 Zhejiang University                            Zhejiang University                                    CUHK
+
+Abstract                                                                                                                              RISC-V CPU
+                                                                                                                                                   RoCC cmd
+                                                                                                                                                                Gemmini Accelerator
+
+   Machine learning on point clouds is increasingly accessible at the                                                                              RoCC PTW   Controller     Transposer
+                                                                                                                                      BOOM Core
+                                                                                                                                                                            Systolic array
+edge, notably in applications such as autonomous driving. However,                                                                                            Scratchpad
+
+
+
+
+                                                                                                                       Vector Units
+the sparse and irregular nature of point clouds presents significant                                                                    L1 I+D                  Bank 0
+                                                                                                                                                                Bank 1
+latency challenges on general-purpose hardware. RISC-V, with its                                                                                                Bank 2
+                                                                                                                                          L2
+
+
+
+
+                                                                                                                                                                  …
+evolving ecosystem, offers a promising platform for embedding in-
+                                                                                                                                                                           ReLU      ++++++++
+telligence at the edge due to its full-stack scalability. This paper fo-                                                                                        Bank K
+                                                                                                                                        DRAM                               Scaling   Accumulator
+
+cuses on the advanced point cloud operation known as submanifold
+                                                                                                                            Rule Mapping               GMS
+convolution (SC), deploying submanifold sparse convolutional net-                                                                                                          Operator Fusion
+                                                                                                                            Optimization            Optimization
+works (SSCNs) on a RISC-V System-on-Chip (SoC) designed within
+                                                                                                Figure 1: Our Optimizations for Point Cloud Inference Engine
+the Chipyard framework. We address three critical bottlenecks of
+                                                                                                on RISC-V Processor.
+SSCNs- Rule Map Construction (Mapping), Gather-MatMul-Scatter
+(GMS), and uncombined operation - to meet the real-time inference
+requirement for the on-chip implementation. By leveraging the RISC-
+                                                                                                   Despite their potential, point clouds present unique challenges due
+V Vector extension and Gemmini, an open-source full-stack DNN
+                                                                                                to their unordered and unstructured nature. This results in a highly
+accelerator generator, we vectorize the Mapping process, offload
+                                                                                                irregular and sparse data representation, which can lead to significant
+GEMM-related operations to the Gemmini Systolic Array, and coop-
+                                                                                                inefficiencies when processed using conventional computational
+eratively use the Systolic Array and vector processing units to reduce
+                                                                                                units. In response, research has explored point-based techniques
+the memory footprint. Our evaluations show that the RISC-V-based
+                                                                                                that process raw point data directly to extract features specific to
+SSCNs implementation achieves an average of 11.73× and 13.1×
+                                                                                                each point. However, point-based accelerators, such as PointNet [5]
+overall speedups with a small workload compared to TorchSparse
+                                                                                                and Mesorasi [6], require additional preprocessing steps, including
+on Edge-CPU, a state-of-the-art point cloud inference engine, for 3D
+                                                                                                Farthest Point Sampling (FPS) and K-nearest neighbor (KNN) search,
+segmentation and detection tasks, respectively. When contrasting
+                                                                                                which introduce additional computational overhead and can result
+with TorchSparse on an Edge-GPU, our implementation still deliv-
+                                                                                                in substantial information loss.
+ers a notable improvement, with average speedups of 1.63× for 3D
+                                                                                                   To overcome these limitations, recent research has gravitated
+segmentation and 1.07× for detection tasks.
+                                                                                                towards voxel-based techniques that rely on sparse convolutional
+                                                                                                neural networks (SSCNs) [7]. Notable state-of-the-art (SOTA) im-
+1        Introduction                                                                           plementations include MinkowskiEngine [8] and TorchSparse [9],
+   LiDAR sensors and depth cameras become more widespread in
+                                                                                                which enhance efficiency by calculating outputs only for specified co-
+recent years. Compared to 2D image data, point cloud data provides
+                                                                                                ordinates within a compact computational framework. These frame-
+a wealth of spatial details, including coordinates, color, and intensity,
+                                                                                                works also optimize memory access and computation regularity,
+which are crucial for applications across various domains. Therefore,
+                                                                                                which is particularly advantageous for managing the sparsity inher-
+point cloud data is increasingly valuable for 3D spatial sensing, and
+                                                                                                ent in 3D datasets. Different from regular convolution, sparse convo-
+has been commonly used in drones [1], computer vision [2], and
+                                                                                                lution has an irregular computation pattern with varying numbers
+autonomous vehicle [3, 4].
+                                                                                                of input/output pairs for different kernel offsets. This irregularity
+∗ Thiswork is partially supported by The National Key Research and Development                  limits the ability of current sparse inference engines to fully utilize
+Program of China (No. 2023YFB4402900), The National Natural Science Founda-                     GPU parallelism. Additionally, the scattered nature of point clouds
+tion of China (No. 62304197) and The Research Grants Council of Hong Kong SAR
+(No. CUHK14210723).                                                                             in sparse representations results in high costs for data gathering
++ Corresponding authors                                                                         and scattering, which can dominate execution time. These factors
+                                                                                                collectively delay real-time processing in sparse convolution neural
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed           networks. Other than TorchSparse and MinkowskiEngine, a majority
+for profit or commercial advantage and that copies bear this notice and the full citation       of cutting-edge designs also deploy this algorithm on GPUs [8–11].
+on the first page. Copyrights for components of this work owned by others than the              However, given the growing demand for point cloud applications in
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission   edge computing, the higher costs and energy demands of GPU-based
+and/or a fee. Request permissions from permissions@acm.org.                                     solutions may impede widespread adoption. We thus advocate for
+ICCAD’24, October 27–31, 2024, New Jersey, USA                                                  RISC-V, driven by its relatively low energy consumption and open-
+© 2024 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-1077-3/24/10. . . $15.00                                                    source flexibility for customization, which aligns closely with the
+https://doi.org/10.1145/3676536.3676774                                                         unique requirements of edge environments.
+   In this contribution, we present RISCSparse, a solution specifi-      address the high computational times associated with the mapping
+cally tailored for edge computing environments using RISC-V, as          search and matrix multiplication operations in sparse convolution.
+shown in Figure 1. Our approach adeptly addresses the challenge of
+irregular workload utilization and significantly reduces execution         Kernel                                                  Kernel
+times, especially during the critical stages of data gathering and
+scattering. We have focused on optimizing the essential components
+of SSCNs, including the rule mapping process, GMS operations, and
+operator fusion. Unlike existing solutions that target FPGA and GPU
+architectures [8, 9, 11, 12], we have developed an ASIC RISC-V and
+Gemmini-based accelerator within the Chipyard framework. To the
+                                                                            Input feature                  Output feature          Input feature         Output feature
+best of our knowledge, this represents the groundbreaking effort to
+                                                                                                    (a)                                            (b)
+construct a sparse convolution framework leveraging RISC-V and
+the Gemmini [13] open-source platform. Our experimental results          Figure 2: Traditional Convolution vs SSC: (a) Traditional Con-
+validate the effectiveness of our design, achieving speedups of up to    volution; (b) SSC.
+2.85× for 3D segmentation tasks and up to 1.82× for 3D detection
+tasks when employing U-Net and ResNet architectures, respectively,
+                                                                                                              W−1,−1 W−1,0 W−1,1
+under modest workload conditions.
+                                                                                             Pin3             W0,−1 W0,0   W0,1               Pout3
+2     Preliminary                                                                     Pin2          Pin4      W1,−1 W1,0   W1,1          Pout2     Pout4
+   In this section, we concisely discuss SSCN accelerators, focusing
+on the hashtable-based mapping strategy and the Gather-Matmul-                 Pin1                                                  Pout1
+
+Scatter dataflow. We also explore the existing computation resources                                         Mapping search
+available on the RISC-V platform, demonstrating the potential to
+                                                                           Key                  1                            2
+accelerate SSCNs utilizing the RISC-V architecture. This examina-
+tion highlights that the integration of specialized dataflows and the      Value    (Pin1 , W0,0 , Pout1 ) (Pin2 , W−1,1 , Pout1 )
+architectural strengths of RISC-V can greatly improve the efficiency       Key                  3                            4                5
+of processing for advanced neural network applications.                    Value (Pin1 , W1,−1 , Pout2 ) (Pin2 , W0,0 , Pout2 ) (Pin3 , W−1,1 , Pout2 )
+2.1    SSCNs
+   During the convolution process, kernels traverse the input fea-       Gather
+tures summing the products of each kernel offset with corresponding       (Pin1 , W0,0 , Pout1 ) (Pin2 , W−1,1 , Pout1 ) (Pin1 , W1,−1 , Pout2 )
+input values, which are then forwarded to the output feature map.
+                                                                          (Pin2 , W0,0 , Pout2 ) (Pin3 , W−1,1 , Pout2 )
+In dense convolution, the output feature will progressively dilate as
+shown in the Figure 2(a). In contrast, SSCN only calculates on the
+                                                                         MatMul
+non-zero input site, leading to substantial computational savings and                                                                                      Scatter
+avoiding the dilation issue as shown in the Figure 2(b). To calculate              W0,0                        W−1,1                 W1,−1            Pout1      Pout2
+on the nonzero input site only, SSCNs deploy a special mapping                                                                                     PSUM 1 PSUM 2
+operation to identify the correspondence between input and output              PSUM 1                        PSUM 3                 PSUM 5         PSUM 3 PSUM 4
+points. This operation systematically traverses all possible input             PSUM 2                        PSUM 4                                       PSUM 5
+coordinates for each output coordinate, identifying and recording        Figure 3: Mapping Search and Gather-MatMul-Scatter Opera-
+non-zero inputs. These inputs are then organized into a hash table       tions.
+that correlates them with their respective weights and output sites.
+   After maps are generated, SSC adopts a Gather-Matrix Multiply-        2.2       RISC-V
+Scatter (GMS) operation, as shown in Figure 3. According to the GMS         In addition to SSCNs, the RISC-V architecture is increasingly
+flow, a gather operation consolidates input data linked to identical     recognized as a transformative force in high-performance comput-
+weights, as directed by the hash table. This data is then routed to      ing. The flexibility of RISC-V to accommodate both standard and
+the Matrix Multiplication unit which conducts feature and weight         non-standard ISA extensions catalyzes groundbreaking architectural
+matrix multiplication to obtain the partial sum. Finally, the outcomes   innovations. In parallel, Systolic Array (SA) in accelerators, noted
+are scattered into the appropriate positions in the output features.     for their exceptional parallel computing capabilities, have become
+   To identify the optimization targets, we conducted a systematic       a significant trend [14–16]. These arrays are particularly effective
+profiling of runtime for each operation within the MinkUNet 3D seg-      for concurrent and repetitive tasks such as convolutions, crucial in
+mentation task. This profiling was performed on both a CPU (ARM          sparse convolution operations. In our research, we have identified
+Cortex-A57) and a GPU (NVIDIA Jetson Nano). Figure 4 presents a          the Gemmini platform [13] and the RISC-V vector extension as opti-
+detailed breakdown of the operational proportions. Based on obser-       mal solutions for enhancing matrix multiplication tasks and other
+vation, our analysis revealed that matrix multiplication and mapping     Deep Neural Network (DNN) operators. The integration of the Gem-
+search constitute the primary computational tasks, accounting for        mini DNN Accelerator with the RISC-V vector extension capitalizes
+approximately 60% to 70% of the total runtime. This observation un-      on their combined strengths in parallel processing, efficiently opti-
+derscores an urgent need for a strategic solution in our research to     mizing the execution of SC operations. This synergy substantially
+                                                                                                                                                                Table 1: Notation List.
+     GMS       Map     BN      ReLu       Others        Scatter                  GEMM     Gather                           Others
+        8.64 %                                                                      1.94 %
+    6.46 %                                                                                                                                   Notation           𝐾                     𝑝 𝑜𝑢𝑡                𝑝 𝑖𝑛
+9.18 %                      36.05 %
+                                                                                                                                            Description     Kernel size        Output coordinate     Input coordinate
+                                                    49.68 %                                                46.76 %
+                                                                                                                                             Notation          𝑋 𝑜𝑢𝑡                  𝑋 𝑖𝑛                 𝑛𝑘
+
+     39.67 %                                                                              1.6 %                                             Description   Output features        Input features       Kernel points
+             (a) proportion on CPU                                (b) GMS proportions on CPU                                                 Notation           𝛿                      𝑢                    𝑠
+                                                                                                                                            Description    Kernel offset      Candidate Coordinate        Stride
+      GMS      Map     BN       ReLu       Others       GEMM                      Others              Scatter                Gather
+       10.77 %                                          16.75 %                                                                              Notation          𝑊                      𝑐                    𝑀
+     2.68 %
+                                                                                                           34.98 %                          Description       Weight            Channel number         Kernel map
+                             38.13 %
+18.92 %                                             16.28 %
+                                                                                                                                      the conversion, we operated these models on the ONNX Runtime
+          29.5 %                                                        31.96 %
+                                                                                                                                      with registered custom operators and adapted kernels to suit specific
+               (c) proportion on GPU                                   (d) GMS proportions on GPU                                     hardware accelerators using Microsoft Machine Learning Algebra
+            Figure 4: Operations proportion in MinkUNet.                                                                              Subprogram Library (MLAS) as the backend. Based on the critical
+                                                                                                                                      operation proportion as shown in Figure 4, we have implemented
+increases instruction-level parallelism, resulting in a significant en-                                                               vectorization techniques on the target operation to manage the irreg-
+hancement in the mapping rate of SC processes within a specific                                                                       ular steps in SC and to refine the inference runtime on RISCSparse.
+timeframe. It is crucial to note that both Hwacha [17] and Ara [18]                                                                   we capitalize a vector unite for hash-related operation, an SA for
+provide open-source vector architectures for CPUs and are widely                                                                      GEMM, and a fused operator. Collectively, these enhancements lead
+used in research settings. However, our strategic choice of Ara over                                                                  to a more streamlined execution pipeline and a higher parallelism.
+Hwacha stems from its status as a standard extension of RISC-V,                                                                       They reduce the computational load and optimize data flow, enhanc-
+which guarantees enhanced support and greater compatibility with                                                                      ing the overall performance of the RISCSparse framework.
+an extensive range of RISC-V APIs. This decision aligns with our
+commitment to adopting technologies that ensure sustained support                                                                     3.2     Rule Mapping Optimization
+and development within the rapidly evolving RISC-V ecosystem.                                                                             During the Mapping phase of SC, we generate a kernel map that
+                                                                                                                                      systematically indexes the necessary GEMM operations. This map
+3        RISCSparse                                                                                                                   includes the corresponding weights and feature vectors as a tuple
+   This section unfolds our RISCSparse as follows: Section 3.1 pro-
+                                                                                                                                      (𝑝 𝑖𝑛   𝑜𝑢𝑡                                      𝑖𝑛
+                                                                                                                                         𝑗 , 𝑝𝑖 , 𝛿𝑘 ) required for each GEMM. Here 𝑝 𝑗 is the input feature
+vides an overview workflow for RISCSparse. Section 3.2 introduces                                                                                                         𝑜𝑢𝑡
+the vectorize mapping function. Section 3.3 elaborates the improve-                                                                   site, 𝛿𝑘 is the weight offset and 𝑝𝑖 is the site of the output feature
+ment in offloading GMS to Gemmini and vector machine. Section 3.4                                                                     vector as shown in the notation table in Table 1. Initially, in our
+brings in the operation fusion technique to enhance inter-operation                                                                   implementation, we establish a hash table using the input coordinates
+data movement.                                                                                                                        𝑝 𝑖𝑛
+                                                                                                                                        𝑗 as keys and their respective indices 𝑗 as values. Subsequently, we
+                                                                                                                                      compute the output coordinates 𝑝 𝑜𝑢𝑡 according to the kernel offsets,
+3.1        Overview                                                                                                                   generating candidate input coordinates 𝑝𝑖𝑜𝑢𝑡 + 𝛿𝑘 for each output
+                             Runtime Execution
+                                                                        RISC-V CPU                Gemmini Accelerator                 coordinate 𝑝𝑖𝑜𝑢𝑡 and weight 𝛿𝑘 . Specifically:
+                                                                                     RoCC cmd
+
+                                                                                                Controller     Transposer
+                                                                                                                                      (1) If the stride 𝒔 is equal to 1, the output coordinates are directly
+                                                                                     RoCC PTW
+                                                                        BOOM Core
+                                                                                                              Systolic array
+                                                                                                Scratchpad
+                                                        Vector Units
+
+
+
+
+                                Rule Mapping                              L1 I+D                  Bank 0                                  assigned the input coordinates:
+                                Optimization                                                      Bank 1
+                                                                                                  Bank 2
+                                                                            L2
+                                                                                                    …
+
+
+
+
+                              GMS Optimization
+                                                                          DRAM
+                                                                                                  Bank K
+                                                                                                             ReLU
+
+                                                                                                             Scaling
+                                                                                                                       ++++++++
+                                                                                                                       Accumulator
+                                                                                                                                                                           𝑝 𝑜𝑢𝑡 = 𝑝 𝑖𝑛 .
+                               Operator Fusion
+                                                                             Workload Assignment
+                                                                                                                                      (2) Otherwise, the output coordinates are initialized as an empty
+    Model Conversion                                                                                                                      set and down-sampled through:
+                                                                                                                                            • For each input point 𝑝 in 𝑝 𝑖𝑛 , the algorithm iterates over the
+                                                                                                                                              neighbor points determined by kernel size 𝐾 and coordinates
+                                                                                                                                              dimensions 𝐷, to calculate candidate coordinates 𝑢:
+                                                                                                                                                               𝑢 = 𝑝 − 𝛿,        ∀𝛿 ∈ Δ𝐷 (𝐾).
+                             Kernel Sketches
+                                   &
+                                                                                                                                              Here Δ𝐷 (𝐾) = {0, 1, ..., 𝐾 − 1}𝐷 , represent the kernel offsets.
+                            Operator Register                                                                                               • Each candidate coordinate 𝑢 is validated against the stride
+                                                                                                                                              and boundary conditions:
+                    Figure 5: Overall Workflow.
+                                                                                                                                                             𝑢 mod 𝑠 = 0         and 𝑢 < 𝑠 · 𝑏.
+   Figure 5 illustrates the comprehensive workflow of our proposed
+RISCSparse. At the top level, the deployment process starts by con-                                                                         • If 𝑢 satisfies these conditions, it is scaled down by the stride
+verting our SSCN models into the ONNX format. Specifically, we                                                                                and added to the set of output coordinates:
+focus on two models: SparseResNet and MinkUNet, both of which                                                                                                                   n𝑢 o
+were initially implemented using the PyTorch framework. Following                                                                                               𝑝 𝑜𝑢𝑡 = 𝑝 𝑜𝑢𝑡 ∪       .
+                                                                                                                                                                                  𝑠
+       • Finally, duplicate coordinates in 𝑝 𝑜𝑢𝑡 are removed to obtain                                                    N
+                                                                                  x1   y1   z1   b1
+         the unique set of output coordinates.                                                                  x1   x2   x3   x4   …       δx   δx   δx   δx   …
+                                                                                  x2   y2   z2   b2 transpose
+   We then query the hash table to verify the existence of each candi-                                          y1   y2   y3   y4   …       δy   δy   δy   δy   …
+                                                                              N   x3   y3   z3   b3                                     +
+date input coordinate. If a matching input coordinate 𝑝 𝑖𝑛                                                      z1   z2   z3   z4   …       δz   δz   δz   δz   …
+                                                           𝑗 is identified,       x4   y4   z4   b4
+such that 𝑝 𝑖𝑛    =   𝑝 𝑜𝑢𝑡 + 𝛿 , we append a new entry (𝑝 𝑖𝑛 , 𝑝 𝑜𝑢𝑡 , 𝛿 )                                     b1   b2   b3   b4   …       0    0     0   0    …
+
+
+
+
+                                                                                   …
+                                                                                   …
+                                                                                   …
+                                                                                   …
+               𝑗        𝑖      𝑘                             𝑗    𝑖      𝑘
+to the kernel map. This entry denotes a potential GEMM operation                   SIMD bitwise hashing
+essential for deriving the output feature vectors.                                                              x1 + δx x2 + δx x3 + δx x4 + δx                 …
+   Mapping: Vector Optimization                                                                                 y1 + δ y y2 + δ y y3 + δ y y4 + δ y             …
+   Constructing the kernel map involves managing several irregular                                              z1 + δ z z2 + δ z z3 + δ z z4 + δ z             …
+computational tasks. The initial step is to organize input points into                                             b1       b2       b3       b4                …
+a hash table, by assigning a unique hash value to each set of input                                                                     N
+coordinates. The challenge lies in correlating a hash value with ev-
+ery point across all four dimensions. To address this challenge, we
+                                                                                                                           V Lmax
+employ a vectorized hashing method with SIMD shown in Figure 6,
+allowing us to index batches of points rather than one. In RISCSparse,        Figure 6: Vectorized Hashing for Point Clouds Coordinates.
+our method begins with reorganizing the memory allocation of the
+                                                                              for single-threaded computing devices. In response, we have devel-
+input coordinates from original, 𝑁 × (𝑥, 𝑦, 𝑧, 𝑏), to transposed format,
+                                                                              oped an approach optimized for SIMD operations, allowing for the
+(𝑁𝑥 , 𝑁 𝑦 , 𝑁𝑧 , 𝑁𝑏 ). This reorganization is crucial for enhancing the
+                                                                              processing of batches of keys up to the maximum vector lane width.
+efficiency of the following vectorized hashing operations. In the sub-
+                                                                              This method employs a linear probing technique as its open address-
+sequent steps of our vectorized hashing method, we employ vectors
+                                                                              ing scheme, systematically enhancing the efficiency of searching for
+that slide with a fixed 32-bit hash value block along each dimension
+                                                                              empty buckets to insert entries or conclude the search.
+of the transposed input coordinates. This operation significantly
+                                                                                 To explore the capabilities of the RISC-V vector extension, we
+facilitates the efficient hashing of input points. To apply this method
+                                                                              implemented vertical vectorization [20], enabling each vector lane to
+to hash kernel points, we need to include an additional crucial step.
+                                                                              process a batch of keys during both the insertion and lookup phases.
+Specifically, we incorporate an offset to the transposed coordinates,
+                                                                              Each vector lane uniquely handles distinct input keys within a linear
+upon which we consistently apply the same vectorized logic. This
+                                                                              probing hash table framework, as detailed in Algorithm 2. Initially, a
+nuanced process, which enhances the efficiency of our kernel map
+                                                                              vector mask load operation sets all lanes to true, preparing for SIMD
+construction, is elaborated in detail in Algorithm 1.
+                                                                              hash computation. As depicted in Figure 7, the keys are hashed to
+Algorithm 1 Vectorized (Kernel) Hash Operation.                               compute their respective positions in the hash table. The results
+  Input: 𝑁 , 𝐾, P𝑖𝑛 , 𝜹                                                       are then used in the gather operation to collate inputs, followed
+  Output: P𝑜𝑢𝑡                                                                by scatter operations that distribute keys into the hash table in a
+  P𝑇 ← transpose(P𝑖𝑛 )                                                        non-contiguous manner. This strategy permits "out-of-order" access,
+  𝒉 ← hash-value                                                              allowing immediate reuse of vector lanes post-key insertion. Specifi-
+  for 𝑘 = 0 to 𝐾 − 1 do                                                       cally, the process starts with verifying empty positions through a
+      for 𝑖 = 0 to 𝑁 step 𝑣𝑙 do                                               gather operation. Also, to prevent conflicts when multiple keys tar-
+                                                                              get the same empty slot, we need a pre-scatter conflict detection step.
+          (𝒙, 𝒚, 𝒛, 𝒃) ← P𝑇 [𝑖] + 𝜹 [𝑘]
+                                                                              Conflicts arise when two lanes point to the same location. We scatter
+           ⊲ Prepare vectors for each dimension with current offset
+                                                                              a vector with unique values per lane and then gather with the same
+          𝒉 ← 𝒉 vbitwise (𝒙, 𝒚, 𝒛, 𝒃)
+                                                                              indices. If the values match, the lane can scatter safely; otherwise,
+                          ⊲ Apply bitwise operations to hash vector
+                                                                              conflicting lanes proceed to the next bucket in the following loop.
+          P𝑜𝑢𝑡 ← 𝒉
+                                                                              After resolving conflicts, keys and values are then scattered into
+      end for
+                                                                              unoccupied positions, as illustrated by the subsequent loops in the
+  end for
+                                                                              diagram. In the subsequent loops, new offsets are calculated based
+                                         ⊲ Function Descriptions:
+                                                                              on conflicts or full slots to guide the placement process. When a key
+  vbitwise: Performs bitwise logical operations such as AND, OR,
+                                                                              encounters a non-empty slot, it prompts an increment in the offset
+  and XOR on vector elements.
+                                                                              vector. This increment effectively redirects the search to the next
+   Besides indexing point cloud coordinates, the construction and             available position in the subsequent cycle, ensuring efficient conflict
+update of the kernel map significantly influence the setup time for           resolution. This method not only optimizes memory utilization but
+subsequent GEMM operations. Modern SC engines on GPUs typ-                    also enhances the efficiency of handling collisions and inserting new
+ically utilize parallelizable hash tables, such as the Cuckoo hash            entries.
+table [19], which are optimized for GPU execution and benefit from               During the insertion phase, we apply dynamic vector lane reuse,
+Single Instruction Multiple Threads (SIMT) capabilities due to their          which fully leverages SIMD resources to enhance batch processing.
+multiple kernels. In contrast, SC implementations on CPUs often em-           However, this technique can disrupt the order of results, presenting
+ploy advanced data structures like Google’s densemap or sparsehash.           challenges for subsequent lookup operations. Order preservation is
+Although these data structures can achieve, on average, 𝑂 (𝑛 insert +         essential for mapping calculations in SC spaces, where the sequential
+𝑛 query ) complexity, they still operate sequentially, posing challenges      integrity of the input-to-output relationship must be maintained. To
+                                        … Vector mask load (all true initially)   enhance the efficiency essential for subsequent SC computation
+          Keys 88 45 37 9               … SIMD Hash computation
+                        Index Offset                                              processes.
+      Position 4 7 8 4 + 0 0 0 0
+                                                                                  3.3        GMS Optimization
+To_keys           88         45 100     … Insert to empty slots                      The kernel map execution primarily involves a sequence of GEMM
+                                                                                  operations of varying sizes. For each kernel index, SC retrieves the
+                62 71 37 9                 Conflit insertion
+                                                                                  input feature vectors from designated positions as specified by the
+    Next loop            Index Offset      No empty position
+                1 4 9 5 + 0 0 0 0                                                 kernel map. These positions dictate which input features to gather,
+                                           Can be inserted
+                  ……                                                              channel by channel, and store sequentially in an input buffer ar-
+          Figure 7: Vectorized Hash Table Construction.                           ray. Each entry in the kernel map directly influences where the SC
+                                                                                  gathers data. Only positions with valid indices, i.e., non-negative,
+Algorithm 2 Vectorized Hash Table Construction                                    are considered, thereby excluding irrelevant position data. The SC
+  Input: Hash table T, keys 𝑲 , values 𝑽 , number of keys 𝑁                       then performs GEMM operations for each valid input position, gen-
+  index ← 0                                                                       erating intermediate results for the output feature vectors for each
+  𝒌𝑒𝑚𝑝𝑡 𝑦 ← 𝑘𝑒𝑚𝑝𝑡 𝑦                                                               channel. These intermediate results, accumulated from numerous
+  𝒎 ← true                                         ⊲ Initialize bitmask           GEMM operations within the output buffer array, are subsequently
+  𝜹 ←0                                                                            aggregated to form the final, complete output feature vectors.
+  while index + 𝑣𝑙 ≤ 𝑁 do                     ⊲ vl: vector lane length               GEMM: Enhancing performance with Systolic Array
+      𝒌 ← 𝑲𝑚                                                                         To boost the efficiency of GMS flow, we offload the GEMM compu-
+      𝒗 ← 𝑽𝑚                                                                      tations to Gemmini SA. This strategic move leverages the inherent
+      index ← index + vcount(𝒎)                                                   parallelism of SA to accelerate matrix multiplication tasks, thereby
+      𝒑 ← vbitwise(𝒌)                     ⊲ Calculate input positions             enhancing throughput and reducing latency in processing the kernel
+      𝒌 𝒕 ← vgather(𝒑, 𝑻𝒌𝒆𝒚𝒔 )                                                    map.
+      𝒎 ← 𝑻𝑘𝑒𝑦𝑠 == 𝒌𝑒𝑚𝑝𝑡 𝑦                          ⊲ Find empty slots               Gather and Scatter: Vector optimization
+      𝑻𝒌𝒆𝒚𝒔 ← vscatter(𝒌𝑚 )                                                          With GEMM operations now efficiently offloaded to the systolic
+      𝑻𝒗𝒂𝒍𝒖𝒆𝒔 ← vscatter(𝒗𝑚 )                                                     array, we turn our attention to optimizing the channel processing
+      𝜹 ← 𝒎 ? 0 : (𝜹 + 1)                                                         through advanced gather and scatter techniques. In channel pro-
+               ⊲ Increment offsets where positions were not empty                 cessing, each input feature vector contains 𝐶 𝑖𝑛 channels, while each
+  end while                                                                       output vector consists of 𝐶 𝑜𝑢𝑡 channels. The state-of-the-art SC en-
+                                          ⊲ Function Descriptions:                gine, TorchSparse, partitions these channels into fixed-size blocks,
+  vcount: Counts the number of true values within a vector mask.                  requiring padding when GPU threads handle specific segments of the
+  vbitwise: Performs bitwise logical operations such as AND, OR,                  feature vector. Conversely, our method can dynamically adjust vec-
+  and XOR on vector elements.                                                     tor lengths, avoiding the need for padding, as shown in Algorithm 3.
+  vgather: Retrieves values from non-contiguous positions using                   The process begins by using a vector mask operation to extract valid
+  a vector of indices. An optional vector mask enables selective                  positions. Positions 𝑃 𝑖𝑛 in the kernel map that is negative are con-
+  storage.                                                                        sidered invalid and are masked out. These valid positions are then
+  vscatter: Distributes vector values to positions using a vector of              consolidated into a contiguous array. During the gather/scatter oper-
+  indices. If multiple lanes target the same position, the rightmost              ations, if 𝑉 𝐿𝑚𝑎𝑥 %(𝐶 𝑖𝑛 , 𝐶 𝑜𝑢𝑡 ) exceeds one, operations span multiple
+  lane’s value is written. An optional vector mask enables selective              channels; otherwise, operations involve repetitions across 𝐶 𝑖𝑛 or
+  storage.                                                                        𝐶 𝑜𝑢𝑡 channels. Such dynamic vector length setting could optimize
+                                                                                  data handling and adapt flexibly to varying data dimensions and
+                                                                                  workload demands.
+address this issue, we employ a nested loop strategy during the query
+                                                                                                                             Kernel Map
+phase. This method processes a fixed number of keys, 𝑣𝑙, in a prede-
+                                                                                                         Mask ﬁlter                            Mask ﬁlter
+termined sequence, ensuring that the output order directly mirrors
+                                                                                                 Valid indices               Systolic array          Valid indices
+the input order. While this approach may result in suboptimal vector
+lane utilization, it is still particularly advantageous in scenarios with                         Input buffer                                       Output buffer
+small data sizes and minimal hash conflicts. By accelerating the key                Input                                                                                Output
+discovery process within the loop, it ensures efficient and predictable                          Input buffer                                        Output buffer
+                                                                                   feature                                                                               feature
+outcomes.                                                                                        Input buffer                                        Output buffer
+   Leveraging the RISC-V vector extension, we have significantly
+                                                                                                      Cin                                                Cout
+reduced computational overhead and enhanced the handling of large
+                                                                                  Vector store with dynamic tilting on Cin           Vector accumulate with dynamic tilting on Cout
+volumes of point cloud data. Our vectorized approach optimizes both
+latency and resource utilization, thereby enhancing batch processing              Figure 8: Illustration of the Gather-Matmul-Scatter (GMS)
+efficiency. We have integrated several key techniques to refine our               Flow, showing how vectorized buffer extraction facilitates
+RISCSparse: vectorized hashing, dynamic vector lane reuse during in-              the offloading of GEMM operations to a Systolic Array.
+sertion, and a nested loop strategy for queries collectively accelerate             With this enhanced GMS mechanism, as shown in Figure 8, our
+processing while maintaining output accuracy. These optimizations                 implementation efficiently transports necessary data buffers to the
+Algorithm 3 Vectorized Gather/Scatter Operation                            for a matrix 𝑿 ∈ R𝑚×𝑛 . Matrix 𝑩 has identical dimensions as 𝑿 , with
+  Input: 𝑛𝑘 , 𝑐, X𝑖𝑛 , M                                                   every element valued at 𝑏. Concurrently, matrix 𝑨 is an 𝑚 ×𝑚 diago-
+  Output: X𝑜𝑢𝑡                                                             nal matrix with 𝑎 occupying its diagonal entries. This configuration
+  X𝑜𝑢𝑡 ← ∅                                                                 allows the operation to be efficiently executed using:
+  𝑠 ← transpose?1 : 0                                                                                      𝒀 = 𝑨 · 𝑿 + 𝑩.                           (4)
+  for 𝑛 = 1 to 𝑛𝑘 do                                                       This computational approach effectively utilizes the capabilities
+      𝒊𝒅𝒙 ← M𝑠                               ⊲ Load indices with stride    of Systolic Arrays, accelerating BatchNorm computation latency
+      𝒎 ← (𝒊𝒅𝒙 > 0)                  ⊲ Generate mask for valid indices     while enabling ReLU operations post-BatchNorm integration. Conse-
+     𝑛 𝑣 ← vcount(𝒎)                                                       quently, it facilitates a streamlined pipeline of Systolic computation
+      𝒊𝒅𝒙 𝑣 ← vcompress(𝒎, 𝒊𝒅𝒙)                                            and ReLU processing. Extending this principle, we utilize the ONNX
+                       ⊲ Count and compress valid indices with mask        Runtime’s graph optimization capabilities to fuse BatchNorm + ReLU
+  end for                                                                  and Add + ReLU operators, as shown in Figure 9. This fusion occurs
+  for 𝑖 in 𝒊𝒅𝒙 𝑣 do                                                        during the elaboration stage of the model parsing section, permitting
+      if 𝑣𝑙%𝑐 > 1 then                                                     automatic operator fusion based on the execution provider specified.
+          X𝑜𝑢𝑡 ← /+= X𝑖𝑛 [𝑖]                                                                         Systolic array
+                         ⊲ Store for gather and accumulate for scatter                                                   Graph
+                                                                                                                                   SpConv3d
+      else                                                                                                            optimization
+          for 𝑗 = 1 to 𝑐 do                                                 SpConv3d
+                                                                                                                                  Systolic/
+              X𝑜𝑢𝑡 ← /+= X𝑖𝑛 [𝑖]                                                       Parsing                                    BN/ReLu
+          end for                                                          BatchNorm                                                          Model Run
+                                                                                                         ReLu
+      end if                                                                           Execution
+                                                                                        provider   CPU
+  end for                                                                    ReLu
+
+                                            ⊲ Function Descriptions:       Figure 9: Schematic representation of operator fusion. This
+  vcount: Counts the number of true values within a vector mask.           approach involves offloading tasks to Systolic Array and inte-
+  vcompress: Compresses elements of an input vector, selecting             grating them during the graph optimization phase to enhance
+  only those elements that correspond to true in the provided vector       the inter-operator pipeline efficiency.
+  mask.
+                                                                           4 Experimental Results
+Systolic Array for further GEMM operations by reducing the over-           4.1 Experimental Setup
+head associated with irregular data movements and alignment issues.           Hardware Implementation: We evaluated the performance and
+                                                                           efficiency of our RISC-V SoC within the Chipyard framework [21].
+3.4    Operator Fusion
+                                                                           The SoC incorporates a BOOM Core, a Gemmini Accelerator [13],
+   Beyond optimizing the SC computation flow, we have developed
+                                                                           and an Ara vector co-processor [18], all operating at a standardized
+a fused approach to manage data flow between operators within
+                                                                           1GHz clock frequency [13][18]. We benchmarked its inference per-
+SSCNs. This strategy leverages the SA to minimize data movement,
+                                                                           formance against the NVIDIA Jetson Nano for both CPU and GPU
+efficiently coordinating data transfers and processing across various
+                                                                           baseline, featuring a 128-core NVIDIA Maxwell GPU at 921 MHz,
+computational stages. Utilizing the Gemmini accelerator, which sup-
+                                                                           and a Quad-core 64-bit ARM Cortex-A57 CPU at 1.43 GHz. This
+ports our system, we implement multiple fusion strategies. Notably,
+                                                                           comparison allows us to assess the acceleration ratio and the suit-
+the accelerator allows for the integration of the ReLU (Rectified Lin-
+                                                                           ability of our SoC for edge-computing tasks relative to established
+ear Unit) operation post-matrix multiplication or immediately after
+                                                                           platforms.
+the convolution process. We capitalize on this capability to further
+                                                                              Software Implementation: In our baseline implementation,
+fuse ReLU with other operators, thereby enhancing computational
+                                                                           we employed TorchSparse v2.0.0 on GPU with CUDA v10.2, while
+efficiency and reducing latency.
+                                                                           TorchSparse v1.4.0 for CPU. For RISCSparse, we deployed the model
+   During inference, Batch Normalization (BatchNorm) operates
+                                                                           under the ONNX Runtime framework and conducted exhaustive
+with fixed parameters: mean (𝜇) and variance (𝜎 2 ), which can be
+                                                                           testing using the cycle-accurate simulators FireSim [22] and Verila-
+efficiently computed as a GEMM operation suitable for Systolic
+                                                                           tor. We assessed the inference performance of our SoC on two major
+Arrays. Given the BatchNorm operation:
+                                                                         3D point cloud networks: SparseResNet [8], equipped with 21 sparse
+                                   𝑥𝑖 − 𝜇                                  convolution layers for 3D object detection, and MinkUNet [8], fea-
+                        𝑦𝑖 = 𝛾 √             + 𝛽.                    (1)
+                                    𝜎2 + 𝜖                                 turing 42 sparse layers dedicated to 3D segmentation. Throughout
+where 𝛾 and 𝛽 are scale and shift parameters, and 𝜖 is a small constant.   our evaluations, we utilized 32-bit floating-point precision as basic
+By simplifying, we obtain:                                                 data types.
+                                                   
+                𝑦𝑖 = √
+                          𝛾
+                                   𝑥𝑖 + 𝛽 − √
+                                                𝛾𝜇
+                                                        .            (2)   4.2      Performance Evaluation
+                         𝜎2 + 𝜖                𝜎2 + 𝜖                         To evaluate our RISCSparse, we benchmarked our approach against
+                 𝛾                    𝛾𝜇                                   the baseline, TorchSparse, across both ARM CPU and NVIDIA GPU.
+Defining 𝑎 = √ 2 and 𝑏 = 𝛽 − √ 2 , simplifies to:
+                𝜎 +𝜖                𝜎 +𝜖                                   Acknowledging the heavier computational load of detection mod-
+                             𝒀 = 𝑎𝑿 + 𝑩,                            (3)    els in comparison to segmentation tasks, we strategically adjusted
+                                                                        SparseResNet - GPU 500pt                  69.95                          185.54
+                                                                                                                                                     8.33          10.61    4.56 19.24
+                                                                       SparseResNet - Ours 500pt                    100.6                     84.34
+                                                                                                                                      15.59          2.64   2.09   6.19
+                                                                         MinkUNet - GPU 1000pt                   55.59         61.28
+                                                                                                                              14.93           4.68     21.90
+                                                                         MinkUNet - Ours 1000pt                 42.67 32.26
+
+                                                                                                                              12.15 3.31 15.96
+                                                                                                            0            50        100     150              200       250        300     350
+                  (a)                               (b)
+                                                                               Mapping             GMS   BatchNorm             BN+Relu               Add+Relu         Relu       Others
+Figure 10: A visualized example of (a) a 512+ points cup and
+(b) a 4096+ points car represented with 3D point clouds.               Figure 11: Runtime(ms) breakdown of MinkUNet with 1024
+                                                                       input points and SparseResNet21 with 512 input points on
+  Table 2: Latency (ms) for MinkUNet (3D Segmentation).                GPU and our SoC, respectively.
+
+                     ARM          NVIDIA                                                     250
+      Data size   Cortex-A57    Jetson Nano      Our SoC                                                                  Mapping                           GMS
+
+
+
+
+                                                                             Runtime (ms)
+                                                                                             200
+                    (CPU)          (GPU)
+                                                                                             150
+      512           1113.97    139.57 (7.98×)    49.02 (22.72×)
+                                                                                             100
+      1024          1271.77    201.90 (6.30×)    121.28 (10.49×)
+      2048          1605.34    240.93 (6.66×)    179.56 (8.94×)                              50
+      4096          2218.33    308.35 (7.19×)    465.35 (4.77×)                               0
+                                                                                                     0.5k                     1k          2k                                4k
+      Average       1552.35     222.69 (7.03×)   203.80 (11.73×)
+                                                                                                                              3D input size
+                                                                       Figure 12: Time cost of Mapping and Gather-Matmul-Scatter
+  Table 3: Latency (ms) for SparseResNet21 (3D Detection).
+                                                                       under various number of 3D inputs. Mapping tends to domi-
+                     ARM          NVIDIA                               nate the SC process with larger input sizes.
+      Data size   Cortex-A57    Jetson Nano      Our SoC
+                    (CPU)          (GPU)
+                                                                       Overall, our observations indicate that the runtime for the mapping
+                                                                       operation and the GMS operation of RISCSparse has significantly
+      256          1940.73     182.70 (10.62×)   100.38 (19.33×)       decreased when compared to the GPU. These improvements are
+      512          2921.65     218.65 (13.37×)   204.19 (14.31×)       attributable to the optimizations we have made to both the mapping
+      768          3576.95     272.10 (13.15×)   359.45 (9.95×)        and GMS operations. Furthermore, benefiting from operation fusion,
+      1024         4499.05     319.11 (14.10×)   513.77 (8.76×)        the runtime for RISCSparse in executing add, batch normalization,
+      Average      3234.60     248.14 (12.81×)   294.45 (13.10×)       and ReLU operations has also been relatively reduced in comparison
+                                                                       to the GPU. Although RISCSparse exhibits a relatively longer map-
+smaller data sizes for the detection model. Inference runtime was      ping runtime in SparseResNet, this does not detract from the overall
+measured across varied 3D point sizes. In our experiments with         runtime efficiency.
+MinkUNet for segmentation tasks, the data set sizes varied from 512       However, reviewing Table 2 and Table 3, we observed that RISC-
+to 4096 points. For the more computationally demanding SparseRes-      Sparse’s acceleration rate tends to decrease with larger data sizes. To
+Net model, the data set sizes were constrained to a range of 256 to    better understand this, we executed a series of tests, progressively
+1024 points. A visualized example of data points can be found in       increasing the data size to evaluate the performance of the map-
+Figure 10, and all experiments were conducted using 32-bit floating    ping and GMS operations. As illustrated in Figure 12, the mapping
+point precision.                                                       phase becomes critical with larger input sizes and predominates
+   The performance results are summarized in Table 2 and Table 3.      the SC operations. This trend diminishes the perceived benefits of
+In general, RISCSparse achieves the best performance compared          leveraging the SA to accelerate GEMM operations. Consequently,
+with TorchSparse. Specifically, for 3D segmentation tasks, our SoC     RISCSparse is particularly effective for small to moderate workloads,
+achieved an average speedup of 11.73 × that of the CPU, whereas        but its benefits are less noticeable for larger ones.
+the GPU exhibited a slightly lower speedup of 7.03 ×. Similarly, for
+3D detection tasks, RISCSparse realized an average speedup of 13.10    4.4                  Co-design with Systolic Array
+× the CPU’s performance, while the GPU achieved a marginally              Based on our performance evaluations, particularly the challenges
+slower speedup of 12.81 ×. Our SoC’s superior performance, partic-     with larger data sizes, we focused on optimizing the core architecture
+ularly in scenarios with small to moderate workloads, positions it     to enhance RISCSparse’s scalability and efficiency. To maximize the
+advantageously for edge computing applications.                        utilization of the Gemmini Systolic Array, we explored data flow, SA
+                                                                       mesh size, and SRAM configurations to determine the most suitable
+4.3      Ablation Study                                                SA configuration for SC operations. In our implementation, the
+  We examine each breakdown operation for both MinkUNet and            SA handles regular GEMM operations within the Gather-Matmul-
+SparseResnet tasks on GPU and RISCSparse as shown in Figure 11.        Scatter flow, as well as Batch Normalization and ReLU operations.
+   In the default SRAM configuration for the Gemmini floating-                                                  implementations, we observe substantial speedups averaging at
+point precision Array, the Accumulator (Acc) is assigned 128 KiB                                                1.63× for segmentation and 1.07× for detection tasks. Our work
+for storing intermediate results in Weight-Stationary (WS) mode                                                 extends beyond performance optimization, delving into an in-depth
+Systolic Array (SA), while the Scratchpad (Spad) is allocated 512 KiB                                           analysis of the RISC-V architecture with vector machine and the
+to accommodate both input and output matrices [13]. To prevent                                                  Gemmini accelerator for submanifold sparse convolution operations.
+SRAM constraints from affecting performance comparisons across
+various configurations, we expanded the Acc capacity to 256 KiB and                                             References
+                                                                                                                 [1] M. WuDunn, J. Dunn, and A. Zakhor, “Point cloud segmentation using rgb drone
+the Spad to 1024 KiB. This adjustment aims to evaluate the impact of                                                 imagery,” in International Conference on Image Processing (ICIP), Oct. 2020.
+dataflow and SA size on SC performance. As illustrated in Figure 13,                                             [2] S. Gupta and B. Lohani, “Augmented reality system using lidar point cloud data
+our findings indicate that WS computation mode is more effective                                                     for displaying dimensional information of objects on mobile phones,” ISPRS Annals
+                                                                                                                     of the Photogrammetry, Remote Sensing and Spatial Information Sciences, vol. II–5,
+than Output-Stationary (OS) mode for SC scenarios. Meanwhile,                                                        p. 153–159, May 2014.
+we found that increasing the SA size yields modest performance                                                   [3] B. Li, “3d fully convolutional network for vehicle detection in point cloud,” in
+                                                                                                                     IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS), Sep.
+improvements, which are partially limited by the nature of GEMM                                                      2017.
+operations in SC processes, characterized by numerous moderate-                                                  [4] Y. Wang, W.-L. Chao, D. Garg, B. Hariharan, M. Campbell, and K. Q. Weinberger,
+sized matrix multiplications rather than large-scale ones.                                                           “Pseudo-lidar from visual depth estimation: Bridging the gap in 3d object detec-
+                                                                                                                     tion for autonomous driving,” in IEEE Conference on Computer Vision and Pattern
+                                                                                                                     Recognition (CVPR), Jun. 2019.
+                                                    32 × 32 WS                                        1.58
+                            Systolic Arrary Size
+
+
+
+
+                                                                                                                 [5] C. R. Qi, H. Su, K. Mo, and L. J. Guibas, “Pointnet: Deep learning on point sets for
+                                                    32 × 32 OS                                        1.57           3d classification and segmentation,” in IEEE Conference on Computer Vision and
+                                                                                                                     Pattern Recognition (CVPR), 2017.
+                                                    16 × 16 WS                                     1.53          [6] Y. Feng, B. Tian, T. Xu, P. Whatmough, and Y. Zhu, “Mesorasi: Architecture support
+                                                                                                                     for point cloud analytics via delayed-aggregation,” in IEEE/ACM International
+                                                    16 × 16 OS                                    1.48
+                                                                                                                     Symposium on Microarchitecture (MICRO), 2020.
+                                                      8 × 8 WS                                    1.49           [7] B. Graham, M. Engelcke, and L. Van Der Maaten, “3d semantic segmentation
+                                                                                                                     with submanifold sparse convolutional networks,” in IEEE Conference on Computer
+                                                      8 × 8 OS                        1                              Vision and Pattern Recognition (CVPR), 2018.
+                                                                                                                 [8] C. Choy, J. Gwak, and S. Savarese, “4d spatio-temporal convnets: Minkowski
+                                                                 0          0.5         1               1.5          convolutional neural networks,” in IEEE Conference on Computer Vision and Pattern
+                                                                           Normalized Speedup                        Recognition (CVPR), Jun. 2019.
+                                                                                                                 [9] H. Tang, Z. Liu, X. Li, Y. Lin, and S. Han, “Torchsparse: Efficient point cloud
+          Figure 13: SA Size and Dataflow vs Speedup.                                                                inference engine,” Machine Learning and Systems (MLSys), vol. 4, pp. 302–315, 2022.
+   Upon identifying WS mode as the optimal dataflow for the SA,                                                 [10] H. Tang, S. Yang, Z. Liu, K. Hong, Z. Yu, X. Li, G. Dai, Y. Wang, and S. Han,
+                                                                                                                     “Torchsparse++: Efficient point cloud engine,” in IEEE Conference on Computer
+we investigated how SRAM configurations affect SC performance.                                                       Vision and Pattern Recognition (CVPR) Workshops, Jun. 2023.
+Our findings, as shown in Figure 14, indicate that for SC workloads,                                            [11] Y. Yan, Y. Mao, and B. Li, “Second: Sparsely embedded convolutional detection,”
+increasing the Spad capacity does not yield benefits; however, ex-                                                   Sensors, vol. 18, no. 10, p. 3337, 2018.
+                                                                                                                [12] X. Li, A. Ren, Y. Tan, X. Li, Z. Huang, C. Wang, X. Chen, and D. Liu, “Vea: An
+panding the Acc size can enhance performance. This improvement is                                                    fpga-based voxel encoding accelerator for 3d object detection with lidar,” in IEEE
+primarily because a larger Acc reduces the frequency of adding par-                                                  International Conference on Computer Design (ICCD), Oct. 2022.
+                                                                                                                [13] H. Genc, S. Kim, A. Amid, A. Haj-Ali, V. Iyer, P. Prakash, J. Zhao, D. Grubb, H. Liew,
+tial sums during GEMM computation. In contrast, increasing Spad                                                      H. Mao, A. Ou, C. Schmidt, S. Steffl, J. Wright, I. Stoica, J. Ragan-Kelley, K. Asanovic,
+size offers no advantage due to the moderate matrix multiplication                                                   B. Nikolic, and Y. S. Shao, “Gemmini: Enabling systematic deep-learning archi-
+sizes typical of SC workloads.                                                                                       tecture evaluation via full-stack integration,” in ACM/IEEE Design Automation
+                                                                                                                     Conference (DAC), Dec. 2021.
+       SRAM Configuration <Acc, Spad>
+
+
+
+
+                                                                                                                [14] Y. Zhao, K. Wang, and A. Louri, “Fsa: An efficient fault-tolerant systolic array-based
+                                                                                                                     dnn accelerator architecture,” in IEEE International Conference on Computer Design
+                                                                                                                     (ICCD), Oct. 2022.
+                                                   <256, 1024>                                   1.13           [15] S. Kundu, S. Banerjee, A. Raha, S. Natarajan, and K. Basu, “Toward functional safety
+                                                                                                                     of systolic array-based deep learning hardware accelerators,” IEEE Transactions on
+                                                    <256, 512>                                                       Very Large Scale Integration Systems (TVLSI), vol. 29, no. 3, p. 485–498, Mar. 2021.
+                                                                                                 1.12
+                                                                                                                [16] K. Li, J. Zhou, Y. Wang, J. Luo, Z. Yang, S. Yang, W. Mao, M. Huang, and H. Yu,
+                                                                                                                     “A precision-scalable energy-efficient bit-split-and-combination vector systolic
+                                                   <128, 1024>                            1.01                       accelerator for nas-optimized dnns on edge,” in IEEE/ACM Proceedings Design,
+                                                                                                                     Automation and Test in Eurpoe (DATE), Mar. 2022.
+                                                    <128, 512>                            1.00                  [17] Y. Lee et al., “The hwacha microarchitecture manual, version 3.8.” EECS Department,
+                                                                                                                     University of California, Berkeley, Tech. Rep. UCB/EECS-2015-263, 2015.
+                                                                 0   0.2    0.4    0.6   0.8      1       1.2
+                                                                                                                [18] M. Perotti, M. Cavalcante, N. Wistoff, R. Andri, L. Cavigelli, and L. Benini, “A
+                                                                           Normalized Speedup                        “new ara” for vector computing: An open source highly efficient risc-v v 1.0 vector
+                                                                                                                     processor design,” in IEEE International Conference on Application-specific Systems,
+                                                   Figure 14: SRAM Configuration vs Speedup.                         Architectures and Processors (ASAP), Jul. 2022.
+                                                                                                                [19] D. A. Alcantara, A. Sharf, F. Abbasinejad, S. Sengupta, M. Mitzenmacher, J. D.
+5   Conclusion                                                                                                       Owens, and N. Amenta, “Real-time parallel hashing on the gpu,” ACM Transactions
+   We present RISCSparse, a high-efficiency inference engine specifi-                                                on Graphics (TOG), vol. 28, no. 5, p. 1–9, dec 2009.
+                                                                                                                [20] O. Polychroniou, A. Raghavan, and K. A. Ross, “Rethinking simd vectorization for
+cally made for point cloud perception in edge computing applications.                                                in-memory databases,” in ACM Conference on Management of Data (SIGMOD), ser.
+Our approach encompasses a comprehensive optimization strat-                                                         SIGMOD ’15, 2015.
+                                                                                                                [21] A. Amid et al., “Chipyard: Integrated design, simulation, and implementation
+egy that targets rule map construction, the gather-matrix multiply-                                                  framework for custom socs,” IEEE Micro, vol. 40, no. 4, pp. 10–21, 2020.
+scatter (GMS) operation, and operator fusion. This strategy culmi-                                              [22] S. Karandikar, H. Mao, D. Kim, D. Biancolin, A. Amid, D. Lee, N. Pemberton,
+nates in remarkable performance gains, with average speedups of                                                      E. Amaro, C. Schmidt, A. Chopra, Q. Huang, K. Kovacs, B. Nikolic, R. Katz,
+                                                                                                                     J. Bachrach, and K. Asanovic, “Firesim: Fpga-accelerated cycle-exact scale-out
+11.73× and 13.1× over CPU implementations for segmentation and                                                       system simulation in the public cloud,” in 2018 ACM/IEEE 45th Annual International
+detection tasks, respectively. Furthermore, when compared to GPU                                                     Symposium on Computer Architecture (ISCA), 2018.
+

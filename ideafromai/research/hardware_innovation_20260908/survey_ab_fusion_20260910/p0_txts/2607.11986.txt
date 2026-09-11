@@ -1,0 +1,407 @@
+                                           SpikeDS: Dual Sparsity Spikformer for Perineural
+                                                   Invasion Prediction in 3D MRI
+                                                     Induk Um1 , Youngung Han2 , Kyeonghun Kim3 , Yului Jeong2 , Jina Jeong2 , Hyunsu Go2 ,
+                                                              Dohyun Kweon4 , Sungha Park2,5 , Junga Kim2 , Anna Jung2 , Suah Park2 ,
+                                              Hyuk-Jae Lee2 , Pa Hong6 , Woo Kyoung Jeong7 , Won Jae Lee6 , Ken Ying-Kai Liao8 , Nam-Joon Kim2,†
+                                                 1
+                                                  Chung-Ang University, Seoul, Republic of Korea 2 Seoul National University, Seoul, Republic of Korea
+                                                          3
+                                                            OUTTA, Seoul, Republic of Korea 4 Kyung Hee University, Seoul, Republic of Korea
+                                                                5
+                                                                  Seoul National University School of Medicine, Seoul, Republic of Korea
+                                             6
+                                               Samsung Changwon Hospital, Changwon, Republic of Korea 7 Samsung Medical Center, Seoul, Republic of Korea
+                                                                              8
+                                                                                NVIDIA AI Technology Center, Taipei, Taiwan
+                                                                              †
+                                                                                Corresponding authors: knj01@snu.ac.kr
+
+
+                                            Abstract—Perineural invasion (PNI) is associated with poor        analysis [10], which demands extensive manual delineation
+                                         prognosis in cholangiocarcinoma (CCA). However, its detection        of tumour boundaries [11], [12].
+                                         from 3D MRI remains challenging due to the subtle and spa-              Recent advances in 3D deep learning have enabled auto-
+                                         tially heterogeneous imaging signatures at the tumor periphery.
+                                                                                                              mated volumetric analysis for medical imaging. CNN-based
+arXiv:2607.11986v1 [cs.CV] 13 Jul 2026
+
+
+
+
+                                         Capturing such spatially sparse cues necessitates volumetric
+                                         analysis of 3D MRI, but existing deep learning approaches incur      architectures such as ResNet [13], DenseNet [14], and Ef-
+                                         prohibitive computational costs on volumetric medical images,        ficientNet [15] have been widely adopted for 3D classifica-
+                                         limiting their clinical deployment. We propose Dual Sparsity         tion tasks, while Transformer-based models like Swin Trans-
+                                         Spikformer (SpikeDS), a spiking neural network architecture          former [16] leverage window-based self-attention to capture
+                                         that jointly exploits activation sparsity from binary spike com-
+                                         munication and spatial sparsity from window pruning on the           long-range dependencies. However, applying self-attention to
+                                         firing rate. SpikeDS introduces Dual Sparsity Spiking Atten-         high-resolution 3D volumes incurs a computational burden
+                                         tion (DSSA), which combines two complementary mechanisms.            that scales quadratically with the number of tokens, making it
+                                         The first is Window-based Expert Mixture Spiking Attention           impractical for resource-constrained clinical settings.
+                                         (W-EMSA), which selectively applies attention only to salient           Spiking Neural Networks (SNNs) offer a fundamentally
+                                         windows identified by their firing rates; the second is Cross-
+                                         Window Spiking Self-Attention (CW-SSA), which enables global         different computational paradigm that addresses this energy
+                                         context exchange through an asymmetric scheme where pruned           bottleneck. Unlike conventional Artificial Neural Networks
+                                         windows still contribute as key–value sources. Evaluated on a        (ANNs) that rely on energy-intensive floating-point multiply-
+                                         clinical cohort of 139 CCA patients via 5-fold cross-validation,     accumulate (MAC) operations, SNNs communicate via asyn-
+                                         SpikeDS achieves an AUC of 0.753 at only 14.4 mJ—surpassing          chronous binary spikes; when activations are zero, the cor-
+                                         the best baseline in both AUC and energy efficiency. These results
+                                         suggest that dual sparsity provides an effective hardware-aware      responding multiplications can be entirely skipped, reducing
+                                         strategy for improving the efficiency of 3D spiking transformers     both operations and energy [17], [18]. Spikformer [19] first
+                                         without compromising diagnostic performance.                         demonstrated that spiking self-attention (SSA), using spike-
+                                            Index Terms—Spiking Neural Networks, Window Pruning, 3D           form queries, keys, and values without softmax, can achieve
+                                         Medical Image Classification, Perineural Invasion, Cholangiocar-     competitive performance on vision tasks. The Spike-driven
+                                         cinoma
+                                                                                                              Transformer (SD-Transformer) [20] further advanced this line
+                                                                                                              by proposing a purely spike-driven attention mechanism, and
+                                                               I. I NTRODUCTION
+                                                                                                              its successor Meta-SpikeFormer [21] established a versa-
+                                            Perineural invasion (PNI) refers to the infiltration of tumour    tile meta-architecture for SNNs. More recently, the Spiking
+                                         cells into the space surrounding peripheral nerves, constituting     Transformer with Experts Mixture (SEMM) [22] introduced
+                                         a distinct pathway for tumour spread beyond the primary              a binary routing mechanism that selectively activates expert
+                                         site [1]. In cholangiocarcinoma (CCA), PNI has been closely          heads through Hadamard masking, realising sparse, event-
+                                         linked to higher recurrence rates, lymph node metastasis, and        driven mixture-of-experts routing entirely within the spike
+                                         diminished overall survival, establishing it as a prognostic         domain.
+                                         factor following surgical intervention [2]–[4]. Preoperative            Despite these advances, existing spiking transformers pro-
+                                         identification of PNI is clinically valuable for guiding the         cess all spatial tokens uniformly [23], overlooking the inherent
+                                         extent of surgical resection [5] and neoadjuvant treatment           spatial redundancy in 3D medical volumes where large back-
+                                         decisions [6]; however, PNI manifests as microscopic neural          ground regions carry negligible diagnostic information [24].
+                                         tracking at the tumour periphery [1], making non-invasive            We introduce SpikeDS, a Dual Sparsity Spikformer that com-
+                                         detection inherently difficult [7]–[9]. Conventional quantitative    bines the activation sparsity inherent in SNNs with an explicit
+                                         approaches have predominantly employed radiomics-based               spatial sparsity mechanism. SpikeDS partitions the 3D volume
+                                  (a) Overall Architecture
+                                                                      Stage 0                              Xl
+
+
+
+
+                                                                                                                Classification
+                                                                      SpikeDS
+
+
+
+
+                                                                                               SpikeDS
+                                                                                  Merging
+
+
+
+
+                                                                                                                                   0
+                                                                       Block
+
+
+
+
+                                                                                                Block
+                                                                                   Patch
+
+
+
+
+                                                                                                                    Head
+                                                       SPS
+
+
+
+
+                                                                                                                                   1
+                                                                          X   N                    X   N
+  (b) SpikeDS Block
+
+
+
+
+                                                                                                                                   Q
+
+
+
+
+                                                             W-EMSA
+                            Selection
+
+
+
+
+                                                                                                                                                 Spiking
+                                                                                      Mean
+                             Top-k
+
+
+
+
+                                                                                                                                                  MLP
+                                                                                                                                           SSA
+                                                                                                                                   K
+                                                                                     Pooling
+                                                                                                                                   V
+
+
+
+                                                         Stage l                                                                 Active Window
+            DSSA                                         Stage 0                                 CW-SSA                          Pruned Window
+
+
+
+
+Fig. 1. (a) Overall architecture of SpikeDS. A 3D MRI volume is converted into spike tokens through SPS, then progressively encoded by l stages of SpikeDS
+Blocks with 3D patch merging layers that double the channel dimensions , and finally classified via global average pooling and a linear classification head. (b)
+SpikeDS Block applies Dual Sparsity Spiking Attention (DSSA), which performs W-EMSA only on salient windows selected by firing-rate-guided pruning,
+followed by asymmetric Cross-Window Spiking Self-Attention (CW-SSA) for global context exchange, and a Spiking MLP. Window pruning is disabled in
+Stage 0 and activated with keep ratio ρ in Stages l.
+
+
+
+into non-overlapping windows and prunes uninformative ones                          encoding (RPE) branch injects local spatial priors before the
+based on firing rates, concentrating attention computation                          tokens enter the transformer encoder. We employ the Leaky
+on diagnostically relevant regions. A complementary cross-                          Integrate-and-Fire (LIF) neuron model [25] with hard reset,
+window attention module then maintains global information                           where the membrane potential U [t] accumulates input features
+exchange between the retained and pruned windows through                            and fires a binary spike S[t] upon exceeding a threshold Vth :
+an asymmetric query–key scheme. This dual sparsity is applied                         U [t] = α·U [t−1]·(1−S[t−1])+X[t], S[t] = Θ(U [t]−Vth ) (1)
+progressively across encoder stages, allowing early layers to
+build reliable low-level features before deeper layers focus                        where α = 1 − 1/τ is the membrane decay factor and Θ(·) is
+computation on the most informative regions.                                        the Heaviside step function. Since the spike outputs are binary,
+                                                                                    downstream layers incur only accumulate (AC) operations
+                               II. M ETHOD                                          rather than energy-intensive MAC operations. Crucially, the
+A. Overall Architecture                                                             first Conv3D layer of SPS receives continuous-valued inputs
+   Fig 1 illustrates the overall architecture of our proposed                       and therefore requires MAC operations; all subsequent layers
+method. A 3D input volume X ∈ RC×H×W ×Z is first encoded                            operate in the spike domain and incur only AC operations.
+into spiking feature maps by a Spike Patch Splitting (SPS)                          C. Dual Sparsity Spiking Attention (DSSA)
+module. The tokens are then processed by a three-stage                                 DSSA unifies firing-rate-guided window pruning and
+hierarchical encoder with increasing channel dimensions and                         window-based expert mixture spiking attention (W-EMSA)
+decreasing spatial resolutions, connected via 3D patch merg-                        into a single module. Given input X ∈ RT ×B×H×W ×Z×D ,
+ing layers. Each stage stacks multiple SpikeDS Blocks that                          where B is the batch size, we partition it into Nw non-
+comprise a sequence of DSSA → CW-SSA → Spiking MLP,                                 overlapping 3D windows {Wj }N  j=1 of size wH × wW × wZ .
+                                                                                                                     w
+
+with residual connections throughout. In Stage 0, all windows                       A saliency score for each window is computed as its mean
+are processed without pruning; from Stage 1 and 2 onward,                           firing rate:
+firing-rate-guided window pruning is activated. Global average
+                                                                                                           1      X      (t,b,m,d)
+pooling, batch normalization, a LIF layer, and temporal mean                                      sj =                 Wj                 (2)
+reduction yield the final representation for classification.                                            T BM D
+                                                                                                                                 t,b,m,d
+
+B. Spike Patch Splitting (SPS)                                                      where M = wH wW wZ is the token count per window.
+                                                                                    The active set A = top-k({sj }, ⌊ρNw ⌋) is selected, where
+   SPS [19] converts the continuous-valued input into discrete                      ρ ∈ (0, 1] denotes the proportion of windows retained after
+spike representations through four cascaded Conv3D → BN →                           pruning, and DSSA is defined as:
+LIF stages. Spatial down-sampling via max pooling is applied                                                (
+selectively in the first two stages, reducing the resolution to                                               W-EMSA(Wj ), j ∈ A
+                                                                                              DSSA(Wj ) =                                   (3)
+one-quarter of the original. A convolutional relative position                                                Wj ,            j∈/A
+                                                                                                                TABLE I
+                                                                                     P ERFORMANCE AND THEORETICAL INFERENCE ENERGY COMPARISON
+                                                                                   FOR PNI PREDICTION (5- FOLD CV). OP S DENOTES SOP S FOR SNN S AND
+(a)                                                                                                        FLOP S FOR ANN S .
+
+                                                                                       Model                   Param (M) OPs (G) Energy (mJ) AUC
+                                                                                       ResNet-18 [13]            33.2     9.16     42.2    0.670
+                                                                                       DenseNet-121 [14]         11.3     11.5     52.7    0.711
+(b)                                                                                    EfficientNet-B0 [15]      4.07      0.6     2.76    0.621
+                                                                                       Spikformer [19]           4.29     8.40     16.0    0.703
+                                                                                       SD-Transformer [20]       4.29     6.87     15.2    0.671
+         Input           Spikformer      SD-Transformer         SpikeDS (Ours)         SpikeDS (Ours)            5.22     6.67     14.4    0.753
+
+Fig. 2. Attention maps based on Spike Firing Rate (SFR). These visualizations
+illustrate the spatial density of spike activations within the input volume for
+(a) PNI-positive and (b) PNI-negative cases.                                          Concretely, each window is mean-pooled to a representa-
+                                                                                   tive token w̄j . When pruning is active, CW-SSA adopts an
+                                                                                   asymmetric query–key/value scheme:
+In Stage 0, pruning is disabled (A = {1, . . . , Nw }).
+   W-EMSA performs window-based expert mixture spiking                                Q = fq ({w̄j }j∈A ), K = fk ({w̄j }N                    Nw
+                                                                                                                         j=1 ), V = fv ({w̄j }j=1 )
+                                                                                                                           w
+
+
+
+attention inspired by SEMM [22]. Tokens pass through a LIF                                                                                        (9)
+layer and are projected into queries, keys, and values via                         Queries are derived only from the ρNw active windows, while
+spiking linear layers (Linear → BN → LIF). Since Q, K, V                           keys and values are drawn from all Nw windows, including
+are all binary spike tensors after the LIF layers, the matrix                      those pruned from W-EMSA. This design is motivated by three
+products degenerate to sparse accumulate operations, yielding                      considerations. First, pruned windows retain their stage-input
+energy-efficient attention. Each attention head is treated as a                    representations from the preceding patch merging layer (or
+specialised expert:                                                                SPS for Stage 0), which, although not refined by W-EMSA,
+                                                                                   still encode meaningful low-level spatial features. Second, the
+        SSA(Q, K, V) = SN QK⊤ V · s , s = d−1/2                                    overhead of projecting all Nw tokens into keys and values
+                                          
+                                                            (4)
+                                                                                   is negligible because Nw is the window-level token count,
+                                                                                   not the voxel-level count. Third, the resulting attention map
+                 Aj
+                   (h)                  (h)     (h)
+                         = SSA(h) (Qj , Kj , Vj )
+                                                          (h)
+                                                                             (5)   has shape ρNw × Nw , allowing active windows to attend to
+                                                                                   the full spatial extent of the volume while the ρ factor still
+A spiking router generates a binary gating vector from the                         reduces query-side computation. The cross-attended tokens are
+window-level mean token w̄j :                                                      broadcast back to active windows as a residual. In Stage 0 (no
+                                                                                   pruning), CW-SSA operates symmetrically with ρ = 1.
+            rj = SN BN(w̄j WR ) ∈ {0, 1}H
+                                  
+                                                       (6)
+                                                                                   E. SpikeDSBlock and Hierarchical Encoder
+The gated head outputs are concatenated and projected through                        Each SpikeDSBlock follows:
+a final spiking linear layer:
+                    (1)                                                                X̂ = X + DSSA(X) + CW-SSA(DSSA(X)),                        (10)
+                                 (H) 
+            O j = Aj ; . . . ; A j     ∈ {0, 1}M ×D        (7)
+                                                                                                      X′ = X̂ + SpikingMLP(X̂)                     (11)
+                                          
+             W-EMSAj = SN BN (rj ⊙ Oj ) WO                                   (8)      The three-stage hierarchical encoder doubles the channel
+                                                                                   dimension and halves the spatial resolution at each transition
+                                                          (h)
+Since the router outputs binary spikes, each rj ∈ {0, 1} acts                      via a 3D patch merging layer. Window pruning is disabled
+as a binary mask that selectively activates or suppresses the                      in the first stage to allow reliable low-level feature formation,
+corresponding head expert per window, preserving the spike-                        and is activated with keep ratio ρ in the deeper stages.
+driven property of the network.
+                                                                                                              III. E XPERIMENTS
+D. Cross-Window Spiking Self-Attention (CW-SSA)                                    A. Dataset and Implementation Details
+   CW-SSA enables global information exchange across all                              Dataset. We utilised a retrospective clinical cohort of 139
+windows. It is important to note that the window pruning                           CCA patients (PNI-positive: 85, PNI-negative: 54) with patho-
+introduced in DSSA excludes low-saliency windows only from                         logically confirmed PNI status, collected over more than a
+the W-EMSA attention computation; the windows themselves                           decade at Samsung Medical Center. The T2-weighted phase
+and their feature representations are not discarded. CW-SSA                        of contrast-enhanced MRI was used as the single-phase input.
+exploits this by allowing pruned windows to remain accessible                      Each volume was cropped to a fixed 96×96×48 region centred
+as key-value sources for global context aggregation.                               on the tumor [26]. A three-channel input was constructed by
+stacking the normalized intensity image, a liver mask, and a                                  TABLE II
+tumor mask.                                                               A BLATION STUDY ON THE CORE MODULES OF S PIKE DS.
+   Implementation. SpikeDS was implemented in PyTorch
+                                                                        Configuration                           AUC     Energy (mJ)
+with SpikingJelly [27] and evaluated using stratified 5-fold
+                                                                        w/o Window Pruning (all stages full)    0.674      16.17
+cross-validation. The model was optimized with AdamW [28]               w/o CW-SSA                              0.732      14.20
+(learning rate 1×10−4 , weight decay 1×10−5 ) for 100 epochs            CW-SSA symmetric (Q,K,V from active)    0.737      14.46
+with a batch size of 2 using mixed-precision training on a              w/o Expert Routing (W-EMSA→W-SSA)       0.729      16.16
+                                                                        Pruning at Stage 2 only                 0.737      14.47
+single NVIDIA A100 GPU. A cosine annealing schedule was                 Pruning at all stages                   0.675      14.10
+applied. The base channel dimension was set to C = 64 and               SpikeDS (Ours)                          0.753      14.41
+the number of LIF timesteps to T = 4.
+
+B. Quantitative Evaluation and Visualization                       Each SpikeDS Block incurs energy modulated by the keep
+   We benchmarked SpikeDS against CNN and SNN baselines            ratio ρ:                                 
+using the identical three-channel input (intensity, liver mask,               Eblock = EAC · ρ ΦE + ΦC + ΦM          (13)
+tumor mask). As shown in Table I, 3D CNN models achieved           where ΦE , ΦC , and ΦM denote the SOP counts of W-EMSA,
+AUCs between 0.621 and 0.711, while SNN baselines attained         CW-SSA, and Spiking MLP, respectively. When ρ = 1
+comparable AUCs at substantially lower energy consumption.         (Stage 0) the block reduces to a standard spiking transformer;
+SpikeDS achieves the highest AUC of 0.753 at only 14.4 mJ,         when ρ < 1 (Stages 1–2), W-EMSA cost decreases proportion-
+the lowest among all SNN baselines. Although EfficientNet-         ally.
+B0 consumes less energy (2.76 mJ), its AUC of 0.621 is the            Total inference energy is:
+lowest in the comparison, whereas SpikeDS maintains the best
+AUC–energy trade-off across all models.                              Etotal = EMAC · FL1
+   Fig. 2 visualizes the spiking firing rate (SFR) maps on                                            (i)
+                                                                                                                              
+                                                                                                    Eblock        (i) 
+                                                                                         X
+                                                                     + EAC · SOPSPS +      di ·     EAC      + SOPPM + SOPhead
+representative axial slices. SpikeDS concentrates higher firing
+                                                                                            i
+rates around the tumor region, indicating that the dual sparsity                                                                      (14)
+mechanism effectively directs computational focus toward
+diagnostically relevant areas.                                     where di is the block depth of stage i (d = 2, 2, 4).
+                                                                     Activation sparsity alone (s̄ ≈ 0.10) yields ∼82% energy
+C. Ablation Study                                                  saving over the ANN-equivalent configuration of the same ar-
+                                                                   chitecture (92.3 mJ → 16.17 mJ). Window pruning at Stages 1–
+   Table II summarizes the ablation results. Removing win-
+                                                                   2 (ρ = 0.5) compounds this further for a total saving of 84%
+dow pruning raises energy to 16.17 mJ and lowers AUC
+                                                                   (92.3 mJ → 14.41 mJ).
+to 0.674, as indiscriminate full-window attention introduces
+background noise. Disabling CW-SSA reduces AUC to 0.732.                                  IV. C ONCLUSION
+Replacing its asymmetric design with a symmetric variant that         We introduced SpikeDS, a spiking transformer that exploits
+excludes pruned windows from the key–value pool further            activation sparsity and spatial sparsity for energy-efficient
+confirms the value of pruned-window context: the asymmetric        PNI prediction in 3D MRI. By introducing DSSA, which
+design achieves 0.753 AUC, while the symmetric variant             unifies firing-rate window pruning with W-EMSA, and CW-
+drops to 0.737. Replacing expert routing with standard W-          SSA, which preserves global context even for pruned re-
+SSA drops AUC to 0.729 at 16.16 mJ, losing head-wise               gions through asymmetric cross-window attention, SpikeDS
+suppression of uninformative attention. Pruning at all stages      achieves a principled balance between computational effi-
+degrades AUC to 0.675 because early features are insuffi-          ciency and classification performance. The progressive pruning
+ciently formed for reliable saliency estimation, while pruning     strategy ensures that spatial sparsity is applied only where
+only at Stage 2 yields suboptimal efficiency of 14.47 mJ. The      saliency estimation is reliable. We provided a decomposed
+adopted configuration—pruning with ρ = 0.5 at Stages 1 and 2       energy analysis that explicitly separates the contributions of
+only—achieves the best trade-off, achieving AUC of 0.753 at        activation sparsity and spatial sparsity, demonstrating that their
+14.41 mJ.                                                          compounding effect yields substantial savings. Evaluated on a
+                                                                   clinical CCA cohort for PNI prediction, SpikeDS demonstrates
+D. Energy Analysis                                                 the potential of dual-sparsity spiking architectures for volumet-
+   SpikeDS combines activation sparsity (binary spikes) and        ric medical imaging under stringent energy constraints.
+spatial sparsity (window pruning). All energy estimates adopt
+                                                                                      ACKNOWLEDGMENT
+the 45 nm model [29] with EMAC = 4.6 pJ and EAC = 0.9 pJ.
+Binary spike activations reduce MACs to ACs in all layers            This work was supported by the IITP grant (IITP-2023-RS-
+except the first (float-input) Conv3D, following the standard      2023-00256081) funded by MSIT, Korea, and the ANCHOR
+SOP formulation [19], [20]:                                        program (2026-ANCHOR-01-110) funded by the Ministry of
+                                                                   Education and the Seoul Metropolitan Government, Republic
+                 SOP(l) = s̄l · T · FLOPs(l)               (12)    of Korea.
+                              R EFERENCES                                         [20] M. Yao, J. Hu, Z. Zhou, L. Yuan, Y. Tian, B. Xu, and G. Li,
+                                                                                       “Spike-driven transformer,” Advances in Neural Information Processing
+                                                                                       Systems, vol. 36, pp. 64 043–64 058, 2023.
+ [1] C. Liebig, G. Ayala, J. A. Wilks, D. H. Berger, and D. Albo, “Perineural     [21] M. Yao, J. Hu, T. Hu, Y. Xu, Z. Zhou, Y. Tian, B. Xu, and G. Li,
+     invasion in cancer: a review of the literature,” Cancer, vol. 115, no. 15,        “Spike-driven transformer v2: Meta spiking neural network architecture
+     pp. 3379–3391, 2009.                                                              inspiring the design of next-generation neuromorphic chips,” arXiv
+ [2] S. Conti, N. S. Tissera, F. Castet et al., “Perineural invasion is a prog-        preprint arXiv:2404.03663, 2024.
+     nostic factor in cholangiocarcinoma, regardless of anatomical location: a    [22] Z. Zhou, Y. Lu, Y. Jia, K. Che, J. Niu, L. Huang, X. Shi, Y. Zhu,
+     systematic review and meta-analysis,” JHEP Reports, p. 101770, 2026.              G. Li, Z. Yu et al., “Spiking transformer with experts mixture,” Advances
+ [3] C.-G. Li, Z.-P. Zhou, X.-L. Tan, and Z.-M. Zhao, “Perineural invasion             in Neural Information Processing Systems, vol. 37, pp. 10 036–10 059,
+     of hilar cholangiocarcinoma in Chinese population: one center’s expe-             2024.
+     rience,” World Journal of Gastrointestinal Oncology, vol. 12, no. 4, p.      [23] Y. Liu, S. Xiao, B. Li, and Z. Yu, “Sparsespikformer: A co-design
+     457, 2020.                                                                        framework for token and weight pruning in spiking transformer,” in
+ [4] T. Wei, X.-F. Zhang, J. He et al., “Prognostic impact of perineural               ICASSP 2024-2024 IEEE International Conference on Acoustics, Speech
+     invasion in intrahepatic cholangiocarcinoma: multicentre study,” British          and Signal Processing (ICASSP). IEEE, 2024, pp. 6410–6414.
+     Journal of Surgery, vol. 109, no. 7, pp. 610–616, 2022.                      [24] B. Mirab Golkhatmi, M. Houshmand, and S. A. Hosseini, “A multi-scale
+ [5] M.-C. Chen, X.-Q. Zhou, Z.-W. Liu, M.-M. Tang, Y.-Y. Chen, Y.-J.                  attention-based swin transformer model for medical images segmenta-
+     Luo, L. Ma, B. Liao, and S.-T. Feng, “Preoperative mri prediction                 tion,” Scientific Reports, vol. 15, no. 1, p. 38893, 2025.
+     and molecular pathway study of perineural invasion in intrahepatic           [25] A. N. Burkitt, “A review of the integrate-and-fire neuron model: I.
+     cholangiocarcinoma: Insights from bioinformatics approach,” European              Homogeneous synaptic input,” Biological Cybernetics, vol. 95, no. 1,
+     Journal of Surgical Oncology, p. 110546, 2025.                                    pp. 1–19, 2006.
+ [6] X.-L. Meng, J.-C. Lu, H.-Y. Zeng, Z. Chen, X.-J. Guo, C. Gao, Y.-Z. Pei,     [26] Z. Liu, C. Luo, X. Chen et al., “Noninvasive prediction of perineural
+     S.-Y. Hu, M. Ye, Q.-M. Sun, G.-H. Yang, J.-B. Cai, P.-X. Huang, L. Yv,            invasion in intrahepatic cholangiocarcinoma with interpretable machine
+     L. Zhang, Y.-H. Shi, A.-W. Ke, J. Zhou, J. Fan, Y. Chen, X.-Y. Huang,             learning based on MRI,” International Journal of Surgery, vol. 110,
+     and G.-M. Shi, “The clinical implications and molecular features of               no. 2, pp. 1039–1051, 2024.
+     intrahepatic cholangiocarcinoma with perineural invasion,” Hepatology        [27] W. Fang, Y. Chen, J. Ding, Z. Yu, T. Masquelier, D. Chen, T. Huang, and
+     International, vol. 17, no. 1, pp. 63–76, 2023.                                   Y. Tian, “SpikingJelly: An open-source machine learning infrastructure
+ [7] Y. Han, H. Go, K. Kim, I. Um, J. Kim, J. Jung, N.-J. Kim, W. K.                   platform for spike-based intelligence,” Science Advances, vol. 9, no. 40,
+     Jeong, W. J. Lee, K. Y.-K. Liao, P. Hong, and H.-J. Lee, “LoSA-Net: A             p. eadi1480, 2023.
+     localized and scale-adaptive network for boundary-sensitive prediction       [28] I. Loshchilov and F. Hutter, “Decoupled weight decay regularization,”
+     of perineural invasion in 3d mri,” in 2026 IEEE 23rd International                in Proc. ICLR, 2019.
+     Symposium on Biomedical Imaging (ISBI). IEEE, 2026, pp. 1–5.                 [29] M. Horowitz, “1.1 computing’s energy problem (and what we can do
+ [8] Y. Han, I. Um, K. Kim, J. Kim, H. Go, J. Jung, N.-J. Kim, W. K.                   about it),” in 2014 IEEE international solid-state circuits conference
+     Jeong, W. J. Lee, P. Hong, K. Y.-K. Liao, and H.-J. Lee, “MMA-Former:             digest of technical papers (ISSCC). IEEE, 2014, pp. 10–14.
+     Multi-window mixture-of-head attention transformer for adaptive pni
+     prediction in 3d mri,” in 2026 IEEE 23rd International Symposium on
+     Biomedical Imaging (ISBI). IEEE, 2026, pp. 1–5.
+ [9] Y. Han, M. Cha, K. Kim, I. Um, M. Sho, J. Y. Bae, J. Jung, J. H.
+     Park, S. Lee, N.-J. Kim, W. K. Jeong, W. J. Lee, P. Hong, K. Y.-
+     K. Liao, and H.-J. Lee, “NeoNet: An end-to-end 3d mri-based deep
+     learning framework for non-invasive prediction of perineural invasion
+     via generation-driven classification,” arXiv preprint arXiv:2603.29449,
+     2026.
+[10] X. Huang, J. Cheng, L. Zhang et al., “Feasibility of magnetic resonance
+     imaging-based radiomics features for preoperative prediction of extra-
+     hepatic cholangiocarcinoma stage,” European Journal of Cancer, vol.
+     155, pp. 227–235, 2021.
+[11] R. T. Larue, G. Defraene, D. De Ruysscher, P. Lambin, and
+     W. Van Elmpt, “Quantitative radiomics studies for tissue characteriza-
+     tion: a review of technology and methodological procedures,” The British
+     Journal of Radiology, vol. 90, no. 1070, p. 20160665, 2017.
+[12] P. Lambin, R. T. Leijenaar, T. M. Deist et al., “Radiomics: the bridge
+     between medical imaging and personalized medicine,” Nature Reviews
+     Clinical Oncology, vol. 14, no. 12, pp. 749–762, 2017.
+[13] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image
+     recognition,” in Proc. IEEE/CVF CVPR, 2016, pp. 770–778.
+[14] G. Huang, Z. Liu, L. Van Der Maaten, and K. Q. Weinberger, “Densely
+     connected convolutional networks,” in Proc. IEEE/CVF CVPR, 2017,
+     pp. 4700–4708.
+[15] M. Tan and Q. Le, “EfficientNet: Rethinking model scaling for convo-
+     lutional neural networks,” in Proc. ICML, 2019, pp. 6105–6114.
+[16] Z. Liu, Y. Lin, Y. Cao, H. Hu, Y. Wei, Z. Zhang, S. Lin, and B. Guo,
+     “Swin Transformer: Hierarchical vision transformer using shifted win-
+     dows,” in Proc. IEEE/CVF ICCV, 2021, pp. 10 012–10 022.
+[17] K. Roy, A. Jaiswal, and P. Panda, “Towards spike-based machine
+     intelligence with neuromorphic computing,” Nature, vol. 575, no. 7784,
+     pp. 607–617, 2019.
+[18] B. Yin, F. Corradi, and S. M. Bohté, “Accurate and efficient time-domain
+     classification with adaptive spiking recurrent neural networks,” Nature
+     Machine Intelligence, vol. 3, no. 10, pp. 905–913, 2021.
+[19] Z. Zhou, Y. Zhu, C. He, Y. Wang, S. Yan, Y. Tian, and L. Yuan,
+     “Spikformer: When spiking neural network meets transformer,” in Proc.
+     ICLR, 2023.
+

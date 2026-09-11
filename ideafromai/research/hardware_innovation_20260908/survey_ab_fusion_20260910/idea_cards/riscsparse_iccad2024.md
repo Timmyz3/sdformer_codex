@@ -1,0 +1,17 @@
+# RISCSparse
+- uid/来源: local_author_txt:RISCSparse_ICCAD2024_author.txt
+- 全文出处: /workspace/survey_ab_fusion_20260910_stage/p0_local_txt/RISCSparse_ICCAD2024_author.txt
+- 精读深度: 方法级（§2 SSC/GMS 与剖析；§3.1–3.4 向量化 Mapping、GMS 卸载、算子融合；§4 评测分解）
+- 可继承 A: 不规则稀疏的三段式接口——Rule Map（哈希：输入坐标→索引；核偏移生成 (pin, δk, pout) 元组）→ Gather（按相同权偏聚集输入）→ MatMul（Gemmini 脉动阵）→ Scatter；RVV 向量化建表（转置坐标+线性探测、lane mask）；SA 与向量单元协同减中间足迹；BN 融合成 Y=aX+b 等算子融合。作「映射税 + gather/scatter 税」对照，≠ X。
+- 强对照 B: 相对 TorchSparse/MinkowskiEngine 在 Edge-CPU/GPU：同点数下 Mapping/GMS/BN+ReLU 分项是否被向量+SA 吃掉。
+- 可差分 X线索: 诚实：点云亚流形稀疏卷积，非光流 SNN。可借「先付映射税再建执行计划」对照 Prosperity/有限计划与 F3；gather 按键对齐对照 Gustav 源∩W；借入≠本地 X。
+- 与 F1–F7 / Stage B 关系: 旁证稀疏执行前端（rulebook）常成瓶颈——Stage B 分项若见「索引/对齐/重排」吃掉 CSE 节点优势，可升高 F7/计划类优先级；F1 剪枝后若映射不规则恶化需同样分项；不抢 Stage B。
+- 不可搬用边界: Chipyard BOOM+Gemmini+RVV ASIC 仿真/SoC；MinkUNet/SparseResNet 点云分割检测；亚流形约束（输出位点不膨胀）；点数增大时相对 GPU 优势下降（4k 点分段仅 ~4.8× vs CPU）。
+- 可复用 idea 点:
+  - 剖析纪律：CPU/GPU 上 Mapping 与 GMS 占比高——优化前先分项，避免只加速 MatMul。
+  - 向量化哈希建 rulebook：P_in 转置后按 vl 步进；lane 独立线性探测；gather 查空位再 scatter 插入，允许乱序复用 lane。
+  - GMS：按权偏 gather → SA GEMM → scatter 回稀疏输出位点；与向量单元协同降 footprint。
+  - 算子融合：BatchNorm 收成仿射 Y=aX+B，并与 ReLU/Add 组合，砍「未合并 intermediate」。
+  - 小工作量边缘场景加速显著（文称分段均 11.73× vs Edge-CPU TorchSparse）；大点云优势收窄——提醒稀疏消费者随活跃集尺度变化。
+  - 亚流形「只在占用位点算」与膨胀稠密卷积对照——类比门控消费者只服务活跃源字。
+- 杀门建议: 映射/哈希开销 ≥ 算术节省；或活跃集变大后 gather/scatter 主导且无法同端口消化 → 停该 rulebook 布局，不杀稀疏消费者家族。

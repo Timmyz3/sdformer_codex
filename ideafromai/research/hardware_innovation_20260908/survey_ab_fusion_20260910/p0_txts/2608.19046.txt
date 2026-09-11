@@ -1,0 +1,419 @@
+                                         APEX: A Dual-Sparsity Accelerator for Precise and
+                                                    Efficient SNN Inference
+                                                 Devgokul Bawa Venkatesh, Sreeram Radhakrishnan, Rajshekhar Rakshit, Gopalakrishnan Srinivasan
+                                                                       Department of Computer Science and Engineering
+                                                                            Indian Institute of Technology Madras
+                                                                                         Chennai, India
+                                                     {ns26z056,ee23b075}@smail.iitm.ac.in, {cs24s031,sgopal}@cse.iitm.ac.in
+
+
+                                            Abstract—Spiking Neural Networks (SNNs) have emerged as             Despite this algorithmic advance, no existing SNN acceler-
+                                         an energy-efficient alternative to Artificial Neural Networks
+arXiv:2608.19046v1 [cs.AR] 19 Aug 2026
+
+
+
+
+                                                                                                             ator supports the PASC-IF neuron. Its three-stage execution,
+                                         (ANNs), leveraging sparse accumulate operations in the place        inhibitory spike paths, and soft-reset mechanism are incompat-
+                                         of power-hungry multiply-and-accumulate operations. ANN-SNN
+                                         conversion is a widely adopted approach to realize deep SNNs        ible with conventional IF neuron hardware. A naive sequential
+                                         with accuracy comparable to that of ANNs. The Quantization-         implementation would reintroduce temporal dependencies that
+                                         Clip-Floor-Shift (QCFS) activation minimizes conversion error,      undermine the efficiency of modern parallel SNN dataflows.
+                                         yet requires a large number of inference timesteps to match the     In this work, we present APEX, a dual-sparsity SNN inference
+                                         source ANN accuracy on real-world vision datasets. PASCAL           accelerator that integrates the PASC-IF neuron. APEX is built
+                                         addresses this by proposing the Precise ANN-SNN Conversion
+                                         Integrate-and-Fire (PASC-IF) neuron, which guarantees mathe-        upon LoAS [2], which adopts a fully temporal-parallel (FTP)
+                                         matical equivalence between the converted SNN and the source        inner-product dataflow to exploit dual sparsity in both spikes
+                                         ANN, thereby achieving ANN-equivalent accuracy at significantly     and weights. The key observation is that the FTP dataflow fully
+                                         reduced timesteps. Despite this algorithmic advancement, the        resolves the post-synaptic input tensor before the neuron unit
+                                         hardware implications of deploying the PASC-IF neuron remain        is invoked, eliminating the temporal dependency that would
+                                         unexplored. In this work, we present APEX, a dual-sparsity SNN
+                                         inference accelerator that integrates the PASC-IF neuron into the   otherwise prevent parallel execution of the PASC stages. This
+                                         LoAS hardware framework. The three-stage PASC-IF datapath           allows all three stages to be unrolled as combinational circuits,
+                                         is realized as a fully combinational circuit with no additional     each completing in a single clock cycle. In addition, APEX
+                                         latency cost. APEX exploits dual sparsity in both input spikes      supports mixed-precision execution through an evenly split
+                                         and weights through a fully temporal-parallel dataflow, enabling    INT4/INT8 processing-element array. Our contributions are as
+                                         efficient sparse computation and reduced memory traffic. Across
+                                         all evaluated models, the PASC-IF neuron on average achieves up     follows:
+                                         to 3% higher accuracy than the standard IF neuron, with a power        • On average, APEX achieves 40% energy reduction over
+                                         overhead of only 1.3%–5.4%, an area overhead of 2.1%–2.7%,               LoAS, for the best accuracy configurations. Across all
+                                         and 40% energy reduction for best accuracy configurations.
+                                                                                                                  evaluated models, APEX consistently achieves compet-
+                                                               I. I NTRODUCTION                                   itive or higher accuracy than LoAS at reduced timestep
+                                                                                                                  and energy budgets, with a power overhead of 1.3%–5.4%
+                                            Spiking Neural Networks (SNNs) have attracted significant             and an area overhead of 2.1%–2.7%.
+                                         attention as an energy-efficient alternative to Artificial Neural      • We present the hardware implementation of the PASC-IF
+                                         Networks (ANNs) for edge inference [1]. By encoding in-                  neuron as a fully combinational 3-cycle datapath, which
+                                         formation as binary spikes and replacing multiply-accumulate             is integrated into the LoAS accelerator with no changes
+                                         (MAC) operations with low-cost accumulate (AC) operations,               to the surrounding architecture.
+                                         SNNs provide substantial energy savings on dedicated hard-             • APEX exploits dual sparsity in both spikes and weights
+                                         ware [2], [3], [4]. ANN-SNN conversion is the dominant                   via an FTP dataflow, and supports mixed-precision INT4/
+                                         approach for obtaining high-accuracy deep SNNs without                   INT8 execution, reducing energy cost while maintaining
+                                         the prohibitive cost of direct training using backpropagation-           high utilization.
+                                         through-time [5]. QCFS activation [6] minimizes conversion
+                                         error by replacing ReLU with a quantized activation function                    II. BACKGROUND AND M OTIVATION
+                                         during ANN training. However, the converted SNN still re-
+                                         quires up to ∼1024 timesteps to match source ANN accuracy           A. Spiking Neural Networks and the IF Neuron
+                                         on complex datasets such as ImageNet. PASCAL [7] addresses             Unlike traditional ANNs, which process inputs using dense
+                                         this by introducing the PASC-IF neuron, which replaces the          multiply-accumulate (MAC) operations, SNNs encode infor-
+                                         standard integrate-fire (IF) neuron with a three-stage spike-       mation as discrete binary {0, 1} spikes, enabling sparse, event-
+                                         count mechanism that is mathematically proven to reproduce          driven computation [1]. Among spiking neuron models, the
+                                         the QCFS activation output exactly, guaranteeing ANN-level          Integrate-and-Fire (IF) neuron offers the best tradeoff between
+                                         accuracy at any timestep budget.                                    biological plausibility and computational efficiency. As shown
+                                                                               where C ∈ {0, 1}M ×N ×T is the output spike tensor. The
+                                                                               membrane potential is then hard reset to zero whenever a spike
+                                                                               is emitted (Cm,n [ti ] = 1), which can be formulated as
+                                                                                                                                  
+                                                                                            Um,n [ti ] = Xm,n [ti ] 1 − Cm,n [ti ] .      (4)
+                                                                               This temporal dependency, where an output spike at ti depends
+                                                                               on U [ti−1 ], is the foundational challenge for parallel hardware
+                                                                               execution, which we address in Section III-B.
+
+                                                                               B. SNN Training Methodologies
+                                                                                  SNN training methodologies fall into two broad categories:
+                                                                               direct training and ANN-SNN conversion. Direct training [5],
+                                                                               [8] via backpropagation-through-time (BPTT) yields competi-
+                                                                               tive accuracy on complex datasets such as ImageNet [8], with
+                                                                               inference latencies typically below a few tens of timesteps.
+Fig. 1. Im2Col transformation reduces both convolutional and fully-connected   However, since SNNs necessitate multiple sequential forward
+layers to a unified GEMM operation. The input feature map is reshaped into
+matrix A ∈ {0, 1}M ×K , where M = Hout × Wout and K = Cin ×                    passes over T timesteps, BPTT accumulates error gradients
+kh × kw , and the filters are flattened into weight matrix B ∈ RK×N , where    across all timesteps, multiplying both memory and compute re-
+N = Cout .                                                                     quirements by a factor of T relative to an equivalent ANN [5].
+                                                                               This makes direct training computationally intensive for deep
+                                                                               networks.
+in Fig. 1, both fully-connected and convolutional layers reduce                   ANN-SNN conversion eliminates this cost by transferring
+to the same matrix multiplication form via an im2col trans-                    pretrained ANN weights directly into an equivalent SNN, re-
+formation: the input feature map is reshaped into a matrix                     placing each ReLU activation with an IF spiking neuron whose
+A ∈ {0, 1}M ×K×T , where M = Hout × Wout is the number                         average rate of firing approximates the original ReLU output.
+of output spatial locations, K = Cin × kh × kw aggregates the                  Although conversion algorithms achieve accuracy comparable
+input channels and kernel spatial extent (kh , kw denote the                   to the source ANN, they require inference latencies spanning
+kernel height and width), and T is the number of discrete                      hundreds to thousands of timesteps [9].
+timesteps. The filters are similarly flattened into a weight                      QCFS Activation [6]. Bu et al. addressed this by replacing
+matrix B ∈ RK×N , where N = Cout is the number of output                       ReLU with Quantization-Clip-Floor-Shift (QCFS) activation
+channels. The IF operation then proceeds in two steps.                         during ANN training:
+   Synaptic accumulation. At each SNN inference timestep                                                        l               
+ti ∈ {0, . . . , T −1}, the post-synaptic input O ∈ RM ×N ×T is                                                1 zL
+                                                                                            ĥ(z l ) = λl clip        + φ   , 0, 1   ,    (5)
+computed as:                                                                                                   L λl
+
+                                  K                                            where z l is the input to the activation layer, L is the quantiza-
+                                                                               tion step, λl is the trainable activation threshold, and φ = 12
+                                  X
+                   Om,n [ti ] =         Am,k [ti ] Bk,n .               (1)
+                                  k=0                                          is a shift term that minimizes the expected conversion error.
+                                                                               At the end of ANN training, λl = θn , where θn is the firing
+Since A[ti ] is binary and typically sparse, this reduces to a                 threshold used during SNN inference. While QCFS formally
+sparse-matrix sparse-matrix (spMspM) multiplication, where                     minimizes the conversion error, in practice, SNNs trained with
+the expensive MAC units are replaced with low-cost accumu-                     QCFS still require up to ∼1024 timesteps to match source
+late (AC) operations.                                                          ANN accuracy on complex datasets such as ImageNet, despite
+   Firing and reset. A spiking neuron maintains a membrane                     being trained with L = 4 or 8 quantization steps [6].
+potential U ∈ RM ×N , which accumulates the synaptic inputs                       PASCAL and the PASC Neuron [7]. PASCAL addresses
+over time. At timestep ti , the integrated membrane state X ∈                  this limitation by converting a QCFS-trained ANN into an
+RM ×N ×T is specified by                                                       SNN that is mathematically equivalent to the source ANN,
+                                                                               guaranteeing ANN-level accuracy at any timestep budget. This
+                Xm,n [ti ] = Om,n [ti ] + Um,n [ti−1 ],                 (2)    is achieved through the Precise ANN-SNN Conversion (PASC)
+                                                                               neuron, which replaces the standard IF neuron with a three-
+where Um,n [ti−1 ] carries the neuron’s accumulated history                    stage spike generation mechanism. Given the quantization step
+from the previous timestep. An output spike is emitted when                    Ln−1 of the preceding layer and Ln of the current layer, with
+X exceeds a fixed firing threshold vth ∈ R:                                    layerwise threshold θ∗ = Lθnn and initial membrane potential
+                                                                                             ∗
+                         (                                                     mem(0) = θ2 , the PASC neuron operates as follows:
+                           1, if Xm,n [ti ] > vth ,                               1) Stage 1 — Excitatory accumulation (Ln−1 timesteps).
+            Cm,n [ti ] =                                 (3)
+                           0, otherwise,                                              The neuron integrates the incoming spike train using
+       soft reset: upon firing, the membrane potential is decre-
+       mented by θ∗ rather than reset to zero, preserving resid-
+       ual potential. A spike counter s records the cumulative
+       spike count scaled by Lθnn .
+   2) Stage 2 — Inhibitory correction (max(Ln−1 , Ln ) − 1
+       timesteps). The membrane potential of the neuron is re-
+       initialized to the value at the end of Stage 1. Both excita-
+       tory and inhibitory spikes are enabled: if mem(t) ≥ θ∗ ,
+       an excitatory neuronal spike increments s; if mem(t) <
+       0, an inhibitory spike decrements s while the membrane
+       potential is incremented by θ∗ . This stage is critical for
+       correcting over- or under-accumulation errors that arise
+       when Ln−1 ̸= Ln .
+   3) Stage 3 — Output spike generation (Ln timesteps).
+       The membrane potential is reset to the scaled spike count      Fig. 2. Architecture of the APEX accelerator and TPPE microarchitecture,
+                                                                      inspired by LoAS [2]. FIFO-mp stores matched positions from the priority
+       s obtained after Stage 2. Standard IF firing is applied for    encoder for later use in laggy prefix-sum computation, which takes 8 cycles
+       Ln timesteps to generate the final output spike train sl ,     while positions are generated by the priority encoder every cycle. FIFO-B
+       which is passed to the subsequent layer.                       holds weights fetched from the data-B buffer using offsets from the fast prefix
+                                        PLn l                         circuit, for later use by the correction accumulators. The fast prefix is an adder
+                                                             l
+   PASCAL formally proves that             t=1 s (t) = ĥ(z ) for     tree that computes prefix sums for weight fiber access in a single cycle.
+every neuron, thus guaranteeing that the sum of output spikes
+exactly reproduces the QCFS activation output [7]. Converting
+a QCFS-trained ANN to use the PASC-IF neuron instead of the           inner-join execution, are retained from LoAS without modifi-
+standard IF neuron consistently yields higher accuracy at lower       cation. The following subsections describe each component in
+timestep budgets across all model architectures and weight            detail.
+precisions, with full results presented in Section IV. However,
+                                                                      B. FTP Dataflow and Bit Compression
+the three-stage execution, per-neuron spike counter, inhibitory
+spike paths, and soft reset mechanism of the PASC neuron are             APEX adopts the Fully Temporal Parallel (or FTP) Inner-
+not natively supported by existing SNN hardware accelerators,         Product dataflow proposed by LoAS [2], wherein the temporal
+which implement only the standard integrate-fire neuron. This         dimension t is mapped to the innermost loop. This elimi-
+is the central motivation for APEX.                                   nates redundant memory accesses and avoids the accumula-
+                                                                      tion of unnecessary partial sums, as in the case of Inner-
+                 III. APEX A RCHITECTURE                              Product (IP) [10], Outer-Product (OP) [11], and Gustavson’s
+                                                                      (GUST) [12] dataflow, thus improving both computational
+A. Overview
+                                                                      and memory efficiency. To maximize spike compression and
+   APEX is built upon the LoAS [2] SNN accelerator archi-             maintain contiguous memory access of non-zero spikes across
+tecture, which adopts a Fully Temporal Parallel (FTP) Inner-          timesteps, which effectively minimizes data movement across
+Product dataflow to exploit dual sparsity in both input spikes        different levels of the memory hierarchy, APEX inherits the
+and weights. As illustrated in Fig. 2, the core components of         FTP-friendly Compressed Sparse Fiber (CSF) representation
+the architecture are the Temporal Parallel Processing Elements        from LoAS [2]. As shown in Fig. 3, the spike activity of each
+(TPPEs), which perform sparse matrix multiplication, and the          neuron across T timesteps is encoded as a T -bit vector, where
+Parallel Integrate-and-Fire (P-IF) unit, which applies neuron         each bit indicates the presence or absence of a spike at the
+dynamics to generate output spikes for all timesteps in parallel.     corresponding timestep. Neurons that do not generate spikes
+The scheduler distributes SNN workload across TPPE units,             across all T timesteps, referred to as silent neurons, do not
+while the compressor encodes output spikes into a Compressed          contribute to the output activation. Including such neurons in
+Sparse Fiber (CSF) representation and writes them back to the         computation incurs unnecessary latency and memory traffic
+on-chip global cache.                                                 overhead. Hence, the compressed fiber retains only non-silent
+   The sole but critical modification introduced by APEX is the       neurons, effectively reducing memory traffic and improving
+replacement of the standard integrate-fire neuron in LoAS with        computational efficiency.
+the PASC-IF neuron [7]. As established in Section II-B, the
+standard IF neuron limits inference accuracy at low timestep          C. Mixed Precision Enabled TPPEs
+budgets due to conversion errors that accumulate across layers.          The compute engine of APEX consists of two primary com-
+The PASC-IF neuron eliminates this key limitation through its         ponents: the Temporal Parallel Processing Elements (TPPEs)
+three-stage spike generation mechanism, guaranteeing math-            and the Parallel Integrate-Fire (or P-IF) unit. In the beginning
+ematical equivalence between the converted SNN and the                of execution, the compressed weight fiber (fiber-B), including
+source ANN. All other architectural components, namely, the           its bitmask (bm-B) and associated non-zero values, is fetched
+FTP dataflow, CSF compression, mixed-precision TPPEs, and             from SRAM and broadcast to the local bitmask buffers within
+                                                                               are non-zero. Only the corresponding non-zero elements are
+                                                                               then forwarded to the pseudo-accumulator for the accumulate
+                                                                               operation, completely skipping all zero-valued entries.
+                                                                                  A naive implementation of this inner-join requires two fast
+                                                                               prefix-sum circuits, one for each bitmask, for computing the
+                                                                               memory offsets of matched non-zero values. However, a single
+                                                                               fast prefix-sum circuit alone accounts for over 45% of system-
+                                                                               level power, as reported in LoAS [2]. Our APEX inherits the
+                                                                               FTP-friendly inner-join design presented in LoAS [2], which
+                                                                               replaces one of the two fast prefix-sum circuits with a laggy
+                                                                               prefix-sum circuit, exploiting the asymmetry between weight
+                                                                               and spike inputs in SNNs. Since input spikes are binary {0, 1}
+                                                                               values, the accelerator need not wait for the exact spike value
+                                                                               before beginning to accumulate the matched weight — it
+                                                                               opportunistically presumes that the matched non-zero value in
+                                                                               fiber-A fires at all timesteps and begins accumulating fiber-B
+                                                                               immediately via the fast prefix-sum circuit. The laggy prefix-
+Fig. 3. FTP-friendly input spike compression used in APEX; bm refers to the    sum circuit subsequently verifies the actual spike values and
+bitmask and ptr refers to the pointer to the start address of the compressed
+non-zero data stored contiguously in memory.                                   issues corrections via dedicated correction accumulators where
+                                                                               needed. This design nearly halves the cost of the prefix-sum
+                                                                               circuitry with negligible throughput penalty, as the latency of
+each TPPE. In parallel, the bitmask of the input spike fiber                   fetching fiber-B overlaps with the correction process.
+(bm-A) is retrieved and distributed across TPPEs, with each
+                                                                               E. PASC-IF Neuron Unit
+TPPE assigned a distinct fiber along a row of the input matrix.
+This distribution of both input activations and weight fibers is                  The P-IF module in LoAS receives the post-synaptic input
+coordinated by the scheduler.                                                  tensor O ∈ RM ×N ×T from the TPPEs and applies the spiking
+   Once both the bitmasks are available, each TPPE performs                    dynamics across all T timesteps in parallel. APEX replaces the
+an inner-join operation between bm-A and bm-B to identify                      IF neuron (supported by LoAS) in this unit with the PASC-
+indices where both fibers contain non-zero entries. Based on                   IF neuron, whose three-stage spike generation mechanism is
+this matching, only the relevant non-zero elements from the                    described in Section II-B. The key hardware insight is that
+input fiber are retrieved from the global cache and forwarded                  the FTP dataflow (Section III-B) fully resolves post-synaptic
+to the pseudo-accumulator, where accumulation is performed                     input O across all timesteps before the neuron unit is invoked,
+efficiently without processing zero entries. Each TPPE thereby                 eliminating the temporal loop-carried dependency that would
+computes the full contribution corresponding to a given output                 otherwise require sequential execution. This allows each of the
+neuron across all timesteps. Upon completing accumulation,                     three PASC stages to be implemented as a fully combinational,
+the result is forwarded to the P-IF unit, which applies spiking                unrolled circuit, in which successive iterations of each stage’s
+neuron dynamics to generate output spikes across all timesteps                 loop are chained directly through adder and comparator logic,
+in parallel.                                                                   completing in a single clock cycle. All M × N neurons are
+   APEX supports mixed-precision execution at the filter level.                processed in parallel, one stage per cycle, for a total neuronal
+The weight matrix is organized such that each column corre-                    latency of 3 cycles compared to 1 cycle for the standard P-IF
+sponds to a filter, enabling independent quantization of filters               unit. The output spike train Cm,n [1..Ln ] produced by stage-3
+to different precisions (e.g., INT4 or INT8). To support this                  is forwarded to the compressor, encoded into CSF format, and
+efficiently, the TPPE array is evenly split into INT4 and INT8                 written back to the on-chip global cache for the subsequent
+PEs. The Scheduler assigns each filter to a TPPE operating at                  layer.
+the corresponding precision, allowing multiple precisions to be                   The 2-cycle latency overhead is small in practice, as end-to-
+processed concurrently without incurring the overhead of fully                 end inference latency is dominated by the TPPE accumulation
+reconfigurable units. This design enables high PE utilization                  pipeline. The power overhead is similarly modest, since the IF
+while improving energy efficiency.                                             layer contributes far fewer operations than the preceding Mat-
+                                                                               Mul layer [7]. Full characterization is presented in Section IV.
+D. Inner Join Operation
+                                                                                                       IV. R ESULTS
+   Each TPPE performs an inner-join operation between the
+bitmask of the input spike fiber (bm-A) and the bitmask of                     A. Software Configuration
+the weight fiber (bm-B) to identify positions where both fibers                  We evaluate APEX using AlexNet [13], VGG16 [14], and
+contain non-zero entries. A logical AND is first applied to                    ResNet18 [15] on CIFAR-10, across timestep configurations
+the two bitmasks to produce the AND-result, which identifies                   T ∈ {4, 8, 16}, and ResNet34 on ImageNet. Each model is
+matched positions where both the input spike and the weight                    converted to an SNN using two spiking neuron configurations:
+Fig. 4. Energy per image (mJ) for LoAS and APEX across all models and hardware configurations. Percentage labels indicate the overhead or reduction of
+APEX relative to LoAS.
+
+
+                            TABLE I                                                                      TABLE II
+  ACCURACY, WEIGHT SPARSITY (W T.S P.), AND ACTIVATION SPARSITY               ACCURACY, WEIGHT SPARSITY (W T.S P.), AND ACTIVATION SPARSITY
+ (ACT.S P.) FOR QCFS AND PASC-IF CONVERTED SNN S UNDER INT8,                  (ACT.S P.) FOR QCFS AND PASC-IF CONVERTED SNN S UNDER INT8
+    INT4, AND MIXED - PRECISION QUANTIZATION ON CIFAR-10.                                  QUANTIZATION ON THE I MAGE N ET DATASET.
+
+
+                           Wt.Sp.(%)       Act.Sp.(%)       Acc.(%)                                              Wt.Sp.(%) Act.Sp.(%) Acc.(%)
+                                                                                SNN               Method T
+   SNN       Prec.   T    QCFS PASC QCFS PASC QCFS PASC
+                                                                                ResNet34 (INT8) PASC        8          2.72        69.09    74.30
+   AlexNet   INT8     4    27.54    1.82   80.97   79.31   91.56   93.40
+                                                                                                QCFS       16          2.72        42.60    58.79
+             INT8    8     27.54    1.82   77.41   76.09   92.69   93.77
+                                                                                                QCFS       32          2.72        41.22    69.22
+             INT8    16    27.54    1.82   75.26   74.08   93.22   93.81
+             INT4     4    62.09   25.83   80.93   79.01   87.78   91.52
+             INT4     8    62.09   25.83   77.20   75.72   89.80   91.98
+             INT4    16    62.09   25.83   74.98   73.79   90.30   92.17    B. Hardware Configuration
+             Mixed   8     50.67   19.01   77.39   76.04   92.69   93.61
+                                                                               APEX is implemented in RTL and synthesized using Synop-
+   VGG16     INT8     4    14.33    6.64   75.51   75.00   93.18   95.39
+             INT8    8     14.33    6.64   71.40   71.36   94.96   95.61
+                                                                            sys Design Compiler at 400 MHz on 40 nm CMOS technology.
+             INT8    16    14.33    6.64   69.09   69.08   95.66   95.69    APEX comprises 16 TPPEs, evenly split between INT4 and
+             INT4     4    49.33   43.12   75.71   75.14   89.79   94.60    INT8 processing elements to support mixed-precision execu-
+             INT4     8    49.33   43.12   71.55   71.35   92.48   95.03    tion. Each TPPE contains one inner-join unit, five accumula-
+             INT4    16    49.33   43.12   69.23   69.09   93.38   95.13    tors (one 12-bit pseudo-accumulator and four 10-bit correction
+             Mixed   8     34.36   24.51   71.37   71.49   94.94   95.41
+                                                                            accumulators), and a PASC-IF neuron unit replacing the stan-
+   ResNet18 INT8      4     9.18    1.97   69.70   73.24   88.05   96.03    dard IF module of LoAS. A 256 KB double-buffered global
+            INT8     8      9.18    1.97   63.78   69.09   92.20   96.49
+                                                                            cache with 16 banks provides sufficient on-chip data reuse
+            INT8     16     9.18    1.97   60.57   66.58   94.20   96.65
+            INT4      4    53.36   30.89   70.11   73.41   85.25   95.72    across all evaluated workloads. A 128 GB/s HBM module
+            INT4      8    53.36   30.89   64.25   69.29   90.59   96.02    serves as off-chip memory. We evaluate APEX across timestep
+            INT4     16    53.56   30.89   61.08   66.70   92.67   96.16    configurations T ∈ {4, 8, 16} and weight precisions INT4 and
+            Mixed    8     43.28   21.43   63.76   69.08   92.24   96.50    INT8.
+                                                                               We compare APEX against LoAS [2] as our primary hard-
+                                                                            ware baseline, evaluating power, area, and energy efficiency.
+the standard QCFS-converted IF neuron [6] and the PASC-IF                   Since APEX retains all architectural components of LoAS
+neuron [7], the latter guaranteeing mathematical equivalence to             and introduces only the PASC-IF neuron unit and the mixed-
+the source ANN. All models are evaluated under INT8, INT4,                  precision TPPE split, any overhead relative to LoAS is directly
+and mixed-precision weight quantization, applied post-training              attributable to these two modifications. Results are presented
+on a per-layer basis. Mixed-precision assignment follows a lay-             in Section IV-C.
+erwise sensitivity analysis, and achieves accuracy comparable
+to uniform INT8 precision while improving energy efficiency                 C. Hardware Results
+through increased weight sparsity, as shown in Table I.                        1) Power and Area Overhead: Fig. 6 compares the total
+   The average spike sparsity reported in Table I is computed               power and area of APEX against LoAS across all six hardware
+as the fraction of silent neurons, i.e., those producing no spike           configurations, where weight precision W ∈ {4, 8} bits and
+across the entire inference window, over the total number of                timesteps T ∈ {4, 8, 16}). APEX incurs a power overhead of
+neurons in the activation matrix, as described in Section III-B.            1.3%–5.4% and an area overhead of 2.1%–2.7% relative to
+                                                                              Fig. 6. Total power (mW) and area (×103 µm2 ) of LoAS and APEX across
+                                                                              all weight precision and timestep configurations. Percentage labels indicate
+                                                                              the overhead of APEX relative to LoAS.
+
+
+                                                                              tions. For ResNet18, APEX achieves lower energy than LoAS
+                                                                              for several configurations despite providing higher accuracy.
+                                                                              For instance, APEX using W8,T8 achieves 96.49% accuracy at
+                                                                              2.728 mJ, compared to LoAS with 92.2% accuracy at 3.034 mJ
+                                                                              for the same configuration. This energy reduction stems from
+                                                                              the higher weight sparsity introduced by the PASC-IF neuron
+                                                                              relative to the standard IF neuron under the same quantization
+                                                                              setting. For AlexNet and VGG16, APEX incurs a modest
+                                                                              energy overhead of up to 16.2% for the same configuration as
+                                                                              LoAS. However, this overhead is offset by substantial accuracy
+                                                                              gains: for AlexNet, APEX at W8,T4 achieves 93.4% compared
+                                                                              to 91.56% for LoAS; for VGG16, APEX at W8,T4 achieves
+                                                                              95.39% compared to 93.18% for LoAS — improvements of
+                                                                              1.88% and 2.21%, respectively, at the same energy budget.
+                                                                                 The energy–accuracy trade-off is captured in Fig. 7, which
+                                                                              plots accuracy against energy per image across all models,
+                                                                              precisions, and timestep configurations. APEX points consis-
+                                                                              tently appear in the upper-left region compared to their LoAS
+                                                                              counterparts, achieving a higher accuracy at equal or reduced
+                                                                              energy. This shift is most pronounced for ResNet18, where
+                                                                              APEX at W4,T4 achieves 95.72% accuracy at 2.034 mJ while
+                                                                              LoAS at W8,T8 achieves only 92.20% at 3.034 mJ. Across
+                                                                              all three models, APEX at W4,T8 matches or exceeds the
+                                                                              accuracy of LoAS at W8,T16 while consuming significantly
+Fig. 5. Power breakdown of LoAS and APEX across W4T4, W4T8, and
+                                                                              less energy. On average, the best accuracy configurations of
+W8T4 configurations. The fast prefix-sum circuit dominates in both designs.   APEX achieve 40% energy reduction compared to LoAS.
+The PASC-IF neuron unit draws marginally more power than the standard         Mixed-precision configurations further improve this trade-off,
+IF neuron, reflecting the additional combinational logic of the three-stage
+datapath.
+                                                                              with APEX Mix,T8 achieving accuracy comparable to W8,T8
+                                                                              at reduced energy across all models.
+                                                                                 For ResNet-34 SNN on ImageNet with INT8 quantization,
+LoAS, confirming that ANN-equivalent inference accuracy is                    APEX employing PASC-IF neurons achieves 74.3% accuracy
+achieved at minimal hardware cost.                                            at T =8, whereas LoAS with standard IF neurons incurs an ac-
+                                                                              curacy degredation of approximately 5% even at T =32. LoAS
+   2) Power Breakdown: Fig. 5 shows the power breakdown                       consumes 181.76 mJ per inference, since it requires four times
+of LoAS and APEX for W4,T4 configuration. The fast prefix-                    more timesteps, compared to 69.23 mJ for APEX—a 61.9%
+sum circuit dominates power consumption in both the designs,                  reduction in energy consumption. To match APEX accuracy,
+accounting for 67.60% in LoAS and 66.20% in APEX. The                         LoAS would require T =1024 timesteps; synthesizing LoAS
+PASC-IF neuron unit contributes 6.3% of the total power in                    in this configuration yields a dynamic power consumption of
+APEX, compared to 4.0% for the standard IF neuron in LoAS,                    68.94 mW, which is on average 19× higher than APEX.
+reflecting the additional combinational logic of the three-stage
+datapath. The proportions of all the other components remain                                             V. C ONCLUSION
+largely unchanged between the two designs.                                       We presented APEX, a dual-sparse temporal-parallel SNN
+   3) Energy Efficiency: Fig. 4 compares the inference energy                 inference accelerator that integrates the PASC-IF neuron and
+per image of APEX and LoAS for all models and configura-                      supports mixed-precision inference. By exploiting the fully
+Fig. 7. Accuracy vs. energy per image for LoAS and APEX accelerators. APEX consistently achieves higher accuracy than LoAS at comparable energy across
+all SNN models, weight precisions (W ∈ {4, 8, Mix}), and timestep configurations (T ∈ {4, 8, 16}), shifting the Pareto frontier of the energy–accuracy
+trade-off.
+
+
+temporal-parallel dataflow, all three PASC stages are imple-                     [6] T. Bu, W. Fang, J. Ding, P. Dai, Z. Yu, and T. Huang, “Optimal ann-snn
+mented as combinational circuits completing in 3 cycles, with                        conversion for high-accuracy and ultra-low-latency spiking neural
+                                                                                     networks,” 2023. [Online]. Available: https://arxiv.org/abs/2303.04347
+negligible latency overhead. Across AlexNet, VGG16, and                          [7] P. Ramesh and G. Srinivasan, “Pascal: Precise and efficient ann- snn
+ResNet18 on CIFAR-10, APEX achieves on average 40%                                   conversion using spike accumulation and adaptive layerwise activation,”
+energy reduction over LoAS for best accuracy configurations.                         2025. [Online]. Available: https://arxiv.org/abs/2505.01730
+                                                                                 [8] S. Deng, Y. Li, S. Zhang, and S. Gu, “Temporal efficient training
+For ImageNet, APEX achieves 74.30% accuracy on ResNet34                              of spiking neural network via gradient re-weighting,” 2022. [Online].
+SNN at T =8 while consuming 69.23 mJ per inference. LoAS,                            Available: https://arxiv.org/abs/2202.11946
+on the contrary, provides ∼5% lower accuracy even at T =32                       [9] A. Sengupta, Y. Ye, R. Wang, C. Liu, and K. Roy, “Going
+                                                                                     deeper in spiking neural networks: Vgg and residual architectures,”
+while incurring a higher energy consumption of 181.76 mJ                             Frontiers in Neuroscience, vol. Volume 13 - 2019, 2019. [Online].
+per inference. Matching APEX accuracy with QCFS would                                Available: https://www.frontiersin.org/journals/neuroscience/articles/10.
+require T =1024 timesteps, increasing dynamic power by 19×.                          3389/fnins.2019.00095
+                                                                                [10] A. Gondimalla, N. Chesnut, M. Thottethodi, and T. N. Vijaykumar,
+These results demonstrate that ANN-equivalent SNN inference                          “Sparten: A sparse tensor accelerator for convolutional neural
+is achievable at minimal hardware cost, establishing APEX as                         networks,” in Proceedings of the 52nd Annual IEEE/ACM International
+an efficient accelerator for precise SNN deployment targeting                        Symposium on Microarchitecture, ser. MICRO-52. New York, NY,
+                                                                                     USA: Association for Computing Machinery, 2019, p. 151–165.
+edge applications.                                                                   [Online]. Available: https://doi.org/10.1145/3352460.3358291
+                                                                                [11] C. Deng, Y. Sui, S. Liao, X. Qian, and B. Yuan, “Gospa: An energy-
+                             R EFERENCES                                             efficient high-performance globally optimized sparse convolutional neu-
+                                                                                     ral network accelerator,” in 2021 ACM/IEEE 48th Annual International
+ [1] X. Cheng, S. Cao, S. Wang, X. Zeng, W. Li, and M. Wang, “A 1024-
+                                                                                     Symposium on Computer Architecture (ISCA), 2021, pp. 1110–1123.
+     neuron 1m-synapse event-driven snn accelerator for dvs applications,” in
+                                                                                [12] G. Zhang, N. Attaluri, J. S. Emer, and D. Sanchez, “Gamma: Leveraging
+     2024 IEEE International Symposium on Circuits and Systems (ISCAS),
+                                                                                     Gustavson’s algorithm to accelerate sparse matrix multiplication,” in
+     2024, pp. 1–5.
+                                                                                     Proceedings of the 26th ACM International Conference on Architectural
+ [2] R. Yin, Y. Kim, D. Wu, and P. Panda, “Loas: Fully temporal-
+                                                                                     Support for Programming Languages and Operating Systems (ASPLOS).
+     parallel dataflow for dual-sparse spiking neural networks,” in 2024 57th
+                                                                                     ACM, 2021, pp. 687–701.
+     IEEE/ACM International Symposium on Microarchitecture (MICRO),
+                                                                                [13] A. Krizhevsky, I. Sutskever, and G. E. Hinton, “Imagenet classification
+     2024, pp. 1107–1121.
+                                                                                     with deep convolutional neural networks,” in Advances in Neural
+ [3] S. Narayanan, K. Taht, R. Balasubramonian, E. Giacomin, and P.-
+                                                                                     Information Processing Systems, F. Pereira, C. Burges, L. Bottou,
+     E. Gaillardon, “Spinalflow: An architecture and dataflow tailored for
+                                                                                     and K. Weinberger, Eds., vol. 25. Curran Associates, Inc.,
+     spiking neural networks,” in 2020 ACM/IEEE 47th Annual International
+                                                                                     2012. [Online]. Available: https://proceedings.neurips.cc/paper files/
+     Symposium on Computer Architecture (ISCA), 2020, pp. 349–362.
+                                                                                     paper/2012/file/c399862d3b9d6b76c8436e924a68c45b-Paper.pdf
+ [4] R. Mao, L. Tang, X. Yuan, Y. Liu, and J. Zhou, “Stellar: Energy-
+                                                                                [14] K. Simonyan and A. Zisserman, “Very deep convolutional networks
+     efficient and low-latency snn algorithm and hardware co-design with
+                                                                                     for large-scale image recognition,” 2015. [Online]. Available: https:
+     spatiotemporal computation,” in 2024 IEEE International Symposium on
+                                                                                     //arxiv.org/abs/1409.1556
+     High-Performance Computer Architecture (HPCA), 2024, pp. 172–185.
+                                                                                [15] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image
+ [5] Y. Wu, L. Deng, G. Li, J. Zhu, and L. Shi, “Spatio-temporal
+                                                                                     recognition,” in 2016 IEEE Conference on Computer Vision and Pattern
+     backpropagation for training high-performance spiking neural networks,”
+                                                                                     Recognition (CVPR), 2016, pp. 770–778.
+     Frontiers in Neuroscience, vol. 12, May 2018. [Online]. Available:
+     http://dx.doi.org/10.3389/fnins.2018.00331
+

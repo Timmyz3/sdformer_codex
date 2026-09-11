@@ -1,0 +1,635 @@
+                                                          SciFlow: Empowering Lightweight Optical Flow Models with
+                                                                          Self-Cleaning Iterations
+
+                                            Jamie Menjay Lin1             Jisoo Jeong2 Hong Cai2 Risheek Garrepalli2 Kai Wang1                                       Fatih Porikli2
+                                                                       1 Qualcomm   Technologies, Inc. 2 Qualcomm AI Research†
+                                                          {jmlin, jisojeon, hongcai, rgarrepa, kwang, fporikli}@qti.qualcomm.com
+arXiv:2404.08135v1 [cs.CV] 11 Apr 2024
+
+
+
+
+                                                                     Abstract                                                     (a) Base Model   (b) Base+SCI       (c) Base+SCI+RFL
+
+                                            Optical flow estimation is crucial to a variety of vision
+
+
+
+
+                                                                                                                       iter = 1
+                                         tasks. Despite substantial recent advancements, achieving
+                                         real-time on-device optical flow estimation remains a com-
+                                         plex challenge. First, an optical flow model must be suffi-
+                                         ciently lightweight to meet computation and memory con-
+                                         straints to ensure real-time performance on devices. Sec-                     iter = 3
+                                         ond, the necessity for real-time on-device operation imposes
+                                         constraints that weaken the model’s capacity to adequately
+                                         handle ambiguities in flow estimation, thereby intensifying
+                                         the difficulty of preserving flow accuracy.
+                                            This paper introduces two synergistic techniques, Self-
+                                                                                                                       iter = 5
+
+
+
+
+                                         Cleaning Iteration (SCI) and Regression Focal Loss (RFL),
+                                         designed to enhance the capabilities of optical flow mod-
+                                         els, with a focus on addressing optical flow regression am-
+                                         biguities. These techniques prove particularly effective in
+                                         mitigating error propagation, a prevalent issue in optical
+                                                                                                                       iter = 7
+
+
+
+
+                                         flow models that employ iterative refinement. Notably, these
+                                         techniques add negligible to zero overhead in model param-
+                                         eters and inference latency, thereby preserving real-time on-
+                                         device efficiency.
+                                            The effectiveness of our proposed SCI and RFL tech-                       Figure 1. A zoomed-in demonstration of ”Self-Cleaning Itera-
+                                         niques, collectively referred to as SciFlow for brevity, is                  tions (SCI)” effect against error propagation, a prevalent issue
+                                         demonstrated across two distinct lightweight optical flow                    in iterative refinement for optical flow models. (a) The base-
+                                         model architectures in our experiments. Remarkably, Sci-                     line model (RAFT-Small [39] as one choice of model architecture)
+                                         Flow enables substantial reduction in error metrics (EPE                     suffers from error propagation over iterations, especially near the
+                                         and Fl-all) over the baseline models by up to 6.3% and                       arm and legs. (b) When the SCI technique is applied to the base-
+                                                                                                                      line model, it demonstrates a “self cleaning” effect over iterations.
+                                         10.5% for in-domain scenarios and by up to 6.2% and
+                                                                                                                      This is achieved at negligible additional overhead in computation
+                                         13.5% for cross-domain scenarios on the Sintel and KITTI                     and in model size. (c) When both the SCI and RFL techniques are
+                                         2015 datasets, respectively.                                                 applied to the baseline model, the “self cleaning” effect becomes
+                                                                                                                      even more visible, particularly around the arm and feet. On top of
+                                                                                                                      ”Base+SCI”, this RFL technique concerns only the loss function
+                                         1. Introduction                                                              in training so it adds no additional overhead for inference.
+
+                                         Optical flow is a fundamental task that represents pixel-
+                                                                                                                      action recognition [4, 26], object tracking [22, 50], video
+                                         level correspondence between two consecutive video
+                                                                                                                      compression [28, 42], video frame interpolation [19, 25].
+                                         frames. Since optical flow provides pixel-level movement,
+                                                                                                                         Thanks to the recent advances in deep learning, optical
+                                         it is widely used for a variety of video perception tasks, e.g.,
+                                                                                                                      flow estimation models have become significantly more ac-
+                                         † Qualcomm AI Research is an initiative of Qualcomm Technologies, Inc.       curate by leveraging neural networks [13, 16, 39]. While
+
+
+                                                                                                                  1
+some earlier works lack a principled way to design neu-                      Our proposed techniques add negligible or zero compu-
+ral networks for capturing pixel correspondences, more re-               tation overhead at inference time, which is particularly crit-
+cently, RAFT [39] have proposed an optimization-inspired                 ical for lightweight optical flow models intended for real-
+architecture that sets a new baseline for the method and the             time on-device targets, such as mobile phones and AR/VR
+model architecture. More specifically, it constructs a global            devices. Specifically, SCI only requires the network to pro-
+and re-usable cost volume with pairwise correlations be-                 cess an additional channel of the quality map and RFL only
+tween extracted image features of the two frames and then                affects loss computation during training. In contrast, many
+uses a recurrent neural module to iteratively refine the op-             of the latest state-of-the-art methods require more complex
+tical flow. This essentially mimics the optimization steps               computations for accuracy improvement, including heavier
+used conventional computer vision algorithms for solving                 models or transformer architecture. Despite being parsi-
+correspondences, and has been shown to greatly improve                   monious on computation usage, our proposed approach ef-
+accuracy and generalizability. As a result, most subsequent              fectively improves multiple baseline architectures, achiev-
+and current state-of-the-art solutions follow a similar model            ing the best accuracy when comparing to other existing
+design strategy.                                                         lightweight optical flow models.
+    During the iterative estimation process, the predicted op-               Our main contributions are summarized as follows:
+tical flow is prone to errors especially in the earlier stages           • We propose a novel technique, Self-Cleaning Iteration
+or under high ambiguity. While the iterations can rectify                   (SCI), which enables the model to “self-assess” flow qual-
+many errors, other errors in some cases could persist and                   ity in current iteration, and to “self-clean” flow estimates
+even be further propagated into later iterations, impacting                 in subsequent iterations for optical flow models. This
+final model accuracy. Figure 1 provides an example of this.                 helps resolve ambiguities in the estimation and mitigates
+In the top row for the first iteration, the initial flow estimates          error propagation during the iterative refinement. It is
+tend to be not accurate, with apparent errors near the per-                 noteworthy that SCI incurs minimal computational over-
+son’s arm and legs as well as in the background. Through                    head during model inference.
+the iterations, the estimation on the background pixels im-              • In addition, we propose a Regression Focal Loss (RFL),
+proves, but other errors near the legs persist and the estima-              which guides the model to focus more on regions of high
+tion on the arm becomes even less accurate. There is gen-                   residual regression errors, thus encouraging the model to
+erally a lack of an effective solution to handle such issue of              learn better to improve for those challenging scenarios
+error propagation for many optical flow methods.                            where feature correspondences are harder.
+    In this paper, we propose a novel and effective approach,            • We further combine both techniques, SCI and RFL and
+Self-Cleaning Iterations (SCI), to address the issue of er-                 verify our proposal on two distinct optical flow base-
+ror propagation that is often observed during the iterative                 line architectures. Our experiments demonstrate that our
+refinement process of optical flow models. We enable the                    SCI and RFL jointly serve as an effective unified solu-
+network to “self-assess” the likely correctness of flow es-                 tion to handle ambiguities in both in-domain and cross-
+timates during the iterative refinement. More specifically,                 domain scenarios. Remarkably, our solution also leads to
+in each iteration, we compare the feature maps of the two                   state-of-the-art accuracy results compared with existing
+frames using the current estimated optical flow and warp-                   lightweight optical flow models.
+ing. The pixel-wise differences provide an indication for
+consistency of the optical flow, which are converted into a              2. Related Work
+quality range between 0 and 1. The resulting dense quality
+measure is consumed by the model as an additional feature
+                                                                         2.1. Optical Flow Models with Iterative Refinement
+channel to guide the network to “self-correct” inconsisten-              RAFT [39] introduced a new optical flow model design and
+cies in next iterations.                                                 has since become the baseline architecture for many later
+    In addition, during training, we introduce a new loss,               advancements. It builds a cross-level global correlation vol-
+namely, Regression Focal Loss (RFL), to better leverage the              umes and iteratively refines the prediction using convolu-
+available ground truth to improve the network’s awareness                tional gated recurrent units (ConvGRU) [6]. GMA [20],
+for regions of potentially incorrect estimates. Existing op-             Flowformer [13], and FlowFormer++ [35] among others
+tical flow training schemes predominantly weight the pixel-              keep improving model accuracy while keeping this Con-
+wise loss equally, without taking into account the different             vGRU baseline design.
+prediction accuracy on each pixel at a given iteration. In                   Despite the success of ConvGRU being an effective neu-
+contrast, our RFL gives heavier weights to regions of high               ral ODE optimizer [5, 8, 39], the error propagation behavior
+residual regression errors, encouraging the network to focus             due in part to irresolvable ambiguities in estimates has not
+its learning more on regions where it faces higher ambigui-              been explicitly discussed. In this paper, we aim at mitigat-
+ties to find feature correspondences.                                    ing this issue prevalent in ConvGRU-based models.
+
+                                                                     2
+Figure 2. Overview of our proposed approach. Self-Cleaning Iterations (SCI) enables the network to “self-assess” the flow prediction
+quality and then to “self-clean” the flow prediction itself over the standard practice of iterative refinement process in many optical flow
+models. Regression Focal Loss (RFL) derives a confidence map and guide the network to focus more on regions of high residual regression
+errors during the iterations. ⃝
+                              C stands for the concatenation operator.
+
+
+2.2. Uncertainty-Aware Optical Flow Estimation                           where N stands for the iteration index and 0 < γ < 1 is a de-
+                                                                         cay factor over iterations. The whole predicted flow map of
+Several prior works have explored incorporating confidence
+                                                                         each iteration is weighted accordingly before accumulation.
+or uncertainty estimates into their models [11, 18, 40, 46]
+                                                                            Several other works adopt complementary insights or
+among others. For instance, [11] modify the network’s out-
+                                                                         regularization objectives based on semantic segmentation,
+put layer to predict variance at intermediate layers and use
+                                                                         object depths, multi-frame aggregation, temporal consis-
+assumed density filtering to propagate uncertainty across
+                                                                         tency, occlusion consistency, or transformation consistency
+the network. [40] (PDC-Net) take a probabilistic approach,
+                                                                         [1, 3, 7, 17, 44, 45] to further enhance their model accuracy
+employing a mixture distribution for prediction and a sep-
+                                                                         on top of the standard optical flow loss function.
+arate uncertainty decoder within their multi-stage architec-
+ture to decouple flow estimation from uncertainty estima-                2.4. Focal Loss Function for Dense Classification
+tion. While PDC-Net is the closest work to ours, we dif-
+fer in two key aspects. First, we do not explicitly use a                Focal Loss [27] has been proven an effective technique to
+dedicated uncertainty decoder. Second, we leverage geo-                  address the class imbalance issue in dense classification
+metric consistency for confidence estimation and utilize a               tasks, such as segmentation. It places higher emphasis on
+self-cleaning mechanism for our iterative refinement.                    feature samples of less (or under) represented classes.
+
+2.3. Standard Loss Function for Optical Flow                                                  CE(pt ) = −log(pt )                      (3)
+FlowNet [9] uses end-point error loss, mathematically the                                F L(pt ) = −(1 − pt )γ log(pt )               (4)
+Euclidean distance, between the ground truth and predicted
+flow. PWC-Net [38] uses L1 and L2 losses. L2 loss is                     where CE and FL represent the cross entropy and focal loss,
+first applied in the initial stage of training, while L1 loss            respectively. And, pt is the probability for a class. Focal
+is applied in subsequent finetuning. Several recent optical              loss is originally proposed for dense classification tasks and
+flow models [13, 39] apply iterative refinement by summing               is designed to work with the cross entropy loss. The orig-
+weighted L1 losses over multiple iterations.                             inal form of focal loss is not directly applicable to optical
+                                                                         flow estimation, a regression task without the definition of
+                         li = ∣∣fgt − fi ∣∣1                   (1)       classes. Moreover, cross entropy is not used in the standard
+                                                                         loss for optical flow estimation.
+where fgt and fi are the optical flow ground truth and pre-
+diction, respectively, in iteration i. A scheme below for                2.5. Lightweight Optical Flow Models
+weighted combination is then used over multiple iterations.
+                                                                         [10, 24, 48] among others are recent works on lightweight
+                                N
+                                                                         design with attention or cost volume construction in a
+                      Ltotal = ∑ γ N −i ⋅ li                   (2)
+                                i=1
+                                                                         coarse-to-fine paradigm. [10] is a lightweight version of
+
+
+                                                                     3
+                                                                            Figure 4. Regression Focal Loss. While equal-weight loss across
+                                                                            all pixels is used for conventional optical flow model training
+                                                                            (Eq. 1), Regression Focal Loss generates the confidence map using
+Figure 3. Concept for SCI map creation. (a) A pair of image fea-            optical flow prediction and ground truth (Eq. 8) and leverages it to
+tures are taken as input. (b) The ground truth flows point to their         the optical flow loss (Eq. 9) so that model can focus on difficult
+matches on the left sub-figure, while the estimated flows point in-         areas in the dataset.
+correctly for some features on the right sub-figure. (c) F2’ is de-
+rived by warping F2 by the estimated flows. (d) F1 and F2’ are
+taken by their tensor-wise differences for Gaussian Kernel (Eq. 6)          the method in the second half. Based on our observations
+evaluation for their affinity. (e) A dense SCI map output is derived.       in many iterative refinement-based models, we notice that
+                                                                            errors made in early iterations of estimation could persist
+                                                                            through subsequent iterations, affecting the quality of the
+[39], which adopts single level cost volume per iteration
+                                                                            dense flow estimates. To address this issue, SCI is designed
+and adopts coarse-to-fine cost volumes with finest resolu-
+                                                                            to assess the quality of these estimates.
+tion being 1/16 and demonstrates real time performance
+                                                                                The core intuition behind SCI is the concept of ‘warping
+on Snapdragon 8 Gen 1 HTP. [48] first performs global                       consistency’ of feature maps. More specifically, SCI mea-
+matching at 1/16 resolution and then refines flow at 1/8 us-                sures the feature similarity between the warped target frame
+ing lightweight CNN layers and demonstrates real time per-                  and the reference frame without any ground truth. This ap-
+formance on Jetson Orion Nano. [24] also adopts coarse-to-                  proach allows the model to self-assess the quality of flow
+fine and in addition uses dilated correlation layer for lighter             estimates in an iteration, and then also allows the model to
+cost volume. In addition there were additional previous                     self-correct the errors in flow estimates over iterations.
+works addressing light weight optical flow estimation like
+                                                                                Figure 3 illustrates the concept of SCI, beginning with
+[14, 32].
+                                                                            the input of an image pair and culminating in the output of
+3. Method                                                                   the SCI map, which represents the ‘self-assessed quality’ of
+                                                                            flow estimates.
+In this section, we discuss details of these two interrelated
+                                                                                Next, in the second half of this section, we elaborate on
+methods, Self-Cleaning Iteration (SCI) and Regression Fo-
+                                                                            how this SCI map is derived and applied.
+cal Loss (RFL). The first technique, SCI, is applied for both
+                                                                                Given input images I1 and I2 , we first encode these im-
+training and inference by actively computing the similarity
+                                                                            ages into feature maps F1,0 and F2,0 . We then adopt an
+between the reference frame and the warped frame based
+                                                                            iterative process to estimate the dense flow field f1,2,i in an
+on the flow estimate. RFL, the second technique as a loss
+                                                                            iteration i for the dense pixelwise displacements between
+function in a similar arithmetic formulation to that of SCI,
+                                                                            F1,i and F2,i .
+is proposed to guide model learning by focusing more on                                           ′
+regions of high residual regression errors. Figure 2 gives an                                   F2,i = W (F2,i , f1,2,i )               (5)
+overview for the system setup, including an optical flow es-                where, W() is the standard warping operation that takes a
+timation network and our proposed SCI and RFL methods.                      dense input feature map F2,i along with the estimated dense
+                                                                            optical flow field f1,2,i to produce a dense output feature
+3.1. Self-Cleaning Iterations                                                      ′
+                                                                            map F2,i   by reverting the pixel-wise displacements of F2,i
+In this section, we present the concept of Self-Cleaning                    according to flow filed f1,2,i for each desired output coor-
+Interactions (SCI) in the first half, and then the details of               dinate point px,y of F1,i and by interpolating closest neigh-
+
+
+                                                                        4
+Table 1. Cross-domain and in-domain optical flow estimation results on Sintel (train) and KITTI (train) datasets. All models of
+cross-domain in this table are trained on FlyingChairs (C) and FlyingThings (T), following train protocol in [39]. All models of in-domain
+in this table are finetuned on Sintel (S) and KITTI (K) using pre-trained model (C+T), following [39] training protocol.
+                 Training                                                          Sintel (train)                 KITTI (train)           Sintel (test)   KITTI (test)
+                              Method                         # Params
+                 Datasets                                                    Clean              Final        EPE              Fl-all     Clean Final         Fl-all
+                              PWC-Net [37]                      8.8 M         2.55              3.93        10.35             33.70        -         -         -
+                              LiteFlowNet2 [15]                 6.4 M         2.24              3.78         8.97             25.90        -         -         -
+ Cross-Domain
+
+
+
+
+                              LiteFlowNet3 [14]                 5.2 M         2.59              3.91        10.40                -         -         -         -
+                              FDFlowNet [23]                    5.8 M         2.60              4.12        10.75             29.59        -         -         -
+                   C+T        FastFlowNet [24]                  1.4 M         2.89              4.14        12.24             33.10        -         -         -
+                              MaskFlowNet-small [49]               -          2.33              3.72           -              23.58        -         -         -
+                              DICL [41]                            -          1.94              3.77         8.70             23.60        -         -         -
+                              DIFT [10]                            -          3.11              4.19        12.87             43.83        -         -         -
+                              MobileFlow1                       1.5 M     1.79 (-0.0%) 3.47 (-0.0%)      8.33 (-0.0%)    22.06 (-0.0%)     -         -         -
+                              MobileFlow1 +SCI+RFL (Ours)       1.5 M     1.68 (-6.2%) 3.34 (-3.8%)     7.21 (-13.5%) 20.75 (-5.9%)        -         -         -
+                              PWC-Net [37]                      8.8 M         2.02              2.08         2.16              9.80      4.39      5.04      9.60
+                              LiteFlowNet2 [14]                 6.4 M         1.41              1.83         1.33              4.32      3.48      4.69      7.62
+ In-Domain
+
+
+
+
+                              LiteFlowNet3 [14]                 5.2 M         1.43              1.90         1.39              4.35      2.99      4.45      7.34
+                              FDFlowNet [23]                    5.8 M         1.80              1.93         1.56              6.36      3.71      5.11      9.38
+                C + T + S/K
+                              FastFlowNet [24]                  1.4 M         2.08              2.71         2.13              8.21      4.89      6.08     11.22
+                              DDCNet (B1) [33]                  3.0 M         1.96              2.25         2.57             15.56      6.19      6.91     38.23
+                              MobileFlow1                       1.5 M     1.09 (-0.0%) 1.76 (-0.0%)      0.96 (-0.0%)     3.14 (-0.0%)     -         -         -
+                              MobileFlow1 +SCI+RFL (Ours)       1.5 M     1.03 (-5.5%) 1.65 (-6.3%)      0.92 (-4.2%) 2.81 (-10.5%)      2.62      3.80      5.82
+
+
+boring points for the queried coordinates in the source fea-                              pixel-wise weighting. We adopt the confidence map in Lite-
+ture map F2,i . Taking the pointwise differences between                                  FlowNetv3 [14] as follows.
+the original F1 and the warped F2′ , we then apply the sum
+                                                                                                             Mconf (x) = e−∣∣fgt (x)−fpred (x)∣∣
+                                                                                                                                                   2
+                                                                                                                                                                    (8)
+of squared differences to a Gaussian kernel function with
+suitable normalization as follows.                                                            Having the confidence map ready, we apply the map to
+                                               −1
+                                               √ ⋅∑c (F1,(x,y) −F
+                                                                  ′                       li and replace Eq. 1 with the following.
+                                                                 2,(x,y) )
+                                                                          2
+                 Gsci (F1 , F2′ )∣(x,y) = e   2 d                              (6)
+                                                                                                        li = ∣∣(1 + α ⋅ (1 − M )β ) ⋅ (fgt − fi )∣∣1                (9)
+where, C stands for the set of elements in the channel di-                                where α and β are hyper parameters. The intuition of Eq.
+mension over the corresponding coordinates (x, y) of F1                                   9 is that we apply higher weighting to regions of low confi-
+F2′ . The Gaussian kernel function comes with the follow-                                 dence and standard weighting to high confidence regions.
+ing property for its value range.                                                            This RFL-based confidence weighting is derived by the
+                                                                                          final iteration of prediction and applied li of all iterations.
+                              0 ≤ Gsci (F1 , F2′ )∣(x,y) ≤ 1,                  (7)        We find this to be more effective as confidence derived in
+                                            ′                                             earlier iterations tends to be noisier, as we shall discuss
+where, the maximum holds for ∣∣F1,(x,y) −F2,(x,y) ∣∣22 = 0 and
+                                  ′
+                                                                                          more in our ablation study. Figure 4 compares between the
+minimum holds for ∣∣F1,(x,y) − F2,(x,y) ∣∣2 = +∞. For con-
+                                          2
+                                                                                          baseline and the RFL approaches.
+ciseness, we refer to this derived dense map Gsci (F1 , F2′ )
+as the SCI map. We then concatenate the SCI map with                                      3.3. SciFlow: The Combination of SCI and RFL
+the estimated dense flow map along the channel dimension                                  Having individual definitions for SCI and RFL, we further
+and feed them as the input to ConvGRU module for itera-                                   discuss their relationship and our final proposal for com-
+tive refinement to derive the flow adjustment on top of the                               bining them. Despite that SCI in Eq. 6 and RFL in Eq. 8
+estimated flow.                                                                           share similar arithmetic structures, their sources of the fea-
+                                                                                          ture maps for the contrastive measures are quite different.
+3.2. Regression Focal Loss                                                                During training, while the RFL relies on the ground truth
+In this subsection, we introduce Regression Focal Loss                                    in back propagation to focus on regions of larger residual
+(RFL). Given the observation that the difficulty in predict-                              regression errors, the SCI relies completely on the input im-
+ing the pixel-wise flow can differ from one pixel to an-                                  ages in the forward pass to derive the SCI map. During in-
+other depending on the contents at and around the pixels,                                 ference, the model continues its active computation for the
+we aim at helping the network focus its learning on regions                               SCI map to self-assess the flow estimates and to self-clean
+that needs more improvement. Comparing with the focal                                     the flow ambiguities. SCI and RFL seem to be synergistic
+loss [27] used in segmentation for handling class imbalance,                              in learning to handle feature ambiguities, while they also
+our proposed RFL is intended for dense regression instead                                 complement each other in how their contrastive measures
+and may be considered as for ”difficulty imbalance”. To                                   are used. In Section 4, we discuss more on empirical results
+this end, we first derive a confidence map to facilitate the                              for the combination of SCI and RFL.
+
+
+                                                                                      5
+Table 2. Ablation study for Self-Cleaning Iteration (SCI) and Regression Focal Loss (RFL). Following same protocol as described in RAFT
+[39], we train all model variants on top of two baseline architectures by two combinations of datasets specified in the table and evaluate
+them on Sintel (S) and KITTI (K) training datasets.
+                                Training                                                                    Sintel                           KITTI 15
+                                                  Architecture              SCI         RFL
+                                Datasets                                                        clean (epe)        final (epe)        Fl-epe           Fl-all
+                                                                                               2.21 (-0.0%)      3.35 (-0.0%)      7.51 (-0.0%)   26.90 (-0.0%)
+                Cross-Domain
+
+
+
+                                                                                        ✓      2.29 (+3.6%) 3.52 (+5.1%)           7.44 (-0.9%)   24.88 (-7.5%)
+                                                  RAFT-small [39]
+                                                                             ✓                 2.17 (-1.8%)     3.33 (-0.6%)       7.58 (-0.9%)   25.45 (-5.4%)
+                                 C+T                                         ✓          ✓      2.11 (-4.5%)      3.34 (-0.3%)      7.22 (-3.9%) 24.62 (-9.5%)
+                                                                                               1.79 (-0.0%)      3.47 (-0.0%)      8.33 (-0.0%)   22.06 (-0.0%)
+                                                  MobileFlow1                ✓                 1.65 (-7.8%)     3.30 (-4.9%)      7.22 (-13.3%) 20.73 (-6.0%)
+                                                                             ✓          ✓      1.68 (-6.1%)      3.34 (-3.7%)     7.21 (-13.4%) 20.75 (-5.9%)
+                                                                                               1.42 (-0.0%)      2.09 (-0.0%)      1.21 (-0.0%)    4.68 (-0.0%)
+                                                                             ✓
+                In-Domain
+
+
+
+
+                                                  RAFT-small [39]                              1.46 (+2.8%) 2.06 (-1.4%)           1.20 (-0.8%)    4.74 (-1.3%)
+                                                                             ✓          ✓      1.46 (+2.8%) 2.04 (-2.4%)           1.20 (-0.8%)    4.50 (-3.8%)
+                               C+T + S/K
+                                                                                               1.09 (-0.0%)      1.76 (-0.0%)      0.96 (-0.0%)    3.14 (-0.0%)
+                                                  MobileFlow1                ✓                 1.09 (-0.0%)      1.74 (-1.1%)      0.94 (-2.1%)    2.97 (-5.4%)
+                                                                             ✓          ✓      1.03 (-5.5%)     1.65 (-6.3%)       0.92 (-4.2%) 2.81 (-10.5%)
+
+Table 3. Ablation study of Regression Focal Loss (Eq. 9). We train RAFT-small+SCI models on FlyingChairs (C) and FlyingThings (T)
+and evaluate on Sintel (S) and KITTI (K) training datasets.
+                                                                                                        Sintel                          KITTI 15
+                                 li loss
+                                                                                            clean (epe)        final(epe)       Fl-epe            Fl-all
+                                 a.   ∣∣(fgt − fi )∣∣1 (Eq. 1)                             2.17 (-0.0%)      3.33 (-0.0%)    7.58 (-0.0%)     25.45 (-0.0%)
+                                 b.   ∣∣(α ⋅ (1 − M )β ) ⋅ (fgt − fi )∣∣1                  2.32 (+6.9%)      3.56 (+6.9%)    7.09 (-6.5%)     25.27 (-0.7%)
+                                 c.   ∣∣(1 + α ⋅ (M )β ) ⋅ (fgt − fi )∣∣1                 4.52 (+108.3%) 5.92 (+77.8%)      10.07 (+32.8%) 50.53 (+95.5%)
+                                 d.   ∣∣(1 + α ⋅ (1 − M )β ) ⋅ (fgt − fi )∣∣1 (Eq. 9)      2.11 (-2.8%)      3.34 (+0.3%)    7.22 (-4.7%)     24.62 (-3.3%)
+
+
+
+4. Experiments                                                                                           of regression focal loss, we set both α and β in Eq. 9 to 1.
+                                                                                                            Evaluation Metrics: We evaluate our models by the
+4.1. Experimental Setup                                                                                  End-Point Error (EPE) metric, which is the Euclidean dis-
+Datasets: We follow commonly adopted training and eval-                                                  tance between the predicted flow and the ground truth flow.
+uation protocols in the literature [13, 20, 39, 47]. We train                                            We also use F1-all as defined for the KITTI dataset [31]. In
+our model on FlyingChairs (C) [9] and FlyingThings3D                                                     both cases of error metrics, the lower is the better.
+(T) [29] and evaluate on training dataset of Sintel (S) [2]
+and KITTI (K) [12, 30, 31]. Using C+T pre-trained model,                                                 4.2. Experimental Results
+we finetune Sintel and KITTI datasets and evaluate on Sin-                                               4.2.1     Cross-Domain Evaluation
+tel and KITTI datasets.
+    Network Architectures and Training: We use two                                                       The top half of Table 1 shows our cross-domain evaluation
+lightweight models with different architectures, RAFT-                                                   results, for which the models are trained on FlyingChairs
+small [39] and MobileFlow1 , as our baselines in the ex-                                                 and FlyingThings, and then are evaluated on Sintel and
+periments. In particular, MobileFlow is our model creation                                               KITTI training datasets, respectively. Our solution, Mobile-
+for a lightweight baseline architecture. In order to build                                               Flow+SciFlow (namely, with both SCI and RFL), achieves
+a feasible architecture that fits within the limited memory                                              significantly higher accuracy not only over the baseline Mo-
+and compute capacity of a smartphone, we utilize memory-                                                 bileFlow but also over other compared lightweight optical
+efficient cost volume techniques from [21, 43, 47]. We also                                              flow methods.
+adopt a MobileNetV2 [34] based backbone for feature ex-
+traction and a ConvGRU module for iterative refinement                                                   4.2.2     In-Domain Evaluation
+that is similar to [39]. For fair comparisons, we train both                                             The bottom half of Table 1 shows our in-domain evalua-
+RAFT-small and MobileFlow baselines along with all their                                                 tion results, where models are trained on FlyingChairs, Fly-
+variants for SCI and RFL on top of the baselines using same                                              ingThings3D, and Sintel (or KITTI) and are evaluated on
+train framework2 and dataset protocol as described in RAFT                                               Sintel (or KITTI) following the protocol as in RAFT [39].
+[39] to report our experiment results. We follow the training                                            Our proposed solution demonstrates significantly improved
+parameters all the same as for RAFT, including number of                                                 accuracy over the baseline and even over other state-of-the-
+iterations and the learning rate. For additional parameters                                              art lightweight optical flow models. Please note that, unlike
+   1 MobileFlow is our created lightweight baseline architecture. Please                                 LiteFlowNet model series, in our experiments MobileFlow
+see section 4.1 ”Network Architectures and Training” for more details.                                   and its variant are trained only on KITTI 2015 dataset but
+   2 RAFT: https://github.com/princeton-vl/RAFT                                                          not also on KITTI 2012 dataset.
+
+
+                                                                                                    6
+Image 1
+Image 2
+Ground Truth
+Baseline
+Base + SCI
+Base + SCI+ RFL
+
+
+
+
+Figure 5. Qualitative results on Sintel (train) dataset using RAFT-small architecture (trained with C+T). First and second rows are
+input images. Third row is the ground truth. Fourth row is the output of RAFT-small. Fifth and sixth rows are the output of RAFT-small +
+SCI and RAFT-small + SCI + RFL, respectively.
+
+4.2.3             Ablation Study                                       of removing the portion of the standard L1 loss. Option
+                                                                       ”c” uses the opposite focus on the regions of high confi-
+SCI vs. RFL: Table 2 summarizes our ablation study over                dence, which interestingly produces drastic degradation in
+choices and/or combinations of SCI and RFL. We applied                 accuracy, suggesting the wrong focus for the learning. Our
+SCI and RFL into three variants based on either the archi-             proposed form in option ”d” produces competitive results
+tecture of RAFT-small or the MobileFlow. Despite the fact              by combing both the L1 loss and the confidence-weighted
+that not all variants demonstrate improved accuracy in these           focus on regions of higher residual errors.
+experiments, the particular variants base+SCI+RFL in gen-
+eral demonstrate competitive accuracy over their respective               Final-Iteration Confidence Map vs. Per-Iteration
+baselines among minor run-to-run variations.                           Confidence Map: Our proposed approach is to apply the
+   Regression Focal Loss: Table 3 summarizes our abla-                 single final confidence map to all iterations. When we apply
+tion study on RFL (Eq 9). Option ”a” is the standard L1                instead per-iteration confidence map for each individual it-
+loss without applying RFL. Option ”b” produces inconsis-               eration, we see smaller gains than in the proposed approach.
+tent results over Sintel and KITTI, suggesting the impact              Table 4 lists the numbers.
+
+
+                                                                   7
+                                       Baseline                                                     Base+SCI                                Base+SCI+RFL
+Confidence Maps
+Error Maps
+
+
+
+
+Figure 6. Subtleties in RFL-based confidence maps and error maps. Top Row: We report confidence maps derived with our RFL
+technique for the baseline and its variants. Moreover, SCI and RFL demonstrate their abilities to help resolve ambiguities in certain
+regions, as indicated by their higher confidence measures in these maps. Bottom Row: We report error maps for the predicted flow
+estimates against the ground truth for the baseline and its variants. Moreover, SCI and RFL demonstrate their ability to help resolve
+ambiguities in certain regions, as evidenced by their lower errors in these maps. In these examples, we use samples from the Sintel (train)
+dataset with RAFT-small architecture. The original input images can be found in the right column of Fig 5.
+
+Table 4. Ablation study to compare between final-iteration confi-                                        Table 5. On-device evaluation for SciFlow variants over base-
+dence map and per-iteration confidence map. Here we train RAFT-                                          lines. We report on-device performance of the baselines, RAFT-S
+large models on FlyingChairs (C) and FlyingThings (T) and eval-                                          and MobileFlow, and their variants. For fair comparisons, we en-
+uate on Sintel (S) and KITTI (K) training datasets.                                                      sure same on-device execution power mode and apply same num-
+           Source of Mconf (Eq. 8)
+                                                    Sintel                        KITTI 15               ber (6) of iterations to meet the real-time requirement for model
+                                        clean (epe)       final (epe)      Fl-epe          Fl-all        variants below. ”NA/OOM” indicates an out-of-memory error for
+           No confidence map           1.43 (-0.0%) 2.71 (-0.0%)        5.04 (-0.0%) 17.4 (-0.0%)
+           Per-iter confidence map     1.41 (-1.4%) 2.75 (+1.5%)        4.63 (-8.1%) 16.6 (-4.6%)        the model (along with its needed memory for cost volume and ac-
+           Final-iter confidence map   1.38 (-3.5%) 2.77 (+2.2%)        4.58 (-9.1%) 16.2 (-6.9%)        tivations) during inference. Subsection 4.2.6 has more details.
+                                                                                                          Model Architecture      #Params    Latency (ms)    Power (mW)
+4.2.4                 Qualitative Results
+                                                                                                          RAFT-S                   1.0M        NA/OOM          NA/OOM
+Fig. 5 gives qualitative samples on Sintel dataset. The                                                   RAFT-S+SCI+RFL           1.0M        NA/OOM          NA/OOM
+base+SCI variant demonstrates improved robustness over                                                    MobileFlow1              1.5M     29.02 (+0.00%)   392 (+0.00%)
+                                                                                                          MobileFlow1 +SCI+RFL     1.5M     28.88 (-0.48%)   393 (+0.26%)
+the baseline in occlusion areas. Base+SCI+FRL further
+shows slight improvements in several subtle visual details.
+                                                                                                         that our proposed SciFlow method incurs minimal addi-
+4.2.5                 RFL as A Confidence Measure                                                        tional overhead in latency and power. We observe slightly
+Figure 6 demonstrates an additional use of RFL as a confi-                                               reduced latency MobileFlow+SCI+RFL compared to base-
+dence measure in inference.                                                                              line. Though it might seem counter-intuitive, the compiler
+                                                                                                         optimization may be the reason for such observation, an in-
+4.2.6                 On-Device Evaluation                                                               dication for minimal SciFlow latency overhead.
+We report on-device evaluation of our models on Samsung
+S24 with a Snapdragon 8 Gen 3 processor and Qualcomm                                                     5. Conclusion
+HexagonTM Tensor Processor (HTP), which is an AI ac-                                                     In this paper, we introduce two effective techniques for opti-
+celerator specialized for neural network workloads. We                                                   cal flow estimation. Specifically, we propose Self-Cleaning
+adopt the INT8 (W8A8) quantization based on AIMET3                                                       Iterations (SCI) to help resolve estimation ambiguities, mit-
+[36] toolkit and use the QNN-SDK4 from Qualcomm AI                                                       igating the issue of error propagation during iterative re-
+Stack.5 Table 5 summarizes our evaluation on this target                                                 finement. Additionally, We propose Regression Focal Loss
+S24 device. Other than the RAFT-S and its variant that                                                   (RFL) to guide the model to focus on regions of high resid-
+run out of memory, an expected behavior due to the all-                                                  ual regression errors during training. Our experiments show
+pair cost volume space consumption for RAFT [39] archi-                                                  that SciFlow, the combination of SCI and RFL, significantly
+tecture against limited on-target memory, the result shows                                               improves accuracy of lightweight baseline models at neg-
+                  3 AIMET
+            is a product of Qualcomm Innovation Center, Inc.
+                                                                                                         ligible additional overhead for real-time on-device optical
+                  4 https
+            : / / developer . qualcomm . com / software /                                                flow estimation. We believe our methods may benefit a
+qualcomm-ai-stack                                                                                        wider range of model architectures and may be potentially
+   5 Snapdragon and Qualcomm branded products are products of Qual-
+                                                                                                         extended to more vision use cases and tasks.
+comm Technologies, Inc. and/or its subsidiaries.
+
+
+                                                                                                     8
+References                                                                      national Journal of Robotics Research, 32(11):1231–1237,
+                                                                                2013. 6
+ [1] Shubhankar Borse, Debasmit Das, Hyojin Park, Hong Cai,              [13]   Zhaoyang Huang, Xiaoyu Shi, Chao Zhang, Qiang Wang,
+     Risheek Garrepalli, and Fatih Porikli. Dejavu: Conditional                 Ka Chun Cheung, Hongwei Qin, Jifeng Dai, and Hongsheng
+     regenerative learning to enhance dense prediction. In Pro-                 Li. Flowformer: A transformer architecture for optical flow.
+     ceedings of the IEEE/CVF Conference on Computer Vision                     In Proceedings of the European Conference on Computer Vi-
+     and Pattern Recognition (CVPR), pages 19466–19477, 2023.                   sion, 2022. 1, 2, 3, 6
+     3
+                                                                         [14]   Tak-Wai Hui and Chen Change Loy. Liteflownet3: Resolv-
+ [2] Daniel J Butler, Jonas Wulff, Garrett B Stanley, and                       ing correspondence ambiguity for more accurate optical flow
+     Michael J Black. A naturalistic open source movie for optical              estimation. In Computer Vision–ECCV 2020: 16th Euro-
+     flow evaluation. In Proceedings of the European Conference                 pean Conference, Glasgow, UK, August 23–28, 2020, Pro-
+     on Computer Vision, pages 611–625. Springer, 2012. 6                       ceedings, Part XX 16, pages 169–184. Springer, 2020. 4, 5
+ [3] Hong Cai, Janarbek Matai, Shubhankar Borse, Yizhe Zhang,            [15]   Tak-Wai Hui, Xiaoou Tang, and Chen Change Loy. A
+     Amin Ansari, and Fatih Porikli. X-distill: Improving self-                 lightweight optical flow cnn—revisiting data fidelity and reg-
+     supervised monocular depth via cross-task distillation. In                 ularization. IEEE transactions on pattern analysis and ma-
+     British Machine Vision Conference, 2021. 3                                 chine intelligence, 43(8):2555–2569, 2020. 5
+ [4] Zixi Cai, Helmut Neher, Kanav Vats, David A Clausi, and             [16]   Eddy Ilg, Nikolaus Mayer, Tonmoy Saikia, Margret Keuper,
+     John Zelek. Temporal hockey action recognition via pose                    Alexey Dosovitskiy, and Thomas Brox. Flownet 2.0: Evolu-
+     and optical flows. In Proceedings of the IEEE/CVF Con-                     tion of optical flow estimation with deep networks. In Pro-
+     ference on Computer Vision and Pattern Recognition Work-                   ceedings of the IEEE/CVF Conference on Computer Vision
+     shops, pages 0–0, 2019. 1                                                  and Pattern Recognition, pages 2462–2470, 2017. 1
+ [5] Tian Qi Chen, Yulia Rubanova, Jesse Bettencourt, and David          [17]   Jisoo Jeong, Jamie Menjay Lin, Fatih Porikli, and Nojun
+     Duvenaud. Neural ordinary differential equations. In                       Kwak. Imposing consistency for optical flow estimation.
+     NeurIPS, pages 6572–6583, 2018. 2                                          In IEEE/CVF Conference on Computer Vision and Pattern
+ [6] Kyunghyun Cho, Bart Van Merriënboer, Caglar Gulcehre,                     Recognition, CVPR 2022, New Orleans, LA, USA, June 18-
+     Dzmitry Bahdanau, Fethi Bougares, Holger Schwenk, and                      24, 2022, pages 3171–3181. IEEE, 2022. 3
+     Yoshua Bengio. Learning phrase representations using rnn            [18]   Jisoo Jeong, Hong Cai, Risheek Garrepalli, and Fatih Porikli.
+     encoder-decoder for statistical machine translation. arXiv                 Distractflow: Improving optical flow estimation via real-
+     preprint arXiv:1406.1078, 2014. 2                                          istic distractions and pseudo-labeling. In Proceedings of
+ [7] Debasmit Das, Shubhankar Borse, Hyojin Park, Kambiz                        the IEEE/CVF Conference on Computer Vision and Pattern
+     Azarian, Hong Cai, Risheek Garrepalli, and Fatih Porikli.                  Recognition, pages 13691–13700, 2023. 3
+     Transadapt: A transformative framework for online test time         [19]   Jisoo Jeong, Hong Cai, Risheek Garrepalli, Jamie Menjay
+     adaptive semantic segmentation. In ICASSP 2023-2023                        Lin, Munawar Hayat, and Fatih Porikli. Ocai: Improving
+     IEEE International Conference on Acoustics, Speech and                     optical flow estimation by occlusion and consistency aware
+     Signal Processing (ICASSP), pages 1–5. IEEE, 2023. 3                       interpolation. In Proceedings of the IEEE/CVF Conference
+ [8] Edward De Brouwer, Jaak Simm, Adam Arany, and                              on Computer Vision and Pattern Recognition, 2024. 1
+     Yves Moreau. Gru-ode-bayes: Continuous modeling of                  [20]   Shihao Jiang, Dylan Campbell, Yao Lu, Hongdong Li, and
+     sporadically-observed time series. In Advances in Neural                   Richard Hartley. Learning to estimate hidden motions with
+     Information Processing Systems. Curran Associates, Inc.,                   global motion aggregation. In Proceedings of the IEEE/CVF
+     2019. 2                                                                    International Conference on Computer Vision, pages 9772–
+ [9] Alexey Dosovitskiy, Philipp Fischer, Eddy Ilg, Philip                      9781, 2021. 2, 6
+     Hausser, Caner Hazirbas, Vladimir Golkov, Patrick Van               [21]   Shihao Jiang, Yao Lu, Hongdong Li, and Richard I. Hartley.
+     Der Smagt, Daniel Cremers, and Thomas Brox. Flownet:                       Learning optical flow from a few matches. 2021 IEEE/CVF
+     Learning optical flow with convolutional networks. In                      Conference on Computer Vision and Pattern Recognition
+     Proceedings of the IEEE/CVF International Conference on                    (CVPR), pages 16587–16595, 2021. 6
+     Computer Vision, pages 2758–2766, 2015. 3, 6                        [22]   Kiran Kale, Sushant Pawar, and Pravin Dhulekar. Moving
+[10] Risheek Garrepalli, Jisoo Jeong, Rajeswaran C Ravindran,                   object tracking using optical flow and motion vector estima-
+     Jamie Menjay Lin, and Fatih Porikli. Dift: Dynamic iter-                   tion. In 2015 4th international conference on reliability, in-
+     ative field transforms for memory efficient optical flow. In               focom technologies and optimization (ICRITO)(trends and
+     Proceedings of the IEEE/CVF Conference on Computer Vi-                     future directions), pages 1–6. IEEE, 2015. 1
+     sion and Pattern Recognition, pages 2219–2228, 2023. 3,             [23]   Lingtong Kong and Jie Yang. Fdflownet: Fast optical flow
+     5                                                                          estimation using a deep lightweight network. In 2020 IEEE
+[11] Jochen Gast and Stefan Roth. Lightweight probabilistic deep                International Conference on Image Processing (ICIP), pages
+     networks. In Proceedings of the IEEE Conference on Com-                    1501–1505. IEEE, 2020. 5
+     puter Vision and Pattern Recognition, pages 3369–3378,              [24]   Lingtong Kong, Chunhua Shen, and Jie Yang. Fastflownet:
+     2018. 3                                                                    A lightweight network for fast optical flow estimation. In
+[12] Andreas Geiger, Philip Lenz, Christoph Stiller, and Raquel                 2021 IEEE International Conference on Robotics and Au-
+     Urtasun. Vision meets robotics: The kitti dataset. The Inter-              tomation (ICRA), pages 10310–10316. IEEE, 2021. 3, 4, 5
+
+
+                                                                     9
+[25] Lingtong Kong, Boyuan Jiang, Donghao Luo, Wenqing Chu,                         cost volume. In Proceedings of the IEEE/CVF Conference
+     Xiaoming Huang, Ying Tai, Chengjie Wang, and Jie Yang.                         on Computer Vision and Pattern Recognition, pages 8934–
+     Ifrnet: Intermediate feature refine network for efficient frame                8943, 2018. 3
+     interpolation. In Proceedings of the IEEE/CVF Conference                [39]   Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field
+     on Computer Vision and Pattern Recognition, pages 1969–                        transforms for optical flow. In Proceedings of the European
+     1978, 2022. 1                                                                  Conference on Computer Vision, pages 402–419. Springer,
+[26] Myunggi Lee, Seungeui Lee, Sungjoon Son, Gyutae Park,                          2020. 1, 2, 3, 4, 5, 6, 8
+     and Nojun Kwak. Motion feature network: Fixed motion                    [40]   Prune Truong, Martin Danelljan, Luc Van Gool, and Radu
+     filter for action recognition. In Proceedings of the European                  Timofte. Learning accurate dense correspondences and when
+     Conference on Computer Vision, pages 387–403, 2018. 1                          to trust them. In Proceedings of the IEEE/CVF conference on
+[27] Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He, and                      computer vision and pattern recognition, pages 5714–5724,
+     Piotr Dollár. Focal loss for dense object detection. In Pro-                  2021. 3
+     ceedings of the IEEE international conference on computer               [41]   Jianyuan Wang, Yiran Zhong, Yuchao Dai, Kaihao Zhang,
+     vision, pages 2980–2988, 2017. 3, 5                                            Pan Ji, and Hongdong Li. Displacement-invariant matching
+[28] Guo Lu, Wanli Ouyang, Dong Xu, Xiaoyun Zhang, Chunlei                          cost learning for accurate optical flow estimation. Advances
+     Cai, and Zhiyong Gao. Dvc: An end-to-end deep video com-                       in Neural Information Processing Systems, 33, 2020. 5
+     pression framework. In Proceedings of the IEEE/CVF Con-                 [42]   Chao-Yuan Wu, Nayan Singhal, and Philipp Krahenbuhl.
+     ference on Computer Vision and Pattern Recognition, pages                      Video compression through image interpolation. In Proceed-
+     11006–11015, 2019. 1                                                           ings of the European Conference on Computer Vision, pages
+[29] Nikolaus Mayer, Eddy Ilg, Philip Hausser, Philipp Fischer,                     416–431, 2018. 1
+     Daniel Cremers, Alexey Dosovitskiy, and Thomas Brox. A                  [43]   Haofei Xu, Jiaolong Yang, Jianfei Cai, Juyong Zhang, and
+     large dataset to train convolutional networks for disparity,                   Xin Tong. High-resolution optical flow from 1d attention and
+     optical flow, and scene flow estimation. In Proceedings of                     correlation. In Proceedings of the IEEE/CVF International
+     the IEEE/CVF Conference on Computer Vision and Pattern                         Conference on Computer Vision, pages 10498–10507, 2021.
+     Recognition, pages 4040–4048, 2016. 6                                          6
+[30] Moritz Menze and Andreas Geiger. Object scene flow for                  [44]   Rajeev Yasarla, Hong Cai, Jisoo Jeong, Yunxiao Shi,
+     autonomous vehicles. In Proceedings of the IEEE/CVF Con-                       Risheek Garrepalli, and Fatih Porikli. Mamo: Leveraging
+     ference on Computer Vision and Pattern Recognition, pages                      memory and attention for monocular video depth estimation.
+     3061–3070, 2015. 6                                                             In Proceedings of the IEEE/CVF International Conference
+[31] Moritz Menze, Christian Heipke, and Andreas Geiger. Joint                      on Computer Vision, pages 8754–8764, 2023. 3
+     3d estimation of vehicles and scene flow. In ISPRS Workshop
+                                                                             [45]   Rajeev Yasarla, Manish Kumar Singh, Hong Cai, Yunxiao
+     on Image Sequence Analysis (ISA), 2015. 6
+                                                                                    Shi, Jisoo Jeong, Yinhao Zhu, Shizhong Han, Risheek Gar-
+[32] Anurag Ranjan and Michael J Black. Optical flow estima-
+                                                                                    repalli, and Fatih Porikli. Futuredepth: Learning to predict
+     tion using a spatial pyramid network. In Proceedings of
+                                                                                    the future improves video depth estimation. arXiv preprint
+     the IEEE/CVF Conference on Computer Vision and Pattern
+                                                                                    arXiv:2403.12953, 2024. 3
+     Recognition, pages 4161–4170, 2017. 4
+                                                                             [46]   Zhichao Yin, Trevor Darrell, and Fisher Yu. Hierarchical dis-
+[33] Ali Salehi and Madhusudhanan Balasubramanian. Ddcnet:
+                                                                                    crete distribution decomposition for match density estima-
+     Deep dilated convolutional neural network for dense predic-
+                                                                                    tion. In Proceedings of the IEEE/CVF Conference on Com-
+     tion. Neurocomputing, 523:116–129, 2023. 5
+                                                                                    puter Vision and Pattern Recognition, pages 6044–6053,
+[34] Mark Sandler, Andrew Howard, Menglong Zhu, An-
+                                                                                    2019. 3
+     drey Zhmoginov, and Liang-Chieh Chen. Mobilenetv2:
+                                                                             [47]   Feihu Zhang, Oliver J Woodford, Victor Adrian Prisacariu,
+     Inverted residuals and linear bottlenecks, 2018.            cite
+                                                                                    and Philip HS Torr. Separable flow: Learning motion cost
+     arxiv:1801.04381. 6
+                                                                                    volumes for optical flow estimation. In Proceedings of the
+[35] Xiaoyu Shi, Zhaoyang Huang, Dasong Li, Manyuan Zhang,
+                                                                                    IEEE/CVF International Conference on Computer Vision,
+     Ka Chun Cheung, Simon See, Hongwei Qin, Jifeng Dai, and
+                                                                                    pages 10807–10817, 2021. 6
+     Hongsheng Li. Flowformer++: Masked cost volume autoen-
+     coding for pretraining optical flow estimation. In Proceed-             [48]   Zhiyong Zhang, Huaizu Jiang, and Hanumant Singh. Neu-
+     ings of the IEEE/CVF Conference on Computer Vision and                         flow: Real-time, high-accuracy optical flow estimation on
+     Pattern Recognition, pages 1599–1610, 2023. 2                                  robots using edge devices, 2024. 3, 4
+[36] Sangeetha Siddegowda, Marios Fournarakis, Markus Nagel,                 [49]   Shengyu Zhao, Yilun Sheng, Yue Dong, Eric I Chang, Yan
+     Tijmen Blankevoort, Chirag Patel, and Abhijit Khobare.                         Xu, et al. Maskflownet: Asymmetric feature matching with
+     Neural network quantization with ai model efficiency toolkit                   learnable occlusion mask. In Proceedings of the IEEE/CVF
+     (aimet), 2022. 8                                                               Conference on Computer Vision and Pattern Recognition,
+[37] Deqing Sun, Xiaodong Yang, Ming-Yu Liu, and Jan Kautz.                         pages 6278–6287, 2020. 5
+     PWC-Net: CNNs for optical flow using pyramid, warping,                  [50]   Huizhong Zhou, Benjamin Ummenhofer, and Thomas Brox.
+     and cost volume. In CVPR, 2018. 5                                              Deeptam: Deep tracking and mapping. In Proceedings of the
+[38] Deqing Sun, Xiaodong Yang, Ming-Yu Liu, and Jan Kautz.                         European Conference on Computer Vision, pages 822–838,
+     Pwc-net: Cnns for optical flow using pyramid, warping, and                     2018. 1
+
+
+                                                                        10
+

@@ -1,0 +1,636 @@
+                                          Platinum: Path-Adaptable LUT-Based Accelerator
+                                          Tailored for Low-Bit Weight Matrix Multiplication
+                                                        Haoxuan Shan, Cong Guo, Member, IEEE, Chiyue Wei, Feng Cheng, Junyao Zhang,
+                                                                      Hai (Helen) Li, Fellow, IEEE, Yiran Chen, Fellow, IEEE
+                                                                Department of Electrical and Computer Engineering, Duke University
+                                                    {haoxuan.shan, cong.guo, chiyue.wei, feng.cheng, junyuao.zhang, hai.li, yiran.chen}@duke.edu
+
+                                            Abstract—The rapid scaling of large language models de-                                  𝒚      =    𝒘 ∙   𝒙            compute all
+                                         mands more efficient hardware. Quantization offers a promising                          +0+5=5         0 1    -2            and reuse
+                                         trade-off between efficiency and performance. With ultra-low-bit                                               5      𝑳𝑼𝑻𝒙
+arXiv:2511.21910v1 [cs.AR] 26 Nov 2025
+
+
+
+
+                                                                                                                                +(-2)+5=3       0 0         Index     Value
+                                         quantization, there are abundant opportunities for results reuse,
+                                         and thus it can be boosted with lookup tables (LUTs) based                              +0+0=0         1 1         (𝟎, 𝟎) 𝟎 + 𝟎 = 𝟎
+                                                                                                                                                            (𝟏, 𝟎) -𝟐 + 𝟎 = -𝟐
+                                         acceleration. However, existing LUT-based methods suffer from                          +(-2)+5=3       1 0
+                                                                                                                                                            (𝟎, 𝟏) 𝟎 + 𝟓 = 𝟓
+                                         computation and hardware overheads for LUT construction, and                          +(-2)+0=-2       1 1         (𝟏, 𝟏) -𝟐 + 𝟓 = 𝟑
+                                         rely solely on bit-serial computation, which is suboptimal for                      GEMV: 𝒎𝒌 adds             LUT-based: 𝒎 queries
+                                         ternary-weight networks. We propose Platinum, a lightweight
+                                         ASIC accelerator for integer weight mixed-precision matrix                    Fig. 1: Comparison between original binary matrix vector
+                                         multiplication (mpGEMM) using LUTs. Platinum reduces LUT                      multiplication (GEMV) and LUT-based optimization using a
+                                         construction overhead via offline-generated construction paths                binary weight matrix w of shape (m, k) and input vector x
+                                         and supports both general bit-serial and optimized ternary-                   of shape (k, n), where m = 5, n = 1, k = 2. LUT-based
+                                         weight execution through adaptive path switching. On BitNet
+                                         b1.58-3B, Platinum achieves up to 73.6×, 4.09×, and 2.15×
+                                                                                                                       optimization reduces computation by a factor of k.
+                                         speedups over SpikingEyeriss, Prosperity, and 16-thread T-MAC                 hidden dimensions allow reusing between thousands of
+                                         (CPU), respectively, along with energy reductions of 32.4×, 3.23×,
+                                         and 20.9×, all within a 0.96mm2 chip area. This demonstrates                  weight multiplications per input. Combined with bit-serial
+                                         the potential of LUT-based ASICs as efficient, scalable solutions             approaches [14]–[17], LUT methods can efficiently support
+                                         for ultra-low-bit neural networks on edge platforms.                          integer-based quantization mpGEMM. As a result, LUT-based
+                                            Index Terms—Ultra-low-bit quantization, Ternary weights ma-                acceleration [14], [18]–[23] has recently gained attention for
+                                         trix multiplication, Lookup Table-based accelerator, LLM                      efficient LLM inference.
+                                                                                                                          Precomputing all potential LUTs and loading them at
+                                                                  I. I NTRODUCTION
+                                                                                                                       runtime is prohibitively costly. Most existing methods build
+                                            The size of deep neural networks (DNNs), particularly large                LUTs at runtime for incoming activations and query with
+                                         language models (LLMs), continues to grow rapidly [1]–[3],                    weights. Minimizing LUT construction overhead is thus crit-
+                                         leading to increased energy consumption and computational                     ical. Prosperity [24] addresses this by using “shortcuts”
+                                         latency. Among core operations in LLMs, general matrix                        that reuse intermediate entries during construction. However,
+                                         multiplication (GEMM) dominates both fully connected and                      its dynamic scheduling incurs high area and energy over-
+                                         attention layers. As model sizes scale, GEMM’s computational                  head—unnecessary for models like BitNet with uniformly
+                                         burden grows proportionally, creating major deployment chal-                  distributed weights that utilize most LUT entries.
+                                         lenges.                                                                          Moreover, existing ASICs typically use bit-serial execu-
+                                            Quantization has emerged as a promising solution by                        tion for general weight precision, introducing redundancy for
+                                         reducing computation and memory overhead with minimal                         bitwidth like ternary weights. Bit-serial encoding for ternary
+                                         accuracy loss. Numerous studies show that aggressive low-bit                  numbers uses 2 bits, exceeding the optimal 1.58 bits (log2 3),
+                                         quantization yields substantial efficiency gains [4]–[9]. Instead             and incurs overhead from merging partial sums. In contrast,
+                                         of uniformly quantizing weights and activations, applying low-                ternary LUTs directly represent final results, eliminating this
+                                         bit quantization to weights alone has shown promise [10]–[13],                cost. Experiments show over 1.3× improvement with ternary
+                                         motivating the need for accelerating mixed-precision GEMM                     LUTs over binary LUTs for ternary weights, highlighting
+                                         (mpGEMM). For example, BitNet-b1.58 [13] uses ternary                         optimization potential for specific bitwidths.
+                                         weights (-1, 0, 1) to balance efficiency and accuracy.                           To address these gaps, we propose Platinum, a Path-
+                                            Interestingly, ultra-low-bit quantization enables LUT-based                adaptable LUT-based Accelerator Tailored for Low-bit weights
+                                         acceleration strategies, which store precomputed results for                  mpGEMM. Our key contributions include:
+                                         reuse. This approach is well-suited for LLMs, where large                     • We designed Platinum, a novel LUT-based accelerator for
+                                                                                                                          mpGEMM with integer weights, leveraging a disaggregated
+                                           This work was supported in part by NSF grants 2328805 and 2112562. The
+                                         authors thank the anonymous reviewers for their constructive feedback. Cong      path-based LUT construction framework to reduce LUT
+                                         Guo is the corresponding author of this paper.                                   generation cost and minimize hardware overhead.
+•   The accelerator supports integer-weight mpGEMM via bit-                                     account for 24% of chip area and 32.3% of total power. For
+    serial execution. By switching the construction path, it can                                models like BitNet-b1.58, whose uniformly distributed ternary
+    be reconfigured for optimized execution at specific weight                                  weights lead to high LUT utilization, runtime path scheduling
+    precision such as ternary.                                                                  is thus unnecessary. For instance, only 1.16% of LUT entries
+•   The architecture is optimized for parallelism and dataflow                                  remain unused when tiling the M -dimension with size 1080.
+    efficiency, and is lightweight and modular for edge deploy-                                    In contrast, our accelerator, Platinum, eliminates runtime
+    ment, with a chip area of just 0.96 mm2 .                                                   overhead by disaggregating LUT construction into offline
+•   Platinum achieves up to 73.6× speedup and 32.4× energy                                      path generation and lightweight online path-based construction
+    savings over state-of-the-art baselines on BitNet b1.58 3B,                                 (Figure 2). This removes the need for dynamic scheduling
+    one of the most representative ternary weight models.                                       hardware, reducing area and energy costs while enabling more
+                                                                                                processing elements (PEs) for higher throughput. Moreover,
+                                II. BACKGROUND                                                  the reprogrammable path design allows Platinum to support
+   Bit-serial LUT-based mpGEMM. Bit-serial execution                                            both bit-serial and ternary LUTs. This enables optimized ex-
+decomposes a b-bit integer weight into b binary matrices                                        ecution for ternary-weight networks, while maintaining com-
+w(0) , ..., w(b−1) , and computes y = wx by summing 2i w(i) x.                                  patibility with general weight precisions.
+For a given input x, all w(i) share the same LUT, increasing
+                                                                                                                    III. M ETHODOLOGIES
+reuse. In Figure 1, each output element in the product between
+a binary matrix and input vector has at most 2k unique                                          A. Platinum Overview
+values, where k is the input vector length. These values can                                       Platinum (Figure 3) comprises L Platinum Processing El-
+be precomputed and then queried, replacing mk additions                                         ements (PPEs), aggregators, high-bandwidth on-chip buffers,
+with m LUT accesses and (k − 1)2k additions for LUT                                             and Special Functional Units (SFUs). In each single compu-
+construction. When m is large and LUT access cost is lower                                      tation round, it first constructs L LUTs based on input with
+than k additions, this method reduces runtime computation.                                      shape (Lc, 1) and then sequentially queries (m, Lc) weights
+LLMs naturally satisfy the first condition due to large hidden                                  and aggregates the results into the output buffer. The complete
+dimensions, and the second is met by choosing a large k while                                   algorithm is shown in Algorithm 1. c represents the chunk size
+ensuring LUTs still reside in cache or on-chip buffers.                                         (vector length k) for constructing LUT. The chunk size is set
+   Tradeoffs in LUT construction. Precomputing all LUTs                                         to 5 for ternary weights to align with the weight encoding
+offline is impractical. For example, buffering all LUTs for 8-                                  (Section III-C), which requires LUTs with 128 entries.
+bit activations with k = 2 already require 4GB of memory,                                          PPEs are responsible for LUT construction and query. Each
+which is a high cost. As a result, most works build LUTs                                        includes a controller, adders, and a dedicated LUT buffer.
+at runtime for each input vector. However, constructing binary                                  Aggregators share the adders in PPEs and work alongside
+LUTs requires (k−1)2k additions if each entry is computed in-                                   additional adders to form a pipelined adder tree for efficient
+dependently, which grows exponentially. To mitigate the cost,                                   aggregation and accumulation during the Reduction stage. The
+prior works [18], [24] introduce shortcut-based construction.                                   rationale for including these extra adders is discussed in Sec-
+Prosperity [24] dynamically detects shortcuts between LUT                                       tion IV-B. LUT buffers are implemented using on-chip SRAM.
+entries to reduce cost, which is effective when only a few                                      Each entry is 8-bit to align with Bitnet’s 8-bit activation. Given
+entries are accessed. However, dynamic construction incurs                                      that the LUT occupies a relatively small portion of the overall
+significant overhead—its runtime shortcut scheduling modules                                    chip area, using higher precision (i.e., more bits per entry) is
+                                                                                                also feasible if needed. Each LUT buffer includes a read-write
+                                                                                                port and an additional read-only port to prevent pipeline stalls.
+              Offline                                              Runtime
+                                                            𝑳𝑼𝑻𝒙
+                                                                                                Both ports are used simultaneously during the query phase to
+Binary / 100 𝑥0 +0+0
+Bit-serial                shortcut                 Index Value             ternary 𝒘 𝟏          maximize throughput. The remaining buffers include storage
+                                                    1          0 + 𝑥0           𝒘
+       110 𝑥0 +𝑥1 +0 𝑥0 +0+𝑥2 101                                                    𝒘𝟎         for weights, inputs, outputs, and build paths. They are divided
+                                                    3        𝑙𝑢𝑡 1 +𝑥1
+               111 𝑥0 +𝑥1 +𝑥2                       5        𝑙𝑢𝑡 1 +𝑥2    𝒚=-𝑙𝑢𝑡 𝒘 𝟏 ≪1         into banks to maximize throughput. These buffers are accessed
+                                       Binary       7        𝑙𝑢𝑡 3 +𝑥2         +𝑙𝑢𝑡 𝒘 𝟎         sequentially during execution, benefiting from prefetching.
+                                         …
+                                         Ternary
+            Path generated offline                          switch for different tasks          SFUs are included to support operations beyond mpGEMM,
+                                           …
+                                                            𝑳𝑼𝑻𝒙                                such as vector multiplications and activation functions. Since
+    Ternary 1,0,0 𝑥0 +0+0            𝒘 (enc.)       Index Value
+                                    1,0,0               8       0 + 𝑥0                          this work focuses on GEMM, it only serves as a hardware
+      1,1,0 𝑥0 +𝑥1 +0     𝑥0 −𝑥1 +0
+                                    1,1,0               3     𝑙𝑢𝑡 8 +𝑥1       𝒚=𝑙𝑢𝑡 w
+                           1,-1,0 1,-1,0                                   save additions       overhead for fair comparison with baselines.
+                                                        5     𝑙𝑢𝑡 8 −𝑥1
+       1,1,1 𝑥0 +𝑥1 +𝑥2                                                     for ternary 𝒘          Platinum employs a disaggregated path-based LUT con-
+                                    1,1,1               7     𝑙𝑢𝑡 3 +𝑥2
+                                                                                                struction scheme (Algorithm 2). The build path, generated
+Fig. 2: Platinum leveraging programmable construction path                                      offline, represents shortcut paths as illustrated in Figure 2
+to support both bit-serial LUT-based and ternary LUT-based                                      and is sequentially loaded during the LUT construct stage of
+mpGEMM. The path generation is disaggregated to offline                                         runtime until a ”Finish” token is reached. Each shortcut path
+to reduce runtime overhead. Refer to Section III-C for more                                     triggers the computation of a new LUT entry by combining an
+details of ternary LUT benefits for ternary weights.                                            existing entry with an input element. A dedicated four-stage
+
+
+
+                                                                                            2
+Algorithm 1 Single Computation Round                                           Algorithm 2 Path-Based LUT Construction
+ 1:    Input: Weights (m, Lc), Inputs (Lc, 1), Outputs (m, 1)                   1:   Parameters: Chunk size c, Table size S
+ 2:    Output: Outputs (m, 1)                                                   2:   Input: Input activations a1 , . . . , ac ; build path[S]
+ 3:    Hardware: Platinum Processing Elements (PPE), Aggre-                     3:   Output: Look-up Table LUT[S]
+       gator (AGG)                                                              4:   function LUT C ONSTRUCTION(a1 , . . . , ac )
+ 4:    function FLIP(v,s) return if s then − v else v                           5:      Initialize LUT[0] ← 0, PC ← 0
+ 5:    function PPE .Q UERY(index)                                              6:      while build path[PC] is not “Finish” do
+ 6:        return F LIP(LU T [index[6 : 0]], index[7])                          7:          path ← build path[PC]
+ 7:    end function                                                             8:          dst, src, j, sign ← path
+ 8:    function AGG .R EDUCE(vals, output)                                      9:          LUT[dst] ← LUT[src] +Flip(aj , sign)
+ 9:        sum ← AGG . AGGREGATE(vals)                                         10:          PC ← PC +1
+10:        output ← output + sum                                               11:      end while
+11:    end function                                                            12:      return LUT
+12:    function ROUND(inputs, weights, outputs)                                13:   end function
+13:        PPE .C ONSTRUCT(inputs) (Algorithm 2)
+14:        for i = 0 to m − 1 do                                                      Static Build Path (Buffer) Stage1                         Stage2                                            Stage3                             Stage4
+               vals ← PPE . QUERY(weights[i])                                               Bit Serial
+
+
+
+
+                                                                                                                                                                         dst lut[src] a[j] sign
+                                                                                                                                                 LUT Read Input Access
+15:
+
+
+
+
+                                                                                                                                         sign
+
+
+
+
+                                                                                                                                                                                                        Adder: lut[src]±a[j]
+                                                                                        lut[1]= lut[0]+i[0]
+
+
+
+
+                                                                                                                                                                                                  +/-
+                                                                                                                       Load Build Path
+16:            AGG . REDUCE(vals, outputs[i])
+
+
+
+
+                                                                                                                                                                                                                               lut[dst]
+                                                                                        lut[8]= lut[1]+i[1]
+
+
+
+
+                                                                                                                                                                                                                                          LUT Write
+17:        end for
+
+
+
+
+                                                                                                                                         j
+                                                                                               Ternary
+                                                                                                …        Weights
+18:    end function                                                                    lut[127]=lut[1]= lut[0]+i[0]
+                                                                                                 lut[63]+i[6]
+
+
+
+
+                                                                                                                                         src
+
+
+
+
+                                                                                                                                                                                                                               dst
+                                                                                                 lut[7]=lut[1]-i[1]
+                                                                                                         …
+ PLATinuM-PE                   P L A T I N U M Accelerator
+
+
+
+
+                                                                                                                                         dst
+                                                                                               lut[122]=lut[71]-i[3]
+  Controller
+                                                             Aggregators
+   Adders
+                   Inputs                                     (share +)
+                                                                                 Fig. 4: Four-stage construction pipeline with build path.
+    LUTs
+                                                             + + + +
+                                          ×L
+                                                                               new method from a graph-theoretic perspective with minimal
+                                  …
+
+
+
+                                                     …
+
+
+
+
+      Buffers
+                  Build Path
+                                                               +     +
+ Area Waived
+                                                                               construction cost.
+                                                                 +
+                                                                     +
+                                                                                  The LUT construction can be formalized as a directed
+  Path Gen        Scheduler                                                    hypergraph. Each node represents a LUT entry, and each
+  Weights
+  Encoding        Decoder            Weight Buffer       Output Buffer         hyperedge represents a computation. For example, a hyperedge
+                                                                               e = ({n1 , n2 }, n3 , add_cost) denotes an addition operation
+      Offline                        DRAM                      SFUs            n3 = n1 + n2 . Given a set of source nodes {sj }, a valid
+                                                                               build path is a subset of hyperedges that connects all other
+                Fig. 3: Architecture of Platinum Processor                     nodes to the source set. The optimal build path minimizes
+construction pipeline (Figure 4) is implemented to support                     the total cost and corresponds to a minimum spanning tree
+runtime construction and minimize construction stalls. At each                 (MST) in the hypergraph. In our setting, the source node
+cycle, the pipeline fetches a path entry from the build path                   is lut0 , representing zero, and the operations are restricted
+buffer and sends to PPEs. The controller in PPEs extracts the                  to additions/subtractions of input entry, which are reversible.
+source and destination addresses, input index, and sign bit. In                This allows us to convert the hypergraph into a standard
+the second stage, the required values are read from the LUT                    undirected graph and apply classical MST algorithms such
+and input buffers. These values are combined—either added                      as Prim’s algorithm [25] for efficient construction. The re-
+or subtracted—in the third stage, and the result is written back               sulting MST yields a build path with operations of the form
+in the final stage.                                                            (dst, src, j, flip), representing lut[dst] = lut[src] ± aj .
+                                                                               The build order is naturally topologically sorted from the
+B. Offline Path Generation with MST                                            MST, ensuring correct data dependencies. Notably, for c = 5,
+   Previous designs construct each LUT entry in parallel by                    the shortest Read-After-Write (RAW) dependency distance
+directly computing from the inputs. While this strategy is well-               exceeds the number of pipeline stages, eliminating the need
+suited for GPUs, which benefit from abundant parallelism and                   for additional hardware hazard handling. Combined with LUT
+rich computational resources, it introduces significant over-                  size reduction via symmetry, our MST-based approach reduces
+head in compact accelerators with limited on-chip resources.                   the number of additions by ∼ 10× at c = 5, compared to naive
+This overhead is tolerable for small chunk sizes but a more                    LUT construction.
+efficient construction method is desirable for larger chunk sizes                 The generated build path is stored in on-chip buffer and
+and ternary weights. BIQGEMM [18] proposed a dynamic                           retrieved by the four-stage construction pipeline at runtime. By
+programming approach for binary weights, obtaining each                        generating separate build paths for bit-serial and ternary LUT,
+LUT entry with just a left shift and one addition. Prosperity                  and dynamically switching paths during execution (Figure 4),
+[24] leveraged ”shortcut” to maximize the reuse of entries                     our accelerator efficiently supports multiple weight precisions,
+already computed. Inspired by these ideas, we propose a                        including GEMM in attention layers.
+
+
+
+                                                                           3
+                                                                                                                                       2
+                      5
+
+
+
+
+                                                                                                                         Parameter
+#Addition Reduction
+
+
+
+
+                                                                                                                          Bits Per
+                                                                                                                                     1.86
+                      4
+                                                                                                                                     1.72
+                                                                                                                                                          Selected
+                      3                                                                                                              1.58
+                                                                                                                                            2    3    4      5       6   7   8
+                      2                                                                                                                                Pack Size (C)
+                                       BitSerial        Ternary         Platinum                 Selected                  Fig. 6: Average bits per weight w.r.t the pack size c.
+                      1
+                                 16                  32                  64                         128
+                                            Size of Lookup Table (#Entries)                                           similar to that used in Bitnet.cpp [21]. Every c ternary weights
+Fig. 5: #Addition reduction for ternary weights mpGEMM                                                                are packed into a base-3 integer, requiring only ⌈log2 3c ⌉ bits.
+over LUT sizes. Assume M = 1080.                                                                                      The number is further split into a sign bit and ⌈log2 3c ⌉ − 1
+C. LUT Method Tailored for Ternary Weights mpGEMM                                                                     index bits to preserve symmetry without decoding. As shown
+                                                                                                                      in Figure 6, encoding overhead is minimized at c = 5, achiev-
+   In this section, we present a ternary LUT-based mpGEMM                                                             ing 1.6 bits per weight. This fits neatly into a byte and aligns
+approach and demonstrate why it outperforms bit-serial                                                                well with typical memory systems. Additionally, we reorder
+LUT methods when handling ternary weights. For ternary                                                                indices based on the construction path to ensure LUT entries
+mpGEMM with weights of size M × K and input of size                                                                   are accessed sequentially and no hazard detection is needed
+K ×N , naive computation requires M KN additions. Subtrac-                                                            for the construction pipeline, forming the final encoded weight
+tions are counted as additions due to negligible sign-flip cost.                                                      stream. Since the encoding is performed offline, it reduces
+The bit-serial LUT method reduces this cost by approximately                                                          hardware complexity while avoiding runtime overhead.
+c/2 when M is large, as shown in Equation (1). For each c-
+element input chunk, c2c additions are required to construct                                                                                IV. S YSTEM -L EVEL D ESIGN
+the LUT, followed by 2M LUT queries and M additions                                                                   A. Parallelism and Scaling
+to merge results. This process repeats ⌈K/c⌉N times. An
+                                                                                                                         There are two primary strategies for improving accelerator
+additional M (⌈K/c⌉−1)N additions are needed to accumulate
+                                                                                                                      throughput: (1) enhancing the processing capacity of each
+partial results.
+                                                                                                            PE, and (2) increasing the number of PEs. Our LUT-based
+                                      K            K       K                                                          GEMM approach exploits the fact that each input vector is
+                      #addbs =            c2c + M     +M      −1 N                                          (1)
+                                      c            c       c                                                          reused across many weight vectors, and vice versa-each weight
+   In contrast, the ternary LUT-based method avoids the                                                               vector serves as a query across multiple input chunks, as also
+M ⌈K/c⌉N term and has lower total cost with proper choice of                                                          observed in [20]. Rather than computing a standard M × c
+c, as shown in Equation (2). Here, LUT construction requires                                                          weight matrix with a c × 1 input, we extend processing to
+c3c additions per chunk, and result accumulation is the same                                                          multiple input columns simultaneously, exploiting parallem-
+as in the bit-serial case.                                                                                            lism in N -dimension. Given c×ncols input blocks, we construct
+                                          
+                                               K
+                                                           
+                                                             K
+                                                                  
+                                                                                                                      a LUT with block size equal to ncols , allowing each query to
+                             #addter =             c3c + M      −1 N                                        (2)       return a block of ncols partial sums. This technique reduces
+                                               c             c
+                                                                                                                      query overhead and overall area consumption compared to
+   We further reduce cost by exploiting symmetry (mirror
+                                                                                                                      a single-column LUT design. Theoretically, increasing ncols
+consolidation) in ternary weights, a technique used in prior
+                                                                                                                      boosts throughput. However, Cacti 7.0 [26] analysis shows
+works [14], [19], [21]. For example, weight vectors [−1, 1]
+                                                                                                                      diminishing area efficiency beyond ncols > 8. Additionally,
+and [1, −1] are symmetric; when multiplied with the same
+                                                                                                                      for small N , large ncols values cause resource under-utilization.
+input vector, the output of one can be obtained by negating
+                                                                                                                      Based on this, we set ncols = 8 in our final design.
+the other. We store only LUT entries where the leftmost non-
+                                                                                                                         The second scaling axis involves increasing the number
+zero value is +1 (e.g., [0, 1, -1]) and infer the rest by negation,
+                                                                                                                      of PEs to enable parallel processing along the K and N
+reducing LUT size to ⌈3c /2⌉. Combined with our offline
+                                                                                                                      dimensions. With L PEs, we process L · c × ncols inputs in
+path-based LUT construction (Section III-B), this approach
+                                                                                                                      parallel, and stream the resulting partial sums directly to the
+reduces LUT construction cost from c3c to ⌈3c /2⌉, yielding a
+                                                                                                                      accumulators, reducing output buffer pressure. However, the
+∼ 2c× reduction compared to naive ternary LUT construction
+                                                                                                                      choice of L is constrained by memory bandwidth and tiling
+(Equation (3)). As shown in Figure 5, our method achieves the
+                                                                                                                      granularity. Excessive L can result in resource underutilization.
+lowest addition count across varying chunk sizes for BitNet
+                                                                                                                      We empirically set L = 52 to balance throughput and resource
+b1.58 3B.
+                                                                                                                      efficiency, also facilitating tiling for BitNet-b1.58 models.
+                                                            3c
+                                                                                    
+                                                   K                           K                                      B. Utilization Improvements
+                          #addplatinum =                             +M                −1        N          (3)
+                                                   c        2                  c                                        We observed an imbalance between computation and mem-
+   Compact weight encoding is also critical. Storing each                                                             ory access requirements during the LUT construction, query,
+ternary weight as a byte is highly redundant. A common                                                                and reduction stages. In the construction stage, a stall-free
+solution, e.g., T-MAC [14], uses 2-bit encoding, which still                                                          design requires roughly one addition, one LUT read, and one
+far exceeds the optimal 1.58 bits. Our work adopts a strategy                                                         LUT write per cycle, implying one adder per two LUT ports.
+
+
+
+                                                                                                                  4
+In contrast, during querying, both LUT ports are used for               Model and Kernel Extraction. We extract evaluation kernels
+queries, yielding two partial sums per cycle. This necessitates         from the BitNet-b1.58 model suite [13], which includes b1.58-
+two adders for reduction to maximize the throughput. This               l, b1.58-xl, and b1.58-3B models with 700M, 1.3B, and 3B
+discrepancy results in idle resources: either adders or LUT             parameters, respectively. These models utilize BitLinear layers
+ports. Since the query and reduction stages dominate execution          as their primary compute blocks. We extract the input (K) and
+time, it is more beneficial to maximize resource utilization            output (M ) feature dimensions from these layers, and vary the
+during these stages. To this end, we provision extra adders             product of batch size and sequence length (N ) to evaluate both
+to fully support the reduction stage’s demands. It ensures              the prefill and decode stages of LLM inference. Specifically,
+theoretically near 100% utilization of both LUT ports and an            we test with N = 1024 for the prefill stage and N = 8 for
+average adder utilization of 90.5%, resulting in high overall           the decode stage.
+efficiency.                                                             Hardware Modeling. The RTL of our Platinum processing
+                                                                        elements is implemented in SystemVerilog. We use Synopsys
+C. Tiling and Stationarity                                              Design Compiler with ARM’s standard cell library targeting a
+    Tiling is critical for GEMM acceleration due to the high            commercial 28nm technology node and 500 MHz frequency
+energy and latency cost of DRAM accesses. Large buffers are             to obtain post-synthesis estimates for area and dynamic/static
+allocated for weights and outputs to maintain them on-chip              power. On-chip SRAM buffer characteristics are modeled
+while provisioning only minimal input buffering, since it is            using CACTI 7.0 [26], configured for the same process. Off-
+only accessed during LUT construction. To determine optimal             chip DRAM is modeled using DRAMsim3 [29] to estimate
+tiling configurations, we conducted design space exploration            memory system energy consumption. We followed the settings
+on the prefill stages of three BitNet-b1.58 models. Alongside           in [24] for fair comparison, which employs 64GB DDR4
+tile sizes, we evaluated various data stationary strategies. The        2133R with 64GB/s as maximum bandwidth. We extend the
+evaluations over configurations across three models are shown           open-source Prosperity [24] simulator to support BitNet-b1.58
+in Figure 7. To strike a balance between latency, energy, and           kernels and to develop a cycle-accurate simulator that captures
+area, we picked m tiled=1080, k tiled=520, n tiled=32 with              computation cycles, memory accesses, and PE activities. Using
+mnk-stationary, which is marked with red in the figure. We              trace outputs and synthesized area/power data, we compute
+integrate 272KB on-chip SRAM for buffers, together with                 total cycles and energy per kernel.
+52KB LUT, resulting only a total of 324KB.
+                                                                        B. Area and Power Breakdown
+                                                      B1.58-l
+               3                                      B1.58-xl             The chip has an overall size of 0.96 mm2 . On-chip buffers
+  Area (mm2)
+
+
+
+
+                                                      B1.58-3B          dominate the overall chip area. Specifically, the buffers for
+               2                                      Selected
+                                                                        storing weights and activations occupy approximately 65% of
+                                                                        the total area. When including the memory allocated for LUTs,
+               1                                                        this figure rises to 83.3%, underscoring the memory-intensive
+                   104               105                   106          nature of a LUT-based accelerator. The aggregator and PPEs,
+                          Latency Energy (ms mJ)                        which carry out the core computations, account for just 15% of
+           Fig. 7: Design Space Exploration for Tilling Sizes           the area. The compact footprint of the PPE highlights the area
+                           V. E VALUATION                               efficiency of compute resources with LUT-based method. This
+                                                                        benefit becomes even more pronounced when operator area
+A. Experimental Setup                                                   costs increase, such as FP16 adders used for FP16 activations.
+   We evaluate our accelerator using a comprehensive method-               When running the prefill workloads of the b1.58-3B model,
+ology that combines RTL synthesis, memory modeling,                     our accelerator consumes a power of 3.2W. DRAM access and
+DRAM power estimation, and cycle-accurate simulation. Both              weight buffer access are the most power-intensive operations,
+bit-serial based execution (Platinum-bs) and execution op-              contributing 53.5% and 31.6% of total power, respectively.
+timized for ternary weights are evaluated (Platinum). Plat-
+inum-bs adapts binary LUT and c = 7 to align with the                                TABLE I: Accelerator specifications.
+LUT size. For benchmarking, we compare our design against                                         Eyeriss   Prosperity T-MAC     Platinum
+SpikingEyeriss [27], Prosperity [24], and T-MAC [14] under                                         [27]       [24]       [14]     Ours
+equivalent workloads. Since SpikingEyeriss [24], [27], [28],              Type                       ASIC      ASIC    CPU†        ASIC
+and Prosperity [24] are designed for spiking neural networks,             Freq. (MHz)                 500       500     3490        500
+they are evaluated with a bit-serial execution. Specifically, for         Tech. (nm)                   28        28       5          28
+                                                                          # of PEs                    168       256       —         416
+a ternary-weight matrix W , each ternary-weight mpGEMM is                 Area (mm2 )                1.07      1.06∗     289       0.955
+computed with two passes, handling ’1’ and ’-1’ in weights                           ‡
+                                                                          Throughput (GOP/s)         20.8       375      715       1534
+separately. The final result is then obtained by subtracting the        ∗
+                                                                          Prosperity is scaled for fair comparison.
+results from two passes. T-MAC [14] provides a CPU-based                †
+                                                                          T-MAC: Benchmarked on Apple M2 Pro Laptop.
+                                                                        ‡
+implementation. We evaluate it on an Apple M2 Pro laptop                  The number of operations is based on the additions/subtractions
+with 16 threads, which serves as a strong baseline.                     for naively compute the b1.58-3B model with N =1024.
+
+
+
+                                                                    5
+                                   Eyeriss
+                        102        Prosperity
+    Latency (ms)
+
+                                   T-MAC-T16
+                                   PLATinuM-bs
+                        100        PLATinuM
+
+                              M=1536 M=1536 M=4096 M=2048 M=2048 M=5460 M=3200 M=3200 M=8640 M=1536 M=1536 M=4096 M=2048 M=2048 M=5460 M=3200 M=3200 M=8640
+                              K=1536 K=4096 K=1536 K=2048 K=5460 K=2048 K=3200 K=8640 K=3200 K=1536 K=4096 K=1536 K=2048 K=5460 K=2048 K=3200 K=8640 K=3200
+                                      b158-l              b158-xl              b158-3B               b158-l                b158-xl            b158-3B
+                                                       Decode (N = 8)                                                 Prefill (N = 1024)
+                                  Fig. 8: Comparison of kernel latency across Platinum, CPU (T-MAC), SpikingEyeriss, and Prosperity.
+                                   Eyeriss
+                        102        Prosperity
+    Energy (mJ)
+
+
+
+
+                                   T-MAC-T16
+                                   PLATinuM-bs
+                                   PLATinuM
+                        100
+
+                              M=1536 M=1536 M=4096 M=2048 M=2048 M=5460 M=3200 M=3200 M=8640 M=1536 M=1536 M=4096 M=2048 M=2048 M=5460 M=3200 M=3200 M=8640
+                              K=1536 K=4096 K=1536 K=2048 K=5460 K=2048 K=3200 K=8640 K=3200 K=1536 K=4096 K=1536 K=2048 K=5460 K=2048 K=3200 K=8640 K=3200
+                                      b158-l              b158-xl              b158-3B               b158-l                b158-xl            b158-3B
+                                                       Decode (N = 8)                                                 Prefill (N = 1024)
+                                  Fig. 9: Comparison of kernel energy across Platinum, CPU (T-MAC), SpikingEyeriss, and Prosperity.
+                                                                                            ports and by choosing ncols = 8 per PPE to guarantee
+PLATinuM Improvements
+
+
+
+
+                                                                          Eyeriss           utilization under low-N workloads. In contrast, baseline accel-
+                        40x                                               Prosperity
+                                                                          T-MAC-T16         erators like Prosperity suffer from significant underutilization
+                        10x                                               Platinum-bs       of PEs for decode workloads. Finally, Platinum incorporates
+                         5x                                                                 optimizations specifically for ternary weights, delivering 1.3×
+                                                                                            and 1.4× speedups over its own bit-serial mode in decode and
+                         2x                                                                 prefill stages, respectively.
+                               Dc Pf
+                   Dc Pf Dc Pf Dc Pf Dc Pf Dc Pf                                               Platinum also delivers strong energy efficiency, consuming
+                                b158-l
+                   b158-xl b158-3B b158-l b158-xl b158-3B
+                  Time (ms)                Energy (mJ)                                      18.4×, 15.3×, 15.0×, and 1.31× less energy in the decode
+Fig. 10: Platinum improvements of performance and energy                                    stage, and 32.4×, 3.23×, 20.9×, and 1.34× less in the prefill
+efficiency in Model-level.                                                                  stage, compared to SpikingEyeriss, Prosperity, T-MAC, and
+This highlights the importance of minimizing off-chip memory                                Platinum-bs, respectively. While Prosperity demonstrates high
+access and accesses to weight buffers, showing that using                                   energy efficiency in prefill, Platinum outperforms it by elimi-
+compact weight representations is critical to improve energy                                nating runtime scheduler overhead and using compact weight
+efficiency. Additionally, the LUT buffer exhibits lower power                               formats to reduce memory access and footprint. Additionally,
+usage compared to the weight buffer and DRAM, indicating                                    high parallelism along the K dimension lowers DRAM access
+that LUT introduces low power overhead in LUT-based com-                                    frequency of output data, further boosting energy efficiency.
+putation paradigm.                                                                             These findings highlight that bit-serial execution on our
+                                                                                            accelerator already achieves strong performance and efficiency
+C. Kernel-Level and model-level evaluations                                                 across general weight precisions. Furthermore, optimizations
+   We evaluate Platinum and baseline accelerators using repre-                              tailored for ternary weights provide an additional performance
+sentative kernel workloads extracted from BitNet-b1.58, cov-                                boost, underscoring the effectiveness of our accelerator for
+ering both the prefill and decode stages. The results (Figure 8,                            specific weight precision.
+Figure 9) demonstrate that Platinum outperforms state-of-the-                                                     VI. C ONCLUSION
+art ASIC accelerators and a CPU-based design in terms of
+                                                                                               In this work, we present Platinum, a lightweight and energy-
+both raw performance and energy efficiency.
+                                                                                            efficient ASIC accelerator optimized for low-bit weight matrix
+   Using kernels from the b1.58-3B model configuration (Fig-
+                                                                                            multiplication in neural networks. Platinum employs LUT-
+ure 10), Platinum achieves average speedups of 73.6×, 4.09×,
+                                                                                            based computation with adaptable, offline-generated construc-
+and 2.15× for the prefill stage, and 47.6×, 28.4×, and 1.75×
+                                                                                            tion paths to achieve high performance and energy efficiency
+for the decode stage, over SpikingEyeriss, Prosperity, and
+                                                                                            within a compact hardware footprint. By switching paths and
+16-thread T-MAC, respectively. Three key factors contribute
+                                                                                            compressing weights offline, it achieves even better efficiency
+to this high performance over the baselines. First, by dis-
+                                                                                            for specific weight precision, such as the ternary weights
+aggregating ”shortcut” path scheduling to offline, it not only
+                                                                                            in BitNet-b1.58 models. Given its efficiency and versatility,
+benefits from low LUT construction cost, but also minimizes
+                                                                                            Platinum holds promise for broader adoption in deploying
+the hardware overhead of runtime scheduling, and thus more
+                                                                                            LLM workloads on edge devices.
+area is available for additional PEs. Second, Platinum achieves
+high PE utilization by duplicating adders to fully exploit LUT
+
+
+
+                                                                                        6
+                             R EFERENCES                                            [17] C. Guo, C. Wei, J. Tang, B. Duan, S. Han, H. Li, and Y. Chen, “Transitive
+                                                                                         array: An efficient gemm accelerator with result reuse,” in Proceedings
+ [1] H. Touvron, T. Lavril, G. Izacard, X. Martinet, M. Lachaux,                         of the 52nd Annual International Symposium on Computer Architecture,
+     T. Lacroix, B. Rozière, N. Goyal, E. Hambro, F. Azhar, A. Rodriguez,               2025, pp. 990–1004.
+     A. Joulin, E. Grave, and G. Lample, “Llama: Open and efficient                 [18] Y. Jeon, B. Park, S. J. Kwon, B. Kim, J. Yun, and D. Lee,
+     foundation language models,” CoRR, vol. abs/2302.13971, 2023.                       “Biqgemm: matrix multiplication with lookup table for binary-coding-
+     [Online]. Available: https://doi.org/10.48550/arXiv.2302.13971                      based quantized dnns,” in Proceedings of the International Conference
+ [2] H. Touvron and et al., “Llama 2: Open foundation and fine-tuned                     for High Performance Computing, Networking, Storage and Analysis,
+     chat models,” CoRR, vol. abs/2307.09288, 2023. [Online]. Available:                 SC 2020, Virtual Event / Atlanta, Georgia, USA, November 9-19, 2020,
+     https://doi.org/10.48550/arXiv.2307.09288                                           C. Cuicchi, I. Qualters, and W. T. Kramer, Eds. IEEE/ACM, 2020,
+                                                                                         p. 95. [Online]. Available: https://doi.org/10.1109/SC41405.2020.00099
+ [3] M. Shoeybi, M. Patwary, R. Puri, P. LeGresley, J. Casper, and
+                                                                                    [19] Z. Mo, L. Wang, J. Wei, Z. Zeng, S. Cao, L. Ma, N. Jing, T. Cao, J. Xue,
+     B. Catanzaro, “Megatron-lm: Training multi-billion parameter language
+                                                                                         F. Yang, and M. Yang, “LUT tensor core: Lookup table enables efficient
+     models using model parallelism,” CoRR, vol. abs/1909.08053, 2019.
+                                                                                         low-bit LLM inference acceleration,” CoRR, vol. abs/2408.06003, 2024.
+     [Online]. Available: http://arxiv.org/abs/1909.08053
+                                                                                         [Online]. Available: https://doi.org/10.48550/arXiv.2408.06003
+ [4] C. Guo, C. Zhang, J. Leng, Z. Liu, F. Yang, Y. Liu, M. Guo, and
+                                                                                    [20] G. Park, B. Park, M. Kim, S. Lee, J. Kim, B. Kwon, S. J.
+     Y. Zhu, “ANT: exploiting adaptive numerical data type for low-bit
+                                                                                         Kwon, B. Kim, Y. Lee, and D. Lee, “LUT-GEMM: quantized
+     deep neural network quantization,” in 55th IEEE/ACM International
+                                                                                         matrix multiplication based on luts for efficient inference in large-
+     Symposium on Microarchitecture, MICRO 2022, Chicago, IL, USA,
+                                                                                         scale generative language models,” in The Twelfth International
+     October 1-5, 2022. IEEE, 2022, pp. 1414–1433. [Online]. Available:
+                                                                                         Conference on Learning Representations, ICLR 2024, Vienna, Austria,
+     https://doi.org/10.1109/MICRO56248.2022.00095
+                                                                                         May 7-11, 2024.         OpenReview.net, 2024. [Online]. Available:
+ [5] C. Guo, J. Tang, W. Hu, J. Leng, C. Zhang, F. Yang, Y. Liu, M. Guo,                 https://openreview.net/forum?id=gLARhFLE0F
+     and Y. Zhu, “Olive: Accelerating large language models via hardware-           [21] J. Wang, H. Zhou, T. Song, S. Cao, Y. Xia, T. Cao, J. Wei,
+     friendly outlier-victim pair quantization,” in Proceedings of the 50th              S. Ma, H. Wang, and F. Wei, “Bitnet.cpp: Efficient edge inference for
+     Annual International Symposium on Computer Architecture, 2023, pp.                  ternary llms,” CoRR, vol. abs/2502.11880, 2025. [Online]. Available:
+     1–15.                                                                               https://doi.org/10.48550/arXiv.2502.11880
+ [6] H. Peng, K. Wu, Y. Wei, G. Zhao, Y. Yang, Z. Liu, Y. Xiong, Z. Yang,           [22] S. Kim, J. Lee, and H.-J. Yoo, “Slim-llama: A 4.69mw large-language-
+     B. Ni, J. Hu, R. Li, M. Zhang, C. Li, J. Ning, R. Wang, Z. Zhang,                   model processor with binary/ternary weights for billion-parameter llama
+     S. Liu, J. Chau, H. Hu, and P. Cheng, “FP8-LM: training FP8                         model,” in 2025 IEEE International Solid-State Circuits Conference
+     large language models,” CoRR, vol. abs/2310.18313, 2023. [Online].                  (ISSCC), vol. 68, 2025, pp. 421–423.
+     Available: https://doi.org/10.48550/arXiv.2310.18313                           [23] C. Wei, B. Duan, C. Guo, J. Zhang, Q. Song, H. Li, and Y. Chen, “Phi:
+ [7] F. Cheng, C. Guo, C. Wei, J. Zhang, C. Zhou, E. Hanson, J. Zhang,                   Leveraging pattern-based hierarchical sparsity for high-efficiency spik-
+     X. Liu, H. Li, and Y. Chen, “Ecco: Improving memory bandwidth and                   ing neural networks,” in Proceedings of the 52nd Annual International
+     capacity for llms via entropy-aware cache compression,” in Proceedings              Symposium on Computer Architecture, 2025, pp. 930–943.
+     of the 52nd Annual International Symposium on Computer Architecture,           [24] C. Wei, C. Guo, F. Cheng, S. Li, H. F. Yang, H. H. Li, and Y. Chen,
+     2025, pp. 793–807.                                                                  “Prosperity: Accelerating spiking neural networks via product sparsity,”
+ [8] C. Guo, F. Cheng, Z. Du, J. Kiessling, J. Ku, S. Li, Z. Li, M. Ma,                  in 2025 IEEE International Symposium on High Performance Computer
+     T. Molom-Ochir, B. Morris et al., “A survey: Collaborative hardware                 Architecture (HPCA). IEEE, 2025, pp. 806–820.
+     and software design in the era of large language models,” IEEE Circuits        [25] R. C. Prim, “Shortest connection networks and some generalizations,”
+     and Systems Magazine, vol. 25, no. 1, pp. 35–57, 2025.                              Bell System Technical Journal, vol. 36, no. 6, pp. 1389–1401, 1957.
+ [9] S. Haoxuan, W. Chiyue, Y. Xiaoxuan, G. Cong, L. Hai, C. Yiran,                 [26] R. Balasubramonian, A. B. Kahng, N. Muralimanohar, A. Shafiee,
+     Z. Mengyuan et al., “Neuromorphic computing in the era of large                     and V. Srinivas, “CACTI 7: New tools for interconnect exploration
+     models,” Artificial Intelligence Science and Engineering, vol. 1, no. 1,            in innovative off-chip memories,” ACM Trans. Archit. Code Optim.,
+     pp. 17–30, 2025.                                                                    vol. 14, no. 2, pp. 14:1–14:25, 2017. [Online]. Available: https:
+[10] J. Lin, J. Tang, H. Tang, S. Yang, X. Dang, and S. Han,                             //doi.org/10.1145/3085572
+     “AWQ: activation-aware weight quantization for LLM compression and             [27] Y. Chen, T. Krishna, J. S. Emer, and V. Sze, “14.5 eyeriss:
+     acceleration,” CoRR, vol. abs/2306.00978, 2023. [Online]. Available:                An energy-efficient reconfigurable accelerator for deep convolutional
+     https://doi.org/10.48550/arXiv.2306.00978                                           neural networks,” in 2016 IEEE International Solid-State Circuits
+[11] E. Frantar, S. Ashkboos, T. Hoefler, and D. Alistarh, “GPTQ: accurate               Conference, ISSCC 2016, San Francisco, CA, USA, January 31 -
+     post-training quantization for generative pre-trained transformers,”                February 4, 2016. IEEE, 2016, pp. 262–263. [Online]. Available:
+     CoRR, vol. abs/2210.17323, 2022. [Online]. Available: https://doi.org/              https://doi.org/10.1109/ISSCC.2016.7418007
+     10.48550/arXiv.2210.17323                                                      [28] S. Narayanan, K. Taht, R. Balasubramonian, E. Giacomin, and
+[12] H. Wang, S. Ma, L. Dong, S. Huang, H. Wang, L. Ma, F. Yang,                         P.-E. Gaillardon, “Spinalflow: an architecture and dataflow tailored
+     R. Wang, Y. Wu, and F. Wei, “Bitnet: Scaling 1-bit transformers for                 for spiking neural networks,” in Proceedings of the ACM/IEEE
+     large language models,” CoRR, vol. abs/2310.11453, 2023. [Online].                  47th Annual International Symposium on Computer Architecture, ser.
+     Available: https://doi.org/10.48550/arXiv.2310.11453                                ISCA ’20. IEEE Press, 2020, p. 349–362. [Online]. Available:
+[13] S. Ma, H. Wang, L. Ma, L. Wang, W. Wang, S. Huang, L. Dong,                         https://doi.org/10.1109/ISCA45697.2020.00038
+     R. Wang, J. Xue, and F. Wei, “The era of 1-bit llms: All large language        [29] S. Li, Z. Yang, D. Reddy, A. Srivastava, and B. L. Jacob, “Dramsim3:
+     models are in 1.58 bits,” CoRR, vol. abs/2402.17764, 2024. [Online].                A cycle-accurate, thermal-capable DRAM simulator,” IEEE Comput.
+     Available: https://doi.org/10.48550/arXiv.2402.17764                                Archit. Lett., vol. 19, no. 2, pp. 110–113, 2020. [Online]. Available:
+[14] J. Wei, S. Cao, T. Cao, L. Ma, L. Wang, Y. Zhang, and M. Yang, “T-                  https://doi.org/10.1109/LCA.2020.2973991
+     MAC: CPU renaissance via table lookup for low-bit LLM deployment
+     on edge,” CoRR, vol. abs/2407.00088, 2024. [Online]. Available:
+     https://doi.org/10.48550/arXiv.2407.00088
+[15] Y. Chen, A. F. AbouElhamayed, X. Dai, Y. Wang, M. Andronic, G. A.
+     Constantinides, and M. S. Abdelfattah, “Bitmod: Bit-serial mixture-
+     of-datatype LLM acceleration,” in IEEE International Symposium on
+     High Performance Computer Architecture, HPCA 2025, Las Vegas,
+     NV, USA, March 1-5, 2025. IEEE, 2025, pp. 1082–1097. [Online].
+     Available: https://doi.org/10.1109/HPCA61900.2025.00084
+[16] P. Judd, J. Albericio, T. Hetherington, T. M. Aamodt, and A. Moshovos,
+     “Stripes: Bit-serial deep neural network computing,” in 2016 49th
+     Annual IEEE/ACM International Symposium on Microarchitecture
+     (MICRO), 2016, pp. 1–12.
+
+
+
+
+                                                                                7
+

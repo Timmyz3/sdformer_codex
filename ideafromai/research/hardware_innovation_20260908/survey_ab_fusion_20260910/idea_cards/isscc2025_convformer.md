@@ -1,0 +1,17 @@
+# ISSCC25-ConvFormer
+- uid/来源: local_author_txt:ISSCC2025_23_2_ConvFormer_author.txt
+- 全文出处: /workspace/survey_ab_fusion_20260910_stage/p0_local_txt/ISSCC2025_23_2_ConvFormer_author.txt
+- 精读深度: 全文/方法级（ISSCC 短文通读：HAPU/RMPI/ATM、DR-LFS、CFMP FMS+DRU、28nm 实测）
+- 可继承 A: 混合注意力降存储阶——多数 Q tile 走线性注意力（KTV 优先，Fmap 从 O(N²)→O(C²)），少数 Q tile 保留 VA 保精度；RMPI 先算 KT/V/KTV 并用 LR2 片上搬运 KT，避免 QKT/KTV 左右矩阵冲突；LFS：先复用片上 KV 并行 VA，再把 KV 槽换成卷积权做层融合，随后 LA tile 再复用 KTV+权；CFMP 级联剪枝（W→Z 扩再掩码稀疏→恢复稠密）。作 Transformer+融合+剪枝产品对照，≠ X。
+- 强对照 B: 相对纯 VA 稀疏注意力、无 KV–权槽切换的层融合、Seg.Head 零跳过：同 Cityscapes ConvFormer 下 EMA/能量是否真降。
+- 可差分 X线索: 诚实：语义分割 ConvFormer ANN 加速器，非 SNN 光流。可借「槽位复用：先 KV 后权」对照有限缓冲上 source/中间/消费者谁占端口；CFMP「只让中间 Z 稀疏」对照 F1/F4 只剪可证书区域；非重叠 LF+零垫边界对照有损共同完成边界处理。借入≠光流标题 X。
+- 与 F1–F7 / Stage B 关系: 第二队列产品级对照——F1/F4（结构化/局部剪枝）、F3（融合调度）、F2（边界/组完成）；Stage B 仍只做 lifting vs ordinary schedule；本文不提供 SNN 供数分母。
+- 不可搬用边界: 28nm、0.65–1.0V、200–625MHz；SegFormer/PVT+Cityscapes；TL>16K 分割；ANN MAC；GB=2MB LMB+1MB RMB；精度门为分割 mIoU 而非 AEE。
+- 可复用 idea 点:
+  - HAPU 混合：LA 为主降 EMA 60.2–78.6%；VA 少数 tile 保全局感受野；训练学 hybrid 模式。
+  - ATM：估 VA tile 防 LMB 溢出，过大则切 Q 顺序拼回。
+  - DR-LFS：KV 驻留算完 VA → 权替换融合卷积 → LA 路径复用 KTV；相对冗余 KV/权 EMA 降 86.8–96.2%。
+  - 非重叠 LF：把 FC 拆成非重叠块，边界零垫，后续注意力靠长程依赖补；相对 slice override 省存储/算，约 50% GB、−20% ops，精度降 <0.5%。
+  - CFMP：FMS 解码 tiled mask→TC offset→提前停止；DRU 把列偏移转行并累加恢复稠密；相对零跳过可抬稀疏度约 6×（Seg.Head）。
+  - 系统指标：0.22μJ/token（SegFormer-B0）——提醒本地应用「服务/能量分项」而非单点峰值 TOPS/W。
+- 杀门建议: 槽切换/融合引入额外 DMA 与本地 finite 背压冲突；或中间稀疏证书费用≥算术节省；或精度门（本地 AEE）不守 → 停该融合/级联剪枝布局，不杀 Transformer 软硬协同家族。

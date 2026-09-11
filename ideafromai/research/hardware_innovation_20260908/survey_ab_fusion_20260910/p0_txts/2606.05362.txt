@@ -1,0 +1,800 @@
+                                             MOSAIC: A Workload-Driven Simulation and Design-Space
+                                                Exploration Framework for Heterogeneous NPUs
+                                          Arghadip Das∗‡ , Hoseok Kim∗‡ , Soomin Lee∗ , Arnab Raha† , Deepak A Mathaikutty† , Vijay Raghunathan∗
+                                                                                      ∗ Purdue   University † Intel Corporation
+
+
+
+                                        Abstract
+                                                                                                                                           Homogeneous baseline
+                                             AI model architectures are diversifying rapidly. Although
+                                        dense matrix multiplication still underlies today’s CNNs and                    Big            Big                    Big                Big
+                                        transformers, emerging architectures (state-space models, long
+                                        convolutions via the fast Fourier transform (FFT), Kolmogorov–                                                 iso-area swap
+                                        Arnold networks, and spiking networks) are not multiply–
+arXiv:2606.05362v2 [cs.AR] 6 Jun 2026
+
+
+
+
+                                        accumulate (MAC) dominated; they spend much of their com-                                 Little      Little   Little      Little   Special-Function
+                                        putation on vector and non-MAC primitives that homogeneous,                     Big                                                    FFT/SNN/Poly
+                                                                                                                                  Little      Little   Little      Little
+                                        MAC-centric neural processing units (NPUs) serve poorly. This
+                                                                                                                                           Heterogeneous (HPU)              Higher performance
+                                        has motivated heterogeneous NPUs (HPUs) built from non-                                                                             Lower energy
+                                        identical tiles. Prior heterogeneous designs, however, vary only
+                                        one or two coarse knobs (typically MAC precision or array              Figure 1: MOSAIC’s key idea: a homogeneous NPU repli-
+                                        size) and are evaluated on narrow workloads, and no existing           cates one MAC-centric tile (top); emerging non-MAC oper-
+                                        framework supports HPU design at a fine granularity, where             ators leave much of its silicon dark. At the same total area,
+                                        tiles differ across many architectural dimensions at once.             MOSAIC’s design-space exploration reallocates the chip
+                                             We present MOSAIC, an analytical simulator and                    into a heterogeneous mix of Big, Little, and Special-Function
+                                        design-space-exploration (DSE) framework for HPU                       (FFT/SNN/poly) tiles (bottom), yielding heterogeneous NPUs
+                                        microarchitecture design. MOSAIC searches the joint space              (HPUs) with +46.91% mean iso-area energy savings over
+                                        of tile-level heterogeneity: beyond array size and precision,          the best homogeneous baseline.
+                                        it varies the knobs along which tiles can differ, including
+                                        tile-type composition (large Big, small Little, and non-MAC
+                                        Special-Function tiles), dataflow, sparsity mode, MAC engine           operator types at once. The hardware on which these
+                                        type, and special-function units for non-MAC operators                 workloads run, however, has not diversified at the same
+                                        (FFT, spiking-integrate, polynomial). Unlike prior simulators,         rate.
+                                        which model a single homogeneous tile type, MOSAIC models                  We refer to AI accelerators as neural processing units
+                                        non-MAC tiles with their own energy, area, and timing                  (NPUs); the term is generic, spanning the deployment
+                                        models and maps operators across a mix of tiles with a                 spectrum from battery-powered edge and client devices
+                                        heterogeneity-aware compiler. A multi-seed pipeline that               to datacenter inference servers. Commercial NPUs from
+                                        pairs a stratified sweep with genetic-algorithm refinement             Intel [16], Qualcomm [39], AMD [1], and MediaTek [26]
+                                        returns Pareto-optimal designs, with cost models calibrated            replicate identical compute tiles built around large multiply–
+                                        to a 7 nm node and cross-validated against NVIDIA’s Deep               accumulate (MAC) arrays, vector digital signal processors
+                                        Learning Accelerator (NVDLA). Across a 20-workload suite,              (DSPs), and matched SRAMs, which are designs implicitly
+                                        the best general-purpose HPU found by MOSAIC (∼200 mm2                 tuned for the dense GEMMs of CNNs and transformers.
+                                        Big+Little+Special-Function) achieves +46.91% mean iso-area            Emerging operators do not stress this substrate evenly.
+                                        energy savings over the best iso-area homogeneous baseline.            On commercial NPUs, MAC utilization varies sharply:
+                                        Index Terms—Heterogeneous Architecture, Neural Process-                dense CNNs saturate the array, while state-space-model
+                                        ing Unit, Mixed-Precision, Design-Space Exploration, Energy            (SSM) scans, FFT-based long convolutions, KAN polynomial
+                                        Efficiency, High Performance.                                          bases, and graph-neural-network (GNN) gathers spend most
+                                                                                                               of their time outside it [4–6], so end-to-end inference
+                                        1. Introduction                                                        latency degrades on hardware never built for them. The
+                                                                                                               same mismatch leaves substantial dark silicon. A quantized
+                                            Neural-network workloads are diversifying rapidly, mov-
+                                                                                                               INT8 layer never touches the FP16 datapath, a depthwise
+                                        ing well beyond the dense general matrix multiplications
+                                                                                                               convolution barely fills a 32×32 MAC array, and an FFT
+                                        (GEMMs) of convolutional neural networks (CNNs) and
+                                                                                                               or polynomial operator’s MAC-fabric lowering wastes most
+                                        transformers [8, 13, 46] to include selective state-space
+                                                                                                               of the multiplier silicon.
+                                        scans (Mamba [12]), long convolutions executed via the
+                                        fast Fourier transform (FFT; Hyena [36]), Kolmogorov–                      These inefficiencies carry two costs, and both matter
+                                        Arnold networks built from polynomial basis functions                  across the deployment spectrum. The primary cost is
+                                        (KAN [24]), and spiking neural networks (SNNs) [28]. A                 performance: emerging operators stall on a substrate built
+                                        single multimodal inference pass now mixes many of these               for dense GEMM, slowing inference on edge and datacenter
+                                                                                                               NPUs alike. The secondary cost is energy: underused
+                                        ‡ Equal contribution.                                                  datapaths still draw power, which shortens battery life
+
+
+                                                                                                           1
+on edge devices and raises the operating cost and carbon
+footprint of datacenter inference.
+    An NPU is built from tiles, and each tile contains
+one or more cores (compute units such as a MAC array,
+a vector DSP, or a special-function unit) together with
+local memory and ports. Tile-level heterogeneity (i.e., com-         Figure 2: Generic NPU tile template: a MAC array and vector
+posing a chip from non-identical tiles whose cores differ            DSP fed from an SRAM scratchpad through input/output
+in type, precision, array size, dataflow, memory capacity,           register files, with load/store ports to a shared DRAM
+or specialized operator support) is one response to this             channel.
+mismatch, but no existing study or tool treats it as a
+primary design knob. Prior work shows that exposing                    joint heterogeneous space and returns Pareto-optimal
+architectural diversity improves latency, energy, or area              architectures. (Section 3.5)
+efficiency for specific workload classes by varying MAC              • 20-workload characterization and three-group tax-
+precision [43], array dimensions [25], or coarse functional            onomy. The 20 workloads, spanning ten architectural
+partitioning (a CNN core plus a recurrent-neural-network               families, fall into three groups by how much they benefit
+(RNN) core [42], and plug-in coarse-grained reconfigurable             from heterogeneity: quantized LLMs/CNNs, FP16 trans-
+arrays (CGRAs) for nonlinear large-language-model (LLM)                former/SSM, and bandwidth-bound. (Section 5.3)
+operators [38]). However, each of these studies fixes a single       • Silicon-grounded calibration. Per-module energy, area,
+coarse-grained knob of heterogeneity and evaluates it on               and timing are calibrated against ASAP7 7 nm synthe-
+a narrow workload spectrum. There is no tool today that                sis [3] and cross-validated end-to-end against the open-
+lets an architect ask: which mix of tile types, MAC array              source NVIDIA Deep Learning Accelerator (NVDLA) [30]
+dimensions, precisions, sparsity modes, dataflows, memory              at two design points, backed by a system-level register-
+capacities, and special-function units is right for a given            transfer-level (RTL) gating study. (Section 3.4)
+workload suite? The simulators that enable design-space-
+                                                                         MOSAIC’s DSE returns HPUs that beat the best iso-
+exploration (DSE) (e.g., Timeloop [34], SCALE-Sim [41],
+                                                                     area homogeneous designs across the suite. Peak savings
+MAESTRO [18], and Voyager [37]) all assume a homoge-
+                                                                     reach 60.10 ± 1.18% on ResNet-50 (mean ± stdev, 3
+neous tiling design, modeling a single uniform tile with no
+                                                                     seeds). The GA-refined Big+Little+Special-Function design
+notion of mixed tile types or specialized non-MAC compute
+units. Consequently, no existing study or tool supports              at ∼200 mm2 reaches +46.91% mean iso-area energy
+systematic exploration of multi-knob tile-level heterogeneity        savings and 2.44 mean TOPS/W (tera-operations per
+across diverse workloads.                                            second per watt); a ∼100 mm2 variant is 1.5–2.4× faster
+                                                                     than NVDLA-large on INT8/SSM/ViT workloads. A comple-
+    We present MOSAIC, an analytical simulator and DSE
+                                                                     mentary system-level RTL gating study delivers 28% more
+framework that designs heterogeneous NPUs (HPUs) by
+                                                                     MACs at 93.6% lower power.
+treating structural tile-level heterogeneity (Big, Little, and
+Special-Function (FFT/SNN/polynomial) tile types, each               2. Background and Motivation
+with a per-tile configurable precision set, composed per
+workload mix) as a joint design space. MOSAIC jointly ex-            2.1. Generic NPU Tile
+plores tile-type composition, MAC array geometry, precision
+(including INT4/INT8 quantization), sparsity mode, dataflow,              Production NPUs are built by replicating an identical tile
+memory-hierarchy capacity, and specialized functional units          template across the chip. Fig. 2 shows the canonical layout.
+(FFT, SNN, polynomial). Given a target neural network                Each tile pairs a MAC fabric (typically a 16×16 to 64×64
+suite, it produces per-operator and per-tile breakdowns of           systolic array supporting INT8 and FP16) with a vector
+latency, energy, power, and utilization, together with tile-         DSP that executes activations, normalizations, elementwise
+area estimates. These characterizations drive a multi-seed           operations, and softmax. A 256 KB–2 MB on-chip SRAM
+DSE pipeline (a stratified random sweep over the joint               scratchpad feeds the compute units through input and
+knob space followed by a per-area-budget genetic-algorithm           output register files (IRF/ORF), and dedicated load/store
+(GA) refinement seeded from the sweep bests) that returns            ports stage tensors to and from off-chip DRAM. Multiple
+Pareto-optimal architectures for the workload mix.                   tiles share a single DRAM channel and communicate over
+                                                                     a mesh, ring, bus, or NoC interconnect. The resulting three-
+    Our contributions are as follows:
+                                                                     level energy hierarchy (∼1–3 pJ/byte at IRF/ORF, ∼5 pJ/byte
+•   Heterogeneity-aware analytical simulator. Unlike                 at SRAM, 40–200 pJ/byte at DRAM [14, 27]) shapes every
+    prior simulators, which model one homogeneous tile type,         tiling, reuse, and dataflow decision an NPU compiler makes.
+    MOSAIC models a chip as a mix of non-identical tiles,                 Commercial NPUs from Intel [16], Qualcomm [39],
+    including non-MAC tiles for FFT, spiking-integrate, and          AMD [1], and MediaTek [26] all replicate this template
+    polynomial operators, coordinated by a chip-level orches-        identically: every tile exposes the same precisions, the same
+    trator that captures DRAM bandwidth sharing, cross-tile          operator set, and the same memory hierarchy, all driven
+    activation caching, network-on-chip (NoC) traffic, and           by a single clock domain. The bet is that the tile is well-
+    per-tile power gating. (Section 3.3)                             matched to a workload mix dominated by dense convolution
+•   Multi-seed DSE pipeline. A stratified random sweep               and matrix multiplication, and that adding tiles is the right
+    over the 12-knob design space (3 seeds, ∼2.94 M samples),        knob for scaling performance. The remainder of this section
+    followed by per-area-budget GA refinement, searches the          examines whether that bet still holds.
+
+
+                                                                 2
+                         MAC       Vector      Others                   level quantization, per-edge KAN bases of varying degree).
+  ResNet-50                                                             MOSAIC targets the across-models scope (one silicon design
+                                                                        per workload mix) and the across-layers scope via the
+     Hyena
+                                                                        mapper (§3.2); within-layer heterogeneity is future work
+       MoE                                                              (§7). What is needed is a chip composed of different tile types
+  SNN-VGG9                                                              tailored to the operator mixture of the target workload suite:
+       KAN                                                              a heterogeneous architecture where tiles differ in MAC array
+   GNN-GAT                                                              geometry, supported precisions, sparsity mode, dataflow,
+              0     25              50                  75   100%       memory capacities, and the presence or absence of dedicated
+                               Latency share                            functional units.
+Figure 3: Per-operator inference latency breakdown on the               2.4. The Need for a Heterogeneous Design Frame-
+Intel LNL NPU, grouped into MAC, Vector, and Other (non-                     work
+MAC) operators. Only ResNet-50 is MAC-bound.
+                                                                            Prior heterogeneous-NPU studies have repeatedly
+                                                                        demonstrated the benefits of moving away from homo-
+2.2. Operator Diversity in Modern Workloads                             geneous tiling, but each fixes a single coarse-grained knob
+     Neural-network workloads have moved past dense                     and evaluates on a narrow workload spectrum. DNPU [42]
+GEMM as the single dominant kernel. A typical workload                  hard-wires a CNN core paired with an RNN core; Spantidi
+mix now spans dense CNNs and vision transformers [8,                    et al. [43] vary MAC precision alone (the big.LITTLE
+13] where MAC fabrics still pay off, SSMs [11, 12] and                  NPU); Maleki et al. [25] vary array dimensions alone;
+Hyena [36] long-convolution layers that lean on selective               PICACHU [38] adds a plug-in CGRA for nonlinear LLM
+scans and FFT, KANs [24] that evaluate polynomial bases                 operators. Production silicon is moving the same way:
+per edge, SNNs that integrate-and-fire, GNNs that scatter               MediaTek’s Dimensity 9500 (TSMC N3P) ships a dual-
+and gather, hybrid attention/SSM LLMs (Nemotron-H [31],                 NPU SoC delivering 100 TOPS [45], making heterogeneous-
+Hymba [7]) that interleave qualitatively different layers               NPU design a near-term commercial reality, not just a
+within a single inference, and post-training-quantized LLMs             research idea. Yet no prior simulator supports cross-knob
+(LLaMA [46], Mixtral [17], Nemotron [31] in INT4/INT8                   exploration: production DSE simulators (Timeloop [34],
+forms) that ship with 4× higher arithmetic intensity than               SCALE-Sim [41], MAESTRO [18], Voyager [37]) all model
+their FP16 counterparts. Each family stresses a different               homogeneous substrates with a single tile type and no
+subset of the tile.                                                     dedicated models for non-MAC accelerators (FFT, SNN,
+Quantitative evidence: end-to-end breakdown on real                     polynomial). An architect today therefore has no principled
+silicon. We measured per-operator latency for six represen-             way to ask: which mix of tile types, precisions, MAC array
+tative workloads on the Intel Lunar Lake (LNL) NPU [16] via             geometries, sparsity modes, dataflows, memory capacities, and
+OpenVINO’s [15] per-op profiling counters, grouping each                special-function units is right for a given workload suite?
+operator into MAC (Conv/MatMul/FC), Vector (elementwise,                    Closing this gap requires four co-designed capabilities
+activation, normalization, softmax; targeted at the DSP’s               that resist adoption in isolation: (i) multi-tile heterogeneity
+single-instruction multiple-data (SIMD) datapath), or Other             (independent tile types with the knobs above); (ii) dedicated
+(FFT, polynomial, SNN integrate, SSM scan, gather/scatter;              energy/area/cycle models for non-MAC accelerators; (iii)
+no dedicated hardware, lowered onto MAC or DSP). Fig. 3                 a heterogeneity-aware mapper that filters operators by
+reports the breakdown. ResNet-50 is the only MAC-bound                  tile compatibility and schedules across tiles with NoC-
+workload. Hyena spends ∼30% in FFT lowered onto MAC;                    aware splitting; and (iv) a cross-knob search loop over the
+OLMoE’s expert-routing softmax/gating dominates the Vec-                joint design space. A hetero-aware mapper without non-
+tor share; SNN-VGG9 spends ∼47% in leaky integrate-and-                 MAC models cannot evaluate Special-Function tiles; cross-
+fire (LIF) integration; KAN’s wall time is entirely polynomial          knob search without those prerequisites is uninformative.
+basis evaluation; GNN-GAT is dominated by gather/scatter.               MOSAIC is, to our knowledge, the first framework to
+Prior measurement studies report MAC utilization below                  provide all four within a single tool.
+10% on commercial NPUs for GNN [4], Mamba/SSM [6],
+and KAN-style [5] networks. The dark-silicon problem is
+                                                                        2.5. Iso-Area Intuition
+no longer hypothetical; it is the common case for emerging                  At a fixed chip area N × A, replacing N identical
+model families.                                                         MAC tiles with a heterogeneous mix of Big, Little, and
+                                                                        optionally Special-Function tiles extracts more performance
+2.3. Three Scopes of Heterogeneity                                      and energy efficiency per mm2 than the homogeneous
+    Operator diversity manifests at three architectural                 baseline. Fig. 1 sketches the contrast. The top is the kind
+scopes: across models (a deployed system-on-chip (SoC)                  of homogeneous chip today’s commercial NPUs ship: N
+serves FFT-heavy long convolutions, LIF-bound SNNs,                     identical FP16+INT8 MAC tiles of footprint A each; the
+polynomial-bound KANs, INT4 LLMs, and dense-GEMM                        bottom is a heterogeneous reallocation: a smaller number
+CNNs that cannot share a single tile template), within a                of large Big tiles, several smaller Little tiles, and optionally
+model across layers (artificial-neural-network/SNN (ANN–                a Special-Function tile whose primary compute is an FFT,
+SNN) networks alternate MAC and spiking-integrate layers;               SNN-integrate, or polynomial unit rather than a MAC array,
+Nemotron-H [31] and Hymba [7] interleave attention and                  with total area held at N × A. We use “Big” and “Little” by
+SSM blocks), and within a layer across groups (group-                   analogy with CPU big.LITTLE [10]: the Big tile is large
+
+
+                                                                    3
+and typically carries the wider, higher-precision datapath,            schema describes a homogeneous chip (one template), a
+the Little tile is small and typically restricted to a narrower,       mixed-precision chip with two tile types, or a three-tile-
+lower-precision set—though the supported precisions are                type chip (e.g., an FP16+INT8 Big, an INT4+INT8 Little,
+a per-tile knob, not a fixed property of either type. This             and a Special-Function tile). A representative homogeneous
+reallocation buys three things at the same N × A:                      baseline mirroring an Intel LNL-class NPU [16] is expressed
+• Lower energy at the same area. Lower-precision tiles                 as a set of identical FP16+INT8 MAC tiles with matched
+  consume less per MAC, and idle tiles can be power-gated              SRAM and DSP units, sharing a mesh interconnect and a
+  to a small residual.                                                 single DRAM channel.
+• Lower latency at the same area. The freed area is rein-              3.2. Cost-Aware Compiler
+  vested into more parallelism on the tiles the workload
+  actually exercises.                                                       The compiler converts a (workload, architecture) pair
+• Workloads that homogeneous cannot serve well. Specialized            into an execution plan in four ordered passes. Each pass
+  functional units change the cost model asymptotically for            tags operators for the simulator and DSE; no machine code
+  FFT (O(N log N) butterflies vs. O(N 2 ) on a MAC-array               is emitted.
+  lowering, a ∼100× blow-up at Hyena’s typical N=512),                 (1)         Mixed-precision         assignment.         Default
+  and by large constant factors for LIF (a few gates per               policy             (Conv/MatMul/Pool→INT8;               Layer-
+  neuron vs. a multiplier-array lowering that contributes              Norm/RMSNorm/Softmax/SNN/FFT/polynomial/SSM
+  nothing to the result) and polynomial operators (KAN                 scan→FP16) with a name-based override forcing FP16 on
+  inference is reduced from a long multiply–accumulate                 accuracy-sensitive layers (attention QKV/output projection,
+  chain hopping through SRAM at every step, to a d-                    LM head, classifier, embedding). An aggressive mode
+  cycle Horner-rule fused multiply-add pipeline with the               demotes all convolutions to INT4.
+  accumulator pinned in a register), within the same area              (2) Operator fusion. A greedy left-to-right scan matches
+  budget.                                                              three-op (Conv+BN+Act, Conv+Add+Act) and two-op pat-
+                                                                       terns; matched groups fold post-processing into the tile’s
+    Which mix wins for which workload is precisely the
+                                                                       post-processing module (PPM), skipping the SRAM round-
+question MOSAIC’s DSE answers (§5).
+                                                                       trip for intermediate tensors.
+3. MOSAIC Framework                                                    (3) DAG-aware mapping with op-splitting. Operators
+                                                                       are visited in topological order. For each operator o, the
+     MOSAIC takes a workload suite together with a can-                mapper filters tiles by op-type and precision compatibility,
+didate architecture and returns single-inference latency,              then for each compatible tile T computes an earliest start
+energy, area, power, and per-tile utilization. Driving the             time
+same pipeline with a search loop produces Pareto-optimal                                     
+heterogeneous architectures over a > 1014 -point design                   tstart (o, T) = max tile_finish[T],
+space.                                                                                                                           
+     Fig. 4 shows the four cooperating layers: Inputs (§3.1),                                       max       fj + ⊮[Tj ̸=T] ∆NoC ,
+                                                                                             (fj ,Tj )∈preds(o)
+cost-aware compiler (§3.2; precision, fusion, mapping, op-
+splitting, dataflow), heterogeneity-aware simulator (§3.3; per-                                                                   (1)
+tile module pipeline plus chip-level orchestrator), calibration        and a roofline cycle estimate (the larger of the compute-
+layer (§3.4; synthesized RTL + DRAM literature), and                   bound and bandwidth-bound cycle counts)
+the DSE engine (§3.5; multi-seed stratified sweep + GA                                                                   
+refinement).                                                                                                    bytes
+                                                                               Ĉop (T) = max ⌈ RMACs
+                                                                                                  C η   ⌉ , ⌈ B         ⌉
+                                                                                                                     (T) ,   (2)
+                                                                                                    T T T         DRAM
+3.1. Inputs
+                                                                       where RT ×CT is the MAC array shape and ηT is a per-MAC
+Workload specification. A workload is a directed acyclic               throughput multiplier (> 1 when sparsity skipping applies).
+graph (DAG) of operators, each carrying a type (23-                    The mapper places o on the tile minimizing tstart + Ĉop
+entry vocabulary: 5 MAC-class, 15 DSP-class, 3 spe-                    (completion time, not just cycle estimate). For MAC-class
+cial (SNN-integrate, FFT, polynomial)), shape, precision               ops with multiple compatible tiles, it evaluates an even split
+(INT4/INT8/FP16/BF16/FP32), and per-operand sparsity                   along the output-channel (OC), batch (B), or input-channel
+rates. Workloads are imported from ONNX [33] or extracted              (IC) dimension with explicit reduce/concat cost
+from PyTorch [35].
+                                                                                 Creduce = max ⌈Bout
+                                                                                                                        
+Architecture configuration. An architecture lists one                                              i /BNoC ⌉ + ∆NoC ,             (3)
+                                                                                              i
+or more tile templates, per-template instance counts, an
+interconnect topology (mesh/bus/ring/NoC), DRAM size,                  accepting the split only if its finish time beats single-
+bandwidth, and latency. Each tile template exposes a small             tile placement. Dataflow (weight-stationary (WS), output-
+set of architectural knobs: enabled modules (MAC array,                stationary (OS), row-stationary (RS), or AUTO) is picked
+DSP, special unit, load/store ports), MAC engine type and              per operator: AUTO chooses OS when M ·N exceeds both
+dimensions, supported precisions, sparsity mode (none,                 K ·N and M ·K by 4×, WS otherwise.
+activation-/weight-sided, two-sided, or structured N:M),               What changes under a heterogeneous architecture. The com-
+SRAM capacity and banking, IRF/ORF granularity, DSP                    patibility filter routes each op to the smallest compatible
+unit count and SIMD width, and double-buffering. Each                  tile (FP16 MATMUL→Big, INT8 Conv→any, FFT→Special-
+tile type is clocked in its own fixed domain. The same                 Function); splittable MAC ops are partitioned across
+
+
+                                                                   4
+                 Inputs                          Cost-Aware Compiler                        Heterogeneity-Aware Simulator                                      DSE Engine
+             Workload Suite                                                        Tile A                    Tile B                         Tile C
+                                                         Stage 1                                                                                                       Genetic
+     ResNet-50    ViT            LLaMA         Mixed-Precision Assignment                                                                    FFT
+                                                                            FP16     +      INT8      INT4     +      INT8
+                                                                                                                                            SNN
+     Mamba        KAN            SNN                                                MAC                       MAC                           POLY
+                                                                                                                                                                      Bayesian
+     Hyena        GNN            Mixtral
+                                                         Stage 2                                    Per-tile modules
+         Arch. Config (knobs)                       Operator Fusion                DRAM                                        MAC                                Diverse Random
+        Tiles    MAC Precision                                                                       IRF                       DSP                   ORF
+            DSP       SRAM
+                                                                                   SRAM                                        SFU                              Pareto Filter
+         interconnect  BW                                Stage 3
+                                                                                                                                                                  E• A• L
+                                               DAG Mapping + Op Splitting                                                        NoC
+             Calibration                                                            Chip orchestration                    T1           T2                  Outputs              La tency     Energy
+
+       ASAP7 DC synth                                                               NoC • DRAM BW                                                          latency, energy,
+                                                                                    sharing                           gated                        DRAM    area,
+                                                                                                                                                                                 Area         Power
+
+       Horowitz / CACTI                                                             cross-tile cache •                                                     power,                  Execution trace
+                                                         Stage 4                                                          T3           T4
+                                                                                    clock/power gating                                                     Execution trace
+       LPDDR5 DRAM                                 Schedule Emission
+
+
+
+Figure 4: MOSAIC framework overview: four cooperating layers—inputs, cost-aware compiler, heterogeneity-aware simulator,
+and silicon calibration—wrapped in a multi-seed DSE search loop.
+
+Big+Little so the bulk runs on the small tiles. FP16-only                                 •    SRAM module. Tiling-aware reuse from the chosen
+ops on chips with one FP16-capable tile serialize.                                             dataflow (WS/OS/RS), with grid heuristics as fallback.
+(4) Schedule emission. A scheduler converts the per-op                                    •    IRF / ORF. IRF pays write energy padded to write
+mapping into an execution schedule (latency mode paral-                                        granularity, reads reduced by activation sparsity. ORF
+lelizes distinct-tile assignments; throughput mode pipelines                                   is K-tile-aware (first K-tile write-only, later ones read-
+multi-batch).                                                                                  modify-write).
+                                                                                          •    DSP module. A SIMD instruction set of 14 vector opera-
+3.3. Heterogeneity-Aware Simulator                                                             tions (vadd, vmul, vexp, vreduce, vlut, . . . ) covers every
+     The simulator consumes the compiled execution plan,                                       elementwise/normalization/activation/softmax operator;
+the architecture configuration, and the calibration tables                                     each high-level op decomposes into a vector sequence.
+and returns latency, energy, area, and per-tile utilization.                                   SSM scan carries a sequence-length sequential multiplier.
+It is built on the FlexNPU [40] dataflow-aware analytical                                 •    Special-Function module (special-function unit, SFU). Ded-
+model, extended with non-MAC accelerator modules and                                           icated formulas for radix-2 FFT (N log2 N cycles), LIF
+a chip-level orchestrator that handles heterogeneous tile                                      (⌈N/Npar ⌉T cycles), and Horner polynomial (Nd cycles).
+mixes. The tile-template plus NoC abstraction is general                                  3.3.2. Total-Cycle Model
+enough to model not just single-NPU multi-tile designs
+but also multi-NPU SoCs such as MediaTek’s dual-NPU                                           The seven-module pipeline interleaves DRAM staging,
+Dimensity 9500 [45], where each NPU instance is expressed                                 SRAM tiling-aware reuse, IRF/ORF activation/partial-sum
+as a tile cluster sharing an inter-NPU NoC channel.                                       feed, and PPM post-processing on top of each tile’s compute
+                                                                                          path. With double-buffering (DB), total cycles overlap
+3.3.1. Per-Tile Module Pipeline                                                           compute, memory, and DRAM:
+    A tile is modeled as seven hardware modules; three are                                       
+compute cores (the MAC array, the DSP, and the special-                                            max(Ccmp , Cmem , CDRAM ) + CLP + CSP (DB)
+function unit) and the rest handle memory and data staging.                               Ctot =
+                                                                                                   Ccmp + Cmem + CDRAM + CLP + CSP            (no DB)
+Given a compiled operator, the tile simulator routes the                                                                                           (5)
+operator through one of three execution paths (MAC, DSP,                                  where CLP , CSP are load/store-port direct-memory-access
+or Special-Function) and accumulates cycles and energy at                                 (DMA) cycles.
+each module.
+                                                                                          3.3.3. Latency, Energy, and Area Models
+• Compute module (MAC array). An SRAM-budget tiling
+  pass decomposes the operator along (M, K, N) into tiles                                 Latency. Per-tile latency L = Ctot /f ; end-to-end latency is
+  that fit the working set (weights and double-buffered                                   the makespan of the chip schedule including NoC delays
+  activations within the per-tile SRAM). Per-tile cycles                                  and split-op reductions.
+  follow an engine-specific model; for systolic arrays,                                   Energy. Total tile energy sums contributions from every
+                  Xh       X                       i                                      enabled module:
+           Csys =     D+      (meff + keff + D − 2) ,   (4)
+                                           m
+                                                                                                           Etile = Ecmp + EDRAM + ESRAM + EIRF
+                           n,k                                                                                                                                                                        (6)
+                                                                                                                   + EORF + EDSP + Espec − Efuse ,
+    with pipeline depth D. Compute energy is sparsity-aware
+    MAC count times per-MAC energy from the calibration                                   where Efuse = Nfused · 2 |out| ESRAM/B accounts for SRAM
+    table; six sparsity modes are supported.                                              round-trips avoided by fused intermediates. Chip energy
+•   DRAM module. Burst-aligned reads/writes at per-tile                                   adds NoC transfer and static leakage from power-gated
+    bandwidth, EDRAM = (bytesrd + byteswr ) EDRAM/B .                                     tiles.
+
+
+                                                                               5
+Area. Tile area is the analytical sum                                  arithmetic intensity, and roofline class; per-module energy
+                                                                       breakdowns (compute, DRAM, SRAM, IRF, ORF, DSP, spe-
+Atile = NMAC · max AMAC (p)+ASRAM +ADSP +Aspec +Aports ,               cial, NoC, leakage); and an execution trace in the Perfetto
+                 p
+                                                             (7)       profiling format for visual inspection of tile utilization and
+with per-MAC area taken over the largest supported                     cross-tile movement.
+precision (multi-precision MACs include the wide data-                 3.4. Calibration
+path); IRF/ORF area folds into Aports . Chip area is Achip =
+                                                                           Energy, area, and timing parameters come from Synop-
+P
+    t Atile (t) + ANoC , omitting floorplan dead space (flagged
+in §7; RTL gating study in §5.1 bounds it).                            sys Design Compiler (DC) synthesis of every RTL module
+                                                                       at the ASAP7 7 nm process design kit [3], 2 GHz target.
+3.3.4. Heterogeneous Mechanisms                                        SRAM area is taken from CACTI 7.0 [27]; SRAM leakage
+      Two mechanisms make the analytical model                         is taken from DC.
+heterogeneity-aware.                                                   DRAM calibration. DRAM energy and bandwidth come
+Dynamic DRAM bandwidth sharing. Only tiles whose previ-                from DRAM-process literature rather than logic synthesis.
+ous operator has not yet finished are counted active; per-tile         The ASAP7 calibration pairs with LPDDR5-6400 (40 pJ/byte,
+bandwidth is BWtotal /Nactive , so a subset of busy tiles gets         51.2 GB/s rounded to 64 GB/s on the DSE grid, 100-cycle
+full bandwidth rather than a static share.                             access latency). The bandwidth is a DSE knob and is swept
+Cross-tile activation caching and synchronization. Each tile’s         over {16, 32, 64, 128, 256, 512} GB/s.
+SRAM splits between a working set and a FIFO-evicted                   System-level RTL validation. A dedicated study packages
+activation cache. Three cases: local cache hit (same-tile              a homogeneous two-tile system and an iso-area hetero-
+producer/consumer ⇒ no DRAM read), cross-tile DMA                      geneous (one FP16+INT8 + one INT4+INT8) system into
+(NoC transfer at ⌈B/BNoC ⌉ + h Cbase cycles), or cache miss            109 SystemVerilog files (∼19.3k lines of code) synthesized
+(full DRAM load). A pre-built consumer map enforces                    at ASAP7. The homogeneous design clock-gates the FP16
+dependency synchronization across heterogeneous tiles.                 datapath when running INT8; the heterogeneous design
+Clock and power gating. Idle modules within an active                  power-gates the INT4+INT8 tile when idle. Results in §5.1.
+tile are clock-gated (no dynamic energy). Tiles with no                External cross-validation. The same calibration flow
+scheduled work are power-gated at 5% residual leakage,                 matches MOSAIC against NVIDIA NVDLA [30] at two
+a figure consistent with header-switch power gating at                 design points spanning 32× in MAC density: nv_small
+modern technology nodes.                                               (8×8 INT8 systolic, 64 KB convolution buffer (CBUF)) and
+3.3.5. Heterogeneous Tile Types                                        nv_full (32×64 INT8+FP16, 512 KB CBUF), using the
+                                                                       published NVDLA Primer’s area and energy values as the
+      The tile-template knobs let a single configuration               external reference. NVDLA is the natural target here, and
+schema represent three qualitatively different tile types              effectively the only one: it is the sole openly available
+that recur in our DSE outputs. The supported-precision set             production NPU that ships synthesizable RTL together with
+is itself a per-tile knob: any tile may declare an arbitrary           a published per-module area and energy breakdown, which
+subset of the available datatypes, so the precision labels             is why analytical DSE simulators are likewise each validated
+below are illustrative of representative DSE points, not               against a single such reference (e.g., Timeloop [34] against
+hard-wired tile classes.                                               the Eyeriss accelerator). NVDLA is an edge-class design,
+• Big tile. A large systolic array with ample SRAM, two-               so this check exercises the framework at edge area and
+   sided sparsity, and dual DSP. Hosts the highest-precision           power scales; the same cost models and search apply to
+   operators in a configuration—e.g., FP16 attention, normal-          datacenter-scale NPUs, where only the area, power, and
+   ization, and high-accuracy convolution—and is typically             bandwidth budgets supplied to the DSE differ.
+   provisioned with a wide precision set (e.g., FP16+INT8).
+• Little tile. A small array with modest SRAM, a single
+                                                                       3.5. Design Space Exploration
+   DSP, and optional sparsity. Hosts the lower-precision,                  The DSE engine drives the compiler+simulator over
+   INT-quantizable convolution and matmul at substantially             the joint heterogeneous knob space and returns a Pareto
+   lower energy than the Big tile, and is typically provisioned        front in (energy, area, latency) together with the best design
+   with a narrower, lower-precision set (e.g., INT4+INT8).             under a user-supplied scalar objective.
+• Special-Function tile. No MAC array. Includes one or                 Knobs. The DSE varies 12 knobs spanning tile-type com-
+   more SFUs (FFT, SNN-integrate, polynomial), modest                  position, MAC-array geometry, precision, on-chip memory,
+   SRAM, and a single DSP for pre/post-processing. Hosts               DRAM bandwidth, sparsity, dataflow, interconnect, and
+   the non-MAC operator classes for which MAC lowering                 pipelining. The full knob space exceeds 1014 configurations;
+   is asymptotically wasteful.                                         the per-knob value grid is enumerated in §4.5.
+The same chip simulator orchestrates any cross product                 Search pipeline. The DSE runs in two stages, across
+of these tile types; what differs across architectures is the          multiple random seeds for confidence intervals. Sweep:
+per-type count and per-type sizing.                                    stratified random sampling over the knob space (strata
+                                                                       = area budget × architecture family); it is the source
+3.3.6. Outputs
+                                                                       of the per-workload best-of-DSE numbers in §5.2. GA
+      For each (workload, architecture) pair the simulator             refinement: a per-area-budget genetic algorithm seeded
+emits end-to-end latency, total/average power, and area; per-          from the best sweep individuals, returning the best general-
+tile active cycles, achieved/peak TOPS, TOPS/W, TOPS/mm2 ,             purpose heterogeneous architecture per area budget (§5.3).
+
+
+                                                                   6
+TABLE 1: Workload suite. 14 base models in ten architectural                4.3. Experimental Setup
+families; transformer LLMs include INT4/INT8 quantized
+variants.                                                                   Technology node. All headline results target ASAP7 7 nm
+                                                                            and use the default DC synthesis calibration described in
+  Family                     Model               Precision                  §3.4, paired with LPDDR5-6400 (40 pJ/byte). Big and Little
+  CNN                        ResNet-50 [13]      INT8                       tile types run in fixed clock domains at 1200 MHz and
+  Vision Transformer         ViT-B/16 [8]        FP16,   INT8               500 MHz, respectively.
+  Dense LLM                  LLaMA-7B [46]       FP16,   INT8, INT4         Architectures compared. At each area bracket we com-
+  Dense LLM                  Spec. decode [20]   FP16
+  Mixture-of-experts LLM     Mixtral [17]        FP16,   INT4               pare three families: Homogeneous (Homo, N identical
+  Hybrid attention/SSM LLM   Nemotron-H [31]     FP16,   INT8, INT4         FP16+INT8 tiles), Big–Little (Hetero-BL, mixed FP16+INT8
+  SSM                        Mamba-370M [12]     FP16                       Big and INT4+INT8 Little tiles), and Big–Little–Special-
+  SSM                        Hyena-1.3B [36]     FP16                       Function (Hetero-BLS, adds Special-Function tiles for
+  KAN                        KAN [24]            FP16
+  SNN                        SNN-VGG9 [28]       FP16                       FFT/SNN-integrate/polynomial). The GA refinement (§4.5)
+  Multimodal                 LAVISH [22]         FP16                       returns Hetero-BLS as best at every area budget.
+  Multimodal                 LLaVA [23]          FP16                       Comparison constraints. Comparisons run under three
+  Multimodal                 RT-2 [2]            FP16                       constraints: iso-area (area matched; report energy/latency),
+  GNN                        GNN-GAT [47]        FP16
+                                                                            iso-latency (latency matched; report energy/area), and iso-
+                                                                            energy (energy matched; report area/latency).
+Alongside these two stages, the DSE engine also provides a
+Bayesian-optimization search backend (a surrogate model fit                 4.4. Simulator Validation Setup
+to evaluated configurations, with new candidates proposed                       The simulator is validated along three axes (§5.1): (i)
+by an acquisition function) as a sample-efficient alternative               per-module cycle and energy agreement against Synopsys
+to the stratified sweep when the simulation budget is                       DC at ASAP7 7 nm; (ii) end-to-end agreement against
+constrained.                                                                NVIDIA NVDLA at two design points spanning 32× in
+Objective. The GA-refinement fitness is the workload-equal-
+                                                                            MAC density (nv_small 8×8 INT8 64 KB CBUF; nv_full
+weighted mean iso-area energy savings of the candidate
+                                                                            32×64 INT8+FP16 512 KB CBUF); and (iii) a system-level
+design over the best homogeneous design at the same area
+                                                                            RTL gating study (109 SystemVerilog files, homogeneous
+(from the sweep), normalized by the best peak TOPS/W
+                                                                            vs. iso-area heterogeneous, both synthesized at ASAP7 and
+observed:
+                                                                            run at 1 GHz with the heterogeneous design’s INT4+INT8
+     fitness(d) = ∆Eiso-area (d) + α · maxTOPS/W(d)  ′ ,          (8)       tile power-gated when idle) that grounds the analytical
+                                          d′ TOPS/W(d )                     power-gating model.
+where α is a small positive tie-breaker. We report both
+peak TOPS/W (best-single workload) and mean TOPS/W                          4.5. DSE Setup
+(workload-equal-weighted); for general-purpose chip-level                       The DSE pipeline runs two stages, each repeated across
+claims the mean is the right metric.                                        multiple random seeds for confidence-interval estimation.
+4. Experimental Methodology                                                 Design-space grid. The 12 DSE knobs take values:
+                                                                            MAC array rows/columns ({8, 16, 32, 64, 128}), per-tile
+4.1. Workload Suite                                                         SRAM capacity ({64, 128, 256, 512, 1024, 2048, 4096} KB),
+    We evaluate MOSAIC on a 20-workload suite: 14 base                      supported precision set ({INT8-only, INT4+INT8,
+models spanning ten architectural families, plus six post-                  INT8+FP16, INT4+INT8+FP16}), DRAM bandwidth
+training-quantized INT4/INT8 variants of the widely de-                     ({16, 32, 64, 128, 256, 512} GB/s), per-architecture tile
+ployed transformer LLMs (Table 1). The suite was con-                       counts (1–3 tile types, 1–8 instances per type), sparsity
+structed to (i) exercise all 23 operator types in MOSAIC’s                  mode (none / activation-sided / two-sided), MAC engine
+vocabulary, (ii) stress every execution path on the tile (MAC,              type (systolic / spatial / dot-product / compute-in-memory),
+DSP, Special-Function), (iii) span five orders of magnitude                 dataflow policy (WS / OS / RS), interconnect (mesh /
+in arithmetic intensity, and (iv) cover the INT4/INT8 post-                 bus / ring / NoC), double-buffering, asymmetric-precision
+training quantization that production LLMs increasingly                     MAC variant (none / W4A8 / W2A8 / W4A16+W8A16, in
+ship in.                                                                    WxAy notation for x-bit weights and y-bit activations), and
+                                                                            pipeline depth ({1, 4, 8, 16}).
+4.2. Metrics                                                                Sweep. Stratified random sampling over this 12-knob
+    We report performance, energy, and area (PEA) as                        design space, with three random seeds. Each seed
+the primary triple (lower is better). Performance: end-to-                  evaluates ∼980 K configurations across area brackets
+end single-batch inference latency, achieved TOPS, per-tile                 {50, 100, 200, 400, 800} mm2 and architecture families
+processing-element utilization. Energy: single-inference en-                {Homo, Hetero-BL, Hetero-BLS}, yielding ∼2.94 M total
+ergy with per-module breakdown (compute, DRAM, SRAM,                        samples. The sweep is the source of the per-workload best-
+IRF, ORF, DSP, special, NoC) split into dynamic vs. static.                 of-DSE numbers reported in §5.2.
+Area: total chip area (mm2 ) with per-tile breakdown into                   GA refinement. Per-area-budget GA (population 200, 100
+MAC array, SRAM, DSP, special unit, and ports. Derived:                     generations, tournament selection of size 5, 80% crossover,
+peak TOPS/W (best-single workload) and mean TOPS/W                          20% mutation, 10% elitism) seeded from the top 50 individu-
+(workload-equal-weighted); for chip-level claims we report                  als returned by the sweep at that budget. Five parallel GA in-
+mean.                                                                       stances cover the area sweep {50, 100, 200, 400, 800} mm2 .
+
+
+                                                                        7
+TABLE 2: MOSAIC vs. NVDLA on INT8 64×64×64 GEMM,                                                                                                  speedup
+two design points. Ratio columns report MOSAIC/NVDLA.                         ResNet-50                    29.7
+                                                                                                           29.7 ms
+                                                                                                                ms                                 1.00×
+                                                                         ViT-B/16 (INT8)                   28.6 ms
+                                                                                                      12.1 ms                                      2.35×
+                  nv_small (64 MAC)       nv_full (2048 MAC)             ViT-B/16 (FP16)                   30.3 ms ms
+                                                                                                               57.2                                1.89×
+                                                                       LLaMA-7B (INT8)                                            2491
+                                                                                                                                1630 msms          1.53×
+  Metric         NVDLA MOSAIC     Ratio NVDLA MOSAIC       Ratio       LLaMA-7B (FP16)                                                4242msms
+                                                                                                                                    3350           1.27×
+                                                                       Nemotron (INT8)                                         1375 ms ms
+                                                                                                                                  2262             1.65×
+  Peak TOPS       0.064   0.064   1.00×   2.048    2.048   1.00×       Nemotron (FP16)                                               3674msms
+                                                                                                                                   2810            1.31×
+  Latency (µs)     5.12    5.52   1.08×    1.15     1.60   1.39×          Mixtral (FP16)                                     1001
+                                                                                                                            833 msms               1.20×
+                                                                                   LLaVA                                               5308msms
+                                                                                                                                      4135         1.28×
+  Energy (nJ)     567.7   803.1   1.41×   567.7    677.2   1.19×          Mamba-370M                                        872 ms
+                                                                                                                        399 ms                     2.19×
+  Area (mm2 )      0.40    0.71   1.77×    3.31     4.96   1.50×               GNN-GAT           5.77.6msms                                        1.34×
+  TOPS/W           0.58    0.44   0.76×    4.16     4.85   1.17×                           100    101          102         103          104       105
+                                                                                                 Single-batch inference latencyHPU
+                                                                                                          NVDLA-large           (ms, log scale)
+
+Fitness is the workload-equal-weighted mean energy sav-
+                                                                       Figure 5: Single-batch inference latency of the GA-refined
+ings of the candidate heterogeneous design over the best
+homogeneous design at the same area (found in the sweep),              HPU (Hetero-BLS, ∼100 mm2 ) versus synthesized NVDLA-
+normalized to the best peak TOPS/W observed.                           large on every NVDLA-supported workload, with per-
+Reporting convention. Sweep numbers are reported as                    workload speedup at right.
+cross-seed mean ± stdev (95% confidence interval) over the
+three seeds. Per-workload best-of-DSE numbers report the               single comparison: NVDLA is only the external axis of the
+mean and stdev of the single best sampled design per                   three-axis validation in this section—grounded bottom-up
+workload across the three seeds. GA-refinement results are             by per-module ASAP7 synthesis (§5.1) and topped by a
+reported as the best individual returned by the GA at each             109-file system-level RTL gating study—and even that axis
+area budget.                                                           spans two design points across 32× in MAC density, so
+                                                                       agreement reflects scaling behavior rather than a single
+5. Results                                                             tuned operating point.
+    The results are organized in three parts. §5.1 validates               Table 2 reports each metric and the MOSAIC-over-
+the simulator at three scales (per-module against ASAP7                NVDLA ratio at both scales. Peak TOPS matches by con-
+synthesis, end-to-end against NVDLA on a GEMM cross-                   struction. Latency ratios (1.08× small, 1.39× full) are on
+check, and against synthesized NVDLA-large on every                    par with the fidelity that comparable analytical simulators
+workload it can execute) and reports the system-level RTL              (Timeloop [34], SCALE-Sim [41]) report against synthesized
+gating study. §5.2 presents the multi-seed DSE per-workload            references. Energy sits at 1.41× small and shrinks to 1.19×
+best designs. §5.3 reports the GA refinement, the best                 full, a per-inference overhead that amortizes with scale.
+general-purpose heterogeneous architecture per area budget,            Area ratios (1.77×, 1.50×) reflect a constant bias: NVDLA’s
+and the three-group workload taxonomy that emerges.                    reported area covers only its convolution MAC array
+                                                                       and CBUF; once MOSAIC strips its load/store ports and
+5.1. Simulator Validation                                              PPM accounting (the nvdla_cmac + CBUF subset), the area
+5.1.1. Per-Module Calibration                                          matches the synthesized 3.238 mm2 within 2% (3.308 mm2 ).
+    The simulator is calibrated against Synopsys DC syn-               TOPS/W follows from energy and area. For MOSAIC’s
+thesis at ASAP7 7 nm for every RTL module that backs                   differential use (comparing architectures under identical
+an analytical model, which is what grounds the absolute                modeling assumptions), a constant bias cancels out, and
+energy and area numbers reported in this paper. SRAM area              the monotone tightening across the 32× MAC-density
+is taken from CACTI 7.0 [27] rather than the standard-cell             span between nv_small and nv_full confirms scaling
+register array.                                                        correctness.
+5.1.2. End-to-End vs. NVDLA                                            5.1.3. System-Level RTL Gating Study
+    We validate end-to-end accuracy against the open                        At iso-area and 1 GHz, the synthesized heterogeneous
+NVIDIA NVDLA [30] at two design points spanning 32× in                 chip (5×5 FP16+INT8 tile + 4×4 INT4+INT8 tile, the
+MAC density: nv_small (8×8 INT8 systolic, 64 KB CBUF)                  INT4+INT8 tile power-gated when idle) draws 93.6% less
+and nv_full (32×64 INT8+FP16, 512 KB CBUF). Both are                   power than the synthesized homogeneous baseline (2×
+exercised on an INT8 64×64×64 GEMM that fully fits in                  4×4 dual-datapath tiles with the FP16 path clock-gated)
+each design’s on-chip buffer (Table 2).                                while providing 28.1% more MACs (41 vs. 32) in 8.3%
+NVDLA is the natural—and effectively the only—external                 less area (302,931 vs. 330,320 µm2 ). At 500 MHz the same
+reference for this cross-check: it is the sole openly available        heterogeneous chip saves 41.9% area and 70.7% power. The
+production NPU that ships synthesizable RTL together with              93.6% power-reduction figure agrees within 6% of MOSAIC’s
+a published per-module area and energy breakdown, so it is             analytical 95% leakage-elimination model, providing direct
+the one design an analytical model can be checked against              silicon validation of the gating model.
+end-to-end at module granularity. This mirrors established             5.1.4. End-to-End vs. NVDLA-large on the Workload
+practice for analytical DSE simulators, each of which is                      Suite
+validated against a single such reference (e.g., Timeloop [34]
+against the Eyeriss accelerator), simply because no second                 Beyond the GEMM-level NVDLA validation, we compare
+design publishes RTL and reference numbers at comparable               a representative GA-refined general-purpose HPU (Hetero-
+fidelity. The cross-check is nonetheless stronger than a               BLS, ∼100 mm2 ASAP7) against the synthesized NVDLA-
+
+
+                                                                   8
+                                                                                                                                                         46.9%       46.9%
+
+
+
+
+                                                                                               Iso-area energy savings (%)
+              ResNet-50
+       Nemotron (INT4)                          42.9%
+                                                          60.1%                                                              50
+                                                                                                                                  42.2%      45.4%                                42.7%
+       Nemotron (INT8)                         41.2%
+           Mixtral (INT4)                     39.5%                                                                          40
+         ViT-B/16 (INT8)                      39.4%
+       LLaMA-7B (INT8)                       39.0%                                                                           30
+               GNN-GAT                       38.2%
+       LLaMA-7B (INT4)                      37.3%
+       Nemotron (FP16)                    33.8%                                                                              20
+         ViT-B/16 (FP16)                29.4%
+          Mamba-370M                   28.5%
+                   LLaVA             24.4%                                                                                   10
+       LLaMA-7B (FP16)            19.8%
+          Mixtral (FP16)        15.8%                                                                                         0
+           Spec. decode 0.3%                                                                                                       50         100          200            400      800
+                      0    10    20     30   40   50    60    70                                                                                  Chipindividuals
+                                                                                                                                     GA-evaluated HPU  area budget (mmBest
+                                                                                                                                                                      2) per area budget
+                 Best iso-area energy savings vs. best homogeneous (%)
+    INT-quantized LLMs/CNNs + GNN-GAT        FP16 transformer/SSM        Bandwidth-bound
+                                                                                                 Figure 7: GA-refined mean iso-area energy savings vs.
+Figure 6: Per-workload best iso-area energy savings of the                                       chip-area budget; the per-budget best traces an inverted-U
+DSE-selected heterogeneous design against the iso-knob                                           peaking in the 100–400 mm2 band.
+homogeneous baseline; mean ± stdev across 3 random-
+sampling seeds.                                                                                  tile-precision DSE does not yet expose; this measurement
+                                                                                                 is reported as future work (§7). The single-chip general-
+large (2048-MAC INT8+FP16 systolic, 512 KB CBUF) on                                              purpose winner is reported in §5.3.
+every workload NVDLA-large can execute (Fig. 5). The HPU
+reaches latency parity on ResNet-50 INT8 (NVDLA’s design                                         5.3. GA Refinement
+target) and is faster on every NVDLA-supported workload,                                             The GA refinement runs a per-area-budget GA seeded
+with 1.5–2.4× wins on INT8/SSM and compute-bound                                                from the top 50 individuals returned by the random
+ViT workloads (ViT-B/16 INT8 2.4×, Mamba-370M 2.2×,                                             sweep, scored by the workload-equal-weighted mean iso-
+ViT-B/16 FP16 1.9×, Nemotron INT8 1.6×, LLaMA-7B INT8                                           area energy savings of Eq. 8, the same metric used to
+1.5×) and smaller 1.2–1.3× wins on the FP16 dense-LLM                                           score random samples in Fig. 6. The five area instances
+decodes (LLaMA-7B, Nemotron, Mixtral, LLaVA), where at-                                         evaluate 28,268 GA individuals in total, with four of
+tention’s FP16-only operators serialize on the single Big tile.                                 five budgets reaching the ten-generation no-improvement
+The HPU draws 1.1–2.0× more energy per inference than                                           early-stop (the 50 mm2 instance terminates against the
+NVDLA-large; the energy–latency trade is the architect’s                                        144 h wall after 440 individuals). Fig. 7 shows the per-area-
+to make and the GA refinement surfaces it as a Pareto                                           budget best alongside the GA-evaluated individuals. The
+choice (§5.3). The four workloads NVDLA-large cannot                                            GA returns Hetero-BLS as the optimal architecture at every
+execute, namely three INT4 LLMs (LLaMA-7B, Nemotron,                                            area budget: the Big+Little+Special-Function composition
+Mixtral) and RT-2’s multimodal operators, are omitted                                           is robust across an order-of-magnitude span in chip area.
+from Fig. 5; on them the HPU’s INT4-native Little tile                                          Best general-purpose chip. The 200 mm2 Hetero-BLS
+reaches ∼0.70 TOPS/W (RT-2 at 0.27 TOPS/W), unlocking                                           winner reaches +46.91% mean iso-area energy savings
+deployment of GPTQ/AWQ-style post-training-quantized                                            and 2.44 mean TOPS/W (peak 10.48), both workload-equal-
+LLMs [9, 21] that the homogeneous baseline cannot serve.                                        weighted across the 20-workload suite. The inverted-U in
+                                                                                                Fig. 7 locates the sweet-spot in the 100–400 mm2 band,
+5.2. DSE Across Hardware Knobs                                                                  where the three budgets land within 1.5 percentage points
+    We ran a multi-seed sweep over the 12-knob design                                           of each other (+45.39/ + 46.91/ + 46.88%); the optimum is
+space (3 seeds, ∼2.94 M samples; §4.5). Each sampled                                            robust to area allocation in this band. The 400 mm2 design
+heterogeneous design is scored by its workload-equal-                                           hits the highest mean efficiency at 2.47 TOPS/W (peak 11.21).
+weighted mean iso-area energy savings against the iso-                                          Smaller chips lack room for enough Little tiles, while larger
+knob homogeneous baseline (Eq. 8). For each workload we                                         chips amortize static area over fewer beneficial workloads
+record the best sampled design and report the cross-seed                                        (the 800 mm2 regression to +42.69% comes from FP16-only
+mean/stdev (Fig. 6).                                                                            ops that serialize on the few FP16-capable tiles).
+    ResNet-50 at +60.10 ± 1.18% is the headline; all per-                                       Workload-group taxonomy. The 15 MAC/DSP-dominant
+workload stdevs sit below 1.82%. Each bar’s winner is                                           workloads fall into three groups (Fig. 8), distinguished by
+workload-specific: the optimal Big/Little/Special-Function                                      their best achievable iso-area savings and their position on
+composition is determined by the target workload’s pre-                                         the arithmetic-intensity axis. INT-quantized LLMs/CNNs and
+cision and arithmetic intensity, so the design that wins on                                     GNN-GAT (8) reach 37–60% under per-workload tailoring,
+ResNet-50 loses on INT4 LLMs and vice versa. A clear or-                                        sitting at or past the ASAP7 roofline ridge (arithmetic
+dering emerges and lines up with the three-group taxonomy                                       intensity ≥ 30 MACs/byte) where the DSE picks a Big–Little
+(§5.3): INT4/INT8 quantized workloads (plus GNN-GAT)                                            mix and small INT4+INT8 Little tiles off-load quantiz-
+cluster at the top at 37–60%; FP16 transformer/SSM work-                                        able (and, for GNN-GAT, INT8-compatible) layers. FP16
+loads recover 16–34%; speculative decoding is bandwidth-                                        transformer/SSM workloads (6) recover 16–34% in the same
+bound (0.28%). Quantifying the Special-Function tile’s ben-                                     compute-bound region by keeping FP16 attention on the Big
+efit on the five non-MAC workloads (KAN, SNN-VGG9,                                              tile while off-loading normalization, gating, and quantizable
+Hyena, LAVISH, RT-2) requires an asymmetric per-Special-                                        matmul fragments. Bandwidth-bound (1), spec. decode at an
+Function-tile precision knob that the current symmetric per-                                    arithmetic intensity of 2.4, recovers only 0.28% because no
+
+
+                                                                                           9
+                                                   70                                                                                level workload studies on commercial NPUs (GraNNite [4],
+
+
+                Best iso-area energy savings (%)
+                                                   60                              ResNet-50                                         XAMBA [6], HKN [5]) identify as energy-leaving-on-the-
+                                                   50                                       Nemotron (INT4)
+                                                                                                                                     table.
+                                                   40             GNN-GAT                                                            Operator-level orchestration on heterogeneous SoCs. A
+                                                                                            Nemotron (FP16)
+                                                   30           ViT-B/16 (FP16)                                                      complementary line of work studies how to map individual
+                                                   20                                                                                operators to the right processing unit on a fixed hetero-
+                                                   10                           Mixtral (FP16)                                       geneous SoC (e.g., CPU/GPU/NPU pipelines). MOSAIC
+                                                   Spec. decode             ASAP7 roofline ridge)
+                                                                            (compute-bound                                           inverts the question: given a workload mix, it produces the
+                                                    0
+                                                                  101             102               103                              right heterogeneous chip composition in the first place.
+                                                        Arithmetic intensity (MACs / byte, log scale)
+    INT-quantized LLMs/CNNs + GNN-GAT                                             FP16 transformer/SSM        Bandwidth-bound
+                                                                                                                                     7. Future Work
+Figure 8: Best iso-area energy savings vs. workload arith-
+metic intensity (MACs/byte) for the 15 MAC/DSP-dominant                                                                              (1) Asymmetric per-tile-type precision DSE pass. The
+workloads; markers colored and shaped by the three-group                                                                             GA-returned HPU runs five non-MAC workloads (KAN,
+taxonomy.                                                                                                                            SNN-VGG9, Hyena, LAVISH, RT-2) natively on its Special-
+                                                                                                                                     Function tile. Quantifying that tile’s iso-area savings needs
+                                                                                                                                     an asymmetric per-tile precision knob (e.g., an FP16 SNN
+MAC sizing helps a memory-starved workload: the single                                                                               integrator alongside INT4 Big-tile MACs), absent from the
+point left of the roofline ridge in Fig. 8. The remaining five                                                                       current symmetric DSE—our highest-priority follow-up.
+non-MAC workloads (KAN, SNN-VGG9, Hyena, LAVISH,                                                                                     (2) Within-layer heterogeneity. MOSAIC covers the
+RT-2) execute on the Special-Function tile that the GA-                                                                              across-models and across-layers scopes (§2.3); group-level
+returned HPU instantiates; quantifying their savings against                                                                         quantization within a matmul or convolution would add
+a homogeneous baseline requires the asymmetric per-                                                                                  the third, within-layer scope.
+Special-Function-tile precision DSE pass discussed in §7.
+                                                                                                                                     (3) Mapper–architecture co-design. The greedy DAG
+6. Related Work                                                                                                                      mapper lacks global look-ahead, so on sparsely parallel
+                                                                                                                                     graphs, tiles with rare op-type compatibility (e.g., the
+Heterogeneous NPU architectures. Prior work has ex-                                                                                  Special-Function tile during dense-MATMUL stretches) idle.
+plored heterogeneity along a single axis at a time. Her-                                                                             A search-based or learned policy co-optimized with the
+ald [19] and SCAR [32] compose sub-accelerators that                                                                                 tile-mix knobs would recover that slack.
+differ only in dataflow (weight- vs. output-stationary),                                                                             (4) Physical-design feedback. The area model omits
+while Stream [44] extends this paradigm with layer-fusion                                                                            floorplan dead space, place-and-route (P&R) complexity, and
+scheduling. Tiles in these designs share identical hardware                                                                          power-density hotspots; the RTL gating study (§5.1) bounds
+structures, precisions, and functional units, leaving the                                                                            this mismatch to 8% on one two-tile composition, with
+structural efficiency of right-sized compute unexplored.                                                                             no physical synthesis at the 3 nm target. Floorplan-aware
+DNPU [42] pairs a CNN core with an RNN core in a hard-                                                                               modeling, full P&R, and advanced-node synthesis would
+wired two-core SoC, and the Renesas AI-MPU [29] inte-                                                                                tighten the iso-area comparisons and yield manufacturable
+grates a CPU, reconfigurable processor, and AI accelerator                                                                           designs.
+on a 14 nm SoC; both demonstrate heterogeneous-core value                                                                            (5) Kernel-fidelity simulation. The simulator operates
+but are tied to specific workload pairs and lack any DSE.                                                                            at op-graph, not kernel, granularity; fusion savings are
+Spantidi et al. [43] adopt a big.LITTLE NPU based on MAC                                                                             captured via metadata rather than full kernel fidelity. A
+precision alone, achieving ∼29% energy savings, but vary no                                                                          kernel-level extension would tighten energy estimates for
+other knob. CHARM 2.0 [48] composes field-programmable                                                                               fusion-heavy workloads.
+gate-array fabric and AI-Engine sub-accelerators on Xilinx
+Versal, and PICACHU [38] inserts a plug-in CGRA for                                                                                  8. Conclusion
+nonlinear LLM operators next to an existing GEMM engine;
+both address complementary aspects of heterogeneity but do                                                                               MOSAIC is the first workload-characterization and
+not provide a general-purpose heterogeneous-NPU substrate                                                                            DSE framework that treats structural tile-type composition
+or simulator. Maleki et al. [25] sweep heterogeneous array                                                                           (Big, Little, and Special-Function (FFT/SNN/polynomial)
+sizes alone and report up to 36% energy reduction, again                                                                             tiles, each with a per-tile configurable precision set) as
+on a single axis. No prior study jointly varies tile-type                                                                            a joint design space, with an ASAP7-calibrated simulator
+composition, precision, sparsity, dataflow, and special-function-                                                                    cross-validated against NVDLA and a multi-seed sweep+GA
+unit presence, leaving the cross-knob heterogeneity design                                                                           pipeline. The GA-refined Big+Little+Special-Function HPU
+space largely unexplored.                                                                                                            reaches +46.91% mean iso-area energy savings and
+Simulation frameworks for NPUs. The widely used DSE                                                                                  2.44 mean TOPS/W on the 20-workload suite (peak
+simulators (Timeloop [34], SCALE-Sim [41], MAESTRO [18],                                                                             60.10 ± 1.18% on ResNet-50), is 1.5–2.4× faster than
+and Voyager [37]) all model homogeneous substrates with                                                                              NVDLA-large on INT8/SSM/ViT workloads, and a system-
+a single tile type, lack dedicated models for non-MAC                                                                                level RTL gating study confirms 93.6% lower power at 28%
+accelerators (FFT, SNN-integrate, polynomial), and have                                                                              more MACs in silicon. The contribution is the cross-knob
+no notion of heterogeneity-aware mapping or DRAM                                                                                     platform that makes the Big+Little+Special-Function HPU
+bandwidth sharing across mixed tiles. As a result, they                                                                              discoverable in the first place.
+cannot evaluate the design points that recent operator-
+
+
+                                                                                                                                10
+References                                                                               [24] Z. Liu et al., “KAN: Kolmogorov–Arnold networks,” arXiv preprint
+                                                                                              arXiv:2404.19756, 2024.
+[1]    Advanced Micro Devices, Inc., “AMD XDNA architecture,” 2025.                      [25] M. A. Maleki et al., “Heterogeneous multi-core array-based DNN
+[2]    A. Brohan et al., “RT-2: Vision-language-action models transfer web                    accelerator,” arXiv preprint arXiv:2206.12605, 2022.
+       knowledge to robotic control,” in CoRL, 2023.                                     [26] MediaTek Inc., “MediaTek edge AI: The MediaTek NPU (APU),” 2025.
+[3]    L. T. Clark et al., “ASAP7: A 7-nm FinFET predictive process design               [27] N. Muralimanohar et al., “CACTI 6.0: A tool to model large caches,”
+       kit,” Microelectronics J., 2016.                                                       HP Labs Tech. Rep., Tech. Rep., 2009.
+[4]    A. Das et al., “GraNNite: Enabling high-performance execution of                  [28] E. O. Neftci et al., “Surrogate gradient learning in spiking neural
+       graph neural networks on resource-constrained neural processing                        networks,” IEEE Signal Process. Mag., 2019.
+       units,” arXiv preprint arXiv:2502.06921, 2025.                                    [29] K. Nose et al., “A 23.9 TOPS/W @ 0.8 V, 130 TOPS AI accelerator
+[5]    A. Das et al., “Towards efficient acceleration of Hyena and                            with 16x performance-accelerable pruning in 14 nm heterogeneous
+       Kolmogorov–Arnold networks on NPUs,” in ICEdge, 2025.                                  embedded MPU for real-time robot applications,” in ISSCC, 2024.
+[6]    A. Das et al., “XAMBA: Enabling efficient state space models
+                                                                                         [30] NVIDIA Corporation, “NVDLA: NVIDIA deep learning accelerator,”
+       on resource-constrained neural processing units,” arXiv preprint
+                                                                                              2017.
+       arXiv:2502.06924, 2025.
+[7]    X. Dong et al., “Hymba: A hybrid-head architecture for small language             [31] NVIDIA Research, “Nemotron-H: A family of accurate and efficient
+       models,” arXiv preprint arXiv:2411.13676, 2024.                                        hybrid Mamba–Transformer models,” arXiv preprint arXiv:2504.03624,
+[8]    A. Dosovitskiy et al., “An image is worth 16x16 words: Transformers                    2025.
+       for image recognition at scale,” in ICLR, 2021.                                   [32] M. Odema et al., “SCAR: Scheduling multi-model AI workloads on
+[9]    E. Frantar et al., “GPTQ: Accurate post-training quantization for                      heterogeneous multi-chiplet module accelerators,” in MICRO, 2024.
+       generative pre-trained transformers,” in ICLR, 2023.                              [33] ONNX Community, “Open neural network exchange (ONNX),” 2017.
+[10]   P. Greenhalgh, “big.LITTLE processing with ARM Cortex-A15 and                     [34] A. Parashar et al., “Timeloop: A systematic approach to DNN
+       Cortex-A7,” 2011.                                                                      accelerator evaluation,” in ISPASS, 2019.
+[11]   A. Gu et al., “Efficiently modeling long sequences with structured                [35] A. Paszke et al., “PyTorch: An imperative style, high-performance
+       state spaces,” arXiv preprint arXiv:2111.00396, 2021.                                  deep learning library,” in NeurIPS, 2019.
+[12]   A. Gu et al., “Mamba: Linear-time sequence modeling with selective                [37] K. Prabhu et al., “Voyager: An end-to-end framework for design-
+       state spaces,” arXiv preprint arXiv:2312.00752, 2023.                                  space exploration and generation of DNN accelerators,” arXiv preprint
+[13]   K. He et al., “Deep residual learning for image recognition,” in CVPR,                 arXiv:2509.15205, 2025.
+       2016.                                                                             [38] J. Qin et al., “PICACHU: Plug-in CGRA handling upcoming nonlinear
+[14]   M. Horowitz, “Computing’s energy problem (and what we can do                           operations in LLMs,” in ASPLOS, 2025.
+       about it),” in ISSCC, 2014.                                                       [39] Qualcomm Technologies, Inc., “Unlocking on-device generative AI
+[15]   Intel Corporation, “OpenVINO toolkit,” 2020.                                           with an NPU and heterogeneous computing,” 2024.
+[16]   Intel Corporation, “Intel Core Ultra series mobile processors product             [40] A. Raha et al., “FlexNPU: A dataflow-aware flexible deep learning
+       brief,” 2024.                                                                          accelerator for energy-efficient edge devices,” Frontiers in HPC, 2025.
+[17]   A. Q. Jiang et al., “Mixtral of experts,” arXiv preprint arXiv:2401.04088,        [41] A. Samajdar et al., “A systematic methodology for characterizing
+       2024.                                                                                  scalability of DNN accelerators using SCALE-Sim,” in ISPASS, 2020.
+[18]   H. Kwon et al., “MAESTRO: A data-centric approach to understand                   [42] D. Shin et al., “DNPU: An energy-efficient deep-learning processor
+       reuse, performance, and hardware cost of DNN mappings,” IEEE                           with heterogeneous multi-core architecture,” IEEE Micro, 2018.
+       Micro, 2020.                                                                      [43] O. Spantidi et al., “Targeting DNN inference via efficient utilization
+[19]   H. Kwon et al., “Heterogeneous dataflow accelerators for multi-DNN                     of heterogeneous precision DNN accelerators,” IEEE TETC, 2023.
+       workloads,” in HPCA, 2021.                                                        [44] A. Symons et al., “Stream: Design space exploration of layer-fused
+[20]   Y. Leviathan et al., “Fast inference from transformers via speculative                 DNNs on heterogeneous dataflow accelerators,” IEEE TC, 2025.
+       decoding,” in ICML, 2023.
+[21]   J. Lin et al., “AWQ: Activation-aware weight quantization for LLM                 [45] TechInsights, “Dimensity 9500 debuts Arm C1 cores and dual-NPU,”
+       compression and acceleration,” in MLSys, 2024.                                         TechInsights blog, 2025.
+[22]   Y.-B. Lin et al., “Vision transformers are parameter-efficient audio-             [46] H. Touvron et al., “LLaMA: Open and efficient foundation language
+       visual learners,” in CVPR, 2023.                                                       models,” arXiv preprint arXiv:2302.13971, 2023.
+[23]   H. Liu et al., “Visual instruction tuning,” in NeurIPS, 2023.                     [47] P. Veličković et al., “Graph attention networks,” in ICLR, 2018.
+[36]   M. Poli et al., “Hyena hierarchy: Towards larger convolutional                    [48] J. Zhuang et al., “CHARM 2.0: Composing heterogeneous accelerators
+       language models,” arXiv preprint arXiv:2302.10866, 2023.                               for deep learning on Versal ACAP architecture,” ACM TRETS, 2024.
+
+
+
+
+                                                                                    11
+

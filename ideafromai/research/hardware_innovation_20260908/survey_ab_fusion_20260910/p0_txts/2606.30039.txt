@@ -1,0 +1,316 @@
+                                             Mega: A 22 nm Convolutional Spiking Neural
+                                            Network Accelerator Achieving 0.375 pJ/SOP for
+                                                        Efficient Edge Vision
+                                                                            Rick Luiken⋆ , Manil Dev Gomony and Sander Stuijk
+                                                             Dept. of Electrical Engineering, Eindhoven University of Technology, The Netherlands
+                                                                                      ⋆
+                                                                                        Correspondence to h.j.luiken@tue.nl
+
+
+                                            Abstract—Convolutional Spiking Neural Networks (SNN) offer                   Challenges                                   Solutions
+                                         the potential for highly energy-efficient vision processing by
+                                                                                                                                                                      1
+                                                                                                                                                                 Highly parallel 3x3
+arXiv:2606.30039v1 [cs.AR] 29 Jun 2026
+
+
+
+
+                                         exploiting sparse, event-driven computation. However, existing          Convolutional SNNs use
+                                         SNN accelerators underutilize the inherent parallelism of convo-      many 3x3 convolution layers                    convolution acceleration
+                                         lutional layers and lack the flexibility to accommodate varying           VGG-16          ResNet-18
+                                         memory demands and input sparsity across layers. This paper
+                                         presents Mega, a digital architecture for convolutional SNNs that
+                                                                                                                                                          1
+                                         addresses these limitations through three key contributions: (1)
+                                         highly parallel acceleration of 3 × 3 convolutions, (2) a unified         81.3%
+                                                                                                                    81.2%           88.9%      3x3 conv         One spike         288 SOPs
+                                                                                                                                               Other layers
+                                         data memory for spikes, neuron states, and weights, and (3)
+                                         efficient spike map processing with low-overhead spike detection.       Memory requirements per                       Unified data memory for
+                                         Fabricated in GlobalFoundries 22 nm FDSOI technology, Mega
+                                         achieves an energy efficiency of 0.375 pJ/SOP, improving the
+                                                                                                                    layer are different                       spikes, states and weights
+                                         state of the art by 4×.
+                                                                                                                                                          2
+
+
+
+
+                                                                                                                                                                                    Compute
+                                                                                                                                                                            L1
+                                            Index Terms—SNNs, neuromorphic computing, edge AI
+                                                                                                                 High resolution       Many channels
+                                                                                                                                                                  L2        L1
+                                                                 I. I NTRODUCTION                                                                                           L1
+                                                                                                                  State memory         Weight memory
+                                            Enabling vision-based applications at the edge, where en-
+                                         ergy and compute resources are scarce, requires highly effi-                  AER is inefficient                      Use dense spike maps
+                                         cient processing. Dynamic Vision Sensors (DVS) [1] address                                                                    0 0 0           0
+                                         this need by converting changes in visual scenes into sparse,           x:   0 1 0 0 1 0 1 0                                  0 0 1           1
+                                         event-driven spikes with high temporal resolution. Convolu-                                                      3     256
+                                         tional Spiking Neural Networks (SNNs) naturally exploit this            y:   0 0 0 0 1 0 1 1
+                                                                                                                                                                       0 1 0           0
+                                         sparsity, enabling energy-efficient inference for vision tasks.         256x256: 16 bits per spike                                 256
+                                            Despite the potential, accelerating convolutional SNNs in
+                                         hardware remains challenging. Existing SNN accelerators
+                                                                                                              Fig. 1. Challenges and Solutions. The left side illustrates common challenges
+                                         often fail to fully exploit the parallelism of convolutional         encountered when accelerating convolutional SNNs, while the right side
+                                         layers, particularly for small kernels such as 3 × 3, which          presents our corresponding solutions.
+                                         dominate network designs. Memory demands also vary across
+                                         layers: initial layers often require high-resolution feature maps,
+                                                                                                                             II. H ARDWARE ARCHITECTURE
+                                         making neuron state memory dominant, while deeper layers
+                                         have many channels, making weight memory dominant. Ad-                  Fig. 2 shows the hardware architecture of Mega. The design
+                                         ditionally, common spike communication schemes, such as              is centered around nine compute clusters that collectively
+                                         Address-Event Representation (AER), are efficient only at very       perform parallel 3×3 spiking convolutions.
+                                         high sparsity. However, typical sparsity levels vary per layer,         At a high level, input spikes are loaded by the spike
+                                         reducing their effectiveness.                                        streamer, which converts spike vectors into spike addresses.
+                                            To address these challenges, this paper presents Mega, a          These addresses are sent to the clusters, where they are
+                                         digital architecture for convolutional SNNs. Mega introduces         broadcast to the convolution units (CUs). The CUs use these
+                                         three key innovations, illustrated in Fig. 1:                        addresses to fetch the corresponding weights and neuron states
+                                            1) Highly parallel 3 × 3 spiking convolution acceleration,        to perform accumulation in parallel. After all spikes within a
+                                                exploiting kernel-level and output channel parallelism.       timestep have been processed, the threshold unit in each cluster
+                                            2) A unified data memory for spikes, neuron states, and           generates the output spikes.
+                                                weights that supports different layer types.                  A. Spiking Convolution on Compute Clusters
+                                            3) Low-overhead spike detection and address conversion              Each compute cluster integrates 32 CUs, along with local
+                                                for efficient event-driven processing.                        neuron state memory and a threshold unit.
+                                                         Mega
+                                SNAX Cluster
+
+
+                        RISC-V control system                                 Control & Status Registers                                                                                  1
+                                                                                                                                           CU CU CU CU CU CU CU CU
+
+                                                                                                                                           CU CU CU CU CU CU CU CU
+                                                             Weight        Cluster     Cluster      Cluster
+                               DMA                                                                                                         CU CU CU CU CU CU CU CU
+                                                             buffer          0,0         0,1          0,2
+                                                                                                                                           CU CU CU CU CU CU CU CU
+                                                                       3   Cluster     Cluster      Cluster
+                                                              Spike
+                                                            streamer         1,0         1,1          1,2
+                                               2
+                                                                                                                                                     Neuron state memory
+                                          TCDM             Neuron state    Cluster     Cluster      Cluster
+                 To/From SoC
+
+
+
+
+                                                                             2,0         2,1          2,2
+                               AXI                                                                                                                        Threshold unit
+
+
+                                                                                     Spike buffer
+
+
+
+
+Fig. 2. Mega architecture diagram. Mega is built around nine compute clusters that compute 3 × 3 convolutions in parallel. Each cluster updates 32 neuron
+states in parallel using 32 convolution units (CUs). Spikes, weights, and neuron states are fetched from the integrated SNAX cluster [2]. The spike streamer
+converts dense spike maps into sparse spike addresses, which are forwarded to the compute clusters.
+
+
+
+   1) Spiking convolution: Convolutional Neural Networks                                                Neuron states                                     Neuron state memory
+(CNNs) commonly employ a sliding window, frame-based                                                y' by                                                                  9 banks
+approach. For a 3 × 3 kernel W and input I, the output at                                                                                                          0,0                               2,2
+                                                                                                        0 -4 -9 8 14 2 4
+location (x, y) is given by                                                                                                                   0,0   -4    3    6   -1       8        -7
+                                                                                                                                                                                      8    82   -5
+                                                                                                                                                                                                 8   12
+                                                                                                                                                                                                      8 8   8
+                                                                                                    0 1 15 1 0 -4 5 1
+                                                                                                        2   11    6   -7    0    0   9        0,1   14    9    4   -3      -3         9     3   -4    2     5
+                                     1    1
+                                     X    X                                                             0   5     3    0    8   -9   5        1,0    5    2   -1    0       3         8   13     2   -1     0
+          O[x, y] =                                I[x + a, y + b]W [a, b].            (1)          1   1   6     0   -6   13   -1   0        1,1    8   -7
+                                                                                                                                                          8   10
+                                                                                                                                                               8    28 8    08        0     4   -4   -8     1
+                                     a=−1 b=−1                                                          2   10   -7    8   -4    2   0                    32 states                           32 states
+                                                                                                 bx         0     1    2    0    1   2      32
+                                                                                                  x'                                     channels
+This formulation is output-centric, requiring all input elements                                                 0              1
+contributing to a given output location to be fetched. In SNNs,
+                                                                                                 Fig. 3. Neuron state memory organization. Neuron states are distributed
+where spikes are highly sparse, this approach leads to fetching                                  across nine SRAM banks. The (x, y) coordinate of a state is transformed into
+many zeros, which makes processing inefficient.                                                  (x′ , y ′ , bx, by), as shown on the left. The bank indices (bx, by) select one of
+   An alternative approach, first proposed in [3], defines the                                   the nine banks, while (x′ , y ′ ) defines the word address within the bank. Each
+                                                                                                 memory word stores 32 neuron states corresponding to 32 output channels.
+convolution in an event-driven manner. For an incoming spike
+at location (u, v), the spike S[u, v] is included in the sum for
+neuron state V [x, y] when                                                                       corresponding to 32 output channels. With nine SRAM banks,
+         (u, v) = (x + a, y + b),                      (a, b) ∈ {−1, 0, 1}2 ,          (2)       the architecture supports 288 concurrent neuron state reads and
+                                                                                                 writes per cycle. Each SRAM bank has a capacity of 16 kB,
+which can be rewritten as                                                                        resulting in a total neuron state memory of 144 kB.
+                                                                                                    3) Convolution unit: Mega employs nine compute clusters,
+                                 x = u − a,          y = v − b.                        (3)
+                                                                                                 each responsible for one of the nine kernel offsets in (4),
+   This leads to the following update rule:                                                      enabling fully parallel kernel updates. Within each cluster, 32
+                                                                                                 CUs operate in parallel to process 32 output channels, resulting
+   ∆V [u − a, v − b] = W [a, b] for (a, b) ∈ {−1, 0, 1}2 .                             (4)       in a total of 288 neuron updates per cycle.
+This event-driven update rule produces the same results as the                                      Each CU implements a four-stage pipeline:
+frame-based approach. However, since the update rule is event-                                      1) Address generation: Compute the target neuron address
+driven, computation scales with the number of input spikes.                                             from the input spike coordinates.
+   2) Neuron state memory: The update rule in (4) allows for                                        2) Neuron state fetch: Read the 8-bit neuron state from
+nine neuron updates in parallel. To fetch the nine neuron states                                        the neuron state memory.
+in parallel, we extend the memory interlacing scheme used in                                        3) Neuron update: Add the weight to the neuron state.
+[4]. As shown in Fig. 3, neuron states are distributed across                                           Overflow is handled by clipping the neuron state.
+nine dual-ported SRAM banks, such that each 3×3 window of                                           4) Write-back: Store the updated neuron state in the neu-
+neuron states can be accessed concurrently. To further increase                                         ron state memory.
+throughput, we exploit parallelism across output channels.                                       Read-After-Write (RAW) hazards can occur when a neuron
+Unlike in [4], each SRAM word stores 32 neuron states                                            state is read before it has been updated or written back. These
+hazards are detected during the address calculation stage and
+are resolved by data forwarding, eliminating pipeline stalls.
+   4) Threshold unit: The threshold unit applies leakage and
+thresholding. Mega employs leaky integrate-and-fire (LIF)
+neurons with linear decay. Thresholding is performed in a row-
+wise manner, activating three of the nine thresholding units
+concurrently. Output spikes are buffered before being written
+back to the shared memory.
+   The threshold unit also implements a four-stage pipeline:
+   1) Address calculation: Neuron states are accessed se-                       Fig. 4. Chip micrograph and measurement setup
+      quentially. The address is generated using a counter.
+   2) Neuron state fetch: Read 32 neuron states in parallel.                                      TABLE I
+   3) Leak and threshold: Apply linear leakage to the signed                                   C HIP SUMMARY
+      8-bit neuron states, followed by the threshold compari-              Technology                     22 nm FDSOI CMOS
+      son. Neurons exceeding the threshold emit a spike.                      Area                              1.12 mm2
+   4) Write-back: Store the updated neuron states in the                 Supply voltage                      0.55 V - 1.1 V
+      neuron state memory. Spiking neurons are reset to zero;              Frequency                      155 MHz - 600 MHz
+      otherwise, the leaked neuron state is written back.                 Network type                     Convolutional SNN
+                                                                      Weight/State precision                   INT4/INT8
+B. SoC Integration                                                                             0.55 V @ 155 MHz        1.1 V @ 600 MHz
+   To increase flexibility, Mega is integrated with the SNAX           Power consumption             14.4 mW                144.7 mW
+framework [2], which provides a RISC-V control system and               Energy efficiency         0.375 pJ/SOP            0.978 pJ/SOP
+a Tightly-Coupled Data Memory (TCDM).                                     Throughput               38.4 GSOP/s            148.7 GSOP/s
+   The RISC-V control system communicates with Mega
+through the Control and Status Registers (CSRs) interface           to compute x′ and bx. Therefore, we employ two small lookup
+of Mega, enabling the configuration of parameters such as           tables (LUTs) with 96 entries, which store the x′ and bx
+neuron leakage and the threshold. The RISC-V controller also        corresponding to each LZC output.
+manages data transfers between Mega and the TCDM. The
+TCDM consists of 32 single-port SRAM banks of 8 kB each,                             III. M EASUREMENT R ESULTS
+totaling 256 kB. It stores spikes, neuron states, and weights          Mega is fabricated as part of a larger SoC tapeout in
+before they are loaded into Mega’s local memories. Mega can         GlobalFoundries 22 nm FDSOI. It occupies 1.12 mm2 , which
+access the entire TCDM, providing flexibility to efficiently        is 23.0 % of the SoC area. The chip micrograph and measure-
+handle layers with either large neuron states or large weight       ment setup are shown in Fig. 4. The chip summary is given
+kernels.                                                            in Table I.
+                                                                       As Mega is integrated within a larger SoC sharing a single
+C. Spike streamer                                                   power domain, its individual contributions to leakage and
+   The spike streamer converts dense binary spike maps into         dynamic power must be determined. Leakage power is found
+sparse spike addresses, enabling the spiking convolution ex-        by measuring the total leakage and scaling it proportionally
+plained in Section II-A. It fetches 96-bit spike vectors from the   to the area occupied by Mega. Dynamic power is obtained by
+TCDM and finds spikes using a Leading Zero Counter (LZC),           measuring the total chip power with and without activity on
+which is implemented efficiently as a tree structure. After a       Mega, and taking the difference between the measurements.
+spike is extracted, the corresponding bit is cleared, allowing         Fig. 5 shows the energy and latency of Mega across dif-
+the LZC to locate the next spike. Once all spikes in a vector       ferent input sparsity levels. Both the energy and latency scale
+have been processed, the spike streamer proceeds to the next        well with the input sparsity as a result of the event-driven
+vector.                                                             spiking convolution. Fig. 6 presents the energy efficiency and
+   To avoid stalls when fetching the next spike vector, we          performance tradeoff at different voltages. All tested samples
+prefetch it while the current vector is being processed. A          of the chip operate from 0.55 V to 1.1 V. At 0.55 V, Mega
+second LZC operates on the prefetched vector, allowing im-          runs at up to 155 MHz, consuming just 0.375 pJ/SOP.
+mediate continuation without stalls.                                   We evaluate Mega on the IBM DVS gestures dataset [10],
+   The spike location (x, y) is derived from the combination        a widely used benchmark for event-based vision. The imple-
+of the spike vector address and the LZC output. Due to the          mented network, shown in Fig. 7, achieves an accuracy of
+memory interlacing scheme used, the location needs to be            96.1 %. Each convolutional layer is deployed and evaluated
+converted to the (x′ , y ′ , bx, by) format. To avoid expensive     individually on Mega using inputs with representative spar-
+divide-by-3 and modulo-3 operations, y ′ and by are generated       sity levels. Aggregating the per-layer measurements, Mega
+using lightweight counters. However, since the x coordinate         consumes 174.9 µJ/inference, demonstrating its suitability for
+depends directly on the LZC output, we cannot use counters          energy-efficient edge vision applications.
+                                                                                                                                               TABLE II
+                                                                                                                              C OMPARISON OF NEUROMORPHIC ACCELERATORS
+
+                                                                                   ReckOn [5]                                         ANP-I [6]               Sparse-IMC [7]         SpiDR [8]                  SpikeRAM [9]              Mega
+                                                                                    ISSCC’22                                          ISSCC’23                  ISSCC’24            ESSERC’25                     ISSCC’26              This work
+                                     Technology                                       28 nm                                              28 nm                    22 nm                65 nm                      65/40 nm                22 nm
+                                       Voltage                                       0.5-0.8V                                          0.56-0.9V                0.55-0.9V             0.9-1.2V                     0.8-1.1V             0.55-1.1V
+                                  Clock frequency                                  13-115 MHz                                            Async                 51-280 MHz           50-150 MHz                   50-210 MHz           155-600 MHz
+                                    Network type                                      SRNN                                             FC SNN                   Conv SNN           FC/Conv SNN                  FC/Conv SNN             Conv SNN
+                                   State resolution                                   INT16                                              (N/A)                    (N/A)         INT7, INT11, INT15                  INT16                 INT8
+                                  Weight resolution                                    INT8                                              INT8                  INT4, INT8        INT4, INT6, INT8                    INT8                 INT4
+                                    Neuron model                                        LIF                                               LIF                       LIF            IF, LIF, RMP                       LIF                  LIF
+                                DVS gestures Accuracy                                 87.3 %                                            92.0 %                    94.0 %               93.5 %                       92.9 %               96.1 %
+                                  Energy Efficiency                              5.3-12.8 pJ/SOP                                      1.5 pJ/SOP               3.87 pJ/SOP          5 TOPS/W∗                   11.67 pJ/SOP          0.375 pJ/SOP
+                               *Measured at 95 % sparsity, includes operations skipped due to zeros.
+
+
+
+                                                                                                                                                                      T=20             2x
+                                                                                                           
+
+
+
+
+                                                                                                                                                                                                                                                            FC-1024-11
+                                                                                                                                                                                                                 Max Pool
+
+
+
+
+                                                                                                                                                                                                                                                 Max Pool
+                                                                                                                                                                                            Conv-32
+
+                                                                                                                                                                                                      Conv-32
+
+
+
+
+                                                                                                                                                                                                                            Conv-64
+
+                                                                                                                                                                                                                                       Conv-64
+                                                                                    / D W H Q F \    V 
+ ( Q H U J \    - 
+
+
+
+
+                                                                                                           
+                                                                                                                                                                        32x32x2
+                                                                                                           
+                                                                                                                                                                   Input spikes
+                             
+                                                                                                                                                                       Fig. 7. SNN architecture used for the DVS gestures task.
+                                                                                                                                           
+                                                6 S D U V L W \                                                              6 S D U V L W \                                       IV. C ONCLUSION
+                                                                                                                                                                        This paper presented Mega, a digital convolutional SNN
+  Fig. 5. Energy and latency versus input sparsities for a 96 × 50 spike map.
+                                                                                                                                                                     accelerator. It combines event-driven spiking convolution with
+                                                                                                                                                                     low-overhead spike detection for efficient operation. To im-
+                                                                                                                                                                     prove flexibility, Mega employs a unified memory for spikes,
+                                                                                                                                                                     states, and weights. Implemented in 22 nm, Mega consumes
+                                                                                                                                                                     0.375 pJ/SOP, achieving state-of-the-art energy efficiency.
+                                            0.55 V
+                                            155 MHz                                                                                                                                     ACKNOWLEDGMENT
+                                            0.375 pJ/SOP
+                                                                                                                                                                       This work is funded by EU’s Horizon Europe research and
+                                                                                                                                                                     innovation programme under grant agreement No. 101070374.
+                                                                                                                                     1.1 V                           The authors thank Henk Corporaal for his valuable feedback.
+                                                                                                                                  600 MHz
+                                                                                                                             0.978 pJ/SOP                                                             R EFERENCES
+                                                                                                                                                                      [1] P. Lichtsteiner et al., “A 128× 128 120 db 15 µs latency asynchronous
+                                                                                                                                                                          temporal contrast vision sensor,” JSSC, 2008.
+                                                                                                                                                                      [2] R. A. Antonio et al., “An open-source HW-SW Co-development frame-
+                                                                                                                                                                          work enabling efficient multi-accelerator systems,” ISLPED, 2025.
+                                                                                                                                                                      [3] R. Tapiador-Morales et al., “Neuromorphic LIF row-by-row multicon-
+                                                                                                                                                                          volution processor for FPGA,” TBioCAS, 2019.
+                                                                                                                                                                      [4] J. Sommer et al., “Efficient Hardware Acceleration of Sparsely Active
+                                                                                                                                                                          Convolutional Spiking Neural Networks,” TCADICS, 2022.
+                                                                                                                                                                      [5] C. Frenkel et al., “ReckOn: A 28nm Sub-mm2 Task-Agnostic Spiking
+                                                                                                                                                                          Recurrent Neural Network Processor Enabling On-Chip Learning over
+                                        Fig. 6. Energy efficiency and performance tradeoff.
+                                                                                                                                                                          Second-Long Timescales,” ISSCC, 2022.
+                                                                                                                                                                      [6] J. Zhang et al., “ANP-I: A 28nm 1.5pJ/SOP Asynchronous Spiking Neu-
+                                                                                                                                                                          ral Network Processor Enabling Sub-0.1 µJ/Sample On-Chip Learning
+                                                                                                                                                                          for Edge-AI Applications,” ISSCC, 2023.
+     Table II compares Mega with recent state-of-the-art neu-                                                                                                         [7] Y. Liu et al., “A 22nm 0.26nW/Synapse Spike-Driven Spiking Neural
+  romorphic accelerators. ReckOn [5] and ANP-I [6] target                                                                                                                 Network Processing Unit Using Time-Step-First Dataflow and Sparsity-
+  (recurrent) fully connected networks, limiting their scalability                                                                                                        Adaptive In-Memory Computing,” ISSCC, 2024.
+                                                                                                                                                                      [8] D. Sharma et al., “A 65nm 5 TOPS/W digital CIM accelerator with
+  to larger vision workloads. In contrast, Mega supports convo-                                                                                                           reconfigurable precision and temporal pipelining for spiking neural
+  lutional SNNs, enabling efficient execution of more complex                                                                                                             networks,” ESSERC, 2025.
+  and larger-scale networks. [7]–[9] adopt Compute-In-Memory                                                                                                          [9] H. Fu et al., “SpikeRAM: A 48.1pW/Synapse/Bit Event-Driven Spiking
+                                                                                                                                                                          Compute-Near/In-Memory Processor with Neuromorphic Sensor En-
+  (CIM) to support convolutional SNNs. Despite not using CIM,                                                                                                             abling Life-Long On-Chip Learning,” ISSCC, 2026.
+  Mega achieves the highest energy efficiency, improving on                                                                                                          [10] A. Amir et al., “A low power, fully event-based gesture recognition
+  prior work by 4×.                                                                                                                                                       system,” CVPR, 2017.
+

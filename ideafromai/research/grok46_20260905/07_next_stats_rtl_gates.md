@@ -1,6 +1,6 @@
 # 07 — Next gates (stats before RTL)
 
-Canonical folder: `/home/zhumd/work/ideafromai/`.  
+Canonical folder: `/home/zhumd/work/sdformer_codex/ideafromai/`.  
 Do not open a new production island until T0–T5 exist on **frozen ep34**, same ledger as C1/C2 (not ep35 P0).
 
 ## T0 — Attention / conv / FC cycle share (Workflow B gate)
@@ -53,7 +53,7 @@ Any new island vs ordinary/AND-PopCount/C2-ordinary must be equal lanes/banks/SR
 
 ## What Codex must not start from this pack alone
 
-- New C1* OP-STW / PRRC / OGEC RTL from `/home/zhumd/work/ideafromai/`
+- New C1* OP-STW / PRRC / OGEC RTL from `/home/zhumd/work/sdformer_codex/ideafromai/`
 - New C2* HBG-RP int8 payload RTL
 - Correlation volume, RAFT residual, decoder ConvTranspose engine
 - Weight pruning / FireFly-S

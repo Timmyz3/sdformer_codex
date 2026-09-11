@@ -2,7 +2,7 @@
 
 > 说明：本执行端为 box-scoped，未能经 zmd `machineId` SSH 直连 ismd；证据来自与远程 HEAD 对齐的本地跟踪树  
 > `sdformer_codex@22fc4aa1`（`ideafromai/research/hardware_innovation_20260908/`），并交叉先前会话落在 box 的 Codex 复核摘录。  
-> 远程权威路径仍以 `/home/zhumd/work/ideafromai/...` 为准；落盘目标即该树下本目录。
+> 远程权威路径仍以 `/home/zhumd/work/sdformer_codex/ideafromai/...` 为准；落盘目标即该树下本目录。
 
 ## 必读（已读）
 

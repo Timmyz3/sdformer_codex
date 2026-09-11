@@ -1,0 +1,1264 @@
+                                        A Time-Multiplexed Spiking Neural Network Accelerator with Pipelined
+                                                           Readout for FPGA Inference
+                                                                              Reza Ansari        and         Maciej Wielgosz
+                                                                        AGH University of Science and Technology, Kraków, Poland
+                                                                            m.rezaansari71@gmail.com; wielgosz@agh.edu.pl
+
+
+
+                                        Abstract                                                            discrete temporal events, SNNs can significantly reduce
+                                                                                                            computational overhead and power consumption during
+                                        Spiking Neural Networks (SNNs) provide a power-                     hardware inference. As a result, they have become a key
+                                        efficient, neuromorphic alternative to traditional artificial       technology for enhancing the energy efficiency of artificial
+                                        neural networks by processing information via discrete              intelligence tasks deployed at the edge.
+                                        temporal events. This paper presents the design and                    Mapping SNN architectures to programmable Field-
+                                        Field Programmable Gate Array (FPGA) implementa-                    Programmable Gate Arrays (FPGAs) is a critical step in
+arXiv:2608.00595v1 [cs.AR] 1 Aug 2026
+
+
+
+
+                                        tion of an inference-only SNN accelerator optimized for             developing custom, scalable inference accelerators. How-
+                                        MNIST digit classification. To overcome physical routing            ever, translating dense structural connections from soft-
+                                        constraints and timing bottlenecks inherent in low-cost             ware models directly to hardware topologies introduces
+                                        devices, we propose a highly optimized hardware microar-            significant implementation constraints. Specifically, di-
+                                        chitecture. This architecture features a time-multiplexed           rect spatial mapping often leads to increased interconnect
+                                        1-bit spike-feeding mechanism governed by a finite state            routing pressure, where multi-bit fan-out requirements
+                                        machine (FSM) controller, localized distributed mem-                can exceed available physical wiring tracks. Furthermore,
+                                        ory for weight storage, and an integer-friendly Leaky               the final classification layer—typically involving combina-
+                                        Integrate-and-Fire (LIF) neuron model with optimized                tional argmax trees—presents a critical path bottleneck
+                                        register widths to prevent overflow hazards. Further-               that can severely limit the maximum operating frequency
+                                        more, a multi-cycle pipelined argmax and tie-breaker                (Fmax ) of the overall hardware system.
+                                        readout module is introduced to eliminate the dominant                 To address these challenges, this paper outlines the
+                                        combinational critical path. Implemented on an entry-               design, implementation, and verification of a compact,
+                                        level AMD Artix-7 FPGA (XC7A200T) using a 784-64-10                 inference-only SNN accelerator optimized for FPGAs.
+                                        network topology, the proposed pipelined architecture               We emphasize that the primary contribution of this work
+                                        increases the maximum operating frequency (Fmax ) from              is not a new SNN learning algorithm, but an integrated
+                                        13.3 MHz to 167 MHz. Hardware evaluations demon-                    hardware microarchitecture. Rather than presenting a
+                                        strate a sequential processing latency of 82 µs per im-             single optimization in isolation, the principal novelty
+                                        age, completing a 1,000-sample VHDL simulation test                 lies in the holistic integration of time-multiplexed spike
+                                        batch in 0.082 s. Vivado post-implementation vector-                distribution, localized weight storage, integer-based LIF
+                                        based power analysis yields an estimated total on-chip              processing, and a multi-cycle spike-count and potential-
+                                        power consumption of 0.336 W, achieving an estimated en-            based readout engine. By translating a baseline artificial
+                                        ergy efficiency of approximately 36,300 samples per Joule.          neural network into this cohesive architecture, this work
+                                        These results highlight the proposed microarchitecture as           provides a framework for low-power classification that
+                                        a resource-efficient solution for real-time neuromorphic            is verified directly against a software reference model.
+                                        edge inference, provided the network size remains within            Specifically, the integrated contributions of this work are:
+                                        the practical bounds of its time-multiplexed execution.
+                                                                                                              1. A time-multiplexed 1-bit spike-feeding scheme that
+                                        Keywords: Field-programmable gate array (FPGA),                          serializes dense input fan-out into a routable broad-
+                                        neuromorphic hardware, pipeline processing, spiking neu-                 cast bus;
+                                        ral networks (SNNs), time-multiplexing.
+                                                                                                              2. A localized memory buffer organization that avoids
+                                                                                                                 large, power-intensive combinational weight fan-out;
+                                        1     Introduction                                                    3. An integer-based LIF neuron model with register
+                                                                                                                 widths sized strictly to avoid overflow;
+                                        Spiking Neural Networks (SNNs) represent a significant
+                                        shift toward neuromorphic hardware design, offering a                 4. A multi-cycle pipelined argmax and tie-breaker read-
+                                        biologically inspired alternative to traditional continuous-             out engine that removes the dominant combinational
+                                        activation models. By processing information through                     critical path; and
+
+
+                                                                                                        1
+  5. A comprehensive timing-closure and power analysis             the system. While pipelining is standard practice in
+     that quantifies the resulting improvements in fre-            conventional deep learning accelerators to isolate long
+     quency and energy efficiency.                                 combinational paths, its systematic application within
+                                                                   neuromorphic readout units—particularly when manag-
+  The remainder of this article is organized as follows:           ing multi-tier decision rules like spike counting paired with
+Section 2 reviews the state of the art in neuromorphic             secondary membrane potential tie-breakers—remains
+hardware. Section 3 describes the proposed hardware                less extensively documented [7]. Implementing multi-
+architecture, including the LIF neuron design and the              cycle, multi-stage pipelined classification architectures
+centralized control flow. Section 4 details the experimen-         allows for balanced logic depth across successive regis-
+tal setup, validation methodology, and implementation              ters, effectively mitigating timing violations on resource-
+results. Finally, Section 5 concludes the paper.                   constrained FPGA fabrics.
+
+
+2     Related Work                                                 3     Hardware Architecture and Im-
+The shift from traditional von Neumann architectures                     plementation Details
+to neuromorphic computing has been driven by the in-
+creasing demand for energy-efficient processing at the             Figure 1 presents an architectural overview of the pro-
+edge. Spiking Neural Networks (SNNs) have emerged as               posed SNN accelerator, illustrating the pipelined exe-
+a prominent solution, leveraging the sparsity and tempo-           cution flow structured across three stages: ingestion,
+ral dynamics of biological systems to achieve low-power            processing, and decision-making. At the ingestion stage,
+machine intelligence [1]. While advancements such as               incoming stimulus data is held in the Input Buffer and
+the Loihi manycore processor demonstrate the efficiency            decoded by the Spike Driver into discrete spike events.
+gains of executing asynchronous, spike-based workloads             These events are driven into the Processing Core, where a
+directly on silicon [2], mapping SNN architectures to              parallel Leaky Integrate-and-Fire (LIF) Array interfaces
+programmable Field-Programmable Gate Arrays (FP-                   with localized memory buffers to fetch and update synap-
+GAs) remains a critical challenge for developing scalable,         tic weights and membrane potentials. Finally, in the
+custom inference accelerators [3].                                 decision stage, output spikes generated by the LIF array
+   A common paradigm for neuromorphic inference in-                are accumulated by counters over a designated temporal
+volves converting pre-trained Artificial Neural Networks           window. An Argmax block evaluates these parallel totals
+(ANNs) into SNNs, thereby avoiding the training insta-             to determine the maximum spike activity, outputting
+bility associated with direct spike-based backpropagation          the final classification index. This modular, feed-forward
+[4]. However, translating dense structural connections             topology reduces global routing overhead on the FPGA
+from software models to hardware topologies imposes                while supporting parallel processing requirements.
+significant physical constraints. Direct spatial mapping              The development of the proposed hardware acceler-
+on FPGA fabrics often introduces severe interconnect               ator begins with establishing an algorithmic baseline
+routing pressure, where high-fanout requirements exceed            in software before translating the design into hardware-
+available routing resources and induce substantial com-            compatible primitives. A standard Artificial Neural Net-
+binational propagation delays. To mitigate these bot-              work (ANN) featuring a three-layer topology (784-64-10)
+tlenecks, existing literature explores time-multiplexed            is trained on the MNIST dataset using the PyTorch li-
+sequencing, processing-element folding, and centralized            brary. While a larger configuration containing 128 hidden
+finite state machine (FSM) controllers to serialize spike          neurons was initially evaluated, evaluation indicated that
+delivery across unified internal buses [5]. These strate-          a 64-neuron hidden layer achieves a baseline classification
+gies effectively balance parallel execution with design            accuracy of 97.0%, which is comparable to the 97.7% accu-
+routability, trading absolute single-cycle throughput for          racy obtained with the 128-neuron alternative. Reducing
+improved resource utilization and higher achievable clock          the hidden layer size by half reduces the physical routing
+frequencies.                                                       and logic footprint constraints on the target FPGA fabric
+   Beyond structural routing, the final classification layer       during implementation. To avoid the use of floating-point
+of hardware SNN accelerators presents an additional crit-          arithmetic units in hardware, the extracted continuous
+ical path constraint that has received limited attention           floating-point weights (Wf,l ) for each layer l are mapped
+in literature [6]. Traditional hardware implementations            to 8-bit signed integers (Wq,l ) through a uniform linear
+of the decision-making stage typically rely on purely              quantization process, defined as:
+combinational argmax trees to evaluate winner-take-all                    Wq,l = clamp (round (Sl · Wf,l ) , −128, 127)     (1)
+behavior within a single clock cycle. As the number of
+output classes or internal metrics scales, these wide com-         where Sl = 127/ max(|Wf,l |) represents a layer-dependent
+binational structures introduce significant logic depth,           scaling factor computed from the absolute peak weight
+adversely affecting the Worst Negative Slack (WNS) and             boundaries of that specific layer, and the clamping oper-
+limiting the maximum operating frequency (Fmax ) of                ation restricts the outputs to the valid range of an 8-bit
+
+
+                                                               2
+                                                                                                                        II. PROCESSING CORE
+
+
+                                                               Address & Control Bus                                                    Local Memory
+                                                                                                                                           Buffers
+
+
+
+
+                                                                                                                              /8   Weights       Potentials /32
+                          I. INGESTION STAGE                                                                                                                                                    III. DECISION STAGE
+
+                                       Raw Spike                                                       Time-Mux                                                       Output                              Accumulated                                  Predicted
+                                         Data                                                            Spikes                                                       Spikes                                 Totals     Pipelined Argmax                 Class
+           Input Buffer                                                                                                                 LIF Compute                                  Spike Counters
+                                             /1                  Spike Driver                                  /1                                                      /1                                     /4         & Tie-Breaker            /4
+           (784 Pixels)                                                                                                                     Array                                 (10 Channels × 4-bit)
+                                                                                                                                                                                                                        (Readout Engine)
+
+
+
+
+Figure 1: Proposed hardware accelerator microarchitecture optimized for low-cost FPGAs, explicitly illustrating
+data-path bit-widths, localized dual-bus memory boundaries, and the multi-cycle pipelined decision stage.
+
+                                                       LIF Neuron Processing Element (PE)
+                                                                                                                                                             Table 1: SNN Classification Accuracy (%) Grid Search
+                                                                                       Threshold (θ)                                                         Results for Time Window T = 16 (Evaluated over a
+                                 Arithmetic Core
+                                                                                                                                                             1,000-Sample validation Subset)
+Synaptic Current                                                  Membrane                              Fire                                 Output
+                                                                                                                    Out FF
+    Isyn (32-bit)
+                    /32      +                         −          Potential                    ≥                    (1-bit)
+                                                                                                                                   /1
+                                                                                                                                             Spike
+                                                                   (32-bit)
+                                                                                                                                                                  Threshold (θ)    sh=0     sh=1      sh=2     sh=3     sh=4    sh=5       sh=6        sh=7
+                                                                                                                                                                       25           68.4     69.7      70.3     70.3     69.8    70.1      69.8        70.0
+                                                                                0                                                                                      50           76.6     75.8      76.2     75.4     75.5    75.5      75.4        75.2
+                                               ≫ leak_shif t                  RST
+                                                                              MUX                                                                                     100           88.5     86.4      85.1     84.8     84.1    84.2      84.3        84.1
+                                                                                       32’h0
+                                                                                                                                                                      200           92.1     95.0      94.3     94.3     94.2    94.1      94.0        94.0
+                                                                                1
+
+
+
+
+                                                                                                                                                                      300           90.1     95.1      97.1     96.9     96.5    96.6      96.4        96.4
+                                                                                                                                                                      350           87.3     96.2      97.1     97.3     97.2    96.9      96.8        96.6
+                              Decayed Base Potential
+
+
+
+
+                                                                                                                                                                      400           83.9     95.6      97.4     97.1     97.3    97.5      97.1        97.3
+                                                                                Feedback Reset Select
+
+
+
+
+                                                                                                                                                                      450           78.9     95.1      97.2     97.1     97.4    97.4      97.6        97.6
+                                                                                                                                                                      500           71.3     94.1      97.4     97.3     97.0    97.0      97.2        97.2
+Figure 2: Hardware-efficient, multiplier-free RTL microar-                                                                                                            550           64.4     92.9      97.0     97.4     97.2    96.9      97.0        96.9
+                                                                                                                                                                      600           54.2     91.5      97.2     97.2     97.2    97.4      97.4        97.4
+chitecture of the proposed Processing Element (PE). The                                                                                                               650           47.5     90.7      96.4     97.4     97.4    97.0      97.0        97.0
+architecture implements direct synaptic current (Isyn ) in-
+tegration and shift-based leak mechanics mapped directly
+to the discrete-time dynamics in (2).                                                                                                                        random seeds (42, 43, 44, 45, and 46) to mitigate potential
+                                                                                                                                                             bias from a single sequence. The length of this temporal
+                                                                                                                                                             processing window, along with the operational parameters
+signed integer (int8 ) [8]. As seen in Equation 1, this                                                                                                      of the network, was determined through a parameter
+quantization methodology allows all subsequent synaptic                                                                                                      grid search evaluating various firing thresholds (θ) and
+accumulations within the hardware layers to execute via                                                                                                      membrane leak rates. To prevent test-set leakage, the
+integer operations, reducing resource consumption and                                                                                                        60,000-sample MNIST training dataset was partitioned:
+improving operational efficiency in the evaluated setup.                                                                                                     the baseline artificial neural network (ANN) was trained
+   To drive the neuromorphic core, the static 784-pixel                                                                                                      on a 59,000-sample split, while a 1,000-sample validation
+MNIST grayscale images are converted into a temporal                                                                                                         split was used for this SNN parameter grid search. The
+format compatible with the Leaky Integrate-and-Fire                                                                                                          10,000-sample MNIST test set was reserved for the final
+(LIF) neurons. This design utilizes a rate-encoding mech-                                                                                                    evaluation.
+anism where each pixel’s normalized intensity determines                                                                                                        The results of this grid search on the validation split
+its firing probability over a discrete temporal window                                                                                                       for a temporal window of T = 16 are compiled in Table
+T [9]. To implement the Leaky Integrate-and-Fire (LIF)                                                                                                       1. The evaluation indicates that low thresholds introduce
+neuron dynamics on the FPGA fabric without requiring                                                                                                         additional temporal noise, whereas higher leak rates (e.g.,
+hardware multiplication or division units, the continuous-                                                                                                   leak_shift ∈ {0, 1}) rapidly decay the membrane poten-
+time leakage is realized using an arithmetic right-shift                                                                                                     tial, reducing neural activity and classification accuracy.
+operation. The discrete-time membrane potential V for                                                                                                        The grid search shows a maximum validation accuracy
+a given neuron at timestep t + 1 is modeled as:                                                                                                              of 97.6% at a threshold of θ = 450, obtained with both
+           V [t + 1] = V [t] − (V [t] ≫ leak_shift) + Isyn [t]                                                                                (2)            leak_shift = 6 and leak_shift = 7.
+                                                                                                                                                                To resolve this tie, the configuration with leak_shift =
+where leak_shift represents the bit-shift parameter con-                                                                                                     6 is selected. A higher leak rate reduces sub-threshold
+trolling the decay rate, and Isyn [t] is the spatial synaptic                                                                                                membrane accumulation from background noise while
+current accumulated during the current execution layer.                                                                                                      still allowing sufficiently driven neurons to cross their
+The hardware implementation corresponding to these                                                                                                           activation boundaries. This supports information propa-
+simplified neuron dynamics is illustrated in Fig. 2.                                                                                                         gation [10, 11] without introducing the noise and random
+  To ensure reproducibility, the pseudorandom spike-                                                                                                         firings observed at lower thresholds (e.g., θ ≤ 200) [12].
+generation process is evaluated across five independent                                                                                                      Consequently, the θ = 450 and leak_shift = 6 configura-
+
+
+                                                                                                                                                       3
+Table 2: Bit-Accurate Software Reference SNN Classifi-                                                                       IDLE STATE
+
+cation Accuracy on the Full 10,000-Sample MNIST Test
+                                                                                                                        Initial quiescent state
+
+
+
+Set Across 5 Random Seeds (θ = 450, leak_shift = 6)                                                                            start = ’1’
+
+
+
+
+                                                                                                                     LOAD_HIDDEN_LAYER
+           Random Seed             Test-Set Accuracy (%)                                                            Loop: pixel_counter 0 to 783
+                                                                                                                                                                pixel_counter < 783
+
+
+
+               42                           96.69
+               43                           96.71                                                                         pixel_counter == 783
+
+
+               44                           96.65
+                                                                                                                     HIDDEN_ISYN_READY
+               45                           96.69                                                                    Assert prep_Isyn_hidden
+
+               46                           96.75
+         Mean ± Std Dev                 96.70 ± 0.04
+ Baseline ANN (10 epochs, Adam)             97.70
+                                                                                                                   HIDDEN_LIF_PROCESSING
+                                                                                                                      Assert en_lif_hidden
+
+
+
+
+tion is selected as the target configuration for physical
+VHDL mapping.                                                               timestep_counter < T - 1
+                                                                                                                    LOAD_OUTPUT_LAYER
+                                                                                                                   Loop: neuron_counter 0 to 63
+                                                                                                                                                                neuron_counter < 63
+
+
+   Following parameter optimization, the bit-accurate soft-
+                                                                               Increment timestep
+
+
+
+
+ware reference SNN model was evaluated on the 10,000-                                                                     neuron_counter == 63
+
+
+
+
+sample MNIST test set across all five random seeds. Due           Next Sample                                        OUTPUT_ISYN_READY
+
+to extensive simulation runtimes, this full 10,000-sample
+                                                                                                                      Assert prep_Isyn_output
+
+
+
+evaluation was conducted purely in software to evaluate
+algorithmic variance, while a 1,000-sample subset was                                                              OUTPUT_LIF_PROCESSING
+utilized to verify the structural equivalency of the VHDL                                                             Assert en_lif_output
+
+
+hardware. The results of this software evaluation are
+                                                                                                                                                                              sample_counter ==
+                                                                                                                                                                              NUM_SAMPLES - 1
+                                                                                                                                                                                (Final Sample)
+
+
+detailed in Table 2. In the evaluated setup, the base-
+line continuous-activation ANN (trained with Adam for
+                                                                                                                  OUTPUT_SPIKE_COUNTING
+                                                                                                                    Assert count_spike_valid
+
+10 epochs) achieves an evaluated test-set accuracy of                                                                   timestep_counter == T - 1
+
+97.70%. In comparison, the optimized hardware SNN
+configuration yields a mean test-set accuracy of 96.70% ±                                                              ARGMAX_COMPUTING
+                                                                                                       Assert calculate_argmax | Wait: prediction_ready = ’1’
+
+0.04%. This represents an ANN-to-SNN conversion drop
+of 1.00%. Given the constraints of the 16-timestep archi-
+                                                                                                                   sample_counter < NUM_SAMPLES - 1
+
+
+
+
+tecture, this result demonstrates that the model preserves                                                                RESET_STATE
+                                                                                                                     Clear reset_counter, rst_V
+the algorithmic fidelity of the baseline network, main-
+taining stable classification performance across varying
+                                                                  Figure 3: Algorithmic state machine diagram of the
+temporal noise profiles.
+                                                                  centralized FSM layer controller.
+
+3.1    Centralized Finite State Machine
+       (FSM) and Control Flow                                               pixel_counter ≤ 783). At each clock edge, the
+                                                                            input_spike_driver broadcasts a single 1-bit pixel
+To coordinate the temporal execution windows and se-                        spike across a shared bus to all 64 hidden layer
+quential layer dependencies while preventing routing con-                   synapse accumulators simultaneously. Each accumu-
+gestion or race conditions, the neuromorphic accelerator is                 lator concurrently indexes its localized memory to
+synchronized by a centralized Finite State Machine (FSM)                    aggregate the respective 8-bit weight if a spike is
+layer controller. This controller manages the progression                   present.
+of algorithmic steps across both structural layers over
+the duration of the discrete temporal window (T = 16).               3. HIDDEN_ISYN_READY: A single-cycle syn-
+The architectural state progression, as illustrated in Fig-             chronization barrier reached immediately after
+ure 3, is divided into ten deterministic functional states              the 784-pixel iteration. The controller asserts
+operating in a closed loop.                                             prep_Isyn_hidden, causing all 64 hidden accumu-
+   The functional execution sequence operates via the                   lators to latch their total internal current sums onto
+following structured state progression:                                 the 32-bit I_syn ports of the corresponding hidden
+                                                                        LIF neurons while clearing internal tracking registers
+ 1. IDLE: The initial quiescent state. The controller                   for the next timestep.
+    holds all internal blocks inactive until an exter-
+    nal master handshake trigger asserts the start line              4. HIDDEN_LIF_PROCESSING: A single-cycle
+    (start = ’1’), transitioning the FSM into the hidden                state executing parallel neuron evaluation. Asserting
+    layer loading cycle.                                                en_lif_hidden = ’1’ activates all 64 hidden Leaky
+                                                                        Integrate-and-Fire (LIF) neurons concurrently. On
+ 2. LOAD_HIDDEN_LAYER: A 784-clock-cycle                                the rising clock edge, each neuron updates its mem-
+    iteration over the input pixel space (0 ≤                           brane potential via a multiplierless right-shift leak
+
+
+                                                              4
+    subtraction and synaptic current addition (Equation             3.2    Memory Architecture and Time-
+    2). Neurons exceeding the threshold (θ) register an                    Multiplexed Spike Broadcasting
+    output spike (’1’) and reset their membrane poten-
+    tial register (V ) to zero; otherwise, the spike register       Directly mapping a dense 784-to-64 layer onto an FPGA
+    is cleared (’0’) and Vnext is retained.                         fabric can result in high interconnect fan-out, requiring
+                                                                    over 400,000 signal lines (784 × 64 × 8-bit weights),
+                                                                    potentially leading to routing congestion and increased
+ 5. LOAD_OUTPUT_LAYER: A 64-clock-cycle it-                         critical-path delays. To mitigate these routing constraints,
+    eration over the hidden neuron layer (0 ≤ neuron_               the proposed architecture combines a time-multiplexed
+    counter ≤ 63). At each rising clock edge, the regis-            1-bit broadcasting bus with an isolated, localized buffer
+    tered 1-bit output spike from the active hidden neu-            memory organization scheme. This approach splits the
+    ron is broadcast to all 10 classification output-layer          implementation into distinct synthesis-time phases and
+    synapse accumulators in parallel. Each accumulator              runtime execution loops, as illustrated in Figure 4.
+    concurrently samples this line and indexes its local
+                                                                       During design elaboration and hardware compilation,
+    weight inside its internal register.
+                                                                    the synthesizer removes the need for external runtime
+                                                                    flash communication or high-overhead memory inter-
+ 6. OUTPUT_ISYN_READY: A single-cycle mem-                          faces by executing VHDL compile-time impure func-
+    ory barrier following the 64-neuron iteration. The              tions. The function load_spike_patterns opens raw,
+    controller asserts prep_Isyn_output to latch the 10             formatted text data vectors and sequentially flattens
+    accumulated synaptic current values directly onto               the complete multi-sample dataset directly into a local-
+    the 32-bit I_syn input lines of the output layer LIF            ized, un-routed continuous hardware array known as
+    neurons, while resetting the synapse accumulator                the input_memory_buffer. Simultaneously, the func-
+    blocks and weight pointers back to zero.                        tion load_weights processes the quantized 8-bit integer
+                                                                    matrix elements, parsing and distributing them directly
+ 7. OUTPUT_LIF_PROCESSING: A single-cycle                           into local look-up structures dedicated to each individual
+    execution state where the controller asserts en_lif_            synapse accumulator module.
+    output = ’1’. This drives the 10 output-layer LIF                  Operating in parallel, each of the 64 synapse accumu-
+    neurons to compute their updated potentials and                 lators monitors the state of the unified 1-bit broadcast
+    evaluate threshold boundaries concurrently.                     line. At each clock edge, the accumulator modules use
+                                                                    the global pixel_idx pointer to address their own local
+                                                                    buffer, retrieving the specific 8-bit signed weight associ-
+ 8. OUTPUT_SPIKE_COUNTING: A single-                                ated with the current pixel sequence. If the broadcasted
+    cycle evaluation state where the controller asserts             input spike bit is evaluated as HIGH (’1’), the accumula-
+    count_spike_valid, instructing 10 independent                   tor adds the retrieved weight value to an internal 32-bit
+    tracking registers to sample the output spike lines             accumulation register. Conversely, if the spike line is
+    and increment if a firing event occurred. If the tem-           LOW (’0’), the accumulation stage is bypassed, reducing
+    poral window is incomplete (timestep_counter <                  dynamic power consumption.
+    T − 1), the loop increments and transitions back                   This architecture converts a spatial routing bottleneck
+    to LOAD_HIDDEN_LAYER; if completed, it                          into a time-multiplexed sequence. Instead of utilizing
+    advances to readout.                                            extensive routing resources and logic adders within a
+                                                                    single clock cycle, the network processes the connections
+ 9. ARGMAX_COMPUTING: Reached at the end                            over 784 consecutive clock cycles. Upon completion of
+    of the temporal processing window (t = T − 1). The              the loop, the accumulated sums are latched onto the
+    controller asserts calculate_argmax and waits until             32-bit I_syn output bus feeding the LIF neurons, and
+    the argmax unit asserts prediction_ready = ’1’. If              the internal accumulation registers are cleared to prepare
+    more validation images remain, the FSM triggers a               for the next evaluation cycle.
+    system reset via reset_counter and rst_V and ad-
+    vances to the RESET_STATE; if the final sample
+    is reached, it returns to IDLE.                                 3.3    Hardware Verification and Auto-
+                                                                           mated Grading Testbench
+10. RESET_STATE: Positioned at the end of a com-                    To assess functional equivalence between the sequential
+    plete sample execution window. Over one clock cycle,            Python reference model and the synthesized VHDL ar-
+    the controller drives the clear lines back to ’0’ after         chitecture in the tested simulation setup, an automated,
+    clearing prior membrane accumulations and spike                 self-checking testbench was developed. Rather than man-
+    registers across the fabric, before transitioning back          ually inspecting timing waveforms for individual inference
+    into LOAD_HIDDEN_LAYER to process the                           cycles, the testbench environment was designed to exe-
+    first timestep of the subsequent sample.                        cute a continuous, batch-processing VHDL simulation of
+
+
+                                                                5
+             Elaboration & Compilation Phase                                                                                                                                    Simulation Startup                                                       Elaboration & Compile Time
+                                                              Hardware Runtime Simulation
+
+                                                                                                                                      Clock Generator Process                                                                   Reset Sequence
+                                                                       Layer Controller Pointers                                      Oscillates continuously at                                                            Asserts rst for 30 ns then
+                                                                                                                                               100 MHz                                                                              deasserts                     labels.mem
+                                                                       sample_idx, timestep_idx,                                                                                                                                                                  True Labels
+      w_hidden.mem /               spike_patterns.mem                         pixel_idx
+       w_output.mem                      Text File
+
+
+
+                                                                                                                                                                                             Trigger SNN Core
+                                                                                                                                                                                           Asserts start signal for                                              impure function:
+                                                                           input_spike_driver                                                                                               exactly 1 clock cycle                                              load_correct_labels
+                                                                                                                                                                                                                                                                 Reads 1000 lines
+       impure function:              impure function:                  Instantly maps pointers to
+         load_weights              load_spike_patterns                       flat buffer index
+                                                                                                                                             Runtime Execution & Signal Monitoring                                Automated Grading & Reporting
+  Skips to neuron_idx, reads         Reads total_bits
+                                                                                                                                                                                                                                                                     Initializes
+
+
+
+
+                                         Initializes                                                                                                                                                                   Loop index i from 0 to 999
+                                                                                                                                              Increment sample_id                                                     Compare predicted labels array
+           Initializes                                                                                                                                                                                                     vs true labels array
+                                                                                       1-bit                                                                                                                                                                  correct_labels array
+                                                                                    spike_out                                                                                                                                                                Compile-time Constant
+
+
+                                  input_memory_buffer
+                                     Flat Spike Array
+                                                                                  Broadcast to layer
+        weights_array
+                                                                                                                                                                                                                         predicted_labels i ==
+   Local memory buffer per                                                                                                                                                                                                 correct_labels i ?
+         Accumulator                                                                                                                            sample_id ==                            All samples
+                                                                                                                                               NUM_SAMPLES?                               tracked
+                                                                          synapse_accumulator                                                                                                                    No
+                                                                      if input_spike is HIGH, add
+                                                                                 weights
+                                                                                                                                                                                                                                    Yes
+
+                                                                                                                                                        No
+
+                                                                                                                                                                                                                                Increment
+                                                                                                                                                                                                                        correct_predictions count
+
+                                                                                    prep_Isyn
+                                                                                    is HIGH?
+
+                                                                  No                                         Yes
+                                                         Loops 784 or 64 cycles                   Layer processing complete                                                                                                   Move to next
+                                                                                                                                                                    prediction_ready is HIGH on
+                                                                                                                                                                          rising_edge clk?
+                                                                                                                                                         No
+                                                                                                                                                                                                                                Loop finished
+
+                                                            Increment                            Latch I_syn_internal
+                                                           weights_idx                                 to I_syn
+                                                                                                                                                                                                                           Calculate accuracy
+
+                                                                                                                                                                                Yes
+
+
+
+
+                                                                                                                                                                     Capture predicted_label                                   Terminate
+                                                                        Output 32-bit I_syn to                                                                       Store in predicted_labels                                 Simulation
+                                                                             LIF Neuron
+
+
+
+
+Figure 4: Structural breakdown of compilation-level elab-                                                                         Figure 5: Architectural flowchart of the automated
+oration versus physical hardware runtime execution.                                                                               VHDL testbench, detailing the hardware runtime sim-
+                                                                                                                                  ulation, synchronous handshaking, and the automated
+                                                                                                                                  post-simulation grading loop.
+1, 000 samples from the MNIST test set, automatically
+evaluating the hardware’s predictive accuracy against the
+software’s reference baseline. The structural flow of this                                                                        4            Experimental Results and Hard-
+verification environment is illustrated in Fig. 5.                                                                                             ware Evaluation
+   The simulation environment is driven by a 100 MHz
+testbench clock generator. The simulation begins with                                                                             To establish a transparent and rigorous evaluation frame-
+a 30 ns global reset sequence to initialize all internal                                                                          work, the experimental analysis in this work is struc-
+neuron membrane registers, state machines, and synapse                                                                            tured across three distinct scopes: (1) algorithmic fidelity
+accumulators. Following the reset, the testbench incre-                                                                           and variance are evaluated using the 10,000-sample, bit-
+ments a master sample counter (0 to 999) and triggers                                                                             accurate software SNN reference model across five random
+the top-level SNN module by asserting the start signal                                                                            seeds; (2) functional equivalence of the VHDL hardware
+for a single clock cycle.                                                                                                         is validated against this software baseline using a 1,000-
+   The testbench suspends its stimulus generation and                                                                             sample simulation testbench; and (3) physical hardware
+waits for the SNN core to assert the prediction_ready                                                                             performance metrics—including operating frequency, pro-
+flag. Upon detecting the rising edge of this flag, the test-                                                                      cessing latency, and on-chip power consumption—are de-
+bench captures the 4-bit output on the predicted_label                                                                            rived exclusively from Vivado post-implementation timing
+bus and logs it into a localized memory array. This hand-                                                                         and power analyses.
+shake sequence is repeated until all 1, 000 images have                                                                              To evaluate the feasibility, timing performance, and re-
+been processed.                                                                                                                   source efficiency of the proposed Spiking Neural Network
+   Once the hardware runtime simulation concludes, the                                                                            (SNN) hardware accelerator, synthesis and implementa-
+testbench enters an automated verification phase. The                                                                             tion were conducted using the AMD Vivado Design Suite
+testbench iterates through the stored array of hardware                                                                           targeting the AMD Artix-7 AC701 Evaluation Platform
+predictions, comparing each entry against a pre-loaded                                                                            XC7A200T FPGA. As an entry-level, low-power FPGA
+ground-truth memory array containing the true MNIST                                                                               platform, this target device serves as a benchmark for
+labels. The simulation console tallies the correct predic-                                                                        evaluating the performance and resource efficiency of the
+tions and calculates the final inference accuracy, demon-                                                                         microarchitecture in the evaluated setup.
+strating that the integer-based hardware aligns with the                                                                             To establish a comparative baseline, the high-level
+Python baseline in the evaluated setup without requiring                                                                          Python algorithmic reference model was profiled sequen-
+manual waveform inspection.                                                                                                       tially on a host system equipped with an Intel Core Ultra
+
+
+                                                                                                                              6
+ Table 3: Reproducibility and Implementation Details.                           ioral simulation of the 1,000-sample MNIST test batch.
+                                                                                The resulting toggle rates and static probabilities are
+ Item                                Value
+                                                                                recorded by exporting a Switching Activity Interchange
+ FPGA board / evaluation platform    AMD Artix-7 AC701
+ Exact FPGA part                     xc7a200tfbg676-2
+                                                                                Format (.saif) file. During the Vivado power evalua-
+ Vivado version                      2023.2                                     tion phase, this SAIF file is applied to annotate the
+ Synthesis strategy                  Vivado Synthesis Defaults                  post-implementation design, providing high activity cov-
+ Implementation strategy             V1: Vivado Implementation Defaults
+                                     V2: Performance_ExtraTimingOpt             erage for the internal logic and ensuring the estimation
+ Target clock constraint (V1 / V2)   75 ns / 6 ns                               tracks the event-driven SNN operational sparsity much
+ Achieved Fmax (V1 / V2)             13.3 MHz / 167 MHz
+ LUTs (abs. / %)                     V1: 17,021 (12.72%) out of 133,800         more accurately than static vectorless assumptions. To
+                                     V2: 15,985 (11.95%) out of 133,800         provide a comprehensive analysis, both vectorless and
+ Flip-Flops (abs. / %)               V1: 7,957 (2.96%) out of 269,200
+                                     V2: 8,018 (2.98%) out of 269,200
+                                                                                vector-based methodologies are analyzed, isolating static,
+ BRAM tiles (abs. / %)               V1: 0 (0%) | V2: 0 (0%)                    dynamic, and I/O power dissipation. The Vivado report
+ DSP slices (abs. / %)               V1: 0 (0%) | V2: 0 (0%)                    summaries for both architectural versions under both
+ Hidden / output accumulator width   32-bit
+ Weight quantization                 int8, scale Sl = 127/ max(|Wl |)           execution modes are provided in Appendix A.
+ Spike encoding                      rate coding, seed = 42
+ Number of timesteps T               16
+ Latency per sample (cycles / µs)    V1: 13,647 cycles × 75 ns ≈ 1,024 µs
+                                     V2: 13,669 cycles × 6 ns ≈ 82 µs           4.1    Output Classification                    and          the
+ VHDL source modules                 Top-Level: snn_top_level.vhd
+                                     Submodules: lif_neuron.vhd,                       Argmax Decision Core
+                                     synapse_accumulator.vhd,
+                                     input_spike_driver.vhd,
+                                     layer_controller.vhd,
+                                                                                Following the completion of the T = 16 temporal inte-
+                                     output_counter.vhd,                        gration cycles, the final classification of the MNIST digit
+                                     argmax_unit.vhd                            is determined by evaluating the cumulative spike events
+                                                                                across the 10 output-layer LIF neurons. To achieve this,
+                                                                                an independent output_counter hardware module is in-
+9 275HX processor operating at a maximum turbo fre-                             stantiated for each output channel to track the discrete fir-
+quency of 5.4 GHz. This evaluation framework enables                            ing events. At the end of the processing window, the cen-
+a comparison between sequential software execution and                          tral controller asserts the calculate_argmax signal, halt-
+the parallelized FPGA implementations. Consequently,                            ing further accumulation and activating the argmax_unit.
+this section presents an empirical performance analysis                         This module iterates through the 10 counter registers to
+benchmarking the initial non-pipelined readout architec-                        identify the index corresponding to the maximum spike
+ture (Version 1) and the multi-cycle pipelined sequential                       count. To resolve scenarios where all output neurons
+argmax core (Version 2) against the CPU software refer-                         fail to fire, the architecture utilizes the final residual
+ence. Both hardware configurations are evaluated under                          membrane potentials as a tie-breaker in the evaluated
+timing constraints defined within a hardware constraints                        setup. This mechanism is designed to provide a predic-
+file (constants.xdc) to characterize critical path propa-                       tion by utilizing the sub-threshold integration state of
+gation delays, Worst Negative Slack (WNS), estimated                            the LIF neurons when discrete spike outputs are absent
+maximum operating frequencies (Fmax ), estimated on-                            [13]. The mathematical representation of this rate-coded
+chip power dissipation, and Look-Up Table (LUT) fab-                            winner-take-all classification strategy is expressed as:
+ric utilization. To support experimental reproducibility,
+the implementation details, synthesis configurations, and                                            
+                                                                                                       argmax (Si ),       if
+                                                                                                                                P
+                                                                                                                                    Si > 0
+system-level parameters for both design versions are sum-
+                                                                                                     
+                                                                                                     i∈{0,...,9}
+marized in Table 3.                                                                   Prediction =                                            (3)
+                                                                                                      argmax (Vi [T ]),
+                                                                                                                          otherwise
+   Power consumption was evaluated post-implementation                                                 i∈{0,...,9}
+using the AMD Vivado Design Suite Power Analysis tool.
+To establish a baseline comparable with existing FPGA                           where Si represents the total accumulated spike count for
+accelerators in the literature, the default vectorless es-                      output neuron i, and Vi [T ] denotes its final membrane
+timation mode is first utilized, which applies a uniform                        potential at the end of the temporal window.
+12.5% signal switching activity across the unconstrained                          For the initial timing characterization of this baseline
+design nets. However, because the vectorless estimation                         configuration, the hardware constraints file specifies a
+does not fully account for the temporal and data-driven                         target clock period (Ttarget ) of 10 ns, corresponding to
+sparsity of Spiking Neural Networks (SNNs), these base-                         a nominal operating frequency of 100 MHz. Following
+line metrics represent a conservative upper bound in the                        post-implementation timing analysis, the design exhibits
+evaluated setup.                                                                a Worst Negative Slack (WNS) violation of −49.380 ns,
+   To evaluate the estimated power characteristics of the                       indicating that the single-cycle execution path does not
+architecture, a vector-based power analysis is also con-                        satisfy the targeted clock boundaries due to propagation
+ducted. Simulated switching activity is precisely gener-                        delays [14] in the evaluated setup. The estimated maxi-
+ated using the Vivado Simulator (XSim) during a behav-                          mum operating frequency (Fmax ) for this non-pipelined
+
+
+                                                                            7
+configuration is calculated using Equation 4:                          To establish an empirical reference point for energy
+                    1           1                                   performance, the software baselines running on the In-
+   Fmax =                 =          ≈ 16.8 MHz          (4)        tel Core Ultra 9 processor were profiled using hardware
+            Ttarget − WNS   59.38 ns
+                                                                    VRM telemetry via HWInfo64 [17]. Under a full inference
+Timing path analysis indicates that this delay is local-            workload, the unoptimized sequential reference exhibits a
+ized within the single-cycle combinational tree of the              sustained average power dissipation of 56 W at an average
+initial argmax_unit. To execute the comparison opera-               core clock of 3.0 GHz. Given its 84 ms per-sample execu-
+tions across the 10 output registers and evaluate the sub-          tion time, it consumes ≈ 4.704 Joules per sample, result-
+threshold membrane potentials as a tie-breaker within a             ing in a nominal energy throughput of ≈ 0.213 samples/J.
+single clock cycle, the synthesis engine implements more            In comparison, the vectorized NumPy implementation
+than 100 levels of look-up table (LUT) logic fabric [15].           utilizes the CPU’s parallel execution pipelines, drawing
+While Equation 4 identifies a theoretical minimum clock             a steady-state average power of 49 W at a lower core
+period of 59.38 ns (16.8 MHz) based on the initial tim-             clock of 2.85 GHz due to the hardware’s automated AVX
+ing failure, practical FPGA implementation requires a               frequency offsets [18]. This software optimization rep-
+relaxed target constraint to guarantee stable routing and           resents a batched scenario where data is grouped into
+positive slack across all physical device corners. Conse-           parallel matrix operations to maximize execution pipeline
+quently, the system clock constraint was conservatively             utilization. While this parallel framework minimizes ex-
+relaxed to 75 ns (13.33 MHz) [16]. Re-synthesizing the              ecution overhead and reduces the estimated total soft-
+architecture under this 75 ns constraint successfully miti-         ware energy consumed to ≈ 0.0136 Joules per sample
+gated all setup violations, yielding a stable, positive Worst       (yielding an estimated operational software efficiency of
+Negative Slack (WNS) of +2.02 ns in the evaluated setup.            ≈ 73.68 samples/J), it represents an offline throughput
+   Operating at this frequency, the non-pipelined VHDL              metric rather than a real-time edge streaming pipeline.
+SNN architecture completes a single MNIST classifica-               In the evaluated setup, post-implementation power anal-
+tion pass with a per-sample hardware core runtime of                ysis within the AMD Vivado Design Suite provides an
+1.024 ms (1024 µs). In contrast, the unoptimized sequen-            estimated vector-based total on-chip power consumption
+tial software reference requires approximately 84 ms per            of 0.177 W (with a default vectorless estimate of 0.164 W
+sample for the same workload. Consequently, despite                 reported solely for structural evaluation consistency with
+running at a lower clock frequency than the host pro-               external works). This operational power footprint demon-
+cessor, the hardware accelerator achieves a speedup of              strates an estimated computational energy efficiency, for-
+approximately 82× relative to the unoptimized software              malized using primary vector-based metrics in Equation
+reference in the evaluated setup. However, compared to              6 as:
+a vectorized NumPy baseline with an execution latency                                  1
+of approximately 277 µs per sample on the CPU, this                       ηV1 =               ≈ 5.52 × 103 samples/J        (6)
+                                                                                  TVHDL × PV1
+non-pipelined hardware configuration is outperformed by
+the vectorized software implementation by a factor of ap-           where ηV1 represents the baseline hardware energy effi-
+proximately 3.7×. This performance difference illustrates           ciency, calculated using the previously defined operational
+the limitations of a non-pipelined design and motivates             latency TVHDL alongside the post-implementation core
+the pipelined readout architecture introduced in Section            power dissipation (PV1 = 0.177 W).
+4.2. These baseline performance ratios are expressed via               To evaluate the relative energy efficiency differences
+Equation 5:                                                         between the general-purpose execution pipelines and the
+                                                                    hardware architecture [19], the relative energy efficiency
+             TPy,unopt
+           
+           
+           
+            T          ≈ 82×,        vs. unoptimized               gain of the baseline hardware over both software imple-
+   SV1 =
+               VHDL
+                                                          (5)       mentations is evaluated in Equation
+             T
+            NumPy,opt ≈ 0.27×, vs. vectorized                                     ηV1
+           
+                                                                                           ≈ 2.6 × 104 ×, vs. unoptimized
+                                                                            
+               TVHDL                                                         
+                                                                             η
+                                                                                 CPU,unopt
+                                                                      ηrel =
+where SV1 represents the baseline hardware speedup fac-                           ηV1
+                                                                                        ≈ 75×,             vs. vectorized
+tor. The execution latencies per sample for the unopti-
+                                                                             
+                                                                                ηCPU,opt
+mized Python pipeline (TPy,unopt = 84 ms/sample) and                                                                        (7)
+the optimized NumPy implementation (TNumPy,opt =                    where ηrel represents the relative hardware efficiency gain.
+277 µs/sample) are benchmarked directly against the                 The baseline accelerator efficiency (ηV1 = 5517 sam-
+localized VHDL accelerator core processing latency                  ples/J) is compared directly against the unoptimized
+(TVHDL = 1.024 ms).                                                 CPU reference (ηCPU,unopt = 0.213 samples/J) and the
+  This acceleration is driven by the spatial parallelism of         optimized, vectorized CPU baseline (ηCPU,opt = 73.68
+the hardware. At each clock edge, all 64 hidden-layer and           samples/J), respectively. In the evaluated setup, the
+10 output-layer LIF neurons concurrently execute their              baseline hardware architecture indicates an estimated
+membrane potential updates, arithmetic leak operations,             ≈ 26000× increase in throughput-per-watt over the unop-
+and threshold evaluations.                                          timized reference, along with a ≈ 75× efficiency gain over
+
+
+                                                                8
+the vectorized software baseline running on the evaluated                                                       COMPARE_SPIKE_COUNTS
+                                                                                                                                                         counter < 10
+                                                                                                                                                      [Evaluate Max Spike]
+
+CPU. This demonstrates the power-scaling characteristics
+associated with specialized edge hardware designs, prior                                                                  counter == 10
+                                                                                                                               AND
+
+to introducing temporal pipelined optimizations.
+                                                                                                                          Max Spike == 0
+                                                                                                                          [Reset Counter]
+
+
+
+   Finally, physical resource utilization maps onto the                                counter == 10                                                       counter < 10
+
+target Artix-7 fabric, consuming 13% of the available                                      AND
+                                                                                                             COMPARE_MEMBRANE_POTENTIALS             [Evaluate Max Potential]
+                                                                                       Max Spike > 0
+
+
+Look-Up Tables (LUTs) and 3% of the Flip-Flop (FF)
+registers. Due to the multiplierless design of the archi-                                                                  counter == 10
+
+
+
+tecture, weight matrices and neuron states are unrolled
+by the compiler into combinational logic (LUTs) and dis-           calculate_argmax == ’1’
+                                                                  [Reset Counters & Labels]
+                                                                                                                REPORT_PREDICTED_LABEL
+
+tributed registers (Flip-Flops). This mitigates memory
+access constraints associated with physical BRAM tiles,                                                             Assert prediction_ready = ’1’
+                                                                                                                        Latch predicted_label
+
+enabling parallel data access [5]. In the evaluated setup,
+this configuration demonstrates that the parallel neuron                                                            WAIT_FOR_RESET
+math circuits and the baseline combinational argmax tree
+fit within the device fabric with available headroom, as                                                           Deassert prediction_ready = ’0’
+
+observed in the post-implementation floorplan layout pro-
+vided in Appendix B. This utilization indicates physical
+scalability for accommodating deeper or wider network
+                                                                                                                               IDLE                  calculate_argmax == ’0’
+
+
+
+
+architectures on a single device.
+
+
+4.2    Microarchitectural   Optimization:                         Figure 6: Finite State Machine (FSM) state diagram
+       Pipelined Sequential Argmax (Ver-                          of the optimized sequential argmax_unit (Version 2),
+                                                                  showing multi-cycle decision branching and conditional
+       sion 2)                                                    sub-threshold membrane potential tie-breaking.
+To resolve the timing violation (WNS = −49.380 ns)
+identified in the baseline hardware design, a microar-
+chitectural optimization was implemented within the               where Si denotes the accumulated spike count for output
+argmax_unit. The unrolled, purely combinational loop              channel i.
+structures of Version 1 were replaced by a synchronous,              Once i reaches 10, the FSM executes a conditional con-
+multi-cycle Finite State Machine (FSM) control path,              trol branch. If the maximum accumulated spike count is
+as detailed in the behavioral VHDL implementation of              strictly greater than zero (max(Si ) > 0), the tie-breaker
+Version 2. Rather than replicating hardware comparators           mechanism is bypassed, and the FSM transitions directly
+spatially—which increases the look-up table (LUT) logic           to REPORT_PREDICTED_LABEL. Conversely, if no spikes
+path depth within a single clock cycle—this approach              were recorded across the output layer, the FSM branches
+implements temporal multiplexing, re-using a single com-          to COMPARE_MEMBRANE_POTENTIALS to resolve the infer-
+parator slice across consecutive clock edges.                     ence tie-condition. In this state, the FSM re-initializes
+   The FSM control logic is governed by five op-                  the iteration index i to 1 and executes a secondary com-
+erational states:        IDLE, COMPARE_SPIKE_COUNTS,              parison pass over 9 clock cycles, evaluating sub-threshold
+COMPARE_MEMBRANE_POTENTIALS,                                      integration states as defined in (9):
+REPORT_PREDICTED_LABEL,          and     WAIT_FOR_RESET.
+The corresponding state transitions and decision logic
+                                                                                                       (
+                                                                                                           i,      if Vi [T ] > VLpred [T ]
+are illustrated in Fig. 6.                                                               Lpred ←                                                                        (9)
+                                                                                                           Lpred , otherwise
+   In the IDLE state, the module holds the synchronous
+output flag prediction_ready low while resetting the                 where Vi [T ] denotes the final membrane potential of
+loop iteration index i to 1 and initializing the predicted        output channel i at the terminal time step T .
+label index Lpred to 0. The FSM awaits the assertion                 Following the completion of the tie-breaking pass, the
+of the control signal calculate_argmax from the central           FSM enters REPORT_PREDICTED_LABEL, latching the com-
+layer controller. Upon assertion, the system transitions to       puted Lpred onto the primary output bus and asserting
+COMPARE_SPIKE_COUNTS, where the FSM iterates through              prediction_ready high. The sequence concludes with
+the 10 output-channel spike accumulation registers over           a single-cycle WAIT_FOR_RESET state, ensuring a synchro-
+a 9-cycle window. At each rising clock edge, the circuit          nized handshake before returning to the IDLE state. By
+evaluates the conditional inequality defined in (8):              distributing execution latency over a variable window
+                      (                                           of 12 to 22 clock cycles, this microarchitectural change
+                       i,      if Si > SLpred                     isolates the critical path within a single comparator block,
+            Lpred   ←                                  (8)
+                       Lpred , otherwise                          facilitating significantly improved timing closure.
+
+
+                                                              9
+4.3    Post-Optimization Implementation                             compared against this non-batched streaming baseline,
+       Results                                                      the custom 167 MHz FPGA accelerator demonstrates an
+                                                                    approximate 4.6× architectural speedup, while achiev-
+The transition to a multi-cycle Finite State Machine                ing a 694× energy efficiency gain in the evaluated setup.
+(FSM) addressed the combinational bottleneck of the                 This indicates that when general-purpose architectures
+argmax unit. Synthesizing the revised architecture (Ver-            are forced to operate under localized edge constraints
+sion 2) on the Artix-7 FPGA with a target clock period              without offline batching, the spatial computing layout
+of 6 ns yields a positive Worst Negative Slack (WNS) of             of the specialized SNN hardware offers an operational
++0.09 ns. This indicates that the design operates at a              advantage.
+maximum frequency (Fmax ) of approximately 167 MHz in                 Operating at a higher frequency naturally incurs higher
+the evaluated setup. At this clock rate, the cycle-accurate         dynamic power consumption, estimated at a SAIF-based
+simulated latency to process a single test sample is evalu-         estimated total on-chip power of 0.336 W for Version 2
+ated at 82 µs. To evaluate this optimization across both            (with a baseline vectorless estimate of 0.637 W reported
+software execution paradigms, the performance accelera-             solely for structural evaluation consistency with exter-
+tion factors relative to the 5.4 GHz CPU are presented              nal works). However, the reduction in execution time
+in Equation 10:                                                     improves the overall energy metrics of the system. The
+            TPy,unopt                                               energy performance of this multi-cycle optimized core is
+         
+                      ≈ 1.02 × 103 ×, vs. unoptimized
+                                                                    evaluated using the vector-based metrics as:
+         
+         
+         T
+              VHDL,V2
+  SV2 =
+            T
+          NumPy,opt ≈ 3.4×,             vs. vectorized                              1
+                                                                       ηV2 =                  ≈ 3.63 × 104 samples/J      (11)
+         
+         
+             TVHDL,V2                                                          TVHDL,V2 × PV2
+                                                        (10)
+where SV2 denotes the speedup performance achieved by               where ηV2 represents the energy efficiency of the op-
+the optimized, multi-cycle pipelined architecture variant.          timized, multi-cycle pipelined accelerator core. This
+Execution latencies are benchmarked directly against                performance metric is derived using the previously de-
+the accelerated VHDL core runtime (TVHDL,V2 = 82 µs).               fined operational latency TVHDL,V2 alongside the corre-
+This represents an approximate 1000× speedup over the               sponding post-implementation total power dissipation
+unoptimized sequential reference and a 3.4× speedup                 (PV2 = 0.336 W), yielding a peak operational efficiency
+over the vectorized NumPy baseline. With an execution               of approximately 36, 300 samples/J.
+latency of 82 µs per sample, the 167 MHz hardware core                 To evaluate both the internal microarchitectural im-
+demonstrates a performance advantage over the CPU                   provements and the cross-domain aspects of shifting to
+running vectorized code in the evaluated setup, while               custom neuromorphic spatial fabrics, the relative energy
+simultaneously achieving a 12.5× speedup over the ini-              efficiency gains are presented in Equation 12:
+tial single-cycle hardware layout (Version 1). This com-                       ηV2
+parison accounts for the fact that the software baseline                       η ≈ 6.6×,
+                                                                                                    vs. V1 baseline
+                                                                                  V1
+relies on the accumulation of thousands of samples into               ηgain =      ηV2                                  (12)
+memory to execute simultaneously via parallel SIMD
+                                                                              
+                                                                                         ≈ 493×, vs. vectorized CPU
+                                                                                ηCPU,opt
+matrix operations. In edge deployments—such as live
+sensor processing or streaming video—such batching may              where ηgain represents the relative energy efficiency scal-
+not be feasible, requiring the CPU to process inputs se-            ing factor achieved by the pipelined execution model.
+quentially where interpreter and thread context overhead            The optimized multi-cycle design is therefore estimated
+can increase latency. In contrast, the proposed VHDL                to operate more than six times as efficiently as its un-
+design operates as a sequential streaming architecture,             pipelined hardware predecessor in the evaluated setup.
+processing samples individually with a cycle-accurate               Furthermore, when compared against the optimized par-
+simulated latency of 82 µs per image, outperforming the             allel software baseline, the custom VHDL core demon-
+batch throughput of the evaluated CPU setup.                        strates an approximate 493× aggregate energy-efficiency
+   To empirically validate this streaming constraint on             gain, indicating that specialized edge neuromorphic ac-
+the host platform, an additional software experiment was            celerators can deliver the required inference throughput
+conducted where the vectorized NumPy core was forced                while operating below the sustained high-power bound-
+to process the test samples sequentially via an outer loop,         aries (49 W − 56 W) of the evaluated general-purpose
+thereby disabling the look-ahead batching mechanism.                von Neumann computing architecture.
+Under this streaming configuration, the evaluated CPU’s                The design also maintains a low resource footprint
+execution time is estimated at 375 µs per sample while              across the AMD Artix-7 fabric [20]. Post-implementation
+drawing approximately 51 W of continuous steady-state               utilization metrics reveal that the SNN architecture con-
+power. Because the sequential overhead limits the utiliza-          sumes 12% of the available Look-Up Tables (LUTs) and
+tion of the CPU’s wide SIMD registers between iterations,           3% of the Flip-Flops (FFs) on the Artix-7 device. This is
+the total computational energy consumed is estimated at             lower than the previous design’s 13% LUT utilization, in-
+≈ 0.0191 Joules per sample (≈ 52.3 samples/J). When                 dicating that pipelining the argmax tree reduced routing
+
+
+                                                               10
+                               Table 4: Cross-Platform Hardware Performance and Efficiency Summary
+
+                                                       CPU Baseline                    CPU Baseline              Hardware V1         Hardware V2
+   Metric / Parameter
+                                                      (Unopt. Python)               (Vectorized NumPy)         (VHDL Baseline)     (Pipelined VHDL)
+   Target Device Platform                           Intel Core Ultra 9 275HX        Intel Core Ultra 9 275HX     Artix-7 FPGA        Artix-7 FPGA
+   Operating Clock Frequency, fCLK                           3.0 GHz                        2.85 GHz               13.3 MHz            167 MHz
+   Target Clock Period, Ttarget                                 —                               —                  75.000 ns            6.000 ns
+   Worst Negative Slack (WNS)                                   —                               —                  +2.023 ns           +0.090 ns
+   Latency per Sample,    T                                84.00 ms                        277.00 µs               1.024 ms             82.00 µs
+   Speedup Factor, Srel   (vs. Unopt. CPU)                   1.0×                         3.0 × 102 ×                82.0×            1.02 × 103 ×
+   Speedup Factor, Srel   (vs. Vectorized CPU)              0.003×                           1.0×                    0.27×                3.4×
+   Speedup Factor, Srel   (vs. Hardware V1)                    —                              —                       1.0×               12.5×
+   Core Power Dissipation, P                                56.00 W                         49.00 W                 0.177 W              0.336 W
+   Estimated Batch Energy, Ebatch (103 samples)             4700.0 J                         13.6 J                  0.18 J               0.028 J
+   Estimated Energy Efficiency, η                       0.213 samples/J                 73.68 samples/J        5.52 × 103 smpl/J    3.63 × 104 smpl/J
+   Efficiency Gain, ηgain (vs. Unopt. CPU)                    1.0×                        3.46 × 102 ×            2.60 × 104 ×         1.70 × 105 ×
+   Efficiency Gain, ηgain (vs. Vectorized CPU)               0.003×                           1.0×                   75.0×                493.0×
+   Microarchitectural Efficiency Gain (ηV2 /ηV1 )              —                               —                      1.0×                 6.6×
+
+
+
+
+congestion while improving both clock speed and spa-                                formance metrics of our proposed architecture alongside
+tial efficiency. Furthermore, this optimization preserves                           existing implementations, highlighting the differences in
+the 0% utilization of physical block RAM (BRAM) tiles                               implementation platforms and evaluation methodologies.
+observed in the baseline design. All quantized weights                              It should be noted that target platforms, network topolo-
+and dynamic neuron states remain contained within the                               gies, datasets, and power-measurement methodologies
+localized memory buffers mapped to the distributed logic                            differ across the evaluated literature. Consequently, the
+fabric. This indicates that the transition to a sequential,                         performance comparison presented in this section is in-
+multi-cycle argmax control path yields its timing closure                           dicative within the evaluated setup rather than strictly
+and spatial advantages without introducing additional                               controlled.
+resource overheads or dual-port memory access bottle-                                  The 2024 Spiker+ framework by Carpegna et al. [21]
+necks. This level of utilization demonstrates the spatial                           introduced a library of “lean” neuron blocks designed for
+efficiency of the multi-cycle redesign, providing available                         modern FPGA and System-on-Chip (SoC) architectures.
+resources for larger network scales on the same device, as                          Operating at 100 MHz on an AMD Xilinx Zynq-7020
+detailed in the spatial floorplan views in Appendix B.                              device (a 28 nm process node), this framework achieves a
+   To explicitly isolate the effects of the proposed mi-                            classification accuracy of 93.85% with an inference latency
+croarchitectural changes, Table 4 serves as an ablation                             of 780 µs and an estimated energy consumption of 0.14
+comparison between the baseline single-cycle readout                                mJ per image (vectorless).
+(Version 1) and the multi-cycle pipelined FSM readout                                  Comparisons can also be made with architectures
+(Version 2). The replacement of the wide combinational                              featuring alternative hardware scheduling and learning
+argmax tree with a temporal, multi-cycle FSM is the sole                            paradigms. The 2021 adaptive clock/event-driven pro-
+structural difference between these two hardware iter-                              cessor with on-chip STDP capability proposed by Li et
+ations. This single modification directly alleviated the                            al. [22] utilizes a multi-layer topology operating at 100
+system’s critical path bottleneck, enabling the maximum                             MHz on a Virtex-7 FPGA (a 28 nm process node). Their
+clock frequency to scale from 13.3 MHz to 167 MHz and                               implementation reports an inference latency of 3.15 ms,
+thereby reducing per-sample execution latency from 1.024                            an estimated vectorless energy profile of 5.04 mJ per
+ms to 82 µs. Furthermore, while operating at a higher                               image, and an MNIST classification accuracy of 92.93%.
+frequency naturally increased the SAIF-based estimated
+                                                                                       The proposed multi-cycle architecture (Version 2) uti-
+on-chip power from 0.177 W to 0.336 W, the drastic
+                                                                                    lizes a synchronous execution path designed for feedfor-
+reduction in execution time ultimately yielded a 6.6×
+                                                                                    ward inference. Operating at a clock frequency of 167
+improvement in estimated energy efficiency per sample.
+                                                                                    MHz on a 28 nm Artix-7 device, it processes a single digit
+Spatially, transitioning from a fully unrolled comparator
+                                                                                    over 16 timesteps in a cycle-accurate simulated latency
+tree to a sequential, single-comparator FSM reduced over-
+                                                                                    of 82 µs. This represents an approximate 9.5× reduction
+all LUT utilization from 12.72% to 11.95% by eliminating
+                                                                                    in latency compared to the Spiker+ framework and a
+significant interconnect routing congestion.
+                                                                                    38× reduction compared to the model by Li et al. By
+                                                                                    mapping synaptic weights into localized internal memory
+4.4      Comparison with State-of-the-Art                                           buffers and using a hidden layer of 64 neurons, the de-
+         FPGA SNN Accelerators                                                      sign minimizes routing complexity. The resulting energy
+                                                                                    consumption per inference is estimated at 0.053 mJ us-
+When evaluated against contemporary Leaky Integrate-                                ing vectorless metrics and 0.028 mJ using vector-based
+and-Fire (LIF) implementations, the proposed architec-                              (SAIF) telemetry. Furthermore, the design achieves a
+ture demonstrates a trade-off in processing latency and                             classification accuracy of 96.70%, compared to the 92.93%
+estimated energy efficiency. Table 5 summarizes the per-                            reported by Li et al.
+
+
+                                                                               11
+               Table 5: Comparison of MNIST SNN Inference Accelerators on Programmable Logic
+
+                           Proposed Work              Li et al.                Carpegna et al.       Harmeling et al.
+ Metric
+                             (Version 2)                (2021)                      (2024)                (2026)
+ FPGA Process Node              28 nm                    28 nm                       28 nm                 28 nm
+ Device Family                  Artix-7                Virtex-7                   Zynq-7000               Artix-7
+ Network Topology           784 − 64 − 10        784 − 200 − 100 − 10           784 − 128 − 10        784 − 100 − 10
+ Neuron Model                     LIF                     LIF                         LIF                   SRC
+ Timestep Count (T )               16                      −                          100                   220
+ Input Encoding              Rate Coding             Rate Coding                 Poisson Rate         Bernoulli Rate
+ Test Set Evaluated           Full (10k)              Full (10k)                  Full (10k)            Full (10k)
+ Clock Frequency               167 MHz                 100 MHz                     100 MHz               100 MHz
+ Accuracy (MNIST)               96.70%                  92.93%                      93.85%                96.31%
+ Latency per Image               82 µs                  3.15 ms                      780 µs              1.748 ms
+ Energy per Image
+ (Vectorless)                   0.053 mJ                5.04 mJ                     0.14 mJ                1.972 mJ
+ Energy per Image
+ (Vector_based SAIF)            0.028 mJ                     −                          −                     −
+
+
+   The proposed design can also be evaluated against             that at this frequency threshold, the primary critical path
+implementations that employ biologically rich models.            shifts from the classification logic to the combinational
+A 2026 implementation by Harmeling et al. [23] evalu-            arithmetic within the Leaky Integrate-and-Fire module.
+ated Spiking Recurrent Cells (SRC) on an Artix-7 FPGA.           Specifically, the back-to-back calculation of the leak decay
+Their model utilizes recurrent loops and multi-step dy-          and synaptic current integration—defined by the integer
+namics to achieve continuous temporal spike profiles.            expression in Equation 2—increases propagation delay
+Their reported cell configuration achieves an MNIST              within a single clock cycle. To address this timing path,
+classification accuracy of 96.31%, with an inference la-         future implementations can incorporate microarchitec-
+tency of 1.748 ms and an estimated 1.972 mJ of vectorless        tural pipelining within the neuron’s core. By inserting
+energy per digit.                                                intermediate synchronous registers to decouple the arith-
+   The proposed core demonstrates an approximate 21×             metic right-shift subtraction from the subsequent 32-bit
+reduction in inference latency compared to this recurrent        synaptic current accumulation, the combinational path
+architecture, while achieving a 0.39% higher classifica-         delay can be reduced, enabling operation above 200 MHz.
+tion accuracy and a lower estimated vectorless energy
+consumption. Implementing the reduction operation as
+                                                                 5.1.2   Preempting the Secondary Bottleneck:
+a synchronous, pipelined sequential argmax Finite State
+                                                                         Dual-Track Parallel Argmax
+Machine (FSM) instead of a wide, combinational reduc-
+tion tree reduces routing complexity. By breaking the            Once the arithmetic path of the LIF neurons is pipelined,
+combinational delay paths into discrete timing bound-            synthesis indicates that the sequential readout may be-
+aries, the architecture enables an operating frequency           come the next timing bottleneck. The current Version 2
+of 167 MHz on the Artix-7 fabric, improving throughput           design utilizes a two-stage sequential control approach: it
+and energy metrics compared to the alternative hardware          evaluates the 10 output channels over a 10-cycle window
+implementations.                                                 to determine spike counts and conditionally initiates an
+                                                                 additional 10-cycle loop to evaluate sub-threshold mem-
+                                                                 brane potentials if no spikes are recorded. This approach
+5       Conclusion                                               results in an execution latency of up to 22 clock cycles.
+                                                                   To bound the execution latency to a fixed 10-cycle
+5.1     Architectural Extensions and Future                      window, a Dual-Track Parallel Argmax Engine is intro-
+        Improvements                                             duced. Instead of executing the two evaluation sweeps
+5.1.1    Frequency Scaling and Arithmetic Pipelin-               sequentially, this architecture processes both metrics con-
+         ing                                                     currently. In each clock cycle i, the engine compares
+                                                                 the incoming channel spike counts (Si vs. SLspk ) and
+While the current multi-cycle optimization achieves tim-         the terminal membrane potentials (Vi [T ] vs. VLpot [T ]).
+ing closure at a target clock period of 6 ns (Fmax ≈             Two independent tracking registers evaluate these paths
+167 MHz), increasing the operating frequency above               across the 10-cycle sweep to update the running spike
+200 MHz requires reducing the clock period to 5 ns or            label index (Lspk ) and potential label index (Lpot ), as
+below. Physical synthesis and timing analysis indicate           formalized in Equations 13 and 14:
+
+
+                                                            12
+                       (
+                                                                      5.2    Limitations and Boundary Condi-
+                        i,             if Si > SLspk                         tions
+              Lspk   ←                                    (13)
+                        Lspk ,         otherwise                      The current limitations of this work are summarized
+                                                                      below to define the scope of the evaluation and guide
+                     (                                                future work:
+                         i,     if Vi [T ] > VLpot [T ]
+           Lpot ←                                         (14)
+                         Lpot , otherwise                               • Dataset scope: The evaluation is currently lim-
+                                                                          ited to the standard MNIST dataset. Extending
+  At the end of the 10th clock cycle, a global zero-spike                 the microarchitectural validation to more complex
+detection flag evaluates the total layer activity                         or natively neuromorphic benchmarks (e.g., Fashion-
+                                                    P
+                                                      Sk
+to select the final predicted label index (Lpred ) via a                  MNIST, N-MNIST, and DVS-Gesture) is a key ob-
+hardware multiplexer structure:                                           jective.
+
+                                                                       • Inference-only: The architecture supports forward
+                                       if       Sk > 0                    inference exclusively; on-chip or online learning is
+                                            P
+                          Lspk ,
+              Lpred ←                                     (15)            not supported.
+                                       if       Sk = 0
+                          L                P
+                               pot ,
+                                                                        • Simulation-based power estimation: While
+   This approach introduces a microarchitectural trade-off:               the power and energy metrics utilize post-
+evaluating two parallel inequalities concurrently increases               implementation vector-based SAIF profiles generated
+the combinational workload and the physical Look-Up                       from behavioral simulation, these represent CAD-
+Table (LUT) logic depth within the argmax module. How-                    estimated values rather than direct physical board-
+ever, when combined with the proposed neuron arithmetic                   level silicon measurements.
+pipelining, this localized increase in logic depth does not
+affect the global critical path. This dual-track strategy               • Scalability: Time-multiplexed execution scales lin-
+eliminates the conditional 10-cycle overhead, ensuring a                  early with input size and timesteps, which may limit
+deterministic classification window.                                      inference throughput for significantly larger models.
+                                                                        • Coding scheme: The rate coding mechanism can
+                                                                          be inefficient for sparse, event-based workloads where
+5.1.3   Ultra-High-Frequency Scaling:                     Syn-
+                                                                          temporal or rank-order coding would better exploit
+        chronous Logarithmic Binary                       Tree
+                                                                          data sparsity.
+        Reduction
+                                                                        • Deployment pipeline: Data and weights are
+For higher operating frequencies where a sequential com-                  loaded at compile time via VHDL impure functions;
+parator restricts the master clock edge, the execution                    a complete runtime deployment pipeline with exter-
+window of the argmax unit can be compressed from 10                       nal memory or host streaming interfaces is not yet
+clock cycles down to 4 cycles. This is achieved by re-                    implemented.
+structuring the 10-element sweep into a Synchronous
+Logarithmic Binary Tree Reduction network.
+   Instead of evaluating channels sequentially, the 10 chan-
+                                                                      5.3    Concluding Remarks
+nels are grouped into five pairs during the first clock cycle.        This work presents the design, optimization, and FPGA
+Parallel comparators evaluate these pairs simultaneously,             implementation of an inference-only Spiking Neural Net-
+and on the subsequent clock edge, the five intermediate               work (SNN) for MNIST classification on an AMD Artix-7
+winners are registered into pipeline registers. These win-            FPGA platform. By utilizing an integer-driven Leaky
+ners are then paired again to recursively reduce the pool             Integrate-and-Fire (LIF) neuron model with 32-bit regis-
+until the global maximum index is determined.                         ters, the architecture avoids overflow hazards and matches
+   Substituting the O(N ) linear complexity with an                   the software reference model without requiring neuron
+O(log2 N ) binary reduction tree minimizes the process-               or synapse pruning. To mitigate physical routing con-
+ing latency of the classification stage. This architectural           straints and combinational delays, a centralized Finite
+shift introduces a hardware trade-off, increasing resource            State Machine (FSM) controller manages a serialized
+utilization and routing density on the FPGA fabric due                1-bit input spike distribution network mapped to local
+to the concurrent instantiation of parallel comparators.              memory buffers.
+However, by restructuring an unrolled spatial tree into                  The principal novelty of this work is the holistic inte-
+a synchronously registered pipeline, the critical path is             gration of these subsystems into a cohesive neuromorphic
+bounded to a single comparator stage. This ensures the                pipeline. As a key enabler of this integrated architecture,
+classification engine can keep pace with the neuron pro-              the transition from a single-cycle combinational argmax
+cessing pipelines, enabling higher operating frequencies              tree (Version 1) to a multi-cycle sequential argmax unit
+for neuromorphic edge accelerators.                                   (Version 2) eliminates the dominant readout bottleneck.
+
+
+                                                                 13
+This optimization achieves timing closure, improving              Appendix A: Comprehensive Power
+the Worst Negative Slack (WNS) from −49.380 ns to
++0.090 ns at a maximum frequency (Fmax ) of 167 MHz.
+                                                                  Analysis Reports
+At this frequency, the core processes a single sample             This appendix presents the complete post-implementation
+in 82 µs (0.082 s per 1,000-sample batch), representing           power analysis reports generated via the AMD Vivado
+an approximately 1000× speedup over the sequential                Design Suite. To accurately capture the sparse, event-
+Python reference and a ≈ 3.4× throughput improvement              driven nature of the proposed Spiking Neural Network,
+over a parallelized NumPy baseline. While the software            power dissipation is evaluated using both default vector-
+baseline requires batch processing to maximize hardware           less estimation and vector-based profiling driven by a
+utilization, the custom VHDL core operates as a real-             Switching Activity Interchange Format (.saif) simulation.
+time streaming architecture, processing inputs sample-               The visual power distribution summaries are provided
+by-sample with a latency of ≈ 82 µs per image; however,           in Figure 7. The top row depicts the analysis for the base-
+it is important to note that this execution time scales           line non-pipelined architecture (V1), while the bottom
+linearly with input size and the number of operational            row illustrates the optimized multi-cycle pipelined archi-
+timesteps.                                                        tecture (V2). Each row contrasts the baseline vectorless
+   Although operating at a higher frequency increases the         estimation against the vector-based behavioral profiling.
+total on-chip power to 0.336 W (compared to a baseline               A detailed numerical breakdown of these operating con-
+vectorless estimate of 0.637 W), the reduced latency im-          ditions is summarized in Table 6. The data highlights the
+proves estimated energy efficiency by over 6.6× compared          critical importance of vector-based analysis when evalu-
+to Version 1, achieving an estimated ≈ 36300 samples/J.           ating neuromorphic hardware on FPGAs. For instance,
+Compared to the parallelized NumPy execution on a                 in the optimized V2 architecture operating at 167 MHz,
+CPU drawing 49 W, the hardware architecture achieves              the default vectorless estimation predicts a total on-chip
+a ≈ 493× energy-efficiency gain, demonstrating the ef-            power of 0.637 W, driven largely by an overestimated dy-
+ficiency of specialized edge neuromorphic accelerators            namic logic power dissipation of 0.241 W. However, when
+over conventional von Neumann computing systems. The              actual event-driven switching activity is applied via the
+design is suitable for real-world streaming applications          SAIF profile, the total power drops by nearly half to 0.336
+where data batching is impractical. Combined with a               W. This reduction is primarily due to dynamic power
+low resource footprint consuming 12% of available LUTs            scaling down from 0.498 W to 0.197 W, reflecting the
+and 3% of Flip-Flops, the core maintains a classification         inherent sparsity of SNN execution where inactive neu-
+accuracy of 96.70% ± 0.04% across five random seeds on            rons and untriggered synapses bypass integration steps.
+the 10,000-sample MNIST test set.                                 Across both architectural versions, static power dissipa-
+   Overall, this work demonstrates that low-cost, spa-            tion remains firmly bounded between 0.138 W and 0.140
+tial neuromorphic hardware can deliver high computa-              W, demonstrating that the structural pipelining applied
+tional throughput per Watt within embedded stream-                to the argmax unit in Version 2 improves the maximum
+ing constraints. This efficiency is rigorously validated          frequency without incurring static leakage penalties on
+by the Vivado post-implementation power estimates                 the Artix-7 fabric.
+and post-implementation timing analyses detailed in               Table 6: Detailed On-Chip Power Consumption Break-
+Section 4. By mitigating routing congestion via time-             down (Vivado Post-Implementation)
+multiplexed spike broadcasting and eliminating the read-
+out critical path through multi-cycle pipelining, the pro-        Metric
+                                                                                V1 (13.3 MHz)
+                                                                                  Vectorless
+                                                                                                  V1 (13.3 MHz)
+                                                                                                Vector-based (SAIF)
+                                                                                                                      V2 (167 MHz)
+                                                                                                                       Vectorless
+                                                                                                                                        V2 (167 MHz)
+                                                                                                                                     Vector-based (SAIF)
+posed microarchitecture establishes a spatially efficient         Total (W)         0.164              0.177              0.637             0.336
+                                                                  Dynamic (W)       0.026              0.039              0.498             0.197
+paradigm for real-time edge intelligence on resource-             Static (W)        0.138              0.138              0.140             0.139
+constrained programmable fabrics, carefully balancing             Clocks (W)
+                                                                  Signals (W)
+                                                                                    0.002
+                                                                                    0.009
+                                                                                                       0.002
+                                                                                                       0.013
+                                                                                                                          0.065
+                                                                                                                          0.187
+                                                                                                                                            0.062
+                                                                                                                                            0.052
+parallel throughput with the latency trade-offs inherent          Logic (W)
+                                                                  I/O (W)
+                                                                                    0.014
+                                                                                   < 0.001
+                                                                                                       0.023
+                                                                                                      < 0.001
+                                                                                                                          0.241
+                                                                                                                          0.005
+                                                                                                                                            0.081
+                                                                                                                                           < 0.001
+to time-multiplexing.
+
+
+                                                                  Appendix B: Post-Implementation
+Code and Data Availability                                        FPGA Device Floorplans
+To support experimental reproducibility and fa-                   References
+cilitate transparent verification of the reported
+hardware metrics, the complete implementation                     [1] K. Roy, A. Jaiswal, and P. Panda, “Towards spike-
+framework developed in this study is publicly ac-                     based machine intelligence with spiking neural net-
+cessible   at  https://github.com/RezaAnsari471/                      works,” Nature, vol. 575, no. 7784, pp. 607–617, 2019.
+SNN-TimeMultiplexed-Pipelined-Accelerator.                            doi: 10.1038/s41586-019-1677-2.
+
+
+                                                             14
+                                                                [2] M. Davies et al., “Loihi: A neuromorphic manycore
+                                                                    processor with on-chip learning,” IEEE Micro, vol. 38,
+                                                                    no. 1, pp. 82–99, 2018.
+
+                                                                [3] A. Pourtaherian et al., “An efficient FPGA-based
+                                                                    accelerator for spiking neural networks,” in Pro-
+                                                                    ceedings of the International Conference on Field-
+                                                                    Programmable Logic and Applications (FPL), pp. 274–
+                                                                    281, 2018.
+
+                                                                [4] P. U. Diehl, D. Neil, J. Binas, M. Cook, S. C. Liu, and
+      (a) V1: Vectorless Es-   (b) V1: Vector-Based                 M. Pfeiffer, “Fast-classifying, high-accuracy spiking
+      timation                 (SAIF) Profiling
+                                                                    deep networks through weight and threshold balanc-
+                                                                    ing,” in Proceedings of the IEEE International Joint
+                                                                    Conference on Neural Networks (IJCNN), pp. 1–8,
+                                                                    2015.
+
+                                                                [5] D. Neil and S. C. S. Liu, “Minitaur: An event-driven
+                                                                    FPGA accelerator for spiking neural networks,” IEEE
+                                                                    Transactions on Very Large Scale Integration (VLSI)
+                                                                    Systems, vol. 22, no. 11, pp. 2421–2428, 2014.
+      (c) V2: Vectorless Es-   (d) V2: Vector-Based
+                                                                [6] J. A. Perez-Carrasco et al., “Mapping from computer
+      timation                 (SAIF) Profiling
+                                                                    vision to evolutionary core-designed spiking neural
+Figure 7: Post-implementation power analysis results                networks: A systematic approach,” IEEE Transac-
+reported by Vivado.                                                 tions on Pattern Analysis and Machine Intelligence,
+                                                                    vol. 35, no. 3, pp. 706–719, 2013.
+
+                                                                [7] G. Khodabandehloo, M. Mirhassani, and M. Ahmadi,
+                                                                    “A pipelined high-speed hardware architecture for spik-
+                                                                    ing neural networks,” IEEE Transactions on Circuits
+                                                                    and Systems I: Regular Papers, vol. 65, no. 9, pp. 2902–
+                                                                    2913, 2018.
+
+                                                                [8] S. Han, H. Mao, and W. J. Dally, “Deep compres-
+                                                                    sion: Compressing deep neural networks with pruning,
+                                                                    trained quantization and huffman coding,” in Pro-
+                                                                    ceedings of the International Conference on Learning
+                                                                    Representations (ICLR), 2016.
+
+                                                                [9] E. Hunsberger and C. Eliasmith, “Spiking deep
+                                                                    networks with LIF neurons,” arXiv preprint
+                  (a) Version 1 Design                              arXiv:1510.08829, 2015.
+
+                                                                [10] S. Thorpe, A. Delorme, and R. VanRullen, “Spike-
+                                                                    based strategies for rapid processing,” Neural Net-
+                                                                    works, vol. 14, no. 6-7, pp. 715–725, 2001.
+
+                                                                [11] N. Rathi and K. Roy, “What I need is ultra-low
+                                                                    latency: Optimizing threshold and leak dynamics
+                                                                    in spiking neural networks,” IEEE Transactions on
+                                                                    Neural Networks and Learning Systems, vol. 32, no. 4,
+                  (b) Version 2 Design                              pp. 1510–1521, 2021.
+
+Figure 8: Physical layout footprints of V1 and V2 archi-        [12] W. Guo, M. E. Fouda, A. M. Eltawil, and
+tectures.                                                           K. N. Salama, “Neural coding in spiking neural net-
+                                                                    works: A comparative study for robust neuromor-
+                                                                    phic systems,” Frontiers in Neuroscience, vol. 15,
+                                                                    p. 638474, 2021.
+
+
+                                                           15
+[13] A. Cassidy et al., “Cognitive computing building
+    block: A versatile and efficient digital neuron model
+    for neurosynaptic cores,” in Proceedings of the In-
+    ternational Joint Conference on Neural Networks
+    (IJCNN), pp. 1–10, 2013.
+
+[14] S. Hauck and A. DeHon, Reconfigurable Computing:
+   The Theory and Practice of FPGA-Based Computa-
+    tion, Morgan Kaufmann, 2007.
+[15] C. Zhang, P. Li, G. Sun, Y. Guan, B. Xiao, and
+    J. Cong, “Optimizing FPGA-based accelerator design
+    for deep convolutional neural networks,” in Proceed-
+    ings of the ACM/SIGDA International Symposium on
+    Field-Programmable Gate Arrays, pp. 161–170, 2015.
+[16] Pong P. Chu, RTL Hardware Design Using VHDL:
+    Coding for Efficiency, Portability, and Scalability,
+    John Wiley & Sons, 2006.
+[17] REALiX v.o.s., “HWiNFO64: Hardware Infor-
+    mation, Diagnostic and Analysis Software,” 2026.
+    [Online]. Available: https://www.hwinfo.com. [Ac-
+    cessed: July 2026].
+
+[18] Intel Corporation, Intel 64 and IA-32 Architec-
+    tures Optimization Reference Manual, Order Number:
+    248966-046. Santa Clara, CA, USA: Intel Corp., 2023.
+[19] P. A. Merolla et al., “A million spiking-neuron inte-
+    grated circuit with a scalable communication network
+    and interface,” Science, vol. 345, no. 6197, pp. 668–
+    673, 2014.
+[20] S. López-Asunción and P. Ituero, “Enabling Efficient
+    On-Edge Spiking Neural Network Acceleration with
+    Highly Flexible FPGA Architectures,” Electronics,
+    vol. 13, no. 6, p. 1074, 2024. doi: 10.3390/electron-
+    ics13061074.
+[21] A. Carpegna, A. Savino, and S. Di Carlo, “Spiker+:
+    A framework for the generation of efficient spiking
+    neural networks FPGA accelerators for inference at
+    the edge,” IEEE Transactions on Emerging Topics
+    in Computing, pp. 1–15, 2024. https://doi.org/10.
+    1109/TETC.2024.3511676
+[22] S. Li, X. Wang, W. Zuo, H. Yang, and Y. Liu, “A
+    Fast and Energy-Efficient SNN Processor With Adap-
+    tive Clock/Event-Driven Computation Scheme and
+    Online Learning,” IEEE Transactions on Circuits and
+    Systems I: Regular Papers, vol. 68, no. 4, pp. 1543–
+    1552, Apr. 2021. doi: 10.1109/TCSI.2021.3057583.
+[23] P. Harmeling, F. De Geeter, and G. Drion, “Energy-
+    efficient implementation of spiking recurrent cells on
+    FPGA,” arXiv preprint arXiv:2605.10679, 2026.
+
+
+
+
+                                                             16
+

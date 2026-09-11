@@ -1,0 +1,569 @@
+                                              Elastic Spiking Transformers for Efficient Gesture Understanding
+                                                     Alberto Ancilotto1 , Gianluca Amprimo2 , Stefano Di Carlo2 , and Elisabetta Farella1
+                                                                                                 1
+                                                                                                     Fondazione Bruno Kessler
+                                                                                                      2
+                                                                                                        Politecnico di Torino
+
+
+                                           Abstract— Spiking Neural Networks (SNNs), and particularly
+                                        Spiking Transformers, have recently emerged as a promising
+                                        solution for energy-efficient processing of event-based sensor
+                                        data in healthcare applications. However, existing architectures
+                                        are inherently rigid, being trained and deployed as static net-
+                                        works with fixed parameter counts and computational graphs.
+                                        This rigidity presents a critical bottleneck for deployment
+                                        on neuromorphic hardware (e.g., Loihi, Spinnaker), where
+                                        on-chip hardware limitations often force the use of smaller,
+arXiv:2605.13869v1 [cs.NE] 4 May 2026
+
+
+
+
+                                        lower-accuracy models that sacrifice representational capacity
+                                        and accuracy. To bridge this gap, we introduce the Elastic
+                                        Spiking Transformer, a novel architecture that embeds run-
+                                        time adaptability directly into the spiking paradigm. Drawing
+                                        inspiration from Matryoshka-style representation learning, our
+                                        framework introduces nested elasticity within the Feature
+                                        Extractor, Spiking Self-Attention, and Feed-Forward blocks.
+                                        By training a single “universal” model with granularity-aware
+                                        weight sharing, we enable dynamic slicing of network width
+                                        and attention heads during inference without retraining. This
+                                        elasticity offers a unique dual advantage in the SNN domain.
+                                        First, it solves the memory-constrained problem by allowing
+                                        the model to instantly scale its parameter footprint to fit
+                                        diverse hardware specifications without retraining. Second, and                           Fig. 1: Proposed NESTformer modules.
+                                        crucially, we show that elasticity in SNNs not only lowers
+                                        synaptic weight counts but also directly lowers the total spike
+                                        firing rate. By dynamically reducing the number of active
+                                        neurons, our approach achieves a proportional reduction in                      traditional frame-based cameras, these sensors only encode
+                                        synaptic operations, unavailable to standard artificial neural                  motion, producing a sparse representation that naturally
+                                        networks. We validate our approach on standard benchmarks
+                                        (CIFAR10/100, CIFAR10-DVS) and the novel EHWGesture                             aligns with Spiking Neural Networks (SNNs) based pro-
+                                        clinical gesture understanding dataset. Our results demonstrate                 cessing. SNNs enable computation only when spikes arrive,
+                                        that a single Elastic Spiking Transformer spans a wide range of                 reducing costly multiply-accumulate (MAC) operations to
+                                        complexity trade-offs, matching or surpassing the accuracy of                   simple accumulations. On neuromorphic hardware platforms
+                                        independently trained baselines while enabling adaptive, real-                  such as Intel Loihi [5] and IBM TrueNorth [22], [21],
+                                        time gesture recognition on resource-constrained edge devices.
+                                                                                                                        this paradigm achieves energy consumption as low as 0.9-
+                                                            I. INTRODUCTION                                             26 pJ per synaptic operation, enabling always-on gesture
+                                           Gesture recognition and understanding are critical tasks                     recognition on severely power-constrained devices.
+                                        for next-generation human–computer interaction, offering                           Recent advances in SNNs have brought attention-based
+                                        a wide range of applications, from clinical rehabilitation                      architectures to the neuromorphic domain [35], [31], [34],
+                                        monitoring [20] and surgical assistance [27] to sign lan-                       achieving strong performance on gesture benchmarks. How-
+                                        guage interpretation [25] and hands-free device control [30].                   ever, despite recent progress, current spiking transformers
+                                        Deployment on always-on, low-power edge devices allows                          still have architectural limitations that limit their effective
+                                        continuous gesture monitoring, enabling real-time interaction                   use on edge devices. First, existing models are structurally
+                                        while preserving user privacy and reducing communication                        rigid; these architectures have fixed sizes, meaning moving
+                                        latency [1], [19]. However, deployment on such devices faces                    from one neuromorphic chip to another requires scaling and
+                                        a fundamental challenge, as their strict power budgets and                      training a completely new version. Secondly, these architec-
+                                        capabilities limit the computational complexity required for                    tures still often rely on CPU processing. For example, many
+                                        accurate gesture understanding.                                                 of these architectures rely on matrix multiplication, which is
+                                           Event cameras offer a promising sensing modality for                         generally incompatible with the spike-driven processing of
+                                        gesture recognition on such low-resource platforms. Unlike                      true neuromorphic chips. As these chips do not handle such
+                                                                                                                        global computations natively, the workload must be offloaded
+                                           This work was supported by Ministero delle Imprese e del Made in Italy
+                                        (IPCEI Cloud DM 27 giugno 2022 – IPCEI-CL-0000007) and European                 to a higher-power CPU, limiting the actual energy savings
+                                        Union (Next Generation EU).                                                     in real life.
+
+                                                                                                                    1
+   To address these two limitations, we introduce the Neuro-                        II. RELATED WORKS
+morphic Elastic Spiking Transformer (NESTformer) archi-
+                                                                   Spiking Neural Networks
+tecture. Inspired by recent advancements in elastic trans-
+former architectures [7], NESTformer was developed to                 Early SNN research focused on ANN-to-SNN conversion
+allow elasticity to spiking transformer architectures. Our         methods [8], [26] or on directly training Convolutional
+framework is based on three novel architectural blocks:            SNNs using surrogate gradient techniques [23], [28]. Recent
+                                                                   advances in Spiking Transformers have brought attention-
+  1) Elastic Spiking MLP inspired by Matryoshka-style
+                                                                   based architectures to the neuromorphic domain, achiev-
+     representation learning [15], uses a variable hidden
+                                                                   ing strong performance on gesture benchmarks. Spikformer
+     dimension, which allows post-train tuning of the model
+                                                                   [35] introduced Spiking Self-Attention (SSA), replacing the
+     operations and parameter count.
+                                                                   softmax operation with spike-based query-key-value interac-
+  2) Elastic Spiking Attention: A novel approach to spik-
+                                                                   tions. Spikingformer [16] refined residual connections with
+     ing self-attention [35] that allows variable attention
+                                                                   “Dual-Spike” connections to improve gradient flow, enabling
+     head count while also ensuring compatibility when
+                                                                   deeper networks with improved accuracy. QKFormer [34],
+     mapping to neuromorphic hardware.
+                                                                   introduced a hierarchical two-stage architecture with Q-K
+  3) Elastic Feature Extraction: A novel low-resource
+                                                                   Attention, requiring linear complexity with respect to token
+     architecture allows for post-train tuning of the final
+                                                                   length. However, like its predecessors, QKFormer still relies
+     network energy usage.
+                                                                   on operations, such as Batched Matrix Multiply (BMM),
+   This elasticity offers a dual advantage for gesture under-      that are not natively supported on current neuromorphic
+standing, unique in the SNN domain. First, it solves the           hardware and instead run on the CPU. Spike-driven Trans-
+deployment flexibility problem by allowing the model to            former [31] instead focused on strict adherence to the spike-
+instantly scale its parameter footprint to fit devices with        driven philosophy, introducing Spike-Driven Self-Attention
+significantly different hardware resources and power levels,       (SDSA) that eliminates all multiplications, relying solely on
+without retraining. Second, we demonstrate that elasticity in      mask-and-add operations. While this approach significantly
+SNNs also corresponds to proportional reductions in com-           reduces energy consumption, it comes at the cost of reduced
+pute costs: reducing network size not only lowers synaptic         representational capacity and lower accuracy compared to
+weight counts but also directly reduces the total spike firing     BMM-based spiking transformers. Overall, existing spiking
+rate, achieving significantly lower energy consumption than        transformers face a trade-off between architectural expres-
+current state-of-the-art approaches at comparable or better        siveness and true neuromorphic compatibility, and they are
+accuracies.                                                        typically designed as fixed-size models without runtime
+   The main contributions of this work are:                        adaptability.
+  •   Elastic spiking transformer architecture: We propose
+      NESTformer, the first SNN transformer model, to the          Elastic and Slimmable Networks
+      best of our knowledge, capable of runtime adaptability           Classical scalable backbones usually require retraining
+      without retraining. By introducing elasticity across all     once the architecture has been correctly sized for a target
+      three building blocks (feature extraction, self-attention,   computational budget[12], [24], [3]. Elastic or slimmable
+      and MLP), we enable a single universal model to dy-          networks allow a single trained model to operate at mul-
+      namically scale its memory footprint without retraining.     tiple computational budgets by dynamically adjusting width,
+  •   Neuromorphic-native attention mechanism: We in-              depth, or resolution from a given granularity setting.
+      troduce a novel row-wise spiking attention computation       Slimmable Networks [32] introduced width-adjustable CNNs
+      scheme that replaces global matrix multiplications with      that can run at different channel multipliers (0.25×–1.0×)
+      sequential synaptic operations, for better compatibility     using a sandwich training strategy that samples minimum,
+      with neuromorphic-native hardware.                           maximum, and random widths. MatFormer [7] extended
+  •   Energy scaling: We analyze existing spiking transform-       this concept to transformers with Matryoshka-style nested
+      ers and demonstrate how scaling model size often yields      MLP widths, demonstrating up to 2× speedup with minimal
+      sub-linear energy savings due to high spike generation       accuracy degradation. However, MatFormer’s elasticity is
+      in the feature extraction stage. In contrast, we show that   limited to MLP hidden dimensions, while attention and
+      NESTformer’s elasticity directly reduces the total spike     feature extractor remain fixed. Despite their success in ar-
+      firing rate, resulting in a linear reduction in energy.      tificial neural networks, elastic architectures have received
+  •   State-of-the-Art performance: We validate our ap-            little attention in the context of SNN. Directly transferring
+      proach on the EHWGesture clinical dataset [2] and stan-      elasticity concepts to SNNs is non-trivial, as architectural
+      dard event-based benchmarks (DVS128 [1], CIFAR10-            scaling in SNNs affects not only parameter counts but also
+      DVS [17]). Our results show that NESTformer matches          spike dynamics and synaptic activity. To the best of our
+      or outperforms independently trained baselines (75.98%       knowledge, no prior work has explored a fully elastic spiking
+      on EHWGesture, 98.96% on DVS128) while consuming             transformer architecture designed for neuromorphic-native
+      up to 60% less energy than current state-of-the-art          execution.
+      architectures.
+                   III. ARCHITECTURE
+
+   We propose NESTformer, an elastic spiking transformer
+that enables runtime granularity control via three elastic
+building blocks - MLP, self-attention, and feature extractor.
+Network design is built on three principles: (1) Nested
+Architecture, similar to MatFormer [7], where all smaller
+configurations are strict subsets of larger ones, enabling
+weight sharing and efficient training; (2) Spike-Aware Elas-
+ticity where size reduction is designed to minimize both
+parameters and, more importantly, spike activity; and (3)
+Hardware-Aware Design where only structures typically                         Fig. 2: Proposed spiking row-wise attention module
+supported by native neuromorphic hardware are supported,
+avoiding CPU-based ops like BMM, leading to the design of
+                                                                                Algorithm 1: Row-wise Attention Computation
+a novel, neuromorphic-friendly attention block design.
+   The NESTformer architecture processes event-based input               1: O ← zeros(T, B, H, N, D)
+through an elastic feature extractor, followed by spiking                2: for t, b, h in T, B, H do
+attention-MLP elastic blocks. The granularity parameter g                3:     Khead , Vhead ← K[t, b, h], V [t, b, h]
+controls the effective capacity across all three elastic compo-          4:     for i = 1 to N do
+nents (Table I), enabling selection of a nested subnet within            5:           qi ← Q[t, b, h, i]
+the entire network without the need to train separate capacity           6:           ai ← LIF ◦ linear(qi , Khead )
+networks. The following sections detail the three different              7:                                   ⊤
+                                                                                      oi ← LIF ◦ linear(ai , Vhead )
+architectural building blocks.                                           8:          O[t, b, h, i] ← oi
+                                                                         9:       end for
+   TABLE I: Effects of granularity g on network scaling                 10:   end for
+                                                                        11:   return O
+   Component                 g0         g1        g2       g3
+   MLP Hidden Width          64       160        416       1024
+   Attention Heads            4         8         16        32          B. Spiking Row-wise Attention
+   Conv Channels             16        32         64       128             Standard spiking attention mechanisms rely on GEMM
+   Total Parameters        0.68M     0.92M      1.46M     2.59M
+                                                                        [16] or masking operations [34], [35] to compute attention
+                                                                        scores. While highly optimized for GPUs, these operations
+                                                                        require generating and storing dense intermediate matrices,
+A. Elastic Spiking Self-Attention                                       making them fundamentally incompatible with spike-driven
+                                                                        neuromorphic hardware (e.g., Loihi [5], SpiNNaker [11],
+   We propose an elastic spiking self-attention mechanism
+                                                                        Spiker [4]). True neuromorphic architectures operate only
+based on dynamic head slicing, inspired by Matryoshka rep-
+                                                                        by accumulating spikes locally in spike-driven LIF units and
+resentation learning [15]. During inference, we dynamically
+                                                                        lack a global memory to process and store these intermedi-
+slice the Query (Q), Key (K), and Value (V ) tensors to the
+                                                                        ate dense matrices. Consequently, existing implementations
+active head count hg :
+                                                                        often offload this ‘middle step’ to a coprocessor or CPU,
+                                                                        which processes these matrices densely at each timestep,
+             Qg , Kg , Vg = Q, K, V [:, :, : hg , :, :]           (1)
+                                                                        negating the energy benefits of the accelerator. To solve this,
+   Additionally, we modify the attention mechanism to ensure            NESTformer introduces a row-wise formulation that decom-
+compatibility with neuromorphic hardware. Standard spiking              poses the monolithic matrix multiplication into a sequence of
+transformers often compute attention maps using standard                two LIF operations. The standard attention computation can
+general matrix multiplications (GEMM) operations. NEST-                 be easily split row-by-row through a simple mathematical
+former introduces an explicit intermediate LIF activation               transformation:
+between the Q · K T and the V projection. This converts
+                                                                                                      (qh1 KhT )Vh
+                                                                                                                  
+the attention scores into binary spikes, ensuring that the
+subsequent multiplication with V is a strictly spike-driven                                         (qh2 KhT )Vh 
+                                                                                Oh = Qh (KhT Vh ) =                for each h     (3)
+                                                                                                                  
+accumulation:                                                                                               ..
+                                                                                                            .     
+                                                                                                          (qhd KhT )Vh
+   attng = LIF( Qg · KgT ),         Og = LIF(attng · Vg )         (2)     For each row in Oh , this operation is equivalent to a
+                                                                        sequence of two linear LIF layers, using KhT and Vh as
+  This allows mapping the attention mechanism natively to               weights. This allows deployment on native neuromorphic
+event-driven hardware described in the following section.               hardware without requiring offloading to a support CPU.
+                                                                   formers, specifically Spikformer [35] and QKFormer [34].
+                                                                   By varying the block count, embedding dimension, and
+                                                                   number of attention heads, we generated “S”, “B”, and
+                                                                   “L” variants of these baselines. We measure total spikes
+                                                                   per inference, and we estimate energy consumption using
+                                                                   Intel Loihi’s energy model (23.6 pJ per synaptic operation).
+                                                                   As illustrated in Figure 3, these networks show a distinct
+                                                                   disconnect between parameter scaling and energy efficiency.
+                                                                   While reducing model dimensions successfully scales the
+                                                                   memory footprint, the corresponding energy savings are
+                                                                   disproportionately low, dropping by only ∼12% (60.7 µJ to
+                                                                   53.0 µJ) when parameter count varies by over 80% (5.3M
+                                                                   to 0.7M).
+
+
+Fig. 3: Scaling analysis of sota spiking transformers. While
+parameter counts scale significantly between “Larger” and
+“Smaller” configurations (Right), the corresponding energy
+consumption remains high (Left).
+
+
+This changes the way the attention operation is mapped in
+hardware into a very standard operator, supported by the ma-
+jority of currently available neuromorphic chips. Algorithm 1
+shows the code for this simple transformation. It should be
+noted that this formulation is mathematically equivalent to
+the standard Spiking Self Attention [35] with the addition of
+the intermediate LIF operation described earlier (Algorithm
+1, line 6). This row-wise formulation additionally makes
+implementing elasticity trivial, as adjusting the granularity
+hg simply changes the loop limit of the outer iterator
+(Line 2). While row-wise processing incurs a 2.6–10.2×
+slowdown on GPUs (due to loss of BLAS parallelization),
+our formulation is mathematically equivalent to the parallel
+GEMM form. This allows us to train efficiently on GPUs
+using the standard parallel form, then convert the model to
+the row-wise formulation for deployment. Figure 2 shows a
+graphical representation of the proposed row-wise attention
+computation.
+C. Elastic MLP
+    Similar to Matformer [7], the MLP module is designed
+to dynamically adjust hidden dimension using log-spaced
+filter counts. In standard transformers, MLP layers account
+for approximately 60% of parameters. As a result, an elas-
+tic MLP can significantly reduce the network parameter             Fig. 4: Spike count distribution by network section. In
+count, enabling deployment on more resource-constrained            standard spiking transformer architectures (top), the patch
+neuromorphic hardware without retraining. The granularities        embedding stage (left bars) accounts for the majority of ac-
+follow a log-spacing to provide roughly uniform capacity           tivity, generating significantly more spikes than the attention
+increments:                                                        or MLP blocks combined. Notably, this stage does not scale
+                                                                 down proportionally with the rest of the model architecture.
+         hg = round hmin · 2g·log2 (hmax /hmin )/(G−1)   (4)       NESTformer (bottom) shows instead much better spike scal-
+  where hg ∈ {64, 160, 416, 1024} is the MLP hidden                ing at different granularities
+dimension for granularity g.
+                                                                      Figure 4 (top) breaks down the total spike generation
+D. Elastic Patch Embedding                                         by network section. The analysis shows that the patch-
+   To motivate the design of our feature extractor, we first an-   embedding stage is the primary bottleneck for spike gen-
+alyze the scalability of current state-of-the-art spiking trans-   eration. Because this stage processes feature maps at the
+   TABLE II: Spike activity and energy scaling across g
+           Spikes/Inf    Firing Rate        Energy (µJ)   Relative
+     g0       0.56M        1.04%               13.3         29%
+     g1       0.82M        1.49%               19.3         42%
+     g2       1.22M        2.19%               28.7         62%
+     g3       1.95M        3.39%               46.1        100%
+
+
+
+highest spatial resolution, it accounts for the vast majority of
+network activity, consistently generating over 1.0×106 spikes
+across model sizes. In contrast, the downstream attention
+and MLP blocks operate on tokenized, lower-dimensional
+representations and contribute significantly less to the total             Fig. 5: Proposed patch embedding elastic block
+spike count. Consequently, standard scaling strategies that
+reduce the transformer depth or width fail to address the
+dominant energy cost incurred at the input stage. To address         the average firing rate of the remaining neurons increases
+this specific bottleneck, we introduce a novel elastic spiking       significantly (from ∼4.38% to ∼21.01%).
+patch splitting (XiSPS) backbone. Unlike standard static             F. Training
+embeddings, XiSPS supports dynamic, runtime trade-offs                  Unlike standard slimmable approaches that utilize sand-
+between feature granularity and power consumption without            wich training (aggregating losses from minimum, maximum,
+retraining. We adapt the scalability mechanism from the              and random sub-networks), we adopt a simpler stochastic
+XiConv block [3] as our foundation, leveraging a tunable             sampling strategy that updates a single granularity configu-
+compression factor γ to reduce both computational load and           ration per training step. We empirically found that uniform
+parameter count. The novel XiSPS block is designed using             sampling often leaves larger-granularity networks under-
+LIF neurons to ensure purely event-driven processing. To             trained. To counteract this, we sample the active granularity
+simplify training and the elasticity mechanism, we maintain          g from a biased distribution P (g) shifted toward larger
+constant input and output filter counts while dynamically            configurations: gt ∼ P (g), where P depends on the number
+modifying the compressed feature map size during training.           of parameters per granularity setting. This ensures that the
+The final block architecture used in the patch embedding             full parameter set receives frequent updates, stabilizing the
+stage is shown in Figure 5. Figure 6 shows the effect                shared weights that support all smaller subnetworks. To
+that the optimized backbone scaling has on energy usage,             maintain high throughput during training and avoid the
+demonstrating a stronger correlation between network size            significant overhead of dynamic graph recompilation, we rely
+and inference energy.                                                on static tensor shapes. We allocate all elastic tensors to their
+E. Granularity-Energy Relationship and Spike Dynamics                maximum capacity gmax and apply binary masks to zero-
+                                                                     pad inactive regions for lower sampled granularities. This
+   To validate the efficacy of our elastic design, we analyze
+                                                                     guarantees a consistent computational graph structure and
+the relationship between model granularity, total spike ac-
+                                                                     memory layout throughout training. This masking strategy,
+tivity, and energy consumption. As shown in Table II, the
+                                                                     combined with per-granularity batch normalization, enables
+results confirm that reducing granularity directly leads to
+                                                                     different configurations to be trained efficiently within a
+energy savings, unlike previous architectures. Moving from
+                                                                     single model. Training uses the AdamW optimizer with a
+the largest configuration (g3) to the smallest (g0) results in a
+                                                                     learning rate of 1e−3, cosine annealing, and weight decay
+71% decrease in total spike events (1.95M → 0.56M) and a
+                                                                     of 6e−2. Compared to training a single-size network, we
+proportional reduction in total energy (46.1 µJ → 13.3 µJ).
+                                                                     empirically observed that increasing the number of training
+However, a deeper layer-wise analysis reveals a non-linear
+                                                                     steps by around 50% was required to achieve convergence
+dynamic within the Elastic MLP blocks.
+                                                                     across all four sub-networks.
+   TABLE III: Firing Rates (%) in MLP layers across g                                     IV. EXPERIMENTS
+      Layer                g0          g1          g2       g3          We validate NESTformer on a variety of event-driven
+                                                                     and static benchmarks, with a primary focus on gesture
+      block.0.mlp.lif1    7.46%     6.67%         5.47%    2.69%
+      block.0.mlp.lif2    6.67%     7.56%         6.05%    2.96%     understanding for clinical and human-computer interaction
+      block.1.mlp.lif1   20.96%    13.66%         8.00%    4.14%     (HCI) applications. Our primary evaluation uses the new
+      block.1.mlp.lif2   35.52%    25.71%        12.78%   11.31%     EHWGesture dataset, where NESTformer outperforms the
+                                                                     proposed baselines while using significantly less energy. In
+  We observe an inverse relationship between the MLP                 addition to EHWGesture, we report results on standard neu-
+hidden dimension and average firing rate, which can be seen          romorphic benchmarks (DVS128 Gesture, CIFAR10-DVS)
+in Figure 4. As illustrated in Table III, as the granularity         and static classification tasks (CIFAR-10/100) to demonstrate
+reduces the hidden dimension from 1024 (g3) to 64 (g0),              the generalization capabilities for the proposed architecture.
+        TABLE IV: Comparison of Energy, Complexity, and Accuracy on EHWGesture. T=16 for all approaches.
+               Model               Energy (µJ) ↓   Param (M) ↓       Accuracy (%) ↑   AQA (%) ↑   Gesture (%) ↑
+                                                        CNN Baselines
+               ResNet50               147,000         25.60              65.52          71.48          91.02
+               ResNeXt                460,000        116.10              68.51          72.58          94.41
+               PhiNet                  6,900          4.91               71.25          75.11          96.98
+                                                        SNN Baselines
+               Spikformer-1-160        55.3           0.71               71.89          75.94          96.20
+               Spikformer-2-256        59.0           2.60               73.62          78.29          95.86
+               Spikformer-3-320        70.8           5.27               74.16          79.00          96.40
+               QKFormer-2-160           48.1          0.69               73.58          77.59          96.32
+               QKFormer-4-256           73.6          1.51               75.11          78.87          96.22
+               QKFormer-5-320          100.9          2.35               75.28          78.92          96.86
+                                                              Ours
+               NESTformer   (g3)       46.1           2.59               75.98          79.45          96.40
+               NESTformer   (g2)       28.7           1.46               75.86          78.92          96.32
+               NESTformer   (g1)       19.3           0.92               72.38          74.66          95.66
+               NESTformer   (g0)       13.3           0.68               71.01          74.04          94.78
+
+
+
+
+       Fig. 6: Effects of different granularity levels on network parameter count, accuracy, and energy consumption
+
+
+A. EHWGesture: Clinical Gesture Recognition                      ultra-low-power alternative. They maintain a competitive
+                                                                 accuracy comparable to the best baseline in the original
+   The EHWGesture dataset serves as our primary evaluation       dataset paper, while consuming 19.3 to 13.3 µJ, enabling
+benchmark, comprising 9,708 samples across 11 clinical ges-      continuous monitoring on battery-operated devices. Figure
+ture classes. As detailed in Table IV, NESTformer establishes    7 shows the energy-accuracy tradeoffs that can be reached
+a new state-of-the-art for event-based gesture recognition,      with the proposed architecture. In contrast, Figure 6 details
+surpassing both static SNNs and efficient ANN baselines.         the effects of granularity scaling on model size, accuracy,
+Our largest configuration (g3) achieves a peak accuracy of       and energy.
+75.98%, outperforming the strongest baseline, QKFormer-5-
+320 (75.28%), and the lightweight PhiNet CNN (71.25%).           B. Architecture generalization
+This performance advantage is coupled with significant ef-          In addition to EHWGesture, we evaluate NESTformer on
+ficiency gains; NESTformer (g3) consumes only 46.1 µJ            two standard event-based benchmarks (DVS128 Gesture [1],
+per inference, less than half the energy of QKFormer-5-          CIFAR10-DVS [17]) and two static image classification
+320 (100.9 µJ) and orders of magnitude less than the CNN         benchmarks (CIFAR-10 [13], CIFAR-100 [14]). The results,
+baselines, which range from 6,900 µJ to over 460,000 µJ.         summarized in Table V, demonstrate that our elastic frame-
+The architecture also demonstrates good flexibility through      work matches or outperforms fixed-topology state-of-the-art
+its elastic granularities. The intermediate g2 configuration     models while offering significant energy savings.
+emerges as a sweet spot for general deployment, retaining           On DVS128 Gesture, NESTformer (g3) matches the
+99.8% of the peak accuracy (75.86%) while reducing en-           peak accuracy of Spike-Driven Transformer [31] (99.30%)
+ergy consumption by nearly 40% to 28.7 µJ. For scenarios         and outperforms QKFormer (98.60%). Notably, the ultra-
+demanding extreme energy conservation, such as always-           lightweight g0 configuration retains 97.57% accuracy, higher
+on monitoring, the g1 and g0 configurations provide an           than several specialized baselines, while utilizing 5.3× fewer
+TABLE V: Comparison with State-of-the-Art across Event-Based and Static Benchmarks. “-” indicates the metric was not
+reported or applicable. Best results are bolded.
+                                DVS128 Gesture               CIFAR10-DVS                         Static (CIFAR-10 / 100)
+ Model                  Params ↓ Timestep Accuracy ↑ Params ↓ Timestep Accuracy ↑ Params ↓       Timestep C10 Acc ↑ C100 Acc ↑
+                          (M)       (T)        (%)     (M)       (T)      (%)       (M)             (T)       (%)        (%)
+                                                            SNN Baselines
+ Spikformer [35]          2.59      16      98.96        2.57       16        80.90       9.32       4        95.51      78.21
+ QKFormer [34]            1.50      16      98.60        1.50       16        84.00       6.74       4        96.18      81.15
+ Spike-driven TF [31]     1.05      16      99.30        1.05       10        77.40       9.32       4        95.51      77.92
+ STSA [33]                1.99      16      98.70        1.99       16        79.93         -        -          -          -
+ Spikingformer [16]       2.57      16      98.60        2.57       16        80.90       9.32       4        96.04      80.02
+ SEW-ResNet [9]             -       16      97.90          -         -          -           -        4        94.85      74.24
+ LIAF-Net [29]              -       60      97.60          -        10        70.40         -        -          -          -
+ PLIF [10]               17.40      20      97.60       17.40       20        74.80         -        -          -          -
+ TET (ResNet-19) [6]        -        -        -         12.63        4        74.47      12.63       4        94.44      74.47
+ Dspike [18]                -       10      96.90          -        10        75.40         -        -          -          -
+                                                         NESTformer (Ours)
+ NESTformer   (g3)        2.07      16      99.30        1.87       16        83.61      4.14        4        96.18      81.30
+ NESTformer   (g2)        1.21      16      98.61        0.98       16        82.52      2.36        4        95.91      80.12
+ NESTformer   (g1)        0.63      16      98.26        0.56       16        80.94      1.88        4        93.25      79.24
+ NESTformer   (g0)        0.39      16      97.57        0.28       16        79.88      0.98        4        92.83      76.11
+
+
+
+                                                                    A. Temporal Resolution vs. Granularity
+                                                                       Figure 8 presents accuracy heatmaps across timesteps
+                                                                    (T ∈ {8, 16, 32, 64}) and granularities (g ∈ {0, 1, 2, 3}).
+                                                                    We find that AQA and gesture recognition exhibit opposing
+                                                                    trends regarding temporal resolution.
+                                                                       • AQA: Action Quality Assessment benefits consistently
+                                                                         from increased temporal resolution. The highest AQA
+                                                                         performance is achieved at T = 64, g = 3 (80.7%), sur-
+                                                                         passing the T = 32 equivalent (80.1%) and significantly
+                                                                         outperforming T = 8 (74.0%). These findings align
+                                                                         with those in the EHWGesture paper and underscore
+                                                                         the importance of finer temporal granularity to capture
+Fig. 7: Energy / Accuracy tradeoff for the proposed approach             motion dynamics over longer windows.
+compared to alternative SNN baselines                                  • Gesture Recognition: Conversely, gesture recognition
+                                                                         performance peaks at 16 to 32 timesteps and degrades as
+                                                                         T increases to 64. At g = 3, accuracy drops from 96.7%
+parameters than the g3 configuration. On the more chal-                  at T = 32 to 94.4% at T = 64. This is possibly caused
+lenging CIFAR10-DVS classification task, NESTformer (g3)                 by the event sensor dynamics: higher timesteps may
+achieves 83.61%, remaining highly competitive with QK-                   better capture motion dynamics, but longer timesteps
+Former (84.00%) and outperforming standard Spikformer                    will include more spatial information, which is useful
+(80.90%). The benefits of elasticity are most evident here:              for determining hand and finger positions.
+the g2 configuration (0.98M params) achieves 82.52%, de-               While both tasks generally benefit from higher g, it is
+livering 99% of the SOTA performance with 35% fewer                 particularly useful at lower timesteps. Shifting from g = 0 to
+parameters than QKFormer. Finally, on static CIFAR-10/100           g = 1 at T = 8 significantly increases both gesture accuracy
+datasets, NESTformer demonstrates that neuromorphic elas-           (93.1% to 96.0%), and AQA (64.9% to 68.1%). This shows
+ticity generalizes to frame-based data. Notably, on CIFAR-          that a higher g enables the model to learn both spatial and
+100, our g3 configuration (81.30%) achieves a new state-            motion data even when temporal resolution is constrained.
+of-the-art among spiking transformers, surpassing both QK-          For very constrained networks, this shows that even a slight
+Former (81.15%) and Spikformer (78.21%).                            increase in model parameters can yield significantly higher
+                                                                    accuracy gains than using higher timesteps.
+         V. VARIABLE TIMESTEPS TRADEOFFS
+   We analyze the tradeoffs between temporal resolution             B. Energy-Accuracy-Parameter Trade-offs
+(timesteps T ), model granularity (g), and task-specific perfor-       Figure 9 shows the energy-accuracy trade-off. The model
+mance on the EHWGesture dataset. Our analysis highlights            demonstrates distinct optimal operating points for different
+the distinct temporal dependencies between gesture classifi-        target tasks. For gesture recognition, the model operates
+cation and action quality assessment (AQA).                         most efficiently at lower timesteps. T = 8, g = 2 achieves
+Fig. 8: Accuracy heatmaps across timesteps and granularities. Left: Overall top-1 accuracy. Center: Gesture recognition
+accuracy. Right: Action quality assessment (AQA) accuracy. Higher granularity consistently improves performance, while
+optimal timesteps vary by task.
+
+
+a remarkable 96.24% accuracy consuming only 10.49 µJ.
+Increasing T to 64 not only triples the energy to 91.17
+µJ (at g = 2) but actually decreases accuracy to 94.63%.
+For tasks like AQA that rely on motion dynamics, higher
+T offers significant advantages. The configuration T =
+64, g = 3 offers the maximum AQA performance of 80.69%.
+However, this comes at a steep energy cost of 136.94 µJ.
+The T = 16, g = 2 configuration represents a balanced
+options achieving 96.32% gesture accuracy and 78.92% AQA
+accuracy at 28.7 µJ. This configuration represents a new
+state-of-the-art in the accuracy-energy tradeoff for the given
+task.
+
+C. Spike Dynamics Across Configurations
+   Table VI highlights the spiking behavior at granularity
+g = 2. The total spike count for an inference pass scales
+sublinearly with both timesteps (∼2× per doubling of T ) and
+granularity. Notably, firing rates decrease at higher timesteps
+despite increased total spikes, suggesting the network dis-
+tributes computation more sparsely across longer temporal
+windows. This can, in a real neuromorphic chip, increase
+overall efficiency by reducing congestion in the routing
+sections of the neuromorphic accelerators at each timestep,
+leading to higher performance than how energy is usually
+estimated.                                                        Fig. 9: Energy vs. accuracy trade-offs for gesture recognition
+                                                                  (top) and AQA (bottom). Marker size indicates parameter
+ TABLE VI: Spike activity across configurations (g = 2)
+                                                                  count (0.68M–2.59M). Lines connect configurations with the
+    Timestep     Spikes (M)    Firing Rate   Energy (µJ)          same timestep. The Pareto frontier demonstrates that T = 8
+                                                                  and T = 16 configurations dominate for energy-constrained
+    T   =8          0.70          2.64%          16.5
+    T   = 16        1.22          2.19%          28.7             deployment.
+    T   = 32        2.27          2.25%          53.5
+    T   = 64        3.99          1.78%          94.2
+
+                                                                  lower energy costs with varying granularity. Our experiments
+                                                                  demonstrate state-of-the-art accuracy on EHWGesture while
+                    VI. CONCLUSION                                providing both compatibility with neuromorphic hardware
+   We introduced the Elastic Spiking Transformer (NEST-           and deployment flexibility. NESTformer bridges the gap
+former), the first spiking neural network with runtime elas-      between efficient neuromorphic computing and novel elastic
+ticity, enabling a single trained model to operate across         transformer architectures, enabling SNNs to be deployed
+a 3.8× energy range without retraining. We demonstrated           across the full spectrum of neuromorphic hardware, from
+that our novel elastic MLP, elastic attention, and elastic        ultra-low-power (g0: 0.81 mJ) to high-accuracy edge servers
+patch embedding blocks enable both parameter reduction and        (g3: 2.80 mJ) using a single unified model.
+                  VII. DATA AVAILABILITY                                      [19] Y. Lu, Z. Li, and T. T.-H. Kim. An ultra-low-power real-time hand-
+                                                                                   gesture recognition system for edge applications. In 2021 IEEE
+   The code supporting the findings of this study is available                     3rd International Conference on Artificial Intelligence Circuits and
+in the public GitHub repository Elastic-Spiking-Transformers                       Systems (AICAS), pages 1–1, 2021.
+                                                                              [20] G. Masi, S. Tonti, C. Ferraris, G. Olmo, L. Priano, and G. Amprimo.
+at         https://github.com/smilies-polito/                                      Usability Assessment in Parkinson’s Disease: the Case Study of the
+Elastic-Spiking-Transformers. The repository                                       FarmExergame . In 2025 IEEE International Conference on Perva-
+contains the project description and will host the                                 sive Computing and Communications Workshops and other Affiliated
+                                                                                   Events (PerCom Workshops), pages 464–469, Los Alamitos, CA, USA,
+implementation and reproducibility materials for the                               Mar. 2025. IEEE Computer Society.
+Elastic Spiking Transformer.                                                  [21] P. A. Merolla, J. V. Arthur, R. Alvarez-Icaza, A. S. Cassidy, J. Sawada,
+                                                                                   F. Akopyan, B. L. Jackson, N. Imam, C. Guo, Y. Nakamura, et al. A
+                            R EFERENCES                                            million spiking-neuron integrated circuit with a scalable communica-
+                                                                                   tion network and interface. Science, 345(6197):668–673, 2014.
+ [1] A. Amir, B. Taba, D. Berg, T. Melano, J. McKinstry, C. Di Nolfo,         [22] D. S. Modha, F. Akopyan, K. Andra, A. Andreopoulos, R. Ap-
+     T. Marelli, A. Hsu, G. Sherbondy, and D. S. Modha. A low power, fully         puswamy, J. V. Arthur, S. Asaad, A. Bagchi, P. Bartol, D. Boag, et al.
+     event-based gesture recognition system. In Proceedings of the IEEE            Neural inference at the frontier of energy, space, and time. Science,
+     Conference on Computer Vision and Pattern Recognition (CVPR),                 382(6667):205–211, 2023.
+     pages 7243–7252, 2017.                                                   [23] E. O. Neftci, H. Mostafa, and F. Zenke. Surrogate gradient learning in
+ [2] G. Amprimo, A. Ancilotto, A. Savino, F. Quazzolo, C. Ferraris,                spiking neural networks. IEEE Signal Processing Magazine, 36(6):51–
+     G. Olmo, E. Farella, and S. Di Carlo. Ehwgesture-a dataset for                63, 2019.
+     multimodal understanding of clinical gestures. In Proceedings of the     [24] F. Paissan, A. Ancilotto, and E. Farella. Phinets: A scalable backbone
+     IEEE/CVF International Conference on Computer Vision, pages 2701–             for low-power ai at the edge. ACM Transactions on Embedded
+     2710, 2025.                                                                   Computing Systems, 21:1 – 18, 2021.
+ [3] A. Ancilotto, F. Paissan, and E. Farella. Xinet: Efficient neural        [25] R. Rastgoo, K. Kiani, and S. Escalera. Sign language recognition: A
+     networks for tinyml. 2023 IEEE/CVF International Conference on                deep survey. Expert Systems with Applications, 164:113794, 2021.
+     Computer Vision (ICCV), pages 16922–16931, 2023.                         [26] B. Rueckauer, I.-A. Lungu, Y. Hu, M. Pfeiffer, and S.-C. Liu. Con-
+ [4] A. Carpegna, A. Savino, and S. D. Carlo. Spiker+: A framework for             version of continuous-valued deep networks to efficient event-driven
+     the generation of efficient spiking neural networks fpga accelerators         networks for image classification. Frontiers in Neuroscience, 11:682,
+     for inference at the edge. IEEE Transactions on Emerging Topics in            2017.
+     Computing, 13(3):784–798, 2025.                                          [27] B. van Amsterdam, M. J. Clarkson, and D. Stoyanov. Gesture
+ [5] M. Davies, N. Srinivasa, T.-H. Lin, G. Chinya, Y. Cao, S. H. Choday,          recognition in robotic surgery: A review. IEEE Transactions on
+     G. Dimou, P. Joshi, N. Imam, S. Jain, et al. Loihi: A neuromorphic            Biomedical Engineering, 68(6):2021–2035, 2021.
+     manycore processor with on-chip learning. IEEE Micro, 38(1):82–99,       [28] Y. Wu, L. Deng, G. Li, J. Zhu, and L. Shi. Spatio-temporal back-
+     2018.                                                                         propagation for training high-performance spiking neural networks.
+ [6] S. Deng, Y. Li, S. Zhang, and S. Gu. Temporal efficient training              In Proceedings of the AAAI Conference on Artificial Intelligence,
+     of spiking neural network via gradient re-weighting. In The Tenth             volume 32, 2018.
+     International Conference on Learning Representations (ICLR), 2022.       [29] Z. Wu, H. Zhang, Y. Lin, G. Li, M. Wang, and H. Tang. LIAF-Net:
+ [7] F. Devvrit, D. Kuznedelev, H. Rofouei, Mahdi andad Raghavan,                  Leaky integrate and analog fire network for lightweight and efficient
+     B. Kulkarni, and A. Kusupati. Matformer: Nested transformer for               spatiotemporal processing. IEEE Transactions on Neural Networks
+     elastic inference. In Advances in Neural Information Processing               and Learning Systems, 32(11):4749–4761, 2021.
+     Systems (NeurIPS), volume 36, 2023.                                      [30] C.-Y. Yang, Y.-N. Lin, S.-K. Wang, V. R. Shen, Y.-C. Tung, F. H.
+ [8] P. U. Diehl, D. Neil, J. Bindner, M. Pfeiffer, and G. Indiveri.               Shen, and C.-H. Huang. Smart control of home appliances using
+     Fast-classifying, high-accuracy spiking deep neural networks through          hand gesture recognition in an iot-enabled system. Applied Artificial
+     weight and threshold balancing. In International Joint Conference on          Intelligence, 37(1):2176607, 2023.
+     Neural Networks (IJCNN), pages 1–8. IEEE, 2015.                          [31] M. Yao, J. Hu, Z. Zhou, L. Yuan, Y. Tian, B. Xu, and G. Li. Spike-
+ [9] W. Fang, Z. Yu, Y. Chen, T. Huang, T. Masquelier, and Y. Tian. Deep           driven transformer. In Advances in Neural Information Processing
+     residual learning in spiking neural networks. In Advances in Neural           Systems (NeurIPS), volume 36, 2023.
+     Information Processing Systems (NeurIPS), volume 34, pages 21056–        [32] J. Yu, L. Yang, N. Xu, J. Yang, and T. Huang. Slimmable neural
+     21069, 2021.                                                                  networks. In International Conference on Learning Representations
+[10] W. Fang, Z. Yu, Y. Chen, T. Masquelier, T. Huang, and Y. Tian.                (ICLR), 2019.
+     Incorporating learnable membrane time constant to enhance learning       [33] J. Zhang, B. Dong, H. Zhang, J. Ding, F. Heide, B. Yin, and X. Yang.
+     of spiking neural networks. In Proceedings of the IEEE/CVF Inter-             Spiking transformer for event-based action recognition. arXiv preprint
+     national Conference on Computer Vision (ICCV), pages 2661–2671,               arXiv:2203.11825, 2022.
+     2021.                                                                    [34] Z. Zhou, K. Chen, W. Li, Y. Wang, Y. Zhu, and L. Yuan. Qkformer:
+[11] S. B. Furber, F. Galluppi, S. Temple, and L. A. Plana. The spinnaker          Hierarchical spiking transformer using q-k attention. In Advances in
+     project. Proceedings of the IEEE, 102(5):652–665, 2014.                       Neural Information Processing Systems (NeurIPS), 2024.
+[12] A. G. Howard, M. Zhu, B. Chen, D. Kalenichenko, W. Wang,                 [35] Z. Zhou, Y. Zhu, C. He, Y. Wang, S. Yan, Y. Tian, and L. Yuan.
+     T. Weyand, M. Andreetto, and H. Adam. Mobilenets: Efficient                   Spikformer: When spiking neural network meets transformer. In
+     convolutional neural networks for mobile vision applications. arXiv           The Eleventh International Conference on Learning Representations
+     preprint arXiv:1704.04861, 2017.                                              (ICLR), 2023.
+[13] A. Krizhevsky. Learning multiple layers of features from tiny images.
+     Technical report, University of Toronto, 2009. Cited for CIFAR-10.
+[14] A. Krizhevsky. Learning multiple layers of features from tiny images.
+     Technical report, University of Toronto, 2009. Cited for CIFAR-100.
+[15] A. Kusupati, G. Gant, H. Malvar, and A. Sabharwal. Matryoshka
+     representation learning. In Advances in Neural Information Processing
+     Systems (NeurIPS), volume 35, pages 30233–30249, 2022.
+[16] C. Li, L. Ma, and S. Abrar. Spikingformer: Spike-driven residual
+     learning for transformer-based spiking neural networks. arXiv preprint
+     arXiv:2304.11954, 2023.
+[17] H. Li, H. Liu, X. Ji, G. Li, and L. Shi. CIFAR10-DVS: An event-
+     stream dataset for object classification. Frontiers in Neuroscience,
+     11:309, 2017.
+[18] Y. Li, Y. Guo, S. Zhang, S. Deng, Y. Hai, and S. Gu. Dspike:
+     Differentiable spike learning for high-performance spiking neural
+     networks. In Advances in Neural Information Processing Systems
+     (NeurIPS), volume 34, pages 24268–24279, 2021.
+

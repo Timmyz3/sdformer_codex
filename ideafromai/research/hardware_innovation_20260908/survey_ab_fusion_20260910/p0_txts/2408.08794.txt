@@ -1,0 +1,1110 @@
+                                                                                                                                                                                                 1
+
+
+
+
+                                               Xpikeformer: Hybrid Analog-Digital Hardware
+                                                   Acceleration for Spiking Transformers
+                                                                   Zihang Song Prabodh Katti, Osvaldo Simeone, and Bipin Rajendran
+
+
+
+
+                                           Abstract—The integration of neuromorphic computing and                   Artificial Neuron                  Spiking Neuron                 Firing
+                                        transformers through spiking neural networks (SNNs) offers                                                                                   Threshold
+
+                                        a promising path to energy-efficient sequence modeling, with                                                                                    Time
+                                                                                                                   0.52
+                                        the potential to overcome the energy-intensive nature of the
+arXiv:2408.08794v2 [cs.AR] 3 Apr 2025
+
+
+
+
+                                        artificial neural network (ANN)-based transformers. However,               1.31                         0.63
+                                        the algorithmic efficiency of SNN-based transformers cannot be                             Activation                                 (Leaky)
+                                        fully exploited on GPUs due to architectural incompatibility. This         -0.10   Weights Function                              Integrate-and-Fire
+                                                                                                                                                               Weights
+                                        paper introduces Xpikeformer, a hybrid analog-digital hardware
+                                        architecture designed to accelerate SNN-based transformer mod-                                                   (a)
+                                        els. The architecture integrates analog in-memory computing
+                                        (AIMC) for feedforward and fully connected layers, and a                                  Output
+                                        stochastic spiking attention (SSA) engine for efficient attention
+                                                                                                                               Output Layer             Feedforward         Attention
+                                        mechanisms. We detail the design, implementation, and evalu-                                                       Layer             Mask
+                                        ation of Xpikeformer, demonstrating significant improvements                         Encoder/Decoder
+                                        in energy consumption and computational efficiency. Through
+                                        image classification tasks and wireless communication symbol                                                      (Masked)
+                                                                                                                             Embedding Layer
+                                                                                                                                                         Multi-Head
+                                        detection tasks, we show that Xpikeformer can achieve inference                                                 Self Attention
+                                        accuracy comparable to the GPU implementation of ANN-based                            Spike Encoding
+                                        transformers. Evaluations reveal that Xpikeformer achieves 13×                       Input Token Seq.
+                                        reduction in energy consumption at approximately the same
+                                        throughput as the state-of-the-art (SOTA) digital accelerator for                                                (b)
+                                        ANN-based transformers. Additionally, Xpikeformer achieves up
+                                        to 1.9× energy reduction compared to the optimal digital ASIC             Fig. 1. (a) Comparison of an artificial neuron (left) and a spiking neuron
+                                        projection of SOTA SNN-based transformers.                                (right). (b) A simplified block diagram of a spiking transformer.
+
+                                           Index Terms—Spiking neural network, transformer, analog-               This spike-based signaling allows spiking neurons to aggregate
+                                        digital hybrid computing, hardware acceleration, energy effi-
+                                        ciency.                                                                   activations using efficient accumulate (AC) operations, in
+                                                                                                                  contrast to artificial neurons in traditional artificial neural net-
+                                                                                                                  works (ANNs), which process continuous-valued activations
+                                                                I. I NTRODUCTION                                  through multiply-and-accumulate (MAC) operations. SNN-
+                                           The transformer architecture has revolutionized various                based transformers, or spiking transformers, as shown in
+                                        fields within artificial intelligence, becoming the backbone of           Fig. 1(b), adopts spiking neurons in feed-forward operations
+                                        many state-of-the-art (SOTA) models used in natural language              while incorporating spiking-based self-attention mechanisms,
+                                        processing (NLP) [1], computer vision (CV) [2], and wireless              achieving higher computing efficiency in sequence modeling
+                                        communications [3]–[5], but it also imposes a significant                 tasks compared to ANN-based transformers [6], [11]–[19].
+                                        burden on computing and memory resources. This is due                        Although spiking transformers are algorithmically efficient
+                                        to their vast number of parameters and the large amount of                due to their simplified computations, they face significant
+                                        matrix-vector and matrix-matrix multiplications required by               inefficiencies on general-purpose computing platforms like
+                                        dense feed-forward layers as well as the attention mechanism.             GPUs. These inefficiencies stem from a fundamental mismatch
+                                           The integration of neuromorphic computing with trans-                  between the event-driven, sparse nature of spiking algorithms
+                                        former architectures, enabled by spiking neural networks                  and GPU architectures, which are optimized for dense, high-
+                                        (SNNs), represents a promising frontier for achieving energy-             precision workloads. First, spiking transformers operate on
+                                        efficient and biologically-plastic sequence modeling [6]–[9].             binary data, while GPUs are designed for high-precision
+                                        As illustrated in Fig. 1(a), neuromorphic computing uses                  arithmetic (e.g., FP16 or FP32), leading to poor resource
+                                        sparse, temporally-encoded spikes for neuronal signaling [10].            utilization and suboptimal energy efficiency. Second, the tem-
+                                                                                                                  poral dimension of spiking transformers introduces substantial
+                                          The authors are with the Centre for Intelligent Information Process-    data communication overhead, as frequent memory access for
+                                        ing Systems (CIIPS), Department of Engineering, King’s College London,
+                                        WC2R 2LS London, U.K. (zihang.song@kcl.ac.uk, prabodh.katti@kcl.ac.uk,    intermediate results significantly increases latency and energy
+                                        osvaldo.simeone@kcl.ac.uk, bipin.rajendran@kcl.ac.uk)                     consumption. While optimization efforts for spiking trans-
+                                          This work is supported in part by the European Union’s Horizon Europe   formers have primarily focused on algorithmic and software
+                                        project CENTRIC (101096379), the Engineering and Physical Science Re-
+                                        search Council (EPSRC) project (EP/X011852/1) and by Open Fellowships     improvements, the lack of dedicated hardware accelerators
+                                        of the EPSRC (EP/W024101/1 and EP/X011356/1).                             remains a critical gap in the field [20].
+                                                                                                                                      2
+
+
+
+   In recent years, analog in-memory computing (AIMC) us-                 transformer software design. Compared to GPU imple-
+ing non-volatile memory (NVM) devices has emerged as a                    mentations, Xpikeformer achieves a 2.18× speedup over
+promising mixed-signal approach for accelerating both ANNs                traditional ANN-based transformers and a 6.85× speedup
+and SNNs [21]. AIMC enables matrix-vector multiplications                 over spiking transformers.
+(MVMs) to be performed in constant time, O(1), directly                This paper is structured as follows: Section II provides an
+within crossbar arrays of NVM devices. This is achieved             overview of the preliminaries. Section III reviews related work
+by storing the matrix elements as conductances of the NVM           on hardware accelerators for ANN-based and spiking trans-
+devices and by applying input vector values as electrical           formers. Section IV details the design and implementation of
+voltages to the crossbar input lines and reading the resulting      the Xpikeformer architecture. Section V discusses the training
+electrical currents in the crossbar output lines, leveraging        and inference methodologies. Section VI presents the accuracy
+Kirchhoff’s laws. Several AIMC-based ANN transformer ac-            evaluation of the proposed system, and Section VII assesses
+celerators have been proposed, significantly improving the          its efficiency. Finally, Section VIII concludes the paper.
+efficiency of ANN transformers [22]–[24]. However, due to
+architectural differences between ANN-based transformers and
+spiking transformers, these accelerators cannot be directly                               II. P RELIMINARIES
+applied to the latter.                                              A. Spike Encoding and Spiking Neurons
+   Additionally, AIMC is primarily effective for accelerating          One essential difference between SNNs and ANNs is the
+inference in feedforward and fully connected layers, where          information encoding method [26]. In ANNs, activations are
+weights are programmed into the crossbar once and reused            represented by real values x. In contrast, SNNs encode
+during forward propagation. However, AIMC is less suited for        activations in binary temporal sequences s[t] ∈ {0, 1} for
+attention mechanisms, which involve matrix multiplications          t = 1, 2, . . . , T , known as spike trains, where T denotes the
+between two dynamic matrices, requiring frequent data writes        spike encoding length. A commonly utilized spike encoding
+to NVM crossbars. This introduces latency, increases energy         scheme to map a real value x ∈ [0, 1] into a spike train
+overhead, and is limited by NVM endurance [22], [25]. As            is Bernoulli rate coding, whereby each bit in the encoded
+a result, digital acceleration is better suited for attention.      sequence independently takes the value ‘1’ with probability
+Although these matrix multiplications can be simplified to          x and ‘0’ with probability 1 − x, which is expressed as:
+masked additions in spiking domain owing to the binary nature
+of the multiplicands [13], executing them on GPUs—designed                        s[t] ∼ Bern(x) for t = 1, 2, . . . , T.          (1)
+for high-precision arithmetic—remains resource-inefficient.
+   In this paper, we introduce Xpikeformer, the first hardware         Fig. 1(a) illustrates the comparative differences between a
+accelerator specifically designed for spiking transformers. The     spiking neuron and an artificial neuron. Traditional artificial
+architecture integrates two specialized computing frameworks        neurons in ANNs aggregate weighted real-valued inputs and
+to optimize performance and energy efficiency. For static-          apply static activation functions (e.g., sigmoid, tanh, or ReLU)
+weight operations, including feed-forward, embedding, and           to produce the activation. In contrast, a spiking neuron in-
+fully connected layers, Xpikeformer employs AIMC for ef-            tegrates the weighted sum of input spikes using the leaky
+ficient in-memory computation and weight storage. For the           integrate-and-fire (LIF) membrane model over discrete time
+attention mechanism, it utilizes stochastic computing with          steps. The membrane potential V t of an LIF neuron at time
+lightweight logical operations and a streaming dataflow, al-        step t evolves as
+lowing rapid processing without intermediate result storage.
+                                                                                           V t = βV t−1 + I t ,                    (2)
+Additionally, we introduce a simulation framework to train
+Xpikeformer and evaluate its accuracy performance. The key          where β ∈ (0, 1] represents the leak factor determining the
+contributions of this work are as follows:                          rate of decay of the membrane potential over time, and I t
+   • We design an AIMC engine to efficiently handle feed-           is the input at time step t. When V t reaches or exceeds a
+      forward, embedding, and fully connected layers in             threshold voltage Vthresh , the neuron fires a spike, i.e., Ot = 1,
+      spiking transformers without storing non-binary pre-          and resets the potential V t to 0. Otherwise, the neuron remains
+      activations, significantly reducing data transfer overhead.   silent, producing Ot = 0, i.e.,
+   • We propose a software-hardware co-design methodology                                   (
+      for a spike-based attention architecture, termed stochastic          t                   Ot = 1,
+                                                                      if V ≥ Vthresh then                  else Ot = 0 and (2). (3)
+      spiking attention (SSA), which leverages stochastic com-                                 V t = 0,
+      puting to execute matrix multiplications in the attention
+      mechanism of spiking transformers using lightweight
+      logic gates instead of heavy arithmetic units.                B. Stochastic Computing
+   • Xpikeformer achieves a 13× energy reduction at approx-            An important advantage of Bernoulli rate coding is that
+      imately the same throughput as the SOTA digital accel-        it supports stochastic computing, a computational paradigm
+      erator for ANN-based transformer. As the first hardware       that employs Bernoulli bit streams [27]. Consider two
+      accelerator design for spiking transformers, Xpikformer       Bernoulli spike trains s1 [t] and s2 [t] with spiking probabilities
+      also showcases 1.8–1.9× energy reduction compared to          p (s1 [t] = 1) = x1 and p (s2 [t] = 1) = x2 . The multiplication
+      the ideal digital ASIC projection of the SOTA spiking         of real-valued x1 and x2 can be achieved by applying the
+                                                                                                                                            3
+
+
+
+                                                               TABLE I
+C OMPARISON OF OPERATIONS IN ANN TRANSFORMERS , A TYPICAL SOTA SPIKING TRANSFORMER ARCHITECTURE , AND THE SPIKING TRANSFORMER
+ INTRODUCED IN THIS WORK (G E LU = G AUSSIAN E RROR L INEAR U NIT, LIF = L EAKY I NTEGRATE - AND -F IRE , BNL = B ERNOULLI N EURON L AYER )
+
+                             Operations                 ANN [1]           SNN [11], [13], [15]          SNN (Xpikeformer)
+                         Q, K, V Generation               Linear !            Linear + LIF                 Linear + LIF
+                                                             QK T                        tT                           T
+                              Attention            softmax √       V      LIF(LIF(Qt K        )V t )   BNL(BNL(Qt K t )V t )
+                                                                dk
+                                                                          LIF W2 LIF(W1 X t )          LIF W2 LIF(W1 X t )
+                                                                                                                         
+                             Feedforward           W2 (GeLu(W1 X))
+                            Inter-layer              LayerNorm(X)                 None                         None
+                           Normalization
+
+
+bit-wise logic AND (∧) operation on their stochastic repre-                    In a spiking transformer, the feedforward, embedding, and
+sentations s1 [t] and s2 [t], which is denoted as:                          fully connected layers are implemented using spiking neurons
+                                                                            in spiking transformers. A key distinction in MHSA lies in
+                     sout [t] = s1 [t] ∧ s2 [t],                    (4)     how the token representations Q, K, and V are generated and
+since p (sout [t] = 1) = p (s1 [t] = 1) · p (s2 [t] = 1) = x1 x2 . In       processed. In ANN-based transformers, the representations Q,
+this paper, we utilize stochastic computing to help accelerate              K, and V are obtained through linear projections applied to the
+the matrix multiplications within spiking transformers, as will             token embeddings X. In contrast, spiking transformers apply
+be detailed in Section IV-B.                                                LIF neurons after linear projections, resulting in spike-encoded
+                                                                            representations Qt , K t , and V t . Compared
+                                                                                                                       √     to the attention
+                                                                            score computation S = softmax(QK T / dK ) in ANN-based
+C. Transformers and Spiking Transformers                                    transformers, spiking transformers first perform matrix mul-
+   1) ANN-based Transformer: The typical architecture of an                 tiplication between matrices Qt and K t independently for
+ANN-based transformer model is based on stacks of encoder                   each time step t, then apply a LIF neuron to the product,
+                                                                                                           T
+layers [2], [28], decoder layers [29], or both [1]. Each encoder            expressed as S t = LIF(Qt K t ). Another notable difference in
+or decoder layer is composed of a multi-head self-attention                 spiking transformer MHSA is the absence of softmax. ANN-
+(MHSA) mechanism and a feedforward network with residual                    based transformers use the softmax function to normalize
+connections and layer normalization. In models that include                 the attention scores, ensuring they sum to one. However, in
+both encoder and decoder stacks, the decoder layers also                    spiking transformers, softmax is impractical due to the binary
+contain an additional multi-head self-attention mechanism that              nature of attention scores and the need for temporal and sparse
+attends to the encoder’s output.                                            processing. Instead, spiking neurons regulate the activation
+   The MHSA mechanism in transformers allows the model                      through their firing dynamics [13]. Finally, the attention score
+to compute attention scores that determine the relevance                    S t is multiplied with V t at each time step t, followed by a
+of each token in the input sequence with respect to every                   LIF neuron to produce the final attention output.
+other token. This enables the model to weigh and integrate                     3) Efficiency Challenges: Spiking transformers achieve ac-
+information from different positions in the sequence, capturing             curacy comparable to their ANN counterparts in NLP [16],
+various contextual dependencies. Multiple heads attend to the               CV [15], and wireless communication [30]. Estimated on
+sequence elements on different subspaces simultaneously. For                neuromorphic hardware assumptions, their energy efficiency
+each head, the input token embeddings are projected using                   suggests up to an order-of-magnitude reduction in computa-
+projection matrices WQ , WK , and WV to get the query Q,                    tional energy by replacing matrix multiplications with addition
+key K, and values V , respectively. The dot-product attention               and integer multiplication. However, deploying spike-based
+is then calculated as follows:                                              models on general-purpose platforms like CPUs and GPUs
+                                                                            results in significant energy inefficiencies due to:
+                                            QK T
+                                                  
+          attention(Q, K, V ) = softmax √            V,                       •   Data Communication Overhead: Frequent memory ac-
+                                               dk
+                                                                                  cess for intermediate results in feedforward and MHSA
+where dk is the dimension of key vectors within each head.                        layers introduces overhead, especially when the spike
+   2) Spiking Transformers: Spiking transformers are a novel                      encoding length T exceeds GPU bit widths. Non-binary
+adaptation of traditional ANN-based transformers that in-                         pre-activations generated at each time step further amplify
+tegrates principles from SNNs [6], [11]–[19]. The typical                         this overhead, increasing transmission requirements by a
+architecture of a spiking transformer is shown in Fig. 1(b). In                   factor of T compared to equally quantized ANNs.
+this architecture, input tokens are first encoded into temporal               •   Precision Mismatch: SNNs operate on binary data,
+spike trains through a spike encoding layer. The subsequent                       whereas CPUs and GPUs are optimized for high-
+architecture resembles that of ANN transformers, with the                         precision computation (e.g., FP32/64), leading to inef-
+operations of ANN-based transformers and spiking transform-                       ficiencies. While some GPUs support INT8, even this
+ers compared in Table I. The operation of the proposed                            precision exceeds the needs of binary spiking signals.
+Xpikeformer is also listed in Table I and will be detailed in                     FPGA-based spiking attention accelerators may address
+Section IV-B.                                                                     this issue, but remain underexplored [31].
+                                                                                                                                                              4
+
+
+
+D. Analog In-Memory Computing (AIMC)                                                                                      SL Switch Matrix
+
+   AIMC enables fast and energy-efficient MVMs using synap-
+                                                                                                                 Cell
+tic arrays (SAs). An SA primarily comprises an NVM crossbar.                                                                                             WL
+
+
+
+
+                                                                                      WL/BL Switch Matrix
+The crossbars consist of NVM devices, which are NVM
+elements positioned at row-column intersections, where each
+
+
+
+
+                                                                                                                                                       SL
+element can be programmed to different conductance levels,
+representing matrix values. This structure allows the crossbar
+                                                                                                            BL
+to store matrices with significantly greater area efficiency than
+traditional digital buffers. To perform an MVM, the input vec-
+tor is encoded as voltages applied to the crossbar rows. Ohm’s
+Law governs the current flow through each NVM device,                                   MUX Decoder                                 MUX
+
+while Kirchhoff’s Current Law ensures the correct summation
+                                                                                                                        ADC   ADC            ADC   ADC
+of currents at the columns, yielding the dot-product result.
+                                                                                                                          Adder                Adder
+Beyond the crossbar, an SA includes readout units, typically
+comprising successive approximation-register (SAR) analog-
+to-digital converters (ADCs) coupled with multilevel current-
+mode sense amplifiers. These are integrated with accumulation       Fig. 2. Illustration of a typical implementation of synaptic array [32] with
+circuits (e.g., adders and registers) and various peripheral com-   spike-encoded signals as input.
+ponents, including decoders, multiplexers, switch matrices,
+and buffers.
+   A typical implementation of an SA, introduced by [32],           optimization involves a dedicated data path for attention mech-
+is illustrated in Fig. 2. In this setup, every two devices          anisms, reducing latency and further enhancing throughput
+in the crossbar form a differential pair cell, enabling the         [35]. Additionally, an approach to decoding inefficiencies skips
+representation of positive and negative matrix values. The          redundant computations and adopts a sparse matrix format,
+input spike-encoded signals are applied through the bit lines       maximizing MAC utilization [37]. Despite these advance-
+(BLs), while the results are read from the source lines (SLs).      ments, existing solutions remain inadequate in addressing data
+The word lines (WLs) and SLs control the switching of NVM           transfer overhead, which continues to be a major bottleneck.
+devices via transistors. During the weighted sum operation,            2) AMIC-Integrated Accelerators: Advancements in AIMC
+all cells are activated when all WLs are turned on. Input           have enhanced efficiency and performance in ANN trans-
+vector voltages are applied to the BLs, and the resulting           former accelerators. A hybrid approach employs AIMC for
+weighted sum currents are read out in parallel through the SLs.     feedforward layers while executing MHSA on general-purpose
+These currents are then digitized by multiple readout units         units, achieving software-equivalent accuracy for NLP tasks
+concurrently. To optimize the balance between area, power,          but retaining energy inefficiencies due to high-precision digital
+and latency, the readout units are shared among a predefined        computations [38], [39].
+number of crossbar columns and time-multiplexed under the              Efforts to implement MHSA with AIMC require online
+control of a multiplexer (MUX).                                     programming to store intermediate results (K and V ) into
+   In a spiking transformer, input neuron activations are repre-    crossbars, introducing significant latency, power consumption,
+sented by spike trains, which consist of multiple cycles of input   and impracticality due to NVM wear [22]. Circuit-based
+voltage signals to the BLs. Since these input signals encode        implementations replace online programming with analog
+1-bit binary data at each time step, analog voltage representa-     modules for dot-product attention, softmax, and activation
+tion is unnecessary, eliminating the need for digital-to-analog     functions, aligning with crossbar feedforward layers. However,
+converters (DACs) during inference. However, DACs are still         analog circuits suffer from non-linearity, noise, and higher
+required in hardware for the initial programming of NVM             power demands compared to digital designs [23].
+conductances to the appropriate analog levels corresponding            Alternative architectures explore near-memory computing
+to the matrix elements.                                             (NMC) or digital in-memory computing (DIMC) using SRAM
+                                                                    for MHSA workloads. An 8T-SRAM-based hybrid accelerator
+                    III. R ELATED W ORK                             reduces leakage and employs sequence-blocking dataflows to
+                                                                    enhance hardware utilization and reduce execution time [24],
+A. ANN Transformer Accelerators
+                                                                    [40], [41]. However, these designs still require writing key
+   1) Digital Accelerators: The development of digital (fully       and value matrices to SRAM during inference, adding latency
+CMOS-based) accelerators for ANN-based transformers pri-            and energy overhead, while also relying on compute-intensive
+marily focuses on enhancing computational efficiency. Various       softmax operations.
+strategies have been explored to achieve this, including mixed-
+precision techniques [33], algorithm-specific quantization [34],
+and adaptive quantization methods based on input data charac-       B. Advances Towards Efficient Spiking Transformers
+teristics [35]. One approach decomposes major operations into          Despite extensive research on hardware accelerators for
+a single dot product primitive, enabling unified and efficient      SNNs, particularly for LIF models [42]–[44], efforts to accel-
+execution, significantly improving throughput [36]. Another         erate spiking transformers have remained largely algorithmic
+                                                                                                                                                                 5
+
+
+
+
+                                                                                    On-Chip                               TABLE II
+           Off-Chip Memory                        Residual Units                                      X PIKEFORMER C ONFIGURATION OF S YNAPTIC A RRAYS
+
+          Model            Inference                                                                                Parameter                Value
+        Parameters          Output                                            Controller
+                                                                                                                  Resistive device           PCM
+                                       Layer                                                                  Conductance Resolution         4 bits
+                                      Outputs                      Q,K,V
+                                                                                                                 Weight Resolution           5 bits
+                                                    On-Chip                                                      # devices per cell            2
+             AIMC Engine                                                      SSA Engine
+                                                    SRAM
+                                       Layer                     Attention
+                                                                                                            Crossbar dimension (by cell)   128 × 128
+                                       Inputs                     Results                                         ADC resolution             5 bits
+                                                                                                                 ADC sharing ratio             8
+              Spiking            Spiking                   Spiking               SSA
+              Neuron             Neuron                                          Tiles
+               Tile               Tile             ...     Neuron
+                                                            Tile
+            Virtual Block 0:   Virtual Block 1:          Virtual Block:                       the memory, as introduced in Section II-D. This eliminates
+             Embeddings         Layer 1, FF 1            Output layer
+                                                                             LFSR Array       the need for energy-intensive CMOS arithmetic operations in
+                                                                                              conventional digital implementations, significantly reducing
+Fig. 3. The overall system architecture of Xpikefomer.
+                                                                                              computational energy consumption. We impose a restriction
+                                                                                              on the size of crossbar arrays, because excessively large sizes
+                                                                                              result in increased interconnect resistance and capacitance,
+and software-focused. One pioneering study in this domain                                     higher power consumption, signal degradation, and increased
+proposes a spiking MHSA that captures sparse visual features                                  complexity of control circuitry. Consequently, the weights of a
+using spike-form Q, K, and V without employing softmax,                                       feedforward or fully connected layer are most likely distributed
+achieving ANN-comparable accuracy in image classification                                     across multiple SAs or even several spiking neuron tiles.
+tasks [13], [15]. Another significant contribution presents a                                    We choose the phase change memory (PCM) device to
+hardware-friendly spike-driven residual learning architecture                                 implement the crossbars in SAs due to its multi-level cell capa-
+that eliminates non-spike computations from residual con-                                     bility (up to 4 bits per device), high endurance, fast read/write
+nections [14]. Building on these advancements, [19] further                                   speed, and compatibility with CMOS technology [45]–[47].
+reduces computational energy by replacing multiplications                                     Table II summarizes the detailed SA configuration parameters
+with sparse addition operations in MHSA. However, these                                       used in this work. Nevertheless, as an analog device, PCM
+studies remain at the software and algorithmic level, making                                  is susceptible to thermal noise, 1/f noise, device variability,
+them inefficient on general-purpose computing platforms like                                  and quantization effects. A key challenge is conductance drift,
+CPUs and GPUs [31]. Furthermore, none have addressed the                                      where the stored conductance of a memory cell changes
+data transfer overhead, leaving a critical aspect of efficiency                               over time after programming. This drift can degrade neural
+improvement unexplored.                                                                       network performance by affecting the precision and reliability
+                                                                                              of stored weights. Methods to address the effects caused by
+               IV. X PIKEFORMER A RCHITECTURE                                                 these nonidealities will be introduced in Section V.
+                                                                                                 2) Weight Mapping and Tile Architecture: To efficiently
+   Xpikeformer is a hybrid analog-digital architecture designed
+                                                                                              manage this distribution and avoid the overhead of storing non-
+for spiking transformers. As shown in Fig. 3, Xpikeformer
+                                                                                              binary pre-activations, we adopt a row-block-wise mapping
+integrates two specialized computing engines for optimized
+                                                                                              strategy. For example, with a crossbar size of 128×128 cells
+performance. The AIMC engine handles feed-forward, em-
+                                                                                              and a weight matrix of 384×512, the weight matrix must
+bedding, and fully connected layers using spiking neuron
+                                                                                              be divided into twelve 128×128 submatrices. As shown in
+tiles, with NVM crossbars for efficient weight storage. The
+                                                                                              Fig. 4, the row-block-wise mapping strategy ensures that the
+SSA engine implements the MHSA mechanism in the spiking
+                                                                                              same row of submatrices is mapped to the SAs within a single
+domain leveraging stochastic computing. This CMOS-based
+                                                                                              spiking neuron tile. For instance, rows 129-256 of the weight
+design enhances efficiency by replacing arithmetic units with
+                                                                                              matrix are mapped to four SAs (2-1 to 2-4) within one spiking
+logical AND gates.
+                                                                                              neuron tile. The input 512×1 vector is then split into four
+                                                                                              128×1 subvectors and fed into SA 2-1 to SA 2-4, respectively.
+A. AIMC Engine                                                                                   At each SA column output of an SA, only a local sum of the
+   The AIMC engine is composed of multiple spiking neuron                                     vector dot product is obtained. To avoid storing this sum, the
+tiles, which are virtually grouped to ensure sufficient memory                                outputs from the same column of SA 2-1 to SA 2-4 are routed
+for storing weights in each feedforward or fully connected                                    to a shared LIF unit, where they are accumulated using a carry-
+layer. Each tile comprises an input and output buffer, multiple                               save adder (CSA) to produce a single pre-activation value. This
+synaptic arrays (SAs), and a group of LIF units. A shared DAC                                 pre-activation is then added to the current membrane potential
+unit is integrated into each spiking neuron tile to facilitate the                            via an adder.
+initial weight programming. This DAC unit is bypassed during                                     The new membrane potential overwrites the previous one in
+inference, eliminating unnecessary overhead.                                                  a shift register. A comparator then compares this value against
+   1) NVM Crossbars: Each SA includes a fixed-sized NVM                                       a threshold stored in the threshold register. If the membrane
+crossbar array along with multiplexed readout units that allow                                potential exceeds the threshold, the comparator generates a ‘1’
+MVMs to be performed in constant time, O(1), directly within                                  and resets the shift register. At each time step, the shift register
+                                                                                                                                                                            6
+
+
+
+           Weight                                 Spiking Neuron                        Spiking Neuron       1) SSA Algorithm: As introduced in Table I, the spiking
+    Output Matrix          Input                       Tile 1                                Tile 2
+    384 1 384 512          512 1
+                                                                                                          attention mechanism introduced in [13] evaluate the attention
+                                                               LIF Units                      LIF Units
+                                                              SA SA SA                       SA SA        block as:
+
+
+
+
+                                                I/O buffers
+
+
+
+
+                                                                               I/O buffers
+         =                           Weight                   1-1 1-4 2-3                    3-1 3-4                                                         T
+                                     Mapping                  SA SA SA                       SA                  Attention(Qt , K t , V t ) = LIF(LIF(Qt K t )V t ),     (5)
+                                                              1-2 2-1 2-4                    3-2
+                                                              SA SA                          SA
+                                                              1-3 2-2                        3-3          where LIF(·) represents the per-entry application of LIF neu-
+                                                                                                          ron as described in Section II-C2. The proposed SSA replaces
+      SA 2-1                                                  SA 2-4
+                                                                                                          the stateful LIF neurons with the Bernoulli neuron layer
+                Switch Matrices                                             Switch Matrices
+                                                                                                          (BNL), computing the attention as:
+       Input                                                     Input
+       1:128                                                    385:512                                                                                     T
+                                          4
+                                                                                                                   SSA(Qt , K t , V t ) = BNL(BNL(Qt K t )V t ).         (6)
+                   MUX                    ...                                 MUX
+                                                                                                             A Bernoulli neuron is a stateless neuron that takes real-
+      ADC ADC 16
+        Adder
+                   ...   ADCADC
+                          Adder
+                                                                ADC ADC 16
+                                                                  Adder
+                                                                              ...            ADCADC
+                                                                                              Adder
+                                                                                                          valued input, normalizes the value to a probability in [0, 1],
+                                                                                                          and then generates a Bernoulli sequence (1) as its output.
+                                                                                                          Using this neuron model, the rate of the output (6) provides
+                   CSA                                                       CSA
+                                                                                                          an increasingly accurate approximation of real matrix multi-
+                              LIF         16                                                      LIF
+                                                                                                          plications when Qt , K t , and V t are Bernoulli-encoded and
+         Adder
+        ShiftReg
+                              Unit
+                                          ...                      Adder
+                                                                  ShiftReg
+                                                                                                  Unit
+                                                                                                          the encoded sequence is sufficiently long.
+                         >？                                                                  >？
+       Threshold                                                  Threshold
+        Register                                                   Register                                  A detailed description of the SSA algorithm is shown in
+                                                                                                          Algorithm 1. Owing to the binary nature of the representations
+                                  Output 240:256                                                          Qt , K t , and V t , the matrix multiplications in (6) are realized
+                                                                                                          by lightweight logic AND operations and additions instead of
+                                  Output 145:160
+                                  Output 129:144                                                          full-precision multiplication units. In step 5, the N ×N binary
+                                                                                                          attention scores S t are obtained by first calculating the dot-
+Fig. 4. A illustration of the row-block-wise mapping strategy.                                            product between Qt and K t . This is done by accumulating
+                                                                                                          the results of logical AND operations across the dimension
+undergoes a right shift by one bit, representing a leak factor                                            dK . The result is then normalized and used for Bernoulli
+of β = 0.5. The comparator output, which acts as the spiking                                              encoding. Step 9 applies a similar logical AND to compute
+neuron’s output, is sent to the output buffer and subsequently                                            the matrix multiplication between S t and V t and generate
+stored in shared SRAM.                                                                                    probabilistically encoded attention result At .
+   The row-block-wise mapping strategy is compatible with
+                                                                                                          Algorithm 1 Stochastic Spiking Attention (SSA)
+ADC sharing in SAs. As shown Fig. 4, the sharing ratio is 8,
+meaning each SA has 128/8=16 readout units. Consequently,                                                  1: Input: dK × N binary matrix sequences Qt , K t , V t for
+SA 2-1 to SA 2-4 are connected to 16 LIF units. The address                                                   t = 1, . . . , T , dimension dK (corresponding to one atten-
+decoding strategy of the MUX decoder is identical across all                                                  tion head)
+SAs to ensure alignment between local sums. During each                                                    2: Output: dK × N binary matrix sequence At for t =
+MUX decoding cycle, 16 out of 128 output features are                                                         1, . . . , T (corresponding to one attention head)
+obtained.                                                                                                  3: for t = 1 to T do
+   This row-block-wise mapping strategy minimizes data                                                     4:      for each (n, n′ ) in N × N do                  
+                                                                                                                           t              1
+                                                                                                                                            PdK t            t
+movement latency by directly routing local sums from mul-                                                  5:            Sn,n ′ ∼ Bern            Q
+                                                                                                                                              d=1 d,n   ∧  K d,n ′
+                                                                                                                                         dK
+tiple crossbars to LIF units, where they are accumulated and                                               6:      end for
+processed without intermediate buffering. This design reduces                                              7:      Apply casual mask if using a decoder
+memory access bottlenecks, ensuring low latency and high                                                   8:      for each (d, n) in d K × N do                    
+                                                                                                                                             PN
+energy efficiency.                                                                                         9:                Ad,n ∼ Bern N1 n′ =1 Sn,n
+                                                                                                                              t                       t         t
+                                                                                                                                                         ′ ∧ Vd,n′
+
+                                                                                                          10:      end for
+B. SSA Engine                                                                                             11: end for
+   Stochastic spiking attention (SSA) is a software-hardware
+co-designed spike-based attention mechanism optimized to                                                     2) SSA Tile: We designed a customized hardware architec-
+minimize computing and memory access overhead. Unlike                                                     ture, referred to as SSA tiles, optimized for SSA operations.
+ANN-based attention, which relies on computationally in-                                                  As illustrated in Fig. 5, SSA tiles streamline the computation
+tensive real-valued matrix multiplications, and SNN-based                                                 of spike-based attention by utilizing bitwise logic devices. This
+attention, which often uses masked integer addition, SSA                                                  design effectively eliminates the data transfer overhead caused
+utilizes stochastic computing to enable ultra-lightweight binary                                          by writing and reading intermediate results, significantly en-
+operations. This is made possible by the binary and stochastic                                            hancing both the energy efficiency and performance of the
+nature of the queries Q, keys K, and values V , which are                                                 computations.
+encoded using Bernoulli neurons. We introduce the SSA                                                        Each SSA tile is composed of N 2 physical stochastic
+engine following a bottom-up approach.                                                                    attention cells (SACs) arranged in an N × N array. The
+                                                                                                                                                                    7
+
+
+
+                                 An             SSA Tile                                            to generate the Bernoulli samples. The i-th row of At is
+                                                                                                                                            t
+ Input:
+                                                                                                    generated sequentially by holding Si,j     in the (i, j)-th SAU
+                                                                                                    when streaming the j-th row of V t . As a result of this
+                                                                                                    procedure, the ith column within the SSA tile sequentially
+                       SAC            SAC               SAC
+                                                                                                    outputs the i-th row of the attention result At . With N rows
+                                                ...
+                                                                                                    of SACs operating in parallel, the entire matrix At is calculated
+                                                                                                    column by column by one SSA tile.
+                                                                                        Counter
+
+
+
+
+                                                                  -bit Shift Register
+                       SAC            SAC               SAC                                            The Bernoulli encoder uses a comparator to compare the
+                                                ...                                     Register
+                                                                                                    input integer with a pseudo-random number (PRN) gener-
+                                                                                                    ated from an external source. Notably, we do not perform
+                           ...
+
+
+                                          ...
+
+
+
+
+                                                            ...
+                                                                                        Bernoulli
+                                                                                        Encoder     normalization in hardware. Instead, we directly compare the
+                       SAC            SAC               SAC                                         unnormalized input integer I with a random integer sampled
+                                                ...
+                                                                                                    uniformly from (0, Imax ]. In our design, Imax is set to dK
+                                                                                                    within SACs and to N outside of SACs. Choosing dK and
+                       -input          -input           -input
+                      Binary          Binary           Binary
+                                                                                                    N as powers of two can streamline the hardware design by
+Output:                                         ...
+                      Adder           Adder            Adder                                        allowing directly using a fixed-point random integer sampled
+                                                                  External                          from a uniform distribution for the comparison. This approach
+                                                                   PRNG
+                     Bernoulli    Bernoulli     ...   Bernoulli
+                                                                                                    simplifies the design and enables the use of power-efficient
+                     Encoder      Encoder             Encoder
+                                                                                            ?       linear feedback shift register (LFSR)-based PRN generators.
+ Attention(   )                                                                                        3) SSA Engine: The SSA engine is designed for efficient
+                                                                                    Comparator
+                                                                                                    execution of the entire MHSA mechanism in spiking trans-
+Fig. 5. Block diagram of an N × N SSA tile.                                                         formers. It consists of multiple SSA tiles, each serving as an
+                                                                                                    individual attention head. These tiles are stateless, allowing
+                                                                                                    them to be reused across different layers of the transformer,
+N 2 parallelization level in SACs provides several significant                                      enhancing both area and energy efficiency. Additionally, the
+benefits. First, it enables the simultaneous pairing of each                                        SSA engine incorporates an LFSR array that generates all the
+query with every key-value pair. This is achieved by streaming                                      necessary PRNs for the Bernoulli neurons, ensuring a con-
+K t and V t across columns and Qt across rows using 1-bit data                                      sistent supply of random numbers required for the stochastic
+buses. Additionally, this architecture allows for the parallel                                      elements of the model.
+computation of all N × N elements of the attention score S t                                           To further optimize power and area efficiency, the SSA
+matrix. The (i, j)-th element of S t is computed within the                                         engine implements a custom reuse strategy for random number
+corresponding (i, j)-th SAC. Given that SOTA transformers                                           generation, as described in [48]. Here we implement a 32-bit
+for edge AI applications typically operate with N values                                            LFSR and tap all 4 bytes from the LFSR instead of just the
+ranging from 16 to 128, our design incorporates N 2 physical                                        lowest 8-bits [49]. This approach maximizes the utilization of
+SAC units to ensure scalability and efficiency.                                                     generated random numbers, conserving both power and area.
+   To calculate the (i, j)-th element of S t , totally dK AND                                       By leveraging these design strategies, the SSA engine achieves
+operations are needed between the elements of the i-th row                                          a balance of high performance and resource efficiency.
+of Qt and the j-th row of K t . These dK AND operations
+are executed serially in time within the (i, j)-th SAC via                                          C. Dataflow
+an AND gate. The summation is realized by counting the                                                 Fig. 6 illustrates the inference data flow of Xpikeformer,
+AND output using a counter with unsigned INT8 (UINT8)                                               featuring the alternating operation of the AIMC engine and
+output, accommodating a key dimension dK up to 28 = 256.                                            the SSA engine, with data exchange facilitated through on-
+After every dK clock cycles, the summation is buffered to a                                         chip SRAM.
+Bernoulli encoder, where it is normalized by dK and used as                                            The AIMC engine serially drives input data through each
+                                                     t
+a probability to generate the Bernoulli sample Si,j     .                                           forward propagation or fully connected layer. Each AIMC
+                                        t
+   To calculate the attention output A , the generated attention                                    cycle, except for the first and last, includes two feedforward
+          t
+scores Si,j   are held in the SAC for dK clock cycles. The                                          layers and one fully connected layer to project embeddings
+                                    t
+local attention result between Si,j     and the j-th row of V t                                     into the QKV feature space. In each layer, data is processed
+is calculated using another AND gate, serving as the output                                         in a token-wise event-driven manner: the spike encoding of
+of the SAC. To avoid using external delays for V t , a dK -bit                                      each token embedding is input sequentially over T time steps,
+shift register operating on a first-in-first-out basis is deployed                                  followed by cycling through N tokens. This approach allows
+in each SAC to temporarily buffer V t and align it with S t .                                       the membrane potential stored in the LIF unit’s register to
+This allows for the simultaneous streaming of Qt , K t , and                                        accumulate directly and reset upon token switching. Looping
+V t within the SSA block, facilitating pipelining over time                                         N tokens for each time step t would require storing and
+steps. The summation of the local attention results is achieved                                     reading back membrane potentials, leading to unnecessary data
+by adding the outputs of each column of SACs using an N -                                           transmission overhead.
+input binary adder. The sum is then sent to another Bernoulli                                          Between layers within the same AIMC engine, N token
+encoder, where it is normalized by N and used as a probability                                      embeddings are forwarded in a pipelined manner. During
+                                                                                                                                                                   8
+
+
+
+                                                                                   Time
+                   AIMC Engine            SSA Engine         AIMC Engine                ...        SSA Engine        AIMC Engine        SSA Engine   AIMC Engine
+
+
+                  Input:                                        Output:                       Input:
+
+
+
+                                                                    Attention(      )
+                                                                                              Repeat for each             :
+                           Repeat for each               :
+
+                                                                                                           Spiking            Spiking
+                                    ...                                                                    Neuron             Neuron
+                                                SSA                        Merge                            Block              Block
+                                             Streaming                     Heads                               2                  1
+                                    ...                       ...
+                                                                                                                                                           Split
+                                                                                                                                                           Heads
+                                    ...                                                                         Output:
+
+
+
+
+Fig. 6. Illustration of Xpikeformer inference dataflow.
+
+
+
+the forward transmission of each token embedding, the spike                                        Xpikeformer periodically measures the output current of sev-
+encoding over T time steps is also pipelined between layers.                                       eral SA columns using a known calibration input voltage. This
+   The SSA engine operates multiple SSA tiles in parallel,                                         allows Xpikeformer to track global shifts in conductance. Dur-
+with each tile handling one head of the MHSA mechanism.                                            ing inference, the outputs are scaled by a factor derived from
+As previously discussed, queries, keys, and values in SSA                                          these calibration measurements. Calibration can be performed
+tiles are transmitted in a matrix-wise event-driven manner.                                        while tiles are idle, with current summation implemented
+Specifically, the three matrices Qt , K t , and V t are streamed                                   within the system’s control unit to minimize overhead.
+to the SSA tile column by column over dK clock cycles. The
+subsequent matrices Qt+1 , K t+1 , and V k+1 are transmitted in                                                           VI. ACCURACY E VALUATION
+the next dK clock cycles. When pipelining in time steps, the
+computational delay of an SSA tile (from first input to first                                         The inference accuracy of Xpikeformer is validated in
+output) is approximately dK clock cycles.                                                          hardware-simulated environments using AIHWKit. We evalu-
+                                                                                                   ate the encoder-only and decoder-only architectures separately,
+                                                                                                   each through a dedicated task.
+            V. T RAINING AND I NFERENCE D ETAILS
+A. Integrated Framework for Hybrid Training
+                                                                                                   A. Accuracy Results
+   To effectively train Xpikeformer, we adopt a hybrid frame-
+work that integrates SpikingJelly [50] and the IBM Analog                                             Task 1 (Image Classification): To evaluate the accuracy
+Hardware Acceleration Toolkit (AIHWKit) [51]. SpikingJelly                                         performance of the encoder-only transformer, we select the
+defines and manages the spiking components of Xpikeformer,                                         image classification task, as it requires the model to extract
+particularly the LIF neurons and the SSA. AIHWKit is adopted                                       and process relevant features from the entire input image
+to simulate the nonidealities inherent in AIMC.                                                    in parallel. We train three different-sized vision transformers
+   We adopt a two-stage training procedure:                                                        (ViTs) using the Xpikeformer implementation from scratch on
+   1) Conventional training (CT) is first performed in an ideal                                    the CIFAR10 and ImageNet-1K datasets, following the train-
+       full-precision environment.                                                                 ing strategy introduced in Section V-A. Inference accuracy is
+   2) The trained parameters are then fine-tuned using                                             tested on the evaluation dataset using the simulation platform
+       hardware-aware training (HWAT), where noise is in-                                          described in Section V-B. We compare the Xpikeformer results
+       jected during forward propagation to simulate PCM-                                          against two baseline implementations: (i) ANN-ViT (GPU) –
+       based hardware imperfections, while backward propa-                                         Vanilla ViT trained with mixed precision (FP16/32) on GPU
+       gation remains ideal.                                                                       [2] and (ii) SNN-ViT (GPU) – SOTA software design of SNN-
+                                                                                                   based ViT trained with FP16/32 on GPU [13]. The parameters
+   During training, forward propagation outputs are averaged
+                                                                                                   of both baselines are INT8-quantized during the test stage.
+over time steps to compute the loss, which follows a definition
+                                                                                                      The accuracy results are summarized in Table III. For SNN-
+similar to that used in ANN transformer training. The network
+                                                                                                   based models, the minimum spike encoding length T required
+is trained using the AdamW optimizer [52].
+                                                                                                   for convergence (defined as ∆Acc < 0.1) is indicated in brack-
+                                                                                                   ets. Xpikeformer generally requires a longer spike encoding
+B. Global Drift Compensation                                                                       length to converge compared to the SNN-ViT (GPU) due to
+  To mitigate conductance drift in PCM devices within the                                          hardware noise and stochasticity introduced by Bernoulli neu-
+AIMC engine, we implement a global drift compensation                                              rons. Despite this, Xpikeformer achieves competitive results,
+(GDC) method based on [53]. During the calibration phase,                                          attaining 84.74% on CIFAR-10 and 70.50% on ImageNet,
+                                                                                                                                             9
+
+
+
+                        TABLE III
+    ACCURACY P ERFORMANCE ON I MAGE C LASSIFICATION TASKS
+
+                         Size /      CIFAR10        ImageNet-1K
+        Model
+                       Depth-Dim    Accuracy (T )   Accuracy (T )
+                         4-384           83.41            -
+     ANN-ViT [2]
+                         6-512           86.02          65.58
+       (GPU)
+                         8-768             -            71.64
+                         4-384         82.83 (5)          -
+     SNN-ViT [13]
+                         6-512         85.68 (4)      65.42 (6)
+       (GPU)
+                         8-768             -          71.13 (4)
+                         4-384        82.66 (11)          -
+   Xpikeformer-ViT
+                         6-512        84.74 (10)      63.36 (8)      Fig. 7. Long-term ImageNet accuracy of Xpikeformers trained with different
+   (Simulated ASIC)
+                         8-768             -          70.50 (7)      strategies and drift compensation methods: conventional training (CT) + no
+                                                                     compensation (NC), CT + global drift compensation (GDC), hardware-aware
+                                                                     training (HWAT) + NC, and HWAT+GDC.
+                        TABLE IV
+ACCURACY P ERFORMANCE ON I N -C ONTEXT L EARNING FOR W IRELESS
+                   S YMBOL D ETECTION
+                                                                     (BER) metric, where a lower BER indicates higher detection
+                        Size /     2 × 2 Antennas   4 × 4 Antennas
+                                                                     accuracy. The number of input query-answer pairs is fixed
+      Model                                                          at 18. We compare the performance of Xpikeformer with
+                      Depth-Dim       BER (T )         BER (T )
+   ANN-GPT [3]          4-256          0.051             0.141       the following baselines: (i) ANN-GPT (GPU) – a GPT-2-
+      (GPU)             8-512          0.049             0.077       like decoder-only transformer running on GPUs [3], and (ii)
+  SNN-GPT [30]          4-256        0.061 (6)        0.196 (7)      SNN-GPT (GPU) – the SOTA software design of an SNN-
+      (GPU)             8-512        0.058 (4)        0.086 (4)
+ Xpikeformer-GPT        4-256        0.067 (6)        0.205 (11)     based solution running on GPUs [30]. The baseline models
+ (Simulated ASIC)       8-512        0.063 (4)         0.091(5)      are trained using FP16/32 precision and evaluated with INT8
+                                                                     quantization during the test phase.
+                                                                        The results are summarized in Table IV. On the 2×2
+with accuracy gaps of less than 1.5% compared to same-sized          antenna task, both 4-256 and 8-512 Xpikeformers achieve a
+ANN-ViT models.                                                      low BER using the same spike encoding length (T = 6 and
+   While Xpikeformer consistently requires a longer spike            T = 4, respectively) as SNN-GPT (GPU). This is because the
+encoding length than SNN-ViT (GPU) for the same task,                task, characterized by a small number of classes, is relatively
+the additional encoding overhead is smaller on ImageNet              simple. However, as the number of antennas increases, the
+compared to CIFAR-10. This is because transformers gener-            number of classes grows exponentially, leading to degraded
+alize poorly on limited data but exhibit greater robustness to       performance for both small-sized SNN-GPT and Xpikeformer-
+hardware noise and stochasticity when trained on larger, more        GPT models. Scaling up Xpikeformer-GPT from 4-256 to 8-
+diverse datasets.                                                    512 brings greater performance gains than SNN-GPT, reducing
+   Scaling up the model size further improves Xpikeformer’s          BER by 0.114 with 6 fewer time steps, compared to a
+performance while reducing the required spike encoding               0.110 reduction with 3 fewer time steps for SNN-GPT. This
+length. For instance, increasing the model size from 6-512 to        improvement is attributed to the larger model’s ability to better
+8-768 reduces the spike encoding length requirement from 8 to        learn and average out hardware noise and stochastic variations.
+7, while the accuracy gap relative to ANN-ViT decreases from
+2.22% to 1.14%. This improvement occurs because the larger           B. Ablation Study: Long-term Accuracy Performance
+model dimensions effectively average out hardware noise and             To evaluate the impact of NVM conductance drift on perfor-
+Bernoulli coding uncertainties.                                      mance, we analyzed Xpikeformer’s accuracy over time under
+   Task 2 (In-Context Learning for Wireless Communication):          different training strategies and drift compensation methods.
+Decoder-only transformers are well-suited for tasks involving        Four Xpikeformer-ViTs of size 8-768 were trained using all
+temporal sequential dependencies, particularly demonstrating         combinations of two training strategies—CT and HWAT—and
+the ability of in-context learning (ICL). In ICL, the model is       two calibration settings—with and without GDC.
+presented with a sequence of query-answer pairs following a             Without GDC or HWAT, accuracy started at 67.6% but
+consistent pattern. Without explicit training on this pattern, it    dropped significantly to below 50% within one hour. With
+predicts the answer to a new query by attending to preceding         HWAT but no GDC, accuracy remained above 70% initially
+query-answer pairs within the input sequence. This capability        but rapidly declined to below 65% within an hour due to
+has been shown to enable wireless receivers to accurately            conductance drift. With GDC alone, accuracy improved to
+classify symbols, even when the signals have passed through          69.9% and remained above 60% for one year. Combining
+unknown wireless channels and been corrupted by nonlinear-           HWAT and GDC achieved the best stability, with accuracy
+ities [3], [4].                                                      dropping by only 2.09% after one year. Similar trends were
+   Following the formulation in [30], we adopt the two-symbol        observed for other tasks tested in Section VI-A.
+detection task, assuming 2×2 and 4×4 antenna configurations.            We also compared the long-term accuracy of Xpikeformer-
+A larger number of antennas implies higher computational             ViTs (6-512 vs. 8-768), as shown in Table VI-B. Despite
+complexity. Performance is evaluated using the bit error rate        having fewer parameters, the 6-512 model exhibits a larger
+                                                                                                                                               10
+
+
+
+                            TABLE V
+X PIKEFORMER L ONG -T ERM (O NE Y EAR ) ACCURACY ON I MAGE N ET-1K
+
+  Size     CT+NC          HWAT+NC           CT+GDC         HWAT+GDC
+ 6-512   9.63 (-56.73)   11.32 (-55.04)   54.37 (-11.99)   60.41 (-2.95)
+ 8-768   6.10 (-64.40)    5.46 (-65.04)    62.80 (-7.70)   68.41 (-2.09)
+
+
+
+accuracy drop (−2.95% after one year) compared to the 8-768
+model. The smaller model also gained less benefit from GDC
+alone. This is because larger model dimensions help average
+out hardware noise uncertainties and the stochastic component
+of conductance drift during GDC calibration.
+                                                                                          (a)                                (b)
+               VII. E FFICIENCY E VALUATION
+                                                                           Fig. 8. Energy consumption comparison between Xpikeformer and baseline
+A. Energy Consumption                                                      implementations on downstream application (a) ImageNet-1K and (b) ICL
+   We evaluate the runtime energy consumption of the entire                symbol detection (4 × 4 antennas).
+network in two parts: computational energy and runtime
+memory access energy consumption.
+   1) Baselines: We compare the runtime energy consumption                 spike encoding length T for Xpikeformer and SNN-Digi-Opt,
+of Xpikeformer with three baseline architectures: (i) ANN-                 respectively, as determined in Section VI-A, to achieve their
+Quant – a SOTA fully digital accelerator for ANN-based                     converged accuracy. This ensures a fair comparison of compu-
+transformer models, as reported in [34]. This baseline serves              tational efficiency, as both per-inference energy consumption
+as a benchmark for fully digital ANN architectures. (ii) ANN-              and latency scale directly with the spike encoding length
+Quant+AIMC – this baseline modifies (i) by replacing the                   in Xpikeformer and the baseline hardware implementations
+feed-forward and fully connected layers with AIMC crossbars                considered.
+based on PCM, reducing energy costs associated with MAC                       3) Results: We evaluate the energy consumption on both
+operations. (iii) SNN-Digi-Opt – this baseline assumes an                  Task 1 (ImageNet) and Task 2 (4×4 antennas) across different
+ideal digital implementation of spiking transformer using the              model sizes. The energy consumption comparisons between
+arithmetic operations proposed in [15].                                    Xpikeformer and the baseline implementations are shown in
+   2) Evaluation Methods: For the AIMC crossbars used in                   Fig. 8. It can be observed that Xpikeformer consistently con-
+both Xpikeformer and the ANN-Quant+AIMC, we customize                      sumes less energy than all three baseline models across vary-
+the DNN+NeuroSim V1.4 framework [32] with the parameters                   ing model sizes. Specifically, on ImageNet-1K, Xpikeformer
+specified in Table II to simulate the hardware implementations             achieves 9.6-13× energy reduction than ANN-Quant and 5.4-
+on a layer-by-layer basis. The area and energy estimates of                5.9× energy reduction than ANN-Quant+AIMC. Notably, de-
+the SSA tile were obtained by performing synthesis using the               spite using more timesteps to achieve comparable accuracy,
+Cadence 45nm process design kit (PDK).                                     Xpikeformer still consumes 1.8-1.9× less energy than SNN-
+   To estimate the baseline energy consumptions, we consider               Digi-Opt. Similar results go for the ICL symbol equalization
+all digital operations (MAC, AC, MUL, ADD, and logic                       task, where Xpikeformer achieves energy reduction 7-14.5×
+gates) using energy metrics based on 45 nm CMOS tech-                      than ANN-Quant, 2.6-4.0× than ANN-Quant+AIMC, and 1.6-
+nology as reported in [54], [55], following the approach in                1.8× than SNN-Digi-Opt. As the model scales up, the energy
+[56]. We assume that there is sufficient on-chip cache to                  efficiency becomes more evident due to the reduced require-
+keep the model weights loaded for the entire duration of                   ment for spike encoding length T .
+the hardware operation. Therefore, the energy consumption                     Several key insights can be drawn from comparing computa-
+for loading model parameters is excluded from our runtime                  tional energy consumption. Firstly, the results for ANN-Quant
+memory access energy calculations. For all memory access                   demonstrate that MAC operations are highly energy-hungry,
+operations required to read or write input data, output data,              usually dominating more than 90% computing energy even
+and intermediate results, we assume that all necessary data is             when operating at low INT8 precision. This energy overhead
+read from or written to the on-chip SRAM. For all input data,              represents a bottleneck that traditional quantized ANN-based
+output data, and intermediate results in ANNs, as well as pre-             transformer accelerators cannot overcome. In contrast, the
+activations in SNNs, we assume they are quantized to INT8                  other implementations address this challenge using different
+and stored in 8-bit SRAM when necessary. For the fully digital             approaches: ANN-Quant+AIMC and Xpikeformer leverage
+configurations ANN-Quant and SNN-Digi-Opt, we assume all                   AIMC to achieve efficient MVM in fully connected and linear
+model parameters are also quantized to INT8 and pre-loaded                 layers, while SNN-Digi-Opt replaces MAC operations with
+into the cache.                                                            masked ADD operations, taking advantage of the binary nature
+   For SNN implementations, as both computing energy and                   of SNN activations. Additionally, both SNN implementations
+runtime memory access energy are directly proportional to                  avoid energy-intensive operations such as softmax and layer
+the spike encoding length T , we use the minimum required                  normalization, which remain necessary in ANN accelerators.
+                                                                                                                                             11
+
+
+
+                    2.7%
+                                                         ADC                       Latency Latency Breakdown
+                                                                                           Breakdown                      Speedup Speedup
+          18.9%
+                                                         Accumulation
+                                       2.0% 12.1%
+                                                         Peripheries
+     AIMC
+     SSA
+     Other
+                                                          85.9%
+                             78.4%
+
+
+
+Fig. 9. Breakdown of Xpikeformer computational energy.
+                                                                                                 PeripheriesPeripheries
+
+                                                                                           (a)                                     (b)
+   Although Xpikeformer requires a few additional timesteps,
+it still consumes less computational energy than SNN-Digi-              Fig. 10. (a) Latency breakdown of Xpikeformer and (b) Latency comparison
+Opt. This advantage stems from two key factors: (1) For the             with ANN and SNN transformers on GPU.
+attention mechanism, SNN-Digi-Opt uses masked addition and
+integer multiplication to compute attention scores, whereas             energy. This is because ADC multiplexing requires a dedicated
+Xpikeformer employs a more energy-efficient logic-gate-based            decoder and control logic, making these components relatively
+SSA engine. (2) For feed-forward layers, while AIMC requires            more energy-intensive than crossbar itself. Additionally, the
+complex peripheral circuitry and ADCs, but is generally                 SA mapping strategy introduces additional control overhead
+more energy-efficient per timestep than the digital masked              between shared SRAM and local SA buffers. This overhead is
+addition approach. Specifically, AIMC computes MVM with                 unavoidable in this work due to the crossbar size limitations
+O(1) complexity, whereas the digital method requires O(n)               discussed in Section IV-A. Finally, accumulation processes,
+operations, with n being the dimension of the vector.                   including differential adders and LIF units, which involve
+   From the runtime memory access perspective, we observe               digital operations, contribute 12.1% of AIMC energy.
+that both ANN-Quant and ANN-Quant+AIMC consume the
+same high amount of memory access energy, as AIMC does
+not reduce intermediate data storage overhead. In contrast,             B. Latency and Area Evaluation
+both SNN implementations achieve lower memory access                       The latency breakdown of Xpikeformer is shown in
+energy compared to ANN accelerators, primarily owing to the             Fig. 10(a). More than 92% of the latency is attributed to
+softmax-free SNN attention mechanism and the binary nature              peripheral circuit operations, as these handle global data
+of SNN activations. However, this memory efficiency benefit             movement, routing, and control tasks, which are inherently
+diminishes when the number of timesteps T exceeds the bit               sequential and cannot be parallelized like core computations.
+width of the ANN activation datatype.                                   Additionally, decoding, buffering, and interconnect operations
+   Xpikeformer achieves significantly lower memory access               scale with model size, further contributing to the overhead.
+energy compared to SNN-Digi-Opt, because (1) SNN-Digi-                  In contrast, the actual AIMC computing latency is negligible,
+Opt requires storing T non-binary pre-activations from every            accounting for only 0.3% of the total latency. The SSA
+crossbar output column before performing LIF calculations,              computation contributes only 2.0% of the overall latency.
+whereas Xpikeformer’s rowblock-wise mapping strategy in its                We compare the per-inference latency of Xpikeformer with
+AIMC engine eliminates this bottleneck. (2) The streamlined             two same-sized baseline implementations: an ANN-based
+design of the SSA engine eliminates the need to store inter-            transformer and spiking transformer as in [15], both deployed
+mediate attention scores.                                               on a GPU (Nvidia RTX A2000), adopting the minimum spik-
+   Fig. 9 presents the breakdown of Xpikeformer computa-                ing encoding lengths as in Section VI-A. Results are shown in
+tional energy consumption. The majority of the computing                Fig. 10(b). Despite the extra temporal dimension, Xpikeformer
+energy is consumed by the AIMC engine, accounting for                   achieves a 2.18× speedup over the GPU implementation
+78.4% of the total computational energy. The SSA engine                 of ANN-based transformers, benefiting from fast in-memory
+contributes 18.9%, while other components, such as residual             MVM and the parallel, streamlined SSA design. Meanwhile,
+units, collectively account for 2.7%. A more detailed break-            the spiking transformer suffers from poor GPU efficiency due
+down of the AIMC engine’s energy consumption is shown                   to precision mismatches and lack of hardware optimization. In
+on the right side of Fig. 9. Notably, the ADC consumes                  contrast, Xpikeformer delivers a 6.85× speedup over it.
+only 2.0% of the AIMC energy. This efficiency is achieved                  The area of Xpikeformer’s computing engines is estimated
+by sharing ADCs across multiple read-out channels through               using the DNN+NeuroSim V1.4 framework and the Cadence
+multiplexing (Xpikeformer uses a sharing ratio of 8, bal-               synthesis tool at the 45 nm technology node. The total
+ancing energy efficiency and latency), which significantly              chip area of Xpikeformer is 784 mm2 , with the majority
+reduces static power consumption that would otherwise be                (76.5%) occupied by periphery circuits and interconnections.
+incurred by using dedicated ADCs for each channel. We                   The AIMC computing core, which includes crossbars, ADCs,
+also observe that periphery circuits (decoders, multiplexers,           and accumulation units, accounts for 11.5% of the area. The
+switch matrices, buffers, etc.) consume 85.9% of the AIMC               SSA engine, being more area-efficient than traditional ALUs
+                                                                                                                                                           12
+
+
+
+                              TABLE VI                                                       D. Scalability of Xpikeformer
+                 C OMPARISON W ITH SOTA ACCELERATORS
+                                                                                                For the SSA engine, separating SSA tiles from the LFSR
+ Performance Metric                [34]               [24]             Xpikeformer           array improves area efficiency by centralizing PRN generation
+ Paradigm                        ANN                ANN                   SNN                in the shared LFSR array, leaving only basic logic gates and
+ MAC Implementation           Digital ALU       ReRAM-AIMC            PCM-AIMC
+ MHSA Implementation          Digital ALU          DIMC                   SSA
+                                                                                             bit-wise counters in the tiles. In contrast, traditional fixed-
+ Technology                      65 nm             32 nm                 45 nm               point ALU arrays with adders and multipliers incur higher
+ Weight                          INT8           INT8 (Equiv.)        INT5 (Equiv.)
+ Activation Precision           INT8/32             INT8            Multi-Step Binary
+                                                                                             area overhead. The SSA engine’s 1-bit I/O buses, with no in-
+ Frequency                     143 MHz            200 MHz              200 MHz               termediate storage or operations, ensure high data-dimensional
+ Area (mm2 )                     273.0                –                    784               flexibility. Its stateless, modular design supports both head-
+ Energy/Inference* (mJ)           3.97               2.04                  0.30
+ Latency/Inference* (ms)          2.26              4.13†                 2.18†              wise and layer-wise reuse, minimizing resource duplication
+   * Energy and latency results have been normalized to a consistent benchmark task          and enabling efficient scaling to larger attention heads and
+   (ImageNet-1K classification on ViT-8-768 with a patch size of 16 × 16) to ensure          additional layers without significant hardware overhead.
+   fair comparison across different architectures. For [34], we assume their original
+   chip area is fixed and scale the overall latency proportionally to the increase in task      Like most NVM-based architectures, the AIMC engine in
+   size. For [24], we assume that AIMC resources are sufficient to accommodate all           Xpikeformer scales spatially to accommodate larger weight
+   model parameters, while the DIMC resources remain fixed as originally reported,
+   with attention latency scaled up accordingly.                                             matrices. By leveraging the multi-level programming capa-
+   †
+      The latency results for [24] and Xpikeformer account for both computational            bility of PCM devices, it achieves a 3× reduction in re-
+   latency and data movement from memory to computing cores.
+                                                                                             quired memory devices compared to 1-bit ReRAM cells [24].
+                                                                                             With similar planar cell areas (4F 2 –8F 2 ) to ReRAM, PCM
+                                                                                             crossbars provide denser weight storage, improving efficiency
+due to its use of lightweight logic gates as computing units,
+                                                                                             in device count and layout area for large-scale models. The
+contributes 12% of the total area.
+                                                                                             row-block-wise mapping strategy further enhances memory
+                                                                                             utilization and weight distribution. For very-large models,
+                                                                                             Xpikeformer can scale further by connecting multiple nodes
+C. Comparison With SOTA Hardware Accelerators                                                via chip-to-chip interconnects.
+   To the best of the authors’ knowledge, Xpikeformer is the
+first hardware accelerator designed for spiking transformers.
+                                                                                                                  VIII. C ONCLUSION
+We compare Xpikeformer with two SOTA ASIC accelerators
+for ANN-based transformers, summarized in Table VI.                                             In this paper, we introduced Xpikeformer, a hybrid analog-
+   SwiftTron [34] is a fully digital ASIC accelerator designed                               digital hardware architecture designed to accelerate spiking
+for quantized transformers. It replaces traditional floating-point                           neural network (SNN)-based transformer models. Xpikeformer
+ALUs with fixed-point computing units and approximates                                       integrates analog in-memory computing (AIMC) for feed-
+nonlinear operations using second-order polynomials. The                                     forward and fully connected layers and a stochastic spiking
+reported chip area of SwiftTron is 2.9× smaller than that of                                 attention (SSA) engine for efficient attention computation,
+Xpikeformer. However, this reduction is achieved by reusing                                  mitigating the inefficiencies of deploying spiking transformers
+computational resources through time multiplexing, which                                     on general-purpose platforms.
+introduces additional energy consumption and latency due to                                     Trained from scratch, spiking transformer models running
+frequent parameter reads during inference. Benchmarked on                                    on Xpikeformer achieve competitive accuracy on ImageNet-
+the same task, Xpikeformer achieves similar latency while                                    1K classification and wireless communication symbol de-
+consuming 13× less energy by leveraging AIMC for feed-                                       tection tasks while maintaining high accuracy for over a
+forward layers and lightweight logic-gate-based computations                                 year. Although the non-reusable nature of AIMC introduces
+for the attention mechanism.                                                                 an area tradeoff compared to non-AIMC digital accelerators
+   X-Former [24] is an in-memory accelerator for ANN trans-                                  implementing time multiplexing, Xpikeformer achieves 13×
+formers that employs AIMC crossbars for feed-forward layers                                  reduction in energy consumption at approximately the same
+and DIMC for attention. Note that X-Former architecture uses                                 throughput as the SOTA digital accelerator for ANN-based
+1-bit ReRAM for weight storage, which translates to lower                                    transformers.
+weight storage density compared to Xpikeformer’s multi-bit                                      In this work, we adopted NeuroSim’s crossbar assumptions
+PCM devices, potentially increasing the overall area for AIMC                                to facilitate energy, latency, and area evaluations. However,
+implementation. For MHSA computation, X-Former employs                                       this approach may not fully capture the performance of SOTA
+DIMC units based on SRAM arrays, which require writing                                       AIMC technology. Practical implementations of NVM cross-
+Q and V matrices into SRAM crossbars during inference,                                       bars often adopt different input strategies, such as using input
+and storing intermediate results in the memory, leading to                                   spikes to drive device conductivity through word lines and
+additional latency. In contrast, Xpikeformer leverages the SSA                               employing inverted voltage spikes and differential-input ADCs
+engine to eliminate online memory-write operations and inter-                                to represent positive and negative values in the crossbar [57].
+mediate storage while also avoiding the complex peripherals                                  Future work will explore more energy-efficient NVM crossbar
+associated with DIMC. Overall, Xpikeformer achieves a 6×                                     designs, advanced materials like 2D semiconductors, and real-
+reduction in inference energy and a 1.9× speedup over X-                                     world testing to further enhance Xpikeformer’s efficiency and
+Former.                                                                                      applicability in energy-constrained environments.
+                                                                                                                                                            13
+
+
+
+                              R EFERENCES                                        [21] A. Sebastian, M. Le Gallo, R. Khaddam-Aljameh, and E. Eleftheriou,
+                                                                                      “Memory devices and applications for in-memory computing,” Nature
+ [1] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,          nanotechnology, vol. 15, no. 7, pp. 529–544, 2020.
+     Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” Advances in      [22] X. Yang, B. Yan, H. Li, and Y. Chen, “ReTransformer: ReRAM-based
+     neural information processing systems, vol. 30, 2017.                            Processing-in-Memory Architecture for Transformer Acceleration,” in
+ [2] A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn, X. Zhai,                2020 IEEE/ACM International Conference On Computer Aided Design
+     T. Unterthiner, M. Dehghani, M. Minderer, G. Heigold, S. Gelly,                  (ICCAD), 2020, pp. 1–9.
+     J. Uszkoreit, and N. Houlsby, “An image is worth 16x16 words: Trans-        [23] C. Yang, X. Wang, and Z. Zeng, “Full-circuit implementation of trans-
+     formers for image recognition at scale,” in 9th International Conference         former network based on memristor,” IEEE Transactions on Circuits
+     on Learning Representations, ICLR 2021, Virtual Event, Austria, May              and Systems I: Regular Papers, vol. 69, no. 4, pp. 1395–1407, 2022.
+     3-7, 2021, 2021.                                                            [24] S. Sridharan, J. R. Stevens, K. Roy, and A. Raghunathan, “X-former:
+ [3] M. Zecchin, K. Yu, and O. Simeone, “In-context learning for MIMO                 In-memory acceleration of transformers,” IEEE Transactions on Very
+     equalization using transformer-based sequence models,” in Proceedings            Large Scale Integration (VLSI) Systems, vol. 31, no. 8, pp. 1223–1233,
+     of the Workshop on the Impact of Large Language Models on 6G                     2023.
+     Networks, IEEE International Conference on Communications (ICC),            [25] E. J. Merced-Grafals, N. Dávila, N. Ge, R. S. Williams, and J. P.
+     2024.                                                                            Strachan, “Repeatable, accurate, and high speed multi-level program-
+ [4] V. Rajagopalan, V. T. Kunde, C. S. K. Valmeekam, K. Narayanan,                   ming of memristor 1T1R arrays for power efficient analog computing
+     S. Shakkottai, D. Kalathil, and J.-F. Chamberland, “Transformers are ef-         applications,” Nanotechnology, vol. 27, no. 36, p. 365202, 2016.
+     ficient in-context estimators for wireless communication,” arXiv preprint   [26] S. Yang, H. Wang, Y. Pang, M. R. Azghadi, and B. Linares-Barranco,
+     arXiv:2311.00226, 2023.                                                          “Nadol: Neuromorphic architecture for spike-driven online learning by
+ [5] Y. Wang, Z. Gao, D. Zheng, S. Chen, D. Gündüz, and H. V. Poor,                 dendrites,” IEEE Transactions on Biomedical Circuits and Systems,
+     “Transformer-empowered 6G intelligent networks: From massive MIMO                2023.
+     processing to semantic communication,” IEEE Wireless Communica-             [27] A. Alaghi and J. P. Hayes, “Survey of stochastic computing,” ACM
+     tions, vol. 30, no. 6, pp. 127–135, 2023.                                        Transactions on Embedded Computing Systems, vol. 12, no. 2s, pp. 1–
+ [6] C. She and L. Qing, “SpikeFormer: Image reconstruction from the                  19, 2013.
+     sequence of spike camera based on transformer,” in ICIGP 2022: The 5th      [28] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, “BERT: Pre-
+     International Conference on Image and Graphics Processing, Beijing,              training of deep bidirectional transformers for language understanding,”
+     China, January 7 - 9, 2022. ACM, 2022, pp. 72–78.                                in Proceedings of the 2019 Conference of the North American Chapter
+ [7] S. Yang, J. Wang, X. Hao, H. Li, X. Wei, B. Deng, and K. A.                      of the Association for Computational Linguistics: Human Language
+     Loparo, “Bicoss: Toward large-scale cognition brain with multigranular           Technologies, Volume 1, 2019, pp. 4171–4186.
+     neuromorphic architecture,” IEEE Transactions on Neural Networks and        [29] T. Brown, B. Mann, N. Ryder, M. Subbiah, J. D. Kaplan, P. Dhariwal,
+     Learning Systems, vol. 33, no. 7, pp. 2801–2815, 2022.                           A. Neelakantan, P. Shyam, G. Sastry, A. Askell et al., “Language mod-
+                                                                                      els are few-shot learners,” Advances in neural information processing
+ [8] S. Yang, H. Wang, Y. Pang, Y. Jin, and B. Linares-Barranco, “Integrating
+                                                                                      systems, vol. 33, pp. 1877–1901, 2020.
+     visual perception with decision making in neuromorphic fault-tolerant
+                                                                                 [30] Z. Song, O. Simeone, and B. Rajendran, “Neuromorphic in-context
+     quadruplet-spike learning framework,” IEEE Transactions on Systems,
+                                                                                      learning for energy-efficient MIMO symbol detection,” in 2024 IEEE
+     Man, and Cybernetics: Systems, vol. 54, no. 3, pp. 1502–1514, 2024.
+                                                                                      25th International Workshop on Signal Processing Advances in Wireless
+ [9] S. Yang, J. Wang, B. Deng, M. R. Azghadi, and B. Linares-
+                                                                                      Communications (SPAWC), 2024, pp. 1–5.
+     Barranco, “Neuromorphic context-dependent learning framework with
+                                                                                 [31] M. Isik, H. Vishwamith, K. Inadagbo, and I. Dikmen, “HPCNeuroNet:
+     fault-tolerant spike routing,” IEEE Transactions on Neural Networks and
+                                                                                      Advancing neuromorphic audio signal processing with transformer-
+     Learning Systems, vol. 33, no. 12, pp. 7126–7140, 2022.
+                                                                                      enhanced spiking neural networks,” arXiv preprint arXiv:2311.12449,
+[10] W. Maass, “Networks of spiking neurons: The third generation of neural
+                                                                                      2023.
+     network models,” Neural networks, vol. 10, no. 9, pp. 1659–1671, 1997.
+                                                                                 [32] X. Peng, S. Huang, H. Jiang, A. Lu, and S. Yu, “DNN+NeuroSim
+[11] M. Yao, J. Hu, Z. Zhou, L. Yuan, Y. Tian, B. Xu, and G. Li, “Spike-              V2.0: An end-to-end benchmarking framework for compute-in-memory
+     driven transformer,” Advances in neural information processing systems,          accelerators for on-chip training,” IEEE Transactions on Computer-
+     vol. 36, pp. 64 043–64 058, 2023.                                                Aided Design of Integrated Circuits and Systems, vol. 40, no. 11, pp.
+[12] Z. Xu, C. Nie, Z. Deng, Q. Guo, X. Wang, Z. He et al., “SpikeZIP-                2306–2319, 2020.
+     TF: Conversion is all you need for transformer-based snn,” in Forty-first   [33] H. Shao, J. Lu, M. Wang, and Z. Wang, “An efficient training accel-
+     International Conference on Machine Learning, 2024.                              erator for transformers with hardware-algorithm co-optimization,” IEEE
+[13] Z. Zhou, Y. Zhu, C. He, Y. Wang, S. Yan, Y. Tian, and L. Yuan,                   Transactions on Very Large Scale Integration (VLSI) Systems, vol. 31,
+     “Spikformer: When spiking neural network meets transformer,” in The              no. 11, pp. 1788–1801, 2023.
+     Eleventh International Conference on Learning Representations, ICLR         [34] A. Marchisio, D. Dura, M. Capra, M. Martina, G. Masera, and
+     2023, Kigali, Rwanda, May 1-5, 2023.                                             M. Shafique, “SwiftTron: An efficient hardware accelerator for quan-
+[14] C. Zhou, L. Yu, Z. Zhou, Z. Ma, H. Zhang, H. Zhou, and Y. Tian,                  tized transformers,” in 2023 International Joint Conference on Neural
+     “Spikingformer: Spike-driven residual learning for transformer-based             Networks (IJCNN), 2023, pp. 1–9.
+     spiking neural network,” arXiv preprint arXiv:2304.11954, 2023.             [35] T. J. Ham, S. J. Jung, S. Kim, Y. H. Oh, Y. Park, Y. Song, J.-H. Park,
+[15] Z. Zhou, K. Che, W. Fang, K. Tian, Y. Zhu, S. Yan, Y. Tian, and L. Yuan,         S. Lee, K. Park, J. W. Lee, and D.-K. Jeong, “A3 : Accelerating attention
+     “Spikformer V2: join the high accuracy club on imagenet with an SNN              mechanisms in neural networks with approximation,” in 2020 IEEE
+     ticket,” arXiv preprint arXiv:2401.02020, 2024.                                  International Symposium on High Performance Computer Architecture
+[16] M. Bal and A. Sengupta, “SpikingBERT: Distilling bert to train spiking           (HPCA), 2020, pp. 328–341.
+     language models using implicit differentiation,” in Proceedings of the      [36] H.-Y. Wang and T.-S. Chang, “Row-wise accelerator for vision trans-
+     AAAI conference on artificial intelligence, vol. 38, no. 10, 2024, pp.           former,” in 2022 IEEE 4th International Conference on Artificial Intel-
+     10 998–11 006.                                                                   ligence Circuits and Systems (AICAS), 2022, pp. 399–402.
+[17] R.-J. Zhu, Q. Zhao, G. Li, and J. K. Eshraghian, “SpikeGPT: Gener-          [37] J. Park, H. Yoon, D. Ahn, J. Choi, and J.-J. Kim, “OPTIMUS: Op-
+     ative pre-trained language model with spiking neural networks,” arXiv            timized matrix multiplication structure for transformer neural network
+     preprint arXiv:2302.13939, 2023.                                                 accelerator,” Proceedings of Machine Learning and Systems, vol. 2, pp.
+[18] J. Zhang, B. Dong, H. Zhang, J. Ding, F. Heide, B. Yin, and X. Yang,             363–378, 2020.
+     “Spiking transformers for event-based single object tracking,” in Pro-      [38] A. Okazaki, P. Narayanan, S. Ambrogio, K. Hosokawa, H. Tsai, A. No-
+     ceedings of the IEEE/CVF Conference on Computer Vision and Pattern               mura, T. Yasuda, C. Mackin, A. Friz, M. Ishii et al., “Analog-memory-
+     Recognition, 2022, pp. 8801–8810.                                                based 14nm hardware accelerator for dense deep neural networks includ-
+[19] M. Yao, J. Hu, Z. Zhou, L. Yuan, Y. Tian, B. Xu, and G. Li,                      ing transformers,” in 2022 IEEE International Symposium on Circuits
+     “Spike-driven transformer,” Advances in Neural Information Processing            and Systems (ISCAS), 2022, pp. 3319–3323.
+     Systems, vol. 36, 2024.                                                     [39] K. Spoon, H. Tsai, A. Chen, M. J. Rasch, S. Ambrogio, C. Mackin,
+[20] Z. Song, P. Katti, O. Simeone, and B. Rajendran, “Stochastic spiking             A. Fasoli, A. M. Friz, P. Narayanan, M. Stanisavljevic et al., “Toward
+     attention: Accelerating attention with stochastic computing in spiking           software-equivalent accuracy on transformer-based deep neural networks
+     networks,” in 2024 IEEE 6th international conference on artificial               with analog memory devices,” Frontiers in Computational Neuroscience,
+     intelligence circuits and systems (AICAS), 2024.                                 vol. 15, p. 675741, 2021.
+                                                                                 14
+
+
+
+[40] M. Zhou, W. Xu, J. Kang, and T. Rosing, “TransPIM: A memory-
+     based acceleration via software-hardware co-design for transformer,” in
+     2022 IEEE International Symposium on High-Performance Computer
+     Architecture (HPCA), 2022, pp. 1071–1085.
+[41] W. Li, M. Manley, J. Read, A. Kaul, M. S. Bakir, and S. Yu, “H3DAtten:
+     Heterogeneous 3-D integrated hybrid analog and digital compute-in-
+     memory accelerator for vision transformer self-attention,” IEEE Trans-
+     actions on Very Large Scale Integration (VLSI) Systems, vol. 31, no. 10,
+     pp. 1592–1602, 2023.
+[42] M. Bouvier, A. Valentian, T. Mesquida, F. Rummens, M. Reyboz,
+     E. Vianello, and E. Beigne, “Spiking neural networks hardware im-
+     plementations and challenges: A survey,” ACM Journal on Emerging
+     Technologies in Computing Systems (JETC), vol. 15, no. 2, pp. 1–35,
+     2019.
+[43] A. Carpegna, A. Savino, and S. Di Carlo, “Spiker: an FPGA-optimized
+     hardware accelerator for spiking neural networks,” in 2022 IEEE Com-
+     puter Society Annual Symposium on VLSI (ISVLSI), 2022, pp. 14–19.
+[44] Y. Liu, Y. Chen, W. Ye, and Y. Gui, “FPGA-NHAP: A general fpga-
+     based neuromorphic hardware acceleration platform with high speed
+     and low power,” IEEE Transactions on Circuits and Systems I: Regular
+     Papers, vol. 69, no. 6, pp. 2553–2566, 2022.
+[45] J. Wu, Y. Chen, W. S. Khwa, S. M. Yu, T. Y. Wang, J. Tseng, Y. Chih,
+     and C. H. Diaz, “A 40nm low-power logic compatible phase change
+     memory technology,” in 2018 IEEE International Electron Devices
+     Meeting (IEDM), 2018, pp. 27.6.1–27.6.4.
+[46] H.-S. P. Wong, S. Raoux, S. Kim, J. Liang, J. P. Reifenberg, B. Ra-
+     jendran, M. Asheghi, and K. E. Goodson, “Phase change memory,”
+     Proceedings of the IEEE, vol. 98, no. 12, pp. 2201–2227, 2010.
+[47] A. Mehonic, A. Sebastian, B. Rajendran, O. Simeone, E. Vasilaki, and
+     A. J. Kenyon, “Memristors—from in-memory computing, deep learning
+     acceleration, and spiking neural networks to the future of neuromorphic
+     and bio-inspired computing,” Advanced Intelligent Systems, vol. 2,
+     no. 11, p. 2000085, 2020.
+[48] P. Katti, A. Nimbekar, C. Li, A. Acharyya, B. M. Al-Hashimi, and B. Ra-
+     jendran, “Bayesian inference accelerator for spiking neural networks,”
+     in IEEE International Symposium on Circuits and Systems, ISCAS 2024,
+     Singapore, May 19-22, 2024, pp. 1–5.
+[49] Pseudo Random Number Generation Using Linear Feedback Shift
+     Registers. Accessed on 20/10/2023. [Online]. Available: https://www.
+     analog.com/en/design-notes/random-number-generation-using-lfsr.html
+[50] W. Fang, Y. Chen, J. Ding, Z. Yu, T. Masquelier, D. Chen, L. Huang,
+     H. Zhou, G. Li, and Y. Tian, “Spikingjelly: An open-source machine
+     learning infrastructure platform for spike-based intelligence,” Science
+     Advances, vol. 9, no. 40, p. eadi1480, 2023.
+[51] M. J. Rasch, D. Moreda, T. Gokmen, M. Le Gallo, F. Carta, C. Goldberg,
+     K. El Maghraoui, A. Sebastian, and V. Narayanan, “A flexible and
+     fast pytorch toolkit for simulating training and inference on analog
+     crossbar arrays,” in 2021 IEEE 3rd international conference on artificial
+     intelligence circuits and systems (AICAS), 2021, pp. 1–4.
+[52] D. P. Kingma and J. Ba, “Adam: A method for stochastic optimiza-
+     tion,” in 3rd International Conference on Learning Representations,
+     ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track
+     Proceedings, 2015.
+[53] V. Joshi, M. Le Gallo, S. Haefeli, I. Boybat, S. R. Nandakumar,
+     C. Piveteau, M. Dazzi, B. Rajendran, A. Sebastian, and E. Eleftheriou,
+     “Accurate deep neural network inference using computational phase-
+     change memory,” Nature communications, vol. 11, no. 1, p. 2473, 2020.
+[54] A. Pedram, S. Richardson, M. Horowitz, S. Galal, and S. Kvatinsky,
+     “Dark memory and accelerator-rich system optimization in the dark
+     silicon era,” IEEE Design & Test, vol. 34, no. 2, pp. 39–50, 2017.
+[55] C. Buffa, L. Hernandez-Corporales, C. A. P. Cruz, A. Q. Alonso,
+     and A. Wiesbauer, “Voltage controlled oscillator based analog-to-digital
+     converter including a maximum length sequence generator,” Jan. 5 2021,
+     US Patent 10,886,930.
+[56] G. Datta, S. Kundu, A. R. Jaiswal, and P. A. Beerel, “ACE-SNN:
+     Algorithm-hardware co-design of energy-efficient & low-latency deep
+     spiking neural networks for 3d image recognition,” Frontiers in Neuro-
+     science, vol. 16, 2022.
+[57] Y.-C. Chiu, H.-W. Hu, L.-Y. Lai, T.-Y. Huang, H.-Y. Kao, K.-T. Chang,
+     M.-S. Ho, C.-C. Chou, Y.-D. Chih, T.-Y. Chang, and M.-F. Chang, “A
+     40nm 2Mb ReRAM macro with 85% reduction in FORMING time and
+     99% reduction in page-write time using auto-FORMING and auto-write
+     schemes,” in 2019 Symposium on VLSI Technology, 2019, pp. T232–
+     T233.
+

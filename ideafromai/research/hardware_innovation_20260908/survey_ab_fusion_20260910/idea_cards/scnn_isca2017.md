@@ -1,0 +1,17 @@
+# SCNN
+- uid/来源: local_author_txt:SCNN_ISCA2017_author.txt
+- 全文出处: /workspace/survey_ab_fusion_20260910_stage/p0_local_txt/SCNN_ISCA2017_author.txt
+- 精读深度: 方法级（§III PT-IS-CP-dense/sparse 数据流；§IV PE/scatter/PPU/RLE；§VI 利用率与能量）
+- 可继承 A: 压缩稀疏编码上的笛卡尔积执行——权/激活以非零向量+坐标送达，F×I 乘阵列算满叉积无空算；输出坐标由稀疏索引合成而非循环计数器；散点交叉开关写入分布式累加 bank（A≈2×F×I 减冲突）；层边界 PPU：halo 交换→ReLU/池化→再压缩。作「稀疏消费者接口」古典对照，≠ X。
+- 强对照 B: 相对同阵列稠密 PT-IS-CP-dense 与仅门控零乘：同资源下压缩路径是否换来真实工作量∝密度积。
+- 可差分 X线索: 诚实：CNN 推理稀疏（非 SNN 时间维）；可对照「广播域内共同非零结构」与 F1 共同删源字——SCNN 的 Kc 输出通道组压缩块是结构化稀疏接口先例；借入格式≠本地 lifting 剪枝 X。
+- 与 F1–F7 / Stage B 关系: 为 F1（结构剪枝后的供数/执行接口）与稀疏消费者提供强历史对照；Stage B 不直接依赖；第二队列剪枝接口设计时可引用。
+- 不可搬用边界: 16nm 综合估计；AlexNet/GoogLeNet/VGG 剪枝 CNN；16b 乘/24b 累加；输出累加须保持稠密直至 ReLU（高密度 psum）；halo 邻 PE 通信；无膜电位/时间步语义。
+- 可复用 idea 点:
+  - PT-IS-CP-sparse：输入驻留 + 平面分块 + 笛卡尔积；压缩块粒度=权侧 Kc×R×S、激活侧 Wt×Ht。
+  - 输出不连续 → scatter 到 A 个 bank；双缓冲累加：一边收 psum 一边 PPU 排出压缩。
+  - RLE 索引（4b 间隔，最长 15 零）——坐标合成成本显式，可对照 Gustav NRV/本地门索引开销。
+  - 理想工作量≈密度(W)×密度(IA)；硬件利用率受 bank 冲突与压缩解码限制——提醒本地勿把「可跳乘」当净服务%。
+  - Output halo vs input halo：选输出侧 halo 在通道组结束时邻接归约。
+  - IARAM/OARAM 逻辑交换避免层间 DRAM——类比残差链有限缓冲上「源/中间谁住」。
+- 杀门建议: 结构化压缩后 scatter/索引/冲突吃掉密度积优势；或累加必须稠密导致缓冲爆 → 停该压缩执行布局，不杀稀疏/剪枝家族。

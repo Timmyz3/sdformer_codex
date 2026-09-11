@@ -1,32 +1,16 @@
-# A+B 优先 1–2（文献扩量后｜一页）
+# A+B 优先 1–2（过夜修订）
 
-日期：2026-09-10
+日期：2026-09-10 夜
 
-文献：去重 732（paper 653 / open_source 60；new_this_round 287）。
+## 优先 #1 — F1（Stage B 后可挂）
+lifting 源活动 × 敏感 r1 消费者误差结构剪枝；对照含 HiNM/窄稠密/开源 2:4·Wanda。  
+RTL：不直接做；依赖 Stage B 净服务结论。
 
-## 优先 #1 — F1
+## 优先 #2 — F2（第二队列）
+lifting 半步检查点 × 共享组有损共同完成。  
+RTL 粗验：见 MP2（box）。
 
-| 项 | 内容 |
-|---|---|
-| B | r1 上按 T10 门+双消费者损失选可共同删物理源字 |
-| A | lifting T10 PSN、残差链、Gustav 分母、da4ml CSE |
-| X | lifting 改变后的源活动+双 PED 联合扰动定删字 |
-| 杀门 | 不胜 HiNM/窄稠密或破 AEE 门 → 停该布局 |
-| 排队 | Stage B 后可挂 |
-| 最小下一步 | 只写设计页：对照轴含开源 2:4/Wanda；不训练不改 RTL |
-
-## 优先 #2 — F2
-
-| 项 | 内容 |
-|---|---|
-| B | lifting 半步/RNE 边界做组级接受/继续 |
-| A | 半步图、Gustav 共享、SparseInfer+BitFair、finite 互斥 |
-| X | 挂点改到 lifting 半步×r1 并集费用 |
-| 杀门 | 不胜窄层与独立预测+同组关闭，或预测费吞收益 |
-| 排队 | 第二队列 |
-| 最小下一步 | 只写检查点/组定义/对照设计页；不开训 |
-
-## 相对旧版
-
-- 优先序不变；增补开源强对照；F7 显式旁路；F3/F5 更强调底座非 X。
-- 不抢 Stage B。
+## 给管理的 RTL 微探针
+1. MP1 same_port_credit_probe  
+2. MP2 group_accept_continue_probe  
+详见 `rtl_microprobes_for_box.md`。

@@ -1,0 +1,676 @@
+                                                               Lightweight Event-based Optical Flow Estimation
+                                                                           via Iterative Deblurring
+                                                                     Yilun Wu1 , Federico Paredes-Vallés1 and Guido C. H. E. de Croon1
+
+                                                                                                                        Time t − 1
+                                           Abstract— Inspired by frame-based methods, state-of-the-art
+                                                                                                                        Time t
+                                        event-based optical flow networks rely on the explicit construc-
+                                        tion of correlation volumes, which are expensive to compute                                                     F̂ t
+                                        and store, rendering them unsuitable for robotic applications
+                                        with limited compute and energy budget. Moreover, correlation
+arXiv:2211.13726v4 [cs.CV] 5 May 2024
+
+
+
+
+                                        volumes scale poorly with resolution, prohibiting them from                      Raw events                            Deblurred events
+
+                                        estimating high-resolution flow. We observe that the spatiotem-                    y                                    y
+
+
+                                        porally continuous traces of events provide a natural search
+                                        direction for seeking pixel correspondences, obviating the need                              x                                   x
+
+                                        to rely on gradients of explicit correlation volumes as such
+                                        search directions. We introduce IDNet (Iterative Deblurring                                                 t                                       t
+
+
+                                        Network), a lightweight yet high-performing event-based optical
+                                        flow network directly estimating flow from event traces without
+                                        using correlation volumes. We further propose two iterative
+                                        update schemes: “ID” which iterates over the same batch of
+                                        events, and “TID” which iterates over time with streaming                          y                                    y
+
+                                        events in an online fashion. Our top-performing ID model sets a                          x                                   x
+
+                                        new state of the art on DSEC benchmark. Meanwhile, the base
+                                        ID model is competitive with prior arts while using 80% fewer                                                                        Backbone RNN
+                                        parameters, consuming 20x less memory footprint and running
+                                        40% faster on the NVidia Jetson Xavier NX. Furthermore,                                                   ∆F t
+                                        the TID model is even more efficient offering an additional 5x
+                                        faster inference speed and 8 ms ultra-low latency at the cost                                                                                           Ft
+                                        of only a 9% performance drop, making it the only model
+                                        among current literature capable of real-time operation while                                    F̂ t+1
+                                        maintaining decent performance.                                                 Time t + 1
+                                           Code: https://github.com/tudelft/idnet.
+                                                                                                                    Fig. 1. Illustration of the IDNet pipeline for temporal iterative deblurring
+                                                                I. I NTRODUCTION                                    (i.e. TID scheme). Raw events are first deblurred according to the initial
+                                                                                                                    coarse optical flow estimate F̂ t before being processed by the backbone
+                                           Optical flow estimation, i.e. estimating pixel motion over               RNN. The RNN extracts the residual motion from the deblurred events and
+                                        time on the image plane, is both a central and challenging                  outputs the residual flow ∆F t which is added to the initial estimate F̂ t
+                                        task in computer vision. As it encodes a primitive form                     to arrive at the final flow estimation F t . The RNN additionally proposes a
+                                                                                                                    coarse estimate F̂ t+1 for the next timestep under continuous operation.
+                                        of motion information, optical flow underpins many robotic
+                                        navigation applications [1–3]. Compared to frame-based                         However, three major drawbacks of correlation volumes
+                                        cameras, event cameras capture asynchronous brightness                      rise when applied to event data. First, constructing them
+                                        changes in continuous time, offering high dynamic range                     requires accumulation of events which causes high latency.
+                                        measurements with minimal motion blur at high speeds and                    Second, computing and storing the correlation volume is ex-
+                                        low lighting conditions while only consuming milliwatts of                  pensive, restricting deployment on memory/compute-limited
+                                        power [4]. All these advantages make it the ideal sensor                    systems. Finally, as noted in [16,17], the correlation volume
+                                        candidate for resource-constrained agile robots such as micro               scales poorly to higher input resolutions, limiting the algo-
+                                        aerial/ground vehicles (MAVs/MGVs) [5, 6].                                  rithm’s ability to process higher resolution events or deliver
+                                           Learning-based methods have made marked progress in                      fine details in optical flow estimates.
+                                        optical flow estimation by incorporating more apt inductive                    We observe that, compared to estimating flow from two
+                                        biases [7–9]. Notably, the dense all-pair correlation volumes               images, event-based optical flow benefits from the continu-
+                                        introduced in [9] effectively estimate high-quality flow for                ous recording of motion over time and space. This allows
+                                        large motions and have been widely adopted in later re-                     tracing the continuous trajectory to estimate flow, whereas
+                                        search [10–12]. Recent methods for event-based optical flow                 frame-based methods have to search for such “trajectory”
+                                        [13–15] emulate these approaches, treating consecutive event                by estimating gradients in the correlation volume. In other
+                                        frames as discrete images to determine flow.                                words, while correlation volumes are instrumental for meth-
+                                           1 All authors are with the Micro Air Vehicle Laboratory, Faculty of
+                                                                                                                    ods operating over frames to propose an update direction,
+                                        Aerospace Engineering, Delft University of Technology, Delft, The Nether-   such direction is readily evident in the form of blur (i.e. the
+                                        lands. Correspondences: Y.Wu-9@tudelft.nl                                   continuous spatiotemporal trajectory) in the raw events.
+   From this observation, we propose IDNet (Iterative De-         method computes the 4D all-pair correlation volume between
+blurring Network), an event-based algorithm for iterative op-     two neighboring event representations in time, which is
+tical flow estimation without correlation volumes. At its core,   then iteratively processed to arrive at the final optical flow
+IDNet processes event bins sequentially via a backbone RNN        estimate. TMA [14] improves upon [13] by constructing
+where flow is estimated from the traces (i.e. blur) of events.    multiple correlation volumes at a finer temporal scale.
+Additionally, we adopt an iterative update scheme to improve         Although such methods [13,14] achieve high performance,
+estimation quality under rapid motion, employing motion           the explicit computation and storage of correlation volumes,
+compensation (a.k.a. deblurring) [18]. Each iteration deblurs     as mentioned in [16, 17], has poor time and storage com-
+events based on prior flow estimates, then processes them to      plexity which scales badly with input resolution. For events
+refine the flow, akin to frame-based warping techniques.          with resolution H by W, the compute and storage complexity
+                                                                                                                2
+   We propose two iterative update schemes: ID (iterative         of such correlation volume are O((H × W) ). This storage
+deblurring), illustrated in Fig. 2, which iterates over the       requirement eliminates the possibility of its deployment on
+same batch of events to achieve the best performance, and         memory-limited compute platforms and prohibits the algo-
+TID (temporal iterative deblurring), shown in Fig. 1, which       rithm from scaling up to larger input resolutions.
+iterates over events in time for drastically faster processing.
+   On public benchmarks, our methods achieve comparable           B. Iterative Refinement for Optical Flow
+results with state-of-the-art methods that use correlation           The idea of iterative refinement for optical flow can be
+volumes, while using much fewer parameters and memory.            traced back to the early works of iterative KLT tracking [20]
+Without correlation volumes, our method can estimate opti-        where a Taylor series expansion is applied to linearize the
+cal flow from higher-resolution feature maps, resulting in        problem and iteratively solve for the residual error. Learning-
+significant improvements over prior art. Additionally, our        based methods incorporate this principle as well. Most works
+TID scheme is highly efficient, reaching close-to-state-of-       [7,35,36] perform coarse-to-fine refinement along the feature
+the-art performance while incurring minimal latency.              pyramid. In addition, other works such as [9, 37–39] stack
+                   II. R ELATED W ORKS                            multiple modules in series to iteratively estimate the residual
+                                                                  flow. While some warps images [38], other methods such as
+A. Event-based Optical Flow
+                                                                  [9, 37, 39] resample correlation volumes.
+   Traditionally, optical flow estimation is performed from          Recently, iterative refinement for optical flow has also
+image frames with algorithms ranging from classical op-           been applied to event-based data. Methods such as [40] and
+timization techniques such as [19, 20] to modern learning-        [41] use pyramid scale to perform coarse-to-fine estimation
+based methods [7–12] which combine the powerful expres-           similar to PWC-Net [7] but do not perform flow refinement
+sivity of deep neural networks with inductive biases such as      through iterations. The update scheme from [37] is adopted
+correlation matching and coarse-to-fine estimation.               by [42], which processes the correlation volume between
+   Despite the maturity of such solutions, images would           warped event slices through time to arrive at a residual
+suffer from quality degradation such as motion blur and           flow estimate. E-RAFT [13] instead directly processes the
+insufficient exposure. Event cameras, on the other hand, are      correlation volume through an RNN and extracts the fi-
+not plagued by such issues [4] and hence are more suited          nal flow estimate from the final state of the RNN. All
+for use in these challenging conditions.                          aforementioned methods rely on the explicit construction of
+   Early event-based optical flow algorithms such as [21]         correlation volumes as a basis for their refinement schemes,
+adapt frame-based methods such as KLT [20] to the event-          in part to adapt existing successful architectures in the frame-
+based domain or utilize hand-crafted heuristics to fit event      based domain to event data.
+data [22, 23]. The approach in [24] jointly optimizes im-
+age brightness and flow by exploiting brightness constancy.       C. Continuous Operation
+Later, a framework to recover optical flow from events by            Since optical flow is temporally highly correlated as the
+maximizing the contrast of motion-compensated events is           motion in a real-world environment is mostly smooth and
+introduced in [18, 25]. Other than directly optimizing the        continuous, it makes sense to leverage the prior estimate
+objective, this principle is also applied as a learning signal    from the past to better predict the present optical flow. This
+in self-supervised learning methods such as [26–29].              temporal recurrency is introduced in [43] and used in RAFT
+   The availability of event simulators [15, 30, 31] and large-   [9] as a “warm-starting” strategy when applied to video data.
+scale datasets [32–34] enable learning-based methods to           RAFT [9], as well as E-RAFT [13], directly transports the
+achieve superior performance over model-based ones. EV-           previous flow field to the current timestep by the flow itself
+Flownet [29] introduces an event representation which split       under the assumption of constant linear motion.
+events proportionally to the nearby temporal bins and a U-
+Net architecture for processing the event representation. ECN                             III. M ETHOD
+[28] jointly estimates optical flow, depth and egomotion.
+Both methods construct multi-level feature pyramids. E-           A. Event Representation
+RAFT [13], an event-based version of RAFT [9] is the first           As in [13, 44], we utilize the discretized event voxel
+to introduce correlation volumes into the event domain. The       grid as the event representation. Specifically, we create a
+ Algorithm 1: Iterative deblurring (ID).                               An overview of the algorithm is presented in Algorithm 1.
+  input : Event bins E containing events of duration T              Specifically, as shown in Fig. 2, we start with a zero-
+          Number of deblurring iterations N                         initialized flow estimate and backbone RNN memory (F0 =
+  output: Optical Flow Prediction F for the motion during           0, MRNN,0 = 0). After the RNN predicts the flow F1 from
+          the time window of events                                 the raw event bins E0 , the event bins are motion-compensated
+  F0 ← 0, MRNN,0 ← 0, Edeblur,0 ← E                                 with the optical flow vector F1 (xi ), resulting in partially
+  for i ← 0; i < N ; i++ do                                         deblurred event bins E1 . This starts the iterative refinement
+      ∆Fi ← RNN(Encoder(Edeblur,i ); MRNN,i )
+      Fi+1 ← Fi + ∆Fi                                               process, with diminishing flow refinement over iterations.
+      MRNN,i+1 ← WarmStartModule(Fi+1 )                                To leverage the RNN’s recurrency, we use a warm-starting
+      Edeblur,i+1 ← Deblur(Edeblur,i ; ∆Fi )                        module (WSM) comprising feed-forward convolutional lay-
+  F ← FN                                                            ers to set the memory of our backbone RNN: MRNN,1 =
+  return F                                                          WSM(F1 ). We then update the previous belief by adding
+                                                                    the residual flow ∆F2 estimated from E1 to arrive at the
+representation E ∈ RB×H×W with B bins out of the event              flow estimate at iteration 2: F2 = F1 + ∆F2 , from which a
+stream {ei = (ti , xi , yi , pi )} of interest as follows:          new iteration could be started again.
+                                                                       Weight sharing the RNN for all iterations is motivated by
+               t∗i = (B − 1)(ti − tbegin )/(tend − tbegin )   (1)   the expectation that the backbone network can extract any
+                        X
+       E(b, x, y) =             pi max(0, 1 − |b − t∗i |)     (2)   residual motion in the event representation, raw or deblurred,
+                     i|xi =x,yi =y                                  rendering the task unchanged across iterations.
+
+  where b is the integer bin index and H, W correspond to the       D. Iterative Deblurring through Time
+height and width resolution of the event stream respectively.
+                                                                       We also explore another mode of iterative refinement
+B. Motion Compensation                                              through the temporal scale, as shown in Fig. 1. Instead of
+                                                                    deblurring the same events multiple iterations, we give the
+   We utilize the principle of motion compensation [18] as
+                                                                    network access to a continuous stream of events where at
+a core step in our processing. Specifically, we use the flow
+                                                                    each timestep we deblur the event bins E t and pass the
+estimate F to deblur the events to a reference time tref by                          t
+                                                                    deblurred bins Edeblur through the backbone RNN only once.
+changing its pixel coordinate xi = (xi , yi ) as follows:
+                                                                    In addition to estimating the optical flow F t for the current
+                 x′ i = xi + (tref − ti )F(xi )               (3)   timestep, we predict an initial flow F̂ t+1 for deblurring
+                                                                    the event bins E t+1 from the next timestep. This recurrent
+Assuming brightness constancy and linear motion, the ideal          approach refines flow over time, as shown in Fig. 3.
+flow should neutralize motion in events, resulting in a static         The key difference between running this pipeline vs simply
+representation without any motion. The effect of such motion        passing the raw blurry event bins through the backbone
+compensation is depicted in Fig. 1. By projecting all bins of       network once, is that our pipeline initializes an informa-
+event representation E onto the same 2D plane, deblurred            tive memory from previous estimates and only processes
+events show reduced motion, making moving objects appear            deblurred event bins with smaller motion range. This enables
+static with sharp edges. Refer to the supplementary video for       the backbone RNN to improve flow accuracy at a finer scale
+a dynamic illustration.                                             with limited parameters.
+                                                                       Operational-wise, we utilize the same motion compensa-
+C. Iterative Deblurring                                             tion principle and warm start the RNN memory as before,
+   The main architecture of IDNet under iterative deblurring        but introduce an additional module to estimate the initial
+(ID scheme) is shown in Fig. 2. The backbone of our pro-            flow of next timestamp F̂ t+1 through the state of the RNN.
+posed IDNet is a recurrent neural network which processes           A pseudo code of the algorithm is laid out in Algorithm 2.
+the input event bins sequentially one bin at a time. An optical
+flow field is read out from the state of the RNN once all            Algorithm 2: Temporal iterative deblurring (TID).
+bins have been passed through it. In this case, we select a
+                                                                      input : Event bins E t containing events with τ ∈ [t, t + T]
+ConvGRU as the choice for the recurrent unit.                                 Initial flow estimate at F̂ t at time t
+   Next, we introduce iterative deblurring on top of the              output: Optical Flow Prediction F t at time t for the
+sequential processing described above. Our design is inspired                 motion from τ ∈ [t, t + T]
+by the predictive coding scheme in the visual cortex [45]. In         MtRNN ← WarmStartModule(F̂ t )
+this scheme, our perception of the world is constantly up-             t
+                                                                      Edeblur ← Deblur(E t ; F̂ t )
+dated, with only the error signal, i.e. the difference between        ∆F , F̂ t+1 ← RNN(Encoder(Edeblur
+                                                                           t                        t
+                                                                                                        ) ; MtRNN )
+actual visual input and our current prediction, being relayed           t      t
+                                                                      F ← F̂ + ∆F         t
+
+through the hierarchy of visual cortex for refinement. Anal-          return F t , F̂ t+1
+ogously, we utilize motion compensation as our prediction
+model, iterating to refine the flow from the residual signal.
+  Time t
+                                                                                                                                                            Backbone RNN      Residual Block (↓)
+                                                                                                                                                          Encoder
+                                                                                                                                                           Conv2d w/ ReLU      Conv2d w/ ReLU
+                                  Event                                    Event     ......                                                     Ground
+                                 warping                                  warping
+                                                                                                                                                            ch=32, k=7, s=2   ch=c, k=3, s=1 (2 if ↓)
+                                                                                                                                                 truth
+
+                                                                                                                                                           Residual Block ↓    Conv2d w/ ReLU
+                                                                                                                                                L1 Loss             c=32         ch=c, k=3, s=1
+
+
+                                                                                                                                                            Residual Block              +
+              Backbone     ∆F0                               Backbone   ∆F1                                                Backbone   ∆FN ≈ 0
+
+
+
+
+                                                                                              WSM(FN −1 )
+                                                                                                                                                                    c=32
+
+
+
+
+                                      WSM(F1 )
+  y
+                RNN                              y
+                                                               RNN                                          y
+                                                                                                                             RNN
+          x                                              x                                                          x                                      Residual Block ↓
+      t                                              t                                                          t
+                                                                                                                                                                    c=64       Readout Module
+                                                                                     ......
+   F0 = 0                               F1                                      F2                                                               FN         Residual Block          Conv2d
+                                                                                                                                                                    c=64          c=2, k=3, s=1
+
+
+                                                                                                                                                              ConvGRU         Conv2d w/ ReLU
+                                                                                                                                                             c=96, k=3, s=1      c=64, k=3, s=1
+
+
+
+
+Fig. 2. Overall pipeline of IDNet with iterative deblurring scheme (i.e. ID scheme). Starting with a zero flow, each iteration deblurs events using prior
+flow. The deblurred event bins are fed into the RNN sequentially one bin at a time. A residual flow is estimated and used for deblurring in the next
+iteration. The final flow accumulates all residual flows throughout iterations. An L1 loss is applied between the final flow estimate and ground truth. The
+detailed network structure is shown on the right. The parameters ch, k, and s of the Conv2d layer refer to the output channel count, kernel size, and stride.
+
+                                                                                                                        A. Training Details
+  F̂ t
+                                                                                                                           We train our models implemented with PyTorch [46] on
+                                                                                                                        a single NVIDIA RTX 4090 GPU. To strike a good balance
+∆F t                                                                                                                    between inference speed and performance, we set the number
+                                                                                                                        of deblurring iterations N to be 4 for Algorithm 1 and the
+                                                                                                                        sequence length T = 4 and γ = 0.8 in Eq. (4). We use an
+  Ft                                                                                                                    event representation with B = 15 bins for every 100 ms of
+                                                                                                                        events from DSEC and MVSEC under dt = 4 and 20Hz
+                                                                                              t                         setting. B is set to 5 for MVSEC dt = 1 case. We use
+Fig. 3. Initial flow F̂ t , residual flow ∆F t and final flow F t as time                                               Adam [47] for DSEC and AdamW [48] for MVSEC with
+progresses and new event bins keeps coming. A trend of increasing quality
+in F t and lowering magnitude in ∆F t can be observed, implying that the                                                the onecycle learning rate scheduler [49] under a maximum
+flow is iteratively refined through time.                                                                               learning rate of 1 × 10−4 . We train with a batch size of 3 for
+                                                                                                                        250K steps for DSEC and 40K steps for MVSEC. To account
+E. Network Architecture
+                                                                                                                        for the longer-duration event trajectories which span greater
+   We use a single-layer ConvGRU with 96 channels as our                                                                distances on the image plane, we apply random cropping to a
+backbone network. The Encoder network, with 9 convolu-                                                                  larger size of 384 by 512 for training TID models, compared
+tional layers (4 having residual connections), produces 64-                                                             to the 288 by 384 size used for ID models. We also apply
+dim lower-resolution feature maps from each event bin as                                                                horizontal flipping and a 10% probability of vertical flipping
+input to the RNN. The RNN outputs a lower-resolution flow                                                               as data augmentation during training.
+field which is upsampled back to the original input size via
+convex upsampling, similar to [9,13]. The WSM module takes                                                              B. DSEC-Flow
+the same architecture as the Encoder network.                                                                              Our quantitative evaluations on the DSEC-Flow test set are
+F. Loss                                                                                                                 presented in Table I. We report the following performance
+                                                                                                                        metrics regarding flow vector against ground truth: EPE (L2
+  For iterative deblurring (ID) scheme, we apply L1 loss                                                                endpoint error in pixels); AE (angular error in degrees);
+between the final flow and ground truth: LID = ||Fgt −FN ||1 .                                                          nPE (percentage of pixels with optical flow magnitude error
+  For training temporal iterative deblurring (TID), we take                                                             greater than n pixels). We report the model size in millions
+a prediction sequence of length T and enforce an L1 loss                                                                of parameters. Additionally, we gather resource usage data
+on both the intermediate current flows and future flows and                                                             for methods when evaluating a single test sample (100ms
+weigh them using a geometric series to penalize error more                                                              of events) from DSEC: Memory footprint, the minimum
+on later iterations, where γ ∈ (0, 1):                                                                                  amount of working memory required during inference while
+               T                                                                                                        executing the computation graph of the model; GMAC,
+               X
+   LTID =             γ T −t (||Fgtt − F t ||1 + ||Fgtt+1 − F̂ t+1 ||1 )                  (4)                           the number of multiply-and-accumulation operations during
+                t=0                                                                                                     inference measured in billions of operations. We benchmark
+                                                                                                                        the runtime of the algorithms on three different platforms:
+                             IV. E XPERIMENTS
+                                                                                                                        8-core AMD Ryzen 7700 CPU (CPU), Nvidia RTX 4090
+  Following prior works, we train and evaluate our models                                                               Desktop GPU (D-GPU) and Nvidia Jetson Xavier NX Em-
+on two standard benchmarks: DSEC [32] and MVSEC [33].                                                                   bedded GPU (E-GPU), commonly used in mobile robots.
+                                                           TABLE I
+   E VALUATION ON DSEC-F LOW DATASET WITH MODEL STATISTICS . T HE BEST METRIC IS IN BOLD , WHILE THE SECOND BEST IS UNDERLINED .
+            VALUES MARKED “-” ARE UNAVAILABLE , WHILE THOSE WITH “∗” ARE INTERPOLATED FROM SIMILAR ARCHITECTURES .
+
+
+                                                        Performance                                         Runtime
+                                                                                 Model   Memory                                           Real-
+                                                                                                   GMAC
+                                             EPE      AE      1PE 2PE      3PE    Size   Footprint      CPU D-GPU E-GPU                   time
+      MultiCM [25] (Optimization-based)      3.47    13.98    76.6 48.4 30.9        -        -         -        -        -         -          -
+      TamingCM [50] (Self-supervised)        2.33    10.56    68.3 33.5 17.8        -        -         -        -        -         -          -
+      EV-FlowNet [29]                        2.32     7.90    55.4 29.8 18.6      14M     120MB       62      0.20s    2ms       0.02s        ✔
+      EVA-Flow [51]                          0.88     3.31    15.9   -   3.2        -    100MB∗        -        -     35ms∗        -          ✗
+      E-RAFT [13] (1/8 Resolution)           0.79     2.85    12.7 4.7   2.7      5.3M    132MB      256      0.70s    36ms      0.93s        ✗
+         ⌞ E-RAFT (1/4 Resolution)           GPU     Out of   Memory (>40GB)      5.3M    1.9GB      750      1.76s    65ms      1.68s        ✗
+         ⌞ E-RAFT w/o Correlation Volume     1.20     3.75    27.5 11.5 6.3       4.5M    40MB       208      0.53s    30ms      0.71s        ✗
+      E-Flowformer [15]                      0.76     2.68    11.2 4.1   2.4        -        -         -        -        -         -          ✗
+      TMA [14]                               0.74     2.68    10.9 4.0   2.7      6.9M    1.1GB      522      2.30s    17ms      1.06s        ✗
+      Ours (ID, 4 iterations, 1/4 Resolution) 0.72    2.72    10.1   3.5   2.0    2.5M   30MB        1200     2.50s   78ms       2.22s        ✗
+      Ours (ID, 4 iterations, 1/8 Resolution) 0.77    3.00    12.1   4.0   2.2    1.4M   20MB        222      0.68s   46ms       0.63s        ✗
+      Ours (TID, 1 iteration, 1/8 Resolution) 0.84    3.41    14.7   5.0   2.8    1.9M   20MB         55      0.12s   12ms       0.12s        ✔
+
+                                                                                                       TABLE II
+   Our methods significantly surpass optimization-based
+                                                                                 EPE, LATENCY AND PROCESSING MODE OF SELECTED METHODS ,
+MultiCM [25], the self-supervised TamingCM [50], and
+                                                                                       MEASURED ON NVIDIA J ETSON X AVIER NX GPU.
+the feedforward UNet-like EV-FlowNet [29]. Only methods
+that employ correlation volumes [13–15] yield performance                                              EPE      Latency       Processing Mode
+comparable to ours. Notably, our base ID model, which                                E-RAFT [13]       0.79      930ms            Batch
+processes feature maps of 1/8th the input resolution reaches                         EVA-Flow [51]     0.88      93ms∗           On-the-fly
+                                                                                     Ours (TID)        0.84       8ms            On-the-fly
+performance close to, albeit slightly behind, the recent state-
+of-the-art methods (TMA [14] and E-Flowformer [15]).
+                                                                            which consumes 10 times more compute and runs 8 times
+   On the other hand, our models are much more lightweight,
+                                                                            slower. Moreover, [13–15] requires accumulating all events
+using only a quarter of the parameters and minimal memory.
+                                                                            in a time window before processing, resulting in high latency,
+This efficiency enables their deployment on power-efficient
+                                                                            while TID processes event bins sequentially and can thus
+edge inference chips with limited on-chip SRAM up to mere
+                                                                            parallelize the processing of bins as events arrive in real-
+MBs, exemplified by [52, 53]. These memory savings arise
+                                                                            time, significantly reducing inference latency, as reported in
+not merely from a reduced network size but predominantly
+                                                                            Table II. The recently proposed EVA-Flow [51], employing a
+from eliminating correlation volumes, which are essential for
+                                                                            recurrent architecture, has also significantly reduced latency
+their performance. Removing the correlation volume from E-
+                                                                            through on-the-fly processing. However, it still falls behind
+RAFT results in a smaller memory footprint but significantly
+                                                                            our method in both accuracy and latency due to its lack
+deteriorated performance, illustrating its importance.
+                                                                            of a temporal prior and a larger network size. Among all
+   Compared to [13,14], our base model also has the smallest                published methods, TID stands out as the only one nearing a
+GMAC and runs fastest on the embedded GPU, showing 40%                      real-time processing rate on the DSEC-Flow dataset (10Hz)
+improvement over TMA [14]. While [13, 14] demonstrate                       while still upholding decent accuracy.
+faster desktop GPU runtime, this doesn’t genuinely represent                   As highlighted in [16,17], all-pair correlation volumes suf-
+their computational demand. This accelerated performance                    fer from poor time and space complexity. Thus methods like
+owes largely to the higher throughput of high-end GPUs,                     [13–15] derive correlation volumes from feature maps with
+stemming from more CUDA cores and higher memory band-                       1/8 the resolution of the input size to maintain reasonable
+width, while incurring more power use. This setup naturally                 memory usage. This limitation impacts performance, as fine
+favors their more parallel architectures, such as correlation               details cannot be preserved in low-resolution features. As a
+volumes and transformer layers, as used in [13–15]. Con-                    concrete example, E-RAFT processing 1/4 resolution would
+versely, our recurrent networks, inherently sequential, benefit             consume 1.9GB of memory per sample, making it not only
+less from such increased throughput. However, comple-                       impractical to deploy on most hardware but also impossible
+mented by the low power of event cameras, we envision their                 to train on a single GPU due to the even larger memory
+biggest use cases in power-constrained embedded systems                     requirement for training. In contrast, IDNet scales well to
+including IoT and robotics. We contend that evaluating event-               high-res feature maps. By tweaking the convolution stride in
+based algorithms on these systems is more important.                        the Encoder to produce 1/4 resolution maps, performance
+  While ID performs better, TID is drastically faster by                    leaps by 7% in EPE, outperforming prior state-of-the-art on
+only iterating once. By leveraging the temporal prior, we                   this benchmark. Qualitative results are presented in Fig. 4.
+have managed to retain almost the full quality of prediction                While the upscaled model is no longer lightweight, its top
+while incurring a performance drop of only 9-13% compared                   performance may render itself useful in offline non-realtime
+to the base model and state-of-the-art method TMA [14],                     applications such as computational photography [54].
+                                       interlaken_01_a   interlaken_00_b   zurich_city_12_a   zurich_city_15_a
+Image
+                                                                                                                                           TABLE III
+                                                                                                                    E VALUATION RESULTS ON MVSEC O UTDOOR DAY 1 SEQUENCE .
+
+                                                                                                                                                    dt = 1        dt = 4          20Hz
+                                                                                                                                               EPE      3PE     EPE    3PE     EPE    3PE
+Events
+
+
+
+
+                                                                                                                   EV-FlowNet [29]             0.35     0.0     1.09    5.7    0.61   0.45
+                                                                                                                   E-RAFT [13]                 0.27     0.0     0.72   1.1     0.47   0.24
+                                                                                                                    ⌞ w/o Correlation Volume   0.32     0.0     1.02    4.1    0.64   0.55
+E-RAFT
+
+
+
+
+                                                                                                                    ⌞ Finetune                 0.29     0.0     0.67   0.9     0.44   0.22
+                                                                                                                   TMA [14]                    0.25     0.1     0.70    1.1      -      -
+                                                                                                                   ID, 1/4 Res, 1 iter         0.31     0.1     1.30    9.1    0.75   0.88
+                                                                                                                    ⌞ Finetune
+TID, 1/8 Res ID, 1/8 Res ID, 1/4 Res
+
+
+
+
+                                                                                                                                               0.29     0.0     0.75   1.2     0.49   0.23
+                                                                                                                   ID, 1/8 Res, 1 iter         0.33     0.1     1.26    8.5    0.74   0.84
+                                                                                                                    ⌞ Feedforward Init         0.31     0.0     1.11    6.0    0.63   0.86
+                                                                                                                    ⌞ Finetune                 0.30     0.0     0.79   1.5     0.46   0.22
+                                                                                                                   ID, 1/8 Res, 4 iter         0.34     0.0     1.48   11.2    0.84   1.06
+                                                                                                                    ⌞ Finetune                 0.29     0.0     0.77   1.7     0.46   0.25
+                                                                                                                   TID, 1 iter                 0.45     0.2     1.65   13.1    1.03   2.51
+                                                                                                                    ⌞ Finetune                 0.35     0.1     0.78   1.5     0.47   0.20
+
+
+
+
+   Fig. 4. Qualitative results of optical flow predictions on DSEC-Flow with
+   highlighted regions of interest. Images are for visualization only, as optical
+   flow is event-based. Test samples reveal that our ID method at 1/4 resolution
+   produces superior results on fine details and small objects, while the TID
+   method yields results that are comparable to those of E-RAFT.                                                    ID 1/8 Res           TID                 E-RAFT           EV-FlowNet
+
+   C. MVSEC
+      In line with prior works [13, 14, 29], we train
+   on outdoor day 2 sequence and evaluate on the
+   outdoor day 1 sequence under 45Hz (dt = 1), 11.25Hz
+   (dt = 4) and original 20Hz rate. The results are presented in                                                    ID Finetune      TID Finetune      E-RAFT Finetune        Ground Truth
+   Table III. When trained from scratch, our methods lag behind                                                    Fig. 5.   Qualitative results on MVSEC outdoor day 1 sequence.
+   those in [13, 14, 29], unlike the case on DSEC-Flow dataset.
+   Compared to DSEC, MVSEC holds data of limited variety                                                         while incurring undesired latency and are not essential for
+   and poor quality. It features a single sequence, whereas                                                      high performance when the data quality is improved.
+   DSEC encompasses eighteen. The events in MVSEC are                                                               To verify the hypothesis that the reduced performance of
+   lower in resolution and sparser than in DSEC. These factors                                                   IDNet is due to the limited and low-quality training set, we
+   all make generalization on this dataset extremely challenging.                                                finetune models pretrained on DSEC with outdoor day 2
+   As a result, even state-of-the-art methods can only generalize                                                sequence before evaluating on outdoor day 1 sequence,
+   to an EPE of 0.5 pixels at 20Hz evaluation rate. When                                                         marked by “Finetune” in Table III. We observe the finetuned
+   adjusted for time window and mean flow magnitude, this                                                        performance is close to E-RAFT, surpassing those of EV-
+   translates to a 5-pixel EPE under DSEC, notably poorer                                                        FlowNet. Hence, the less good results on this dataset should
+   than any methods benchmarked there. This is reflected in                                                      not be regarded as a limitation of the method, highlighting
+   the qualitative results in Fig. 5 with blurry motion boundaries                                               the need for a more modern and representative benchmark.
+   and poor details, unlike the case in DSEC as shown in Fig. 4.
+      The deterioriated training signal, owing to the limited and                                                D. Ablation Studies
+   lower-quality data, makes algorithmic generalization more                                                           a) Iterative refinement and Deblurring: We study the
+   reliant on their inductive biases. We have pinpointed two                                                     impact of introducing iterative deblurring on a slightly
+   such biases which lead to this outcome on this dataset:                                                       scaled-down model to save time and resources. The results
+   correlation volumes and feedforward processing. Removing                                                      are reported in Table IV. For this experiment, we first set the
+   correlation volumes from E-RAFT renders its performance                                                       number of deblurring iterations down to 1. Without either
+   comparable to EV-FlowNet. The sparse events also com-                                                         iterative processing or deblurring, the performance dropped
+   plicate learning useful representations via recurrent connec-                                                 by 47% on EPE. Introducing recurrency with 4 iterations
+   tions, which are central to the operations of IDNet. By attach-                                               but no deblurring, where the network would take raw event
+   ing a feedforward network which takes the entire voxel grid                                                   bins instead of the deblurred ones as in Algorithm 1, results
+   as input to initialize the memory of our RNN (denoted by                                                      in a 41% decrease in EPE, demonstrating the effectiveness
+   “Feedforward Init” in Table III), we bridge the performance                                                   of deblurring as an inductive bias. Lastly, we remove the
+   gap with EV-FlowNet. While these biases benefit training on                                                   warm starting module (WSM) so that the memory of the
+   this dataset, they demand substantial computational power                                                     backbone RNN would be initialized to zero. This time, EPE
+                           TABLE IV
+  A BLATION STUDY ON DSEC-F LOW W. R . T THE EFFECTIVENESS OF
+ITERATIVE DEBLURRING . T HE STUDY USES A SLIGHTLY SCALED - DOWN
+          MODEL THAN THE ONES PRESENTED IN TABLE I.
+
+                                       EPE    AE      1PE     3PE
+       ID   4   iters                  0.88   3.21    15.6    3.2         Direct Transport, EPE=3.5             Ours (TID), EPE=2.5
+       ID   2   iters                  0.94   3.43    18.1    3.7
+       ID   1   iter                   1.30   4.82    33.7    6.7
+       ID   4   iters w/o deblurring   1.24   4.49    31.1    6.6
+       ID   4   iters w/o WSM          1.02   4.07    20.8    4.0
+
+
+                           TABLE V
+I MPACT OF DIRECT VS LEARNED FORWARD PROPAGATION SCHEMES ON
+                             TID AND E-RAFT.                                    Ground Truth                           Image
+                                               EPE      AE          Fig. 6.     Comparison of optical flow propagation schemes. The flow
+                                                                    prediction made by direct transport from E-RAFT [13] suffers from artifacts
+                TID w/ Direct Transport        1.25    4.60
+                                                                    due to occlusion while our learning-based approach yields a smooth optical
+                TID w/ Learning                0.93    3.98
+                                                                    flow field with lower EPE error.
+                E-RAFT w/ Direct Transport     0.79    2.85
+                E-RAFT w/ Learning               -       -
+                                                                                              TABLE VI
+                                                                         A BLATION STUDIES ON DSEC-F LOW W. R . T THE IMPACT OF
+and AE went up by 16%, revealing the recurrency is better               PERFORMANCE BY FEATURE MAP RESOLUTION . T RAINING THE
+complemented with an informative prior.                               RECURRENT VERSION OF       E-RAFT WITH UPSCALED FEATURE MAPS
+   We also study the impact of the number of deblurring                      WAS INFEASIBLE DUE TO EXCESSIVE MEMORY USAGE .
+iterations on the performance by comparing ID models with
+N = 1, 2, 4 iterations. We observe that iterating twice already                                Feature Map                 Memory
+                                                                                                           EPE       AE
+lowers EPE by 27%, while two extra deblurring iterations                                        Resolution                 Footprint
+bring a diminishing further improvement of 5%.                                E-RAFT [13]
+                                                                                                   1/8       0.79   2.85    132MB
+   Note the improvement brought by multiple iterations is                                          1/4         -      -     1.9GB
+diminishing for scenes with very small motion, such as in                     Non-recurrent        1/8       0.84   2.95    132MB
+                                                                              E-RAFT [13]          1/4       0.79   2.83    1.9GB
+MVSEC (see Table III) where the mean flow magnitude is
+only around 3 pixels at 20Hz evaluation rate.                                                      1/8       0.79   2.91    20MB
+                                                                              Ours, ID
+                                                                                                   1/4       0.72   2.72    30MB
+      b) Forward Propagation Methods: Previous methods
+such as E-RAFT [13] use warping to warm start the pre-
+diction for the next timestep, which simply transports the          despite it barely fitting in the GPU memory with cropped
+optical flow vector estimated from the current timestep by          inputs. The results indicate that using 1/4th resolution feature
+itself to arrive at a coarse estimate for the next timestep.        maps to construct the correlation volume, as opposed to the
+However, even with the high quality flow predictions made           original model’s 1/8th resolution, led to a 6% reduction in
+by E-RAFT, directly transporting those will lead to artifacts       EPE. This is consistent with our findings on IDNet where a
+shown in Fig. 6, such as the white regions with zero flow           slightly larger 9% reduction is similarly observed. However,
+caused by occlusion. Instead, we propose to learn future flow       we would like to highlight that our approach has superior
+directly as described in Algorithm 2. This approach improves        memory usage compared to correlation volumes and scales
+the accuracy of future flow prediction and when combined            very well to higher-resolution input while any attempts to
+with TID, gives a significant 25% boost in the performance          further increase the resolution (input or augmented crops)
+on DSEC-Flow, as shown in Table V. Interestingly, replacing         will lead to prohibitively high memory costs for correlation-
+the direct transport scheme with a learning-based prediction        based methods.
+on E-RAFT does not lead to effective training, possibly due
+to its update module’s specialization in predicting only the                                   V. C ONCLUSION
+current optical flow.                                                  In this work, we introduce IDNet, a lightweight yet high-
+      c) Feature Map Resolutions: Presented in Table VI,            performing event-based optical flow algorithm. We demon-
+we examine how feature map resolutions affect model per-            strate through experiments our network are competitive in
+formance. We conducted a study where we increased the               performance while being much more efficient than state-
+feature map resolution from 1/8th to 1/4th of the input event       of-the-art methods. We believe our work provides valuable
+resolution while keeping all other elements unchanged.              insights into efficiently solving event-based optical flow
+   Although the recurrent E-RAFT (with warm starting)               problems and hope to encourage the community to adopt our
+cannot fit in a single GPU for training with an upscaled            methods for potential applications and explore the principle
+feature map, we were able to train the non-recurrent E-RAFT         of iterative deblurring for other architectures and vision tasks.
+                       ACKNOWLEDGEMENTS                                         [17] H. Xu, J. Yang, J. Cai, J. Zhang, and X. Tong, “High-resolution
+                                                                                     optical flow from 1d attention and correlation,” in 2021 IEEE/CVF
+  This work was sponsored by the Office of Naval Research                            International Conference on Computer Vision (ICCV), 2021, pp.
+(ONR) Global under grant number N629092112014. The views                             10 478–10 487. 1, 2, 5
+and conclusions contained herein are those of the authors only                  [18] G. Gallego, H. Rebecq, and D. Scaramuzza, “A unifying contrast max-
+and should not be interpreted as representing those of the U.S.                      imization framework for event cameras, with applications to motion,
+                                                                                     depth, and optical flow estimation,” in 2018 IEEE/CVF Conference on
+Government.
+                                                                                     Computer Vision and Pattern Recognition, 2018, pp. 3867–3876. 2, 3
+                                                                                [19] B. K. Horn and B. G. Schunck, “Determining optical flow,”
+                             R EFERENCES                                             Artificial Intelligence, vol. 17, no. 1, pp. 185–203, 1981.
+                                                                                     [Online]. Available: https://www.sciencedirect.com/science/article/pii/
+                                                                                     0004370281900242 2
+ [1] H. Chao, Y. Gu, and M. Napolitano, “A survey of optical flow
+     techniques for robotics navigation applications,” Journal of Intelligent   [20] B. D. Lucas and T. Kanade, “An iterative image registration technique
+     & Robotic Systems, vol. 73, no. 1, pp. 361–372, 2014. 1                         with an application to stereo vision,” in Proceedings of the 7th
+                                                                                     International Joint Conference on Artificial Intelligence - Volume
+ [2] T. Qin, P. Li, and S. Shen, “VINS-Mono: A robust and versa-
+                                                                                     2, ser. IJCAI’81.      San Francisco, CA, USA: Morgan Kaufmann
+     tile monocular visual-inertial state estimator,” IEEE Transactions on
+                                                                                     Publishers Inc., 1981, p. 674–679. 2
+     Robotics, vol. 34, no. 4, pp. 1004–1020, 2018. 1
+                                                                                [21] R. Benosman, S.-H. Ieng, C. Clercq, C. Bartolozzi, and M. Srinivasan,
+ [3] R. J. Bouwmeester, F. Paredes-Vallés, and G. C. H. E. de Croon,
+                                                                                     “Asynchronous frameless event-based optical flow,” Neural Networks,
+     “NanoFlowNet: Real-time dense optical flow on a nano quadcopter,”
+                                                                                     vol. 27, pp. 32–37, 2012. 2
+     in 2023 IEEE International Conference on Robotics and Automation
+     (ICRA), 2023, pp. 1996–2003. 1                                             [22] R. Benosman, C. Clercq, X. Lagorce, S.-H. Ieng, and C. Bartolozzi,
+                                                                                     “Event-based visual flow,” IEEE Transactions on Neural Networks and
+ [4] G. Gallego, T. Delbruck, G. Orchard, C. Bartolozzi, B. Taba, A. Censi,
+                                                                                     Learning Systems, vol. 25, no. 2, pp. 407–417, 2014. 2
+     S. Leutenegger, A. J. Davison, J. Conradt, K. Daniilidis, and D. Scara-
+     muzza, “Event-based vision: A survey,” IEEE Transactions on Pattern        [23] E. Mueggler, C. Forster, N. Baumli, G. Gallego, and D. Scaramuzza,
+     Analysis and Machine Intelligence, vol. 44, no. 01, pp. 154–180, 1              “Lifetime estimation of events from dynamic vision sensors,” in 2015
+     2022. 1, 2                                                                      IEEE International Conference on Robotics and Automation (ICRA),
+ [5] D. Falanga, S. Kim, and D. Scaramuzza, “How fast is too fast? the role          2015, pp. 4874–4881. 2
+     of perception latency in high-speed sense and avoid,” IEEE Robotics        [24] P. Bardow, A. J. Davison, and S. Leutenegger, “Simultaneous optical
+     and Automation Letters, vol. 4, no. 2, pp. 1884–1891, 2019. 1                   flow and intensity estimation from an event camera,” in 2016 IEEE
+ [6] B. Forrai, T. Miki, D. Gehrig, M. Hutter, and D. Scaramuzza, “Event-            Conference on Computer Vision and Pattern Recognition (CVPR),
+     based agile object catching with a quadrupedal robot,” in 2023 IEEE             2016, pp. 884–892. 2
+     International Conference on Robotics and Automation (ICRA), 2023,          [25] S. Shiba, Y. Aoki, and G. Gallego, “Secrets of event-based optical
+     pp. 12 177–12 183. 1                                                            flow,” in Computer Vision – ECCV 2022: 17th European Conference,
+ [7] D. Sun, X. Yang, M.-Y. Liu, and J. Kautz, “PWC-Net: CNNs for                    Tel Aviv, Israel, October 23–27, 2022, Proceedings, Part XVIII.
+     optical flow using pyramid, warping, and cost volume,” in 2018                  Berlin, Heidelberg: Springer-Verlag, 2022, p. 628–645. 2, 5
+     IEEE/CVF Conference on Computer Vision and Pattern Recognition,            [26] J. Hagenaars, F. Paredes-Valles, and G. de Croon, “Self-supervised
+     2018, pp. 8934–8943. 1, 2                                                       learning of event-based optical flow with spiking neural networks,”
+ [8] A. Dosovitskiy, P. Fischer, E. Ilg, P. Häusser, C. Hazirbas, V. Golkov,        in Advances in Neural Information Processing Systems, M. Ranzato,
+     P. v. d. Smagt, D. Cremers, and T. Brox, “FlowNet: Learning opti-               A. Beygelzimer, Y. Dauphin, P. Liang, and J. W. Vaughan,
+     cal flow with convolutional networks,” in 2015 IEEE International               Eds., vol. 34.        Curran Associates, Inc., 2021, pp. 7167–
+     Conference on Computer Vision (ICCV), 2015, pp. 2758–2766. 1, 2                 7179. [Online]. Available: https://proceedings.neurips.cc/paper/2021/
+ [9] Z. Teed and J. Deng, “RAFT: Recurrent all-pairs field transforms                file/39d4b545fb02556829aab1db805021c3-Paper.pdf 2
+     for optical flow,” in Computer Vision – ECCV 2020, A. Vedaldi,             [27] F. Paredes-Valles and G. C. H. E. de Croon, “Back to event basics:
+     H. Bischof, T. Brox, and J.-M. Frahm, Eds.             Cham: Springer           Self-supervised learning of image reconstruction for event cameras via
+     International Publishing, 2020, pp. 402–419. 1, 2, 4                            photometric constancy,” in Proceedings of the IEEE/CVF Conference
+[10] S. Jiang, D. Campbell, Y. Lu, H. Li, and R. Hartley, “Learning to               on Computer Vision and Pattern Recognition (CVPR), June 2021, pp.
+     estimate hidden motions with global motion aggregation,” in 2021                3446–3455. 2
+     IEEE/CVF International Conference on Computer Vision (ICCV),               [28] C. Ye, A. Mitrokhin, C. Fermüller, J. A. Yorke, and Y. Aloimonos,
+     2021, pp. 9752–9761. 1, 2                                                       “Unsupervised learning of dense optical flow, depth and egomotion
+[11] Z. Huang, X. Shi, C. Zhang, Q. Wang, K. C. Cheung, H. Qin, J. Dai,              with event-based sensors,” in 2020 IEEE/RSJ International Conference
+     and H. Li, “FlowFormer: A transformer architecture for optical flow,”           on Intelligent Robots and Systems (IROS), 2020, pp. 5831–5838. 2
+     in Computer Vision – ECCV 2022, S. Avidan, G. Brostow, M. Cissé,          [29] A. Zhu, L. Yuan, K. Chaney, and K. Daniilidis, “EV-FlowNet: Self-
+     G. M. Farinella, and T. Hassner, Eds.           Cham: Springer Nature           supervised optical flow estimation for event-based cameras,” Robotics:
+     Switzerland, 2022, pp. 668–685. 1, 2                                            Science and Systems XIV, Jun 2018. 2, 5, 6
+[12] H. Xu, J. Zhang, J. Cai, H. Rezatofighi, and D. Tao, “GMFlow:              [30] D. Gehrig, M. Gehrig, J. Hidalgo-Carrió, and D. Scaramuzza, “Video
+     Learning optical flow via global matching,” in Proceedings of the               to events: Recycling video datasets for event cameras,” in 2020
+     IEEE/CVF Conference on Computer Vision and Pattern Recognition,                 IEEE/CVF Conference on Computer Vision and Pattern Recognition
+     2022, pp. 8121–8130. 1, 2                                                       (CVPR), 2020, pp. 3583–3592. 2
+[13] M. Gehrig, M. Millhausler, D. Gehrig, and D. Scaramuzza, “E-               [31] Y. Hu, S.-C. Liu, and T. Delbruck, “v2e: From video frames to realistic
+     RAFT: Dense optical flow from event cameras,” in 2021 International             dvs events,” in 2021 IEEE/CVF Conference on Computer Vision and
+     Conference on 3D Vision (3DV). Los Alamitos, CA, USA: IEEE                      Pattern Recognition Workshops (CVPRW), 2021, pp. 1312–1321. 2
+     Computer Society, Dec 2021, pp. 197–206. 1, 2, 4, 5, 6, 7                  [32] M. Gehrig, W. Aarents, D. Gehrig, and D. Scaramuzza, “DSEC: A
+[14] H. Liu, G. Chen, S. Qu, Y. Zhang, Z. Li, A. Knoll, and C. Jiang,                stereo event camera dataset for driving scenarios,” IEEE Robotics and
+     “TMA: Temporal motion aggregation for event-based optical flow,”                Automation Letters, vol. 6, no. 3, pp. 4947–4954, 2021. 2, 4
+     in 2023 IEEE/CVF International Conference on Computer Vision               [33] A. Z. Zhu, D. Thakur, T. Özaslan, B. Pfrommer, V. Kumar, and
+     (ICCV). Los Alamitos, CA, USA: IEEE Computer Society, Oct 2023,                 K. Daniilidis, “The multivehicle stereo event camera dataset: An event
+     pp. 9651–9660. 1, 2, 5, 6                                                       camera dataset for 3d perception,” IEEE Robotics and Automation
+[15] Y. Li, Z. Huang, S. Chen, X. Shi, H. Li, H. Bao, Z. Cui, and G. Zhang,          Letters, vol. 3, no. 3, pp. 2032–2039, 2018. 2, 4
+     “BlinkFlow: A dataset to push the limits of event-based optical flow       [34] K. Chaney, F. Cladera, Z. Wang, A. Bisulco, M. A. Hsieh, C. Korpela,
+     estimation,” in 2023 IEEE/RSJ International Conference on Intelligent           V. Kumar, C. J. Taylor, and K. Daniilidis, “M3ED: Multi-robot,
+     Robots and Systems (IROS), 2023, pp. 3881–3888. 1, 2, 5                         multi-sensor, multi-environment event dataset,” in Proceedings of the
+[16] S. Jiang, Y. Lu, H. Li, and R. Hartley, “Learning optical flow from             IEEE/CVF Conference on Computer Vision and Pattern Recognition
+     a few matches,” in 2021 IEEE/CVF Conference on Computer Vision                  (CVPR) Workshops, June 2023, pp. 4015–4022. 2
+     and Pattern Recognition (CVPR), 2021, pp. 16 587–16 595. 1, 2, 5           [35] A. Ranjan and M. J. Black, “Optical flow estimation using a spatial
+       pyramid network,” in 2017 IEEE Conference on Computer Vision and           in 2021 IEEE/CVF Conference on Computer Vision and Pattern
+       Pattern Recognition (CVPR), 2017, pp. 2720–2729. 2                         Recognition (CVPR), 2021, pp. 16 150–16 159. 5
+[36]   T.-W. Hui, X. Tang, and C. C. Loy, “LiteFlowNet: A lightweight
+       convolutional neural network for optical flow estimation,” in 2018
+       IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+       2018, pp. 8981–8989. 2
+[37]   J. Hur and S. Roth, “Iterative residual refinement for joint optical
+       flow and occlusion estimation,” in 2019 IEEE/CVF Conference on
+       Computer Vision and Pattern Recognition (CVPR), 2019, pp. 5747–
+       5756. 2
+[38]   E. Ilg, N. Mayer, T. Saikia, M. Keuper, A. Dosovitskiy, and T. Brox,
+       “Flownet 2.0: Evolution of optical flow estimation with deep net-
+       works,” in 2017 IEEE Conference on Computer Vision and Pattern
+       Recognition (CVPR), 2017, pp. 1647–1655. 2
+[39]   Y. Lu, J. Valmadre, H. Wang, J. Kannala, M. Harandi, and P. H. S.
+       Torr, “Devon: Deformable volume network for learning optical flow,”
+       in 2020 IEEE Winter Conference on Applications of Computer Vision
+       (WACV), 2020, pp. 2694–2702. 2
+[40]   L. Hu, R. Zhao, Z. Ding, L. Ma, B. Shi, R. Xiong, and T. Huang,
+       “Optical flow estimation for spiking camera,” in 2022 IEEE/CVF
+       Conference on Computer Vision and Pattern Recognition (CVPR),
+       2022, pp. 17 823–17 832. 2
+[41]   Z. Li, J. Shen, and R. Liu, “A lightweight network to learn optical flow
+       from event data,” in 2020 25th International Conference on Pattern
+       Recognition (ICPR), 2021, pp. 1–7. 2
+[42]   Z. Ding, R. Zhao, J. Zhang, T. Gao, R. Xiong, Z. Yu, and T. Huang,
+       “Spatio-temporal recurrent networks for event-based optical flow
+       estimation,” in Proceedings of the AAAI Conference on Artificial
+       Intelligence (AAAI), vol. 36, 2022, pp. 525–533. 2
+[43]   M. Neoral, J. Šochman, and J. Matas, “Continual occlusion and optical
+       flow estimation,” in Computer Vision – ACCV 2018, C. Jawahar,
+       H. Li, G. Mori, and K. Schindler, Eds. Cham: Springer International
+       Publishing, 2019, pp. 159–174. 2
+[44]   A. Z. Zhu, L. Yuan, K. Chaney, and K. Daniilidis, “Unsupervised
+       event-based learning of optical flow, depth, and egomotion,” in 2019
+       IEEE/CVF Conference on Computer Vision and Pattern Recognition
+       (CVPR), 2019, pp. 989–997. 2
+[45]   R. P. N. Rao and D. H. Ballard, “Predictive coding in the visual
+       cortex: a functional interpretation of some extra-classical receptive-
+       field effects,” Nature Neuroscience, vol. 2, no. 1, pp. 79–87, 1999.
+       3
+[46]   A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan,
+       T. Killeen, Z. Lin, N. Gimelshein, L. Antiga, A. Desmaison, A. Köpf,
+       E. Yang, Z. DeVito, M. Raison, A. Tejani, S. Chilamkurthy, B. Steiner,
+       L. Fang, J. Bai, and S. Chintala, “PyTorch: An imperative style,
+       high-performance deep learning library,” in Proceedings of the 33rd
+       International Conference on Neural Information Processing Systems.
+       Red Hook, NY, USA: Curran Associates Inc., 2019. 4
+[47]   D. P. Kingma and J. Ba, “Adam: A method for stochastic optimiza-
+       tion,” in 3rd International Conference on Learning Representations,
+       ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track
+       Proceedings, Y. Bengio and Y. LeCun, Eds., 2015. 4
+[48]   I. Loshchilov and F. Hutter, “Decoupled weight decay regularization,”
+       in International Conference on Learning Representations, 2019. 4
+[49]   L. N. Smith and N. Topin, “Super-convergence: very fast training of
+       neural networks using large learning rates,” Artificial Intelligence and
+       Machine Learning for Multi-Domain Operations Applications, May
+       2019. 4
+[50]   F. Paredes-Vallés, K. Y. W. Scheper, C. De Wagter, and G. C. H. E.
+       De Croon, “Taming contrast maximization for learning sequential,
+       low-latency, event-based optical flow,” in 2023 IEEE/CVF Interna-
+       tional Conference on Computer Vision (ICCV), 2023, pp. 9661–9671.
+       5
+[51]   Y. Ye, H. Shi, K. Yang, Z. Wang, X. Yin, Y. Wang, and K. Wang,
+       “Towards anytime optical flow estimation with event cameras,” 2023,
+       arXiv:2307.05033 [cs.CV]. 5
+[52]   G. Technologies, “GAP9 processor,” https://greenwaves-technologies.
+       com/gap9 processor/, Jan 2023, accessed: 2024-03-01. 5
+[53]   Intel, “Intel® Movidius™ Myriad™ X VPU Product Brief,”
+       https://www.intel.com/content/www/us/en/products/docs/processors/
+       movidius-vpu/myriad-x-product-brief.html, 2018, accessed: 2024-03-
+       01. 5
+[54]   S. Tulyakov, D. Gehrig, S. Georgoulis, J. Erbach, M. Gehrig, Y. Li, and
+       D. Scaramuzza, “Time lens: Event-based video frame interpolation,”
+

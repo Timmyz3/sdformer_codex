@@ -25,7 +25,7 @@ Wq共有9,162个非零系数。普通字MAC同样可跳这些静态零、用相�
 主要交付：[compile_projection.py](compile_projection.py)、[result.json](result.json)、[整图整数DAG](whole_integer_dag.json)、`h8_00…11_integer_dag.json`，以及每图官方原始pipeline、可执行`.dais`和真实节点范围。复现仅需运行：
 
 ```bash
-/home/zhumd/work/ideafromai/research/hardware_innovation_20260908/psn/cmvm_20260909/.venv/bin/python -B compile_projection.py
+/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/psn/cmvm_20260909/.venv/bin/python -B compile_projection.py
 ```
 
 后续只能在完整PED链上接同资源MAC／折叠或展开CMVM的具体服务，计输入量化、输出恢复、各类状态和真实后继；这次完成只证明完整A已实际做到该矩阵。

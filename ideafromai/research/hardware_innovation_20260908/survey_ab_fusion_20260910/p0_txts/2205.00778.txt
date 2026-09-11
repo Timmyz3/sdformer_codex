@@ -1,0 +1,687 @@
+                                                                                                                                                                                          1
+
+
+
+
+                                                    Sparse Compressed Spiking Neural Network
+                                                          Accelerator for Object Detection
+                                                                           Hong-Han Lien and Tian-Sheuan Chang, Senior Member, IEEE
+
+
+
+
+                                           Abstract—Spiking neural networks (SNNs), which are inspired                     topologies [1]: general mesh and feedforward. For general
+                                        by the human brain, have recently gained popularity due to their                   mesh topology, large-scale neuromorphic hardware systems
+                                        relatively simple and low-power hardware for transmitting binary                   such as TrueNorth [2], Loihi [3], SpiNNaker [4], BrainScaleS
+                                        spikes and highly sparse activation maps. However, because SNNs
+arXiv:2205.00778v1 [cs.AR] 2 May 2022
+
+
+
+
+                                        contain extra time dimension information, the SNN accelerator                      [5], ODIN [6], µBrain [7] and DYNAPs [8] support a mesh
+                                        will require more buffers and take longer to infer, especially                     of neurons with no particular topology by advanced routers
+                                        for the more difficult high-resolution object detection task. As a                 and schedulers. They distribute the SNN network among the
+                                        result, this paper proposes a sparse compressed spiking neural                     neurocores and use many small neurocores for computations
+                                        network accelerator that takes advantage of the high sparsity of                   with specially arranged memory and processing elements
+                                        activation maps and weights by utilizing the proposed gated one-
+                                        to-all product for low power and highly parallel model execution.                  (PEs). Each neurocore is responsible for storing a portion of
+                                        The experimental result of the neural network shows 71.5%                          the weights and computing that portion of the SNN topology.
+                                        mAP with mixed (1,3) time steps on the IVS 3cls dataset. The                       They are biologically plausible but need large area costs.
+                                        accelerator with the TSMC 28nm CMOS process can achieve                            For the feedforward topology, designs such as [1], [9]–[12]
+                                        1024×576@29 frames per second processing when running at                           processes a feedforward network in a systolic fashion. Their
+                                        500MHz with 35.88TOPS/W energy efficiency and 1.05mJ energy
+                                        consumption per frame.                                                             neurocores are arranged either in a cascaded fashion [1], [10]–
+                                                                                                                           [12] or in a configurable PE array [9]. Our work also falls into
+                                          Index Terms—Spiking neural network, computer vision, object
+                                                                                                                           this category and is similar to Spinalflow’s approach [9].
+                                        detection, VLSI hardware design
+                                                                                                                              However, in contrast to ANN accelerators, current SNN
+                                                                                                                           architectures achieve lower throughput and higher energy per
+                                                                   I. I NTRODUCTION                                        neuron, according to [9], [13]. This phenomenon is primarily
+                                           Spiking neural networks (SNNs) have gotten a lot of at-                         due to the extra time dimension information in SNNs [9],
+                                        tention as an alternative to artificial neural networks (ANNs)                     [10], which causes the longer inference time and requires to
+                                        because the event-driven processing paradigm, which aims to                        repeatedly access the same weight data from off-chip memory
+                                        mimic the brain, can achieve competitive accuracy while using                      and thus consumes a lot of unnecessary energy. One way to
+                                        very little power. Furthermore, the binary spike transmission is                   solve this problem is to use a large internal memory to fit
+                                        relatively simple to implement in hardware. SNNs, as opposed                       all weights in one layer, but this occupies a lot of chip area.
+                                        to ANNs, use spike input and output as well as continuous-                         Another approach is to use binary weights to overcome this
+                                        time leaky integrate-and-fire (LIF) neurons. We use a discrete-                    problem [14]. However, when applied to more difficult tasks,
+                                        time approximate LIF with a delta-shaped synaptic kernel in                        it is easy to cause a significant drop in accuracy, which is not
+                                        this paper. The input spike will be multiplied by weights and                      a good solution.
+                                        accumulated with the residual potential from the previous time                        In addition, the extra time dimension information in SNNs
+                                        step at each time step. If the potential exceeds the threshold,                    also makes it difficult for the accelerator to execute the net-
+                                        the output spike will be fired. Thus, with high sparsity and                       work in real time. Therefore, using the sparsity of the weights
+                                        simple spike I/O, its hardware implementation has got popular                      to lower the area and speed up the inference is a potential
+                                        in recent years for low power and real-time model execution.                       method. SpinalFlow [9] proposed an architecture that can skip
+                                           Various accelerators have recently been proposed, which                         the zero activation computation. However, their sequential
+                                        can be divided into two approaches based on their supported                        processing method sacrifices massive parallelism and only
+                                                                                                                           supports the temporal coding inputs. Furthermore, they ignore
+                                           This work was supported by the Ministry of Science and Technology,
+                                        Taiwan, under Grant 110-2634-F-009 -017, 109-2639-E-009-001, 110-2221-             the sparsity of the weights, resulting in a filter buffer size
+                                        E-A49 -148 -MY3. The authors are with the Institute of Electronics, Na-            of up to 576 KB and a low area efficiency. Sparsity designs
+                                        tional Yang Ming Chiao Tung University, Hsinchu 30010, Taiwan (e-mail:             have also been explored in ANNs to significantly speed up
+                                        scott860228.ee08@nycu.edu.tw, tschang@nycu.edu.tw)
+                                           © 2021 IEEE. Personal use of this material is permitted. Permission from        the inference through the zero-skipping control. SCNN [15]
+                                        IEEE must be obtained for all other uses, in any current or future media,          uses the Cartesian product to multiply all nonzero inputs
+                                        including reprinting/republishing this material for advertising or promotional     and all nonzero weights, and then accumulates the partial
+                                        purposes, creating new collective works, for resale or redistribution to servers
+                                        or lists, or reuse of any copyrighted component of this work in other works.       product of the output of the corresponding coordinate with
+                                        H. -H. Lien and T. -S. Chang, ”Sparse Compressed Spiking Neural Network            the help of the scatter network. However, the complex scatter
+                                        Accelerator for Object Detection,” in IEEE Transactions on Circuits and            network dramatically increases the extra overhead of hardware.
+                                        Systems I: Regular Papers, vol. 69, no. 5, pp. 2060-2069, May 2022, doi:
+                                        10.1109/TCSI.2022.3149006.                                                         SparTen [16] uses the space-efficient bit-mask representation
+                                           Manuscript received XXXX, 2021; revised XXXX, 2021.                             to represent the sparse data and proposes sparse vector-vector
+                                                                                                                                   2
+
+
+
+multiplication that finds the matching nonzero bit positions by    the following SNN layers. Then following the input layers,
+simple logic to accumulate the corresponding partial product.      we adopt the convolution block and several basic blocks as
+In summary, existing works need complex control to deal with       shown in Fig. 2. The convolution block as in Fig. 2(a) use
+the sparse nature of activation maps, which causes a lot of        tdBN for low inference time steps. The basic block as in
+extra power consumption or sacrifices parallelism to achieve       Fig. 2(b) adopts the CSPNet [23] module, which reduces the
+real-time inference.                                               number of operations through channel splitting and then uses
+   This paper proposes a sparse compressed SNN acceler-            1×1 convolution to aggregate the features. The structure of
+ator with spatial parallelism for real-time object detection       the basic block not only speeds up the inference but also
+to address the aforementioned issues. The energy efficient         helps the gradient propagation. The number of channels for
+object detection model is designed with hardware-friendly low      the shortcut connection is set to half of the number of channels
+complexity modules. Its model is compressed and encoded            for the stacked convolution path to reduce the parameters
+with the bit mask format for smaller model size and sparse         and operations in 1×1 convolutional layers. The final Output
+weights to reduce the on-chip memory requirement. Further-         Convolution layer accumulates the membrane potential with
+more, to exploit sparsity without complex control issues, we       no reset and averages the output of all time steps. This layer is
+propose a gated one-to-all product that efficiently utilizes       for the final object detection head, which adopts the detection
+the sparse feature with high parallelism and low power. The        method of YOLOv2 [24]. In this model, the threshold of LIF
+hardware design can be reconfigured for SNN layers as well         is set to 0.5, and the leaky term of LIF is set to 0.25 for a
+as input encoding layers. Besides, this hardware adopts the        simple hardware implementation.
+spatial parallelism to better support the large input resolution
+                                                                      Our SNN model uses mixed time steps for the trade-
+requirement of object detection. The final implementation can
+                                                                   off between computation latency and accuracy. As shown in
+attain 1024×576@29 frames per second processing when
+                                                                   Fig. 1, the input time step is set to one for the first two con-
+running at 500MHz with 35.88TOPS/W energy efficiency and
+                                                                   volutional layers and three for others. The first convolutional
+1.05mJ energy consumption per frame.
+                                                                   layer is treated as an ANN layer for input encoding that fires
+   The rest of the paper is organized as follows. Section II
+                                                                   once based on the current input. The second convolutional
+shows the proposed energy efficient model. Section III presents
+                                                                   layer receives one-time-step input and generates three-time-
+the hardware architecture. Section IV shows the experimental
+                                                                   step outputs to the following layer. This layer computes the
+results and comparisons. Finally, this paper is concluded in
+                                                                   convolution part once and passes the same output to the LIF
+Section V.
+                                                                   for three time steps to produce three different outputs. The
+                                                                   other layers use three time steps. The time step of the first
+          II. E NERGY E FFICIENT M ODEL D ESIGN                    two layers is set to one to reduce the number of operations
+A. Network Architecture                                            significantly due to their large input. Such method only has
+   The SNN model design is mainly divided into three training      a small impact on the final regression result because the first
+methods: (a) unsupervised training, (b) ANNS-to-SNNs con-          few layers are mainly to extract the features of the contour.
+version, and (c) direct training with backpropagation. The most
+commonly used algorithm for unsupervised training is spike-
+timing-dependent plasticity (STDP) [17]. This local training
+method avoids a large amount of gradient storage and is
+very suitable for on-chip learning. However, it lacks global
+information, which makes it difficult for large-scale networks
+and advanced tasks. For the object detection task, Spiking-
+YOLO [18] is the first work that applies the deep SNNs to
+object detection. Their proposed channel-wise normalization
+enables a higher firing rate, which leads to fast information
+transmission and obtains better results with fewer time steps,
+but still requires up to one thousand time steps due to its
+ANNs-to-SNNs conversion. Recent ANNs-to-SNNs conver-
+sion methods have improved the latency to a few time steps by
+the hybrid training [19], [20] (ANN pre-training followed by
+SNN training with tunable threshold and leakage). To achieve
+accurate and real-time inference by hardware accelerators,
+we use the learning-based spatio-temporal backpropagation
+(STBP) [21] with threshold-dependent batch normalization
+(tdBN) [22] to train our object detection network that only        Fig. 1: The network architecture for object detection, where
+takes a few time steps for inference.                              in T and out T are time steps for input and output, respec-
+   Fig. 1 shows the proposed SNN network for object detection      tively.
+with the RGB input images. The input layer uses the encoding
+convolution block to encode the multibit inputs into spikes for
+                                                                                                                                  3
+
+
+
+                                                                  D. Mixed Time Steps
+
+                                                                     Although we used fine-grained pruning to speed up the
+                                                                  inference, the speedup has not yet reached our expectation.
+                                                                  The main reason is that the feature size of the first few layers
+                                                                  is too large and the pruning tends to retain more weights of the
+                                                                  first few layers as shown in Fig. 3. Thus, the overall operation
+                                                                  counts are still large. Therefore, we further reduce the number
+                                                                  of operations by the proposed mixed time steps.
+                                                                     To measure the similarity of features at different time steps,
+        Fig. 2: (a) Convolution block (b) Basic block             we propose a metric named mean Intersection over Union
+                                                                  across Time-steps (mIoUT) as (1).
+
+B. Block Convolution                                                                 C
+                                                                                  1 X N umber of Intersectionc
+   For ease of processing, input feature maps are frequently             mIoU T =                                              (1)
+                                                                                  C c=1  N umber of U nionc
+partitioned into tiles. However, due to overlapped processing,
+the partial sum at the tile boundary must be stored in buffers,
+which consumes a significant amount of area. To avoid this        where C is the channel number, the Intersection is defined as
+problem, we adopt the block convolution method [25] that          the firing count of the neuron equal to the total time steps, and
+partitions the input into non-overlapped blocks and computes      the Union is defined as the firing count of the neuron greater
+each block independently without data dependency, saving          than zero but smaller than the total time steps. Fig. 4 shows an
+large amounts of boundary buffers or access energy. We set        example of the metric, which accumulates spikes across time
+the block size to 32×18 in this paper with replicate boundary     steps. The final result shows that there are four neurons fired
+padding.                                                          at each time step and two neurons fired fewer than three times
+                                                                  but greater than zero. Thus, the mIoUT is 0.67, which means
+                                                                  the features of each time step are very similar.
+C. Fine-grained Pruning
+                                                                     Fig. 5 shows the evaluation of the model with three time
+   To significantly reduce the weight memory requirements and     steps. This figure shows that the features of each time step
+speed up inference, we apply the fine-grained pruning [26] to     at the second layer are very similar. Therefore, the time step
+this network. This method sets weights below the threshold to     number of the second layer is reduced to one, and the same
+zero, where the threshold is determined by the pruning rate. In   convolutional result is passed through the LIF to produce three
+this paper, we set the pruning rate to 80% to prune 3×3 kernels   different outputs to the next layer. The model with (1, 3)
+and keep all weights of the 1×1 kernels intact. The final         mixed time steps can reduce 4.13 giga operations, which is
+pruned result is shown in Fig. 3. The pruned model reduces        17% reduction when compared to the original model.
+70% of weights and 47.3% of operation counts, respectively.
+Note that there are several SNN dedicated pruning methods
+that could be applied as well to further improve pruning rate.
+For example, [27] combines STBP and alternating direction
+method of multipliers (ADMM) to prune models via direct
+training, which needs iterative tuning and training for opti-
+mum performance. The pruning during training approach uses
+output firing characteristics [28], STDP based pruning [29]
+or gradient rewiring [30] for joint learning of connectivity
+and network weight. Pruning based on the ANN-to-SNN                         Fig. 4: An example of the mIoUT metric
+conversion prunes the ANN model before conversion with
+attention guide [31].
+
+
+
+
+    Fig. 3: The density of pruned weights of each layer                   Fig. 5: mIoUT of input features at each layer
+                                                                                                                                          4
+
+
+
+                III. S YSTEM A RCHITECTURE
+A. Analysis of Design Parallelism
+   To fulfill the high computation demand due to the large
+input and model size, some form of parallelism is necessary.
+For sparse SNN computation, we evaluate three possible cases.
+   1) Input channel parallelism: Because of the sparse com-
+      pressed weight, if we have parallelism along the input
+      channel, the execution speed of each channel will be
+      different. Fig. 6 (a) show the analysis of the input
+      channel parallelism compared to the spatial parallelism.
+      We allocate a total of 576 PEs used in this paper              (a) Analysis of the input channel parallelism relative to the spatial
+      to process features on different dimensions. For the           parallelism
+      comparison purpose, we set the PE organizations as
+      (input channel, height, width) = (8, 9, 8) to process
+      8 input channels with 9x8 feature size per channel.
+      We also add FIFOs to reduce the latency due to the
+      workload imbalance of input parallelism. In comparison
+      to the spatial parallelism case ((0, 18, 32), denoted in the
+      figure as the FIFO depth = 0 case), the input parallelism
+      cases require more computation latency and more FIFO
+      hardware resources as shown in the figure. The deep
+      FIFOs will consume a large amount of chip area and
+      power, potentially even larger than the area of PEs.
+                                                                     (b) Analysis of the output channel parallelism relative to the spatial
+   2) Output channel parallelism: If we have parallelism along       parallelism
+      the output channel, all output channels will use the same
+      input feature. Thus, this design must wait until all out-              Fig. 6: Analysis of design parallelism schemes
+      put channel computations have been completed before
+      moving on to the next input feature. Fig. 6 (b) shows
+      the simulation result compared to the spatial parallelism
+      case (0, 18, 32). As shown in the figure, the computation
+      latency is increased as more PEs are assigned to process
+      features on the output channel dimension. Besides, to
+      support output parallelism, this design needs to split
+      SRAM buffers into more banks, necessitating the use
+      of additional peripheral circuits.
+   3) Spatial parallelism: There will be no workload imbal-
+      ance if we have parallelism along the spatial dimension.
+      As a result, we don’t need to connect any accumulators
+      or buffers to the PEs. In addition, according to [25],         Fig. 7: The proposed system architecture for object detection
+      the tile size of block convolution can be larger, which
+      will have a smaller impact on detection result. The only
+      restriction is that the input size be large enough to reap     activation map independently, just like the four Output SRAM
+      the benefits.                                                  buffers.
+Based on these observations, we finally choose the third case           To reuse data, the proposed design will first access a tile of
+to reach the ultimate performance.                                   the input map and weights in the SRAM buffers. If the input
+                                                                     is multibit, it will be split into bit planes, stored in SRAM,
+                                                                     and then processed in the PE with the shifter and adder to
+B. Overview                                                          complete the multibit convolution with bit serial input.
+   Fig. 7 shows the proposed system architecture, which con-            1) Gated One-to-All Product: Exploring the sparsity of
+sists of a PE module for sparse convolution computation, a           SNN can help reduce computation and storage. However,
+LIF module for updating the membrane potential and firing            because of the unexpected zero distribution, the processing
+spikes, a max-pooling module composed of simple OR gates,            of sparse activation maps is frequently irregular, reducing
+and a system controller module for controlling the memory            hardware parallelism and increasing control cost. Because of
+and communication of each module based on configuration.             the simple spike input of SNN, this cost becomes significant.
+The sparse compressed weight data is stored in the Weight            As a result, rather than using zero activation skipping to
+Map SRAM bank and NZ Weight SRAM bank, respectively.                 accelerate inference, this paper employs zero activation gating
+Each of the four Input SRAM buffers stores a sub-tile of the         to reduce energy consumption, denoted as gated one-to-all
+                                                                                                                                   5
+
+
+
+product. This method avoids zero-weight computation to save        Fig. 10 illustrates the difference between CSR and bit-mask
+cycle counts and multibit weight access and storage while          representation. CSR divides the kernel into three parts: index
+maintaining high hardware parallelism for object detection         points, indexes, and non-zero weight values, while bit-mask
+computation.                                                       representation divides the kernel into sparse map and non-
+   Fig. 8 shows an example of the proposed gated one-to-all        zero weight values. According to the degree of sparsity of
+product, which has a 4x4 input convoluted with a 3x3 kernel        our network weights, we find that bit-mask representation can
+to generate four outputs with a sliding window operation. For      save more hardware cost due to its simplicity and is also more
+demonstration purpose, we assume only one nonzero weight           efficient for our sparse computation.
+in the kernel.
+
+
+
+
+Fig. 8: The example of convolution with (a) sliding window,        Fig. 10: Example of difference between CSR and bit-mask
+and (b) gated one-to-all product, where x denotes a weight         representation
+value.
+
+   For the proposed gated one-to-all product, we first encode
+                                                                   C. Data Flow
+an enable map according to each nonzero weight position in
+the kernel. In this example, the nonzero weight is at the upper       1) Example of the Proposed Convolution Data Flow: Based
+left corner, (row, col) = (0, 0). This weight will be multiplied   on the above gated one-to-all product, Fig. 11 shows an ex-
+with the four inputs at the upper left to generate output. The     ample of convolution data flow for the proposed architecture,
+four input block is the enable map. These multiplications can      where the input size is 8×8 for clarity. The proposed PE will
+be parallelly computed in hardware as a one-to-all product.        first load a channel of the input tile and the corresponding
+If more nonzero weights exist in a kernel, the corresponding       weight map and the nonzero weight values. The column
+enable map will be shifted R steps down and C steps right for      encoder and row encoder will encode the position of the
+a nonzero weight at (R, C) position in the kernel. These partial   leftmost nonzero value of the weight map to find the enable
+outputs will be accumulated into the final output. During          map and compute the convolution by using the gated one-to-all
+this process, the zeros in the enable map will be used as a        product. Then, the leftmost nonzero value of the weight map
+clock gating control to save power as shown in Fig. 9. This        will be cleared to zero before the next clock. At the second
+design introduces a gate module to replace the multiplication      cycle, the PE will find the next nonzero weight and repeat the
+to reduce the dynamic power of each neuron. If the signal EN       above process again. The output result of the second cycle will
+is 1, the clock will be enabled, and the corresponding weight      be accumulated with the one of the first cycle. This will be
+will be accumulated. On the contrary, if the signal EN is 0,       repeated until the final nonzero weight. During this process,
+the clock will be turned off to keep the partial sum.              the zero weight values will be skipped to reduce cycle counts.
+   In summary, the steps in the gated one-to-all product are:         2) Algorithm For The Proposed Computing Flow: Fig. 12
+(1) find the enable map based on the nonzero weight position       shows the proposed computing flow of our SNN design, which
+in a kernel, and (2) gate the output neurons with zero values      can be concisely described as the nested loop order: output
+in the enable map and accumulate the nonzero weight values         channel K → time step T → input bit number B → input
+of all enabled output neurons.                                     channel C. The whole computing flow is described below.
+                                                                   Before proceeding with main processing, we will configure
+                                                                   the input based on the layer type and time step number. In our
+                                                                   model, we have a normal SNN layer for spike input and an
+                                                                   encoding layer for the multibit RGB input image. To provide
+                                                                   unified support for both layers, the multibit input will be split
+                                                                   into bit planes and processed bit serially as the spike input.
+                                                                   Thus, we introduce the dimension input bit number B and
+      Fig. 9: The gated computation element in the PE              then the dimension input channel C, and set B to eight for
+                                                                   the input encoding layer. B is set to one for all other layers.
+  2) Weight Compression Format: To support above gate              The second input configuration is based on the time step
+one-to-all product, we choose the bit-mask representation to       number T since the input time step of the first two layers
+represent the sparse weight data instead of Compressed Sparse      is set to one for lower operations and the other layers use a
+Row(CSR) used in other high-performance computing designs.         higher time step. If the input time step is not equal to the
+                                                                                                                                6
+
+
+
+
+                                 Fig. 11: An example of the proposed convolution data flow.
+
+
+
+
+                                                                  Fig. 13: (a) Reorder for encoding layer (b) Reorder for other
+                                                                  layers
+
+
+                                                                  convolution to support up to 512 input channels, 512 output
+                                                                  channels, and kernel sizes from 1×1 to 3×3, (2) parameters
+                                                                  of data flow to support up to 4 input time steps, 4 output
+        Fig. 12: Data flow of spiking neural network              time steps, and 1024×576 input size, (3) number of the
+                                                                  sparse weights, (4) two bits for indicating the max-pooling
+                                                                  and encoding layer, respectively, and (5) a setup indicator to
+output time step, the convolutional result is repeated for each   indicate the setup completion.
+output time step, resulting in different outputs after the LIF
+operation. Following the input configuration, the entire loop                     IV. E XPERIMENTAL R ESULT
+will be executed as shown below. For each output channel,         A. Results of The Proposed Model
+each output time step, each bit plane, and each input channel,
+                                                                     The proposed model is implemented with Pytorch and
+apply the sparse convolution as the gated one-to-all product,
+                                                                  evaluated for object detection in the autonomous driving
+and output the final result after the LIF operation.
+                                                                  application using the IVS 3cls [32] dataset. IVS 3cls is a
+   In addition, according to the KT BC loop order, a layer will
+                                                                  cityscape object detection dataset with about 11,000 samples,
+complete the input channel C dimension before the time step
+                                                                  including 10,000 training images and 1,000 test images. This
+T dimension. However, its output channel K dimension (aka.
+                                                                  dataset contains three types of objects: vehicles, bikes, and
+input channel for next layer input) is completed after the time
+                                                                  pedestrians. Its images have the resolution of 1920×1080. We
+step T dimension, resulting in disorderly sorting of the next
+                                                                  resize the images to 1024×576 as our input in our experiment.
+layer’s input data and inhibiting input sequential addressing.
+                                                                  For model training, we use the AdamW [33] optimizer with
+Therefore, we will reorder the temporal channel order as
+                                                                  10−3 weight decay. The learning rate is warmed up from 10−5
+shown in Fig. 13 by storing the output as the desired input
+                                                                  to 10−4 at the first five epochs, and finally reduced to 10−6 .
+order with non-consecutive addressing. Thus, regardless of the
+                                                                  The batch size is set to 32. We train our baseline SNN model
+encoding layer or other layers, the output channel dimensions
+                                                                  for 160 epochs with two NVIDIA Tesla V100.
+will be arranged sequentially for sequential input data access.
+                                                                     Table I shows the ablation study of the proposed SNN
+The input for the encoding layer will have extra bit number
+                                                                  model. SNN-a, the baseline SNN model, requires 3.17M
+B dimension, which will be split and arranged sequentially as
+                                                                  model parameters and achieves mean average precision (mAP)
+shown in the figure.
+                                                                  of 73.9%. For model slimming, we fine-tune with an additional
+                                                                  90 epochs for fine-grained pruning, and 5 epochs for quan-
+D. Configuration Setup                                            tization and block convolution respectively. The fine-grained
+  The proposed accelerator has a System Controller as shown       pruning causes a 0.6% mAP drop but reduces about 70%
+in Fig. 7, which consists of several registers to store the       of parameters. Quantization and block convolution cause 1%
+configurations. The configurations include (1) parameters of      and 0.8% mAP decrease, respectively. In total, mAP has been
+                                                                                                                                       7
+
+
+
+dropped by 2.4%, but with 70% of fewer parameters and much
+simpler hardware.
+   For comparison purpose, we also train several models of
+the same structure with floating point ANN, quantized ANN
+(QNN), and binary neural network (BNN) as shown in Ta-
+ble II. The mAP of the baseline SNN-a model is slightly lower
+than the mAP of the QNN model with three bits activation
+precision, but much higher than the mAP of the BNN model,
+as shown in the table. SNN’s multiple time steps allow it
+to extract more features with greater precision. To further
+evaluate the inference accuracy with more time steps, we take
+the model weights of SNN-a but infer the model with the
+(1, 4) mixed time steps (denoted as the SNN-4T model). The            (a) Visualization result of the SNN-d model with one time step
+result shows that SNN-4T can slightly improve the mAP. In
+addition, we also compare our SNN-d model with the hybrid
+precision ANN model [34] trained on the same dataset. The
+SNN-d has a higher mAP but requires smaller model size and
+is hardware friendly, demonstrating SNN’s effectiveness with
+small time steps.
+   Fig. 14 shows the visualization results of the SNN-d model
+at various time steps to detect vehicles, bikes, and pedestrians.
+With only one time step, the result has many false bounding
+boxes. This situation improves as more time steps are added,
+as shown in Fig. 14(b) and (c). The results with (1, 3) and (1,
+4) time steps are nearly identical. More time steps can result
+in more accurate results. Based on this observation, we chose       (b) Visualization result of the SNN-d model with (1, 2) mixed time
+(1, 3) mixed time steps to train our model in order to strike a     steps
+balance between accuracy and latency.
+
+B. Analysis of Mixed Time Steps
+   To demonstrate the relationship between the metric mIoUT
+and the accuracy/operation count, we infer the trained model
+with different combinations of mixed time steps as shown
+in Fig. 15. The C1 model in this diagram denotes that just
+the first convolutional layer takes one-time-step input and
+produces three-time-step outputs to the next layer. The C2
+model specifies that the first two convolutional layers receive
+one-time-step input, whereas the second convolutional layer
+creates three-time-step outputs for the next layer. The C2BX
+model states that the first X basic blocks, as well as the          (c) Visualization result of the SNN-d model with (1, 3) mixed time
+first two convolutional layers, get one-time-step input, and        steps
+the basic block’s 1×1 convolutional layer creates three-time-
+step outputs to the following layer. The results show that
+setting the time step of the first few layers with high mIoUT
+to 1 can greatly reduce operations while maintaining high
+accuracy. However, if the time step of the last few layers
+with low mIoUT is set to 1, the accuracy drops significantly
+without much reduction in operation counts. As a result, we
+selected the C2 model to achieve real-time and accurate object
+detection.
+
+C. Hardware Implementation Result
+   The proposed accelerator has been designed with Verilog,         (d) Visualization result of the SNN-d model with (1, 4) mixed time
+synthesized with Synopsys Design Compiler, and implemented          steps
+with the TSMC 28nm CMOS technology. Fig. 16 shows the
+chip layout and its implementation result. The core area is         Fig. 14: Visualization result of the SNN-d model under dif-
+1.0mm×1.0mm with 288.5KB SRAM. The peak throughput is               ferent time steps
+                                                                                                                              8
+
+
+
+                                       TABLE I: The ablation study of the SNN model
+                      Fine-grained    Quantize     Block        Parameter                   AP (%)
+            Model
+                        pruning       (8 bits)   convolution       (M)       Bike    Vehicle Pedestrian       Mean
+           SNN-a                                                  3.17       71.1     80.0       70.7         73.9
+           SNN-b           X                                      0.96       70.6     79.1       70.2         73.3
+           SNN-c           X             X                        0.96       69.8     78.3       68.7         72.3
+           SNN-d           X             X            X           0.96       68.4     77.7       68.4         71.5
+
+                          TABLE II: Experimental results of the proposed object detection model
+                           Precision           Block       Model size    Parameter                    AP (%)
+       Model
+                       Act.       Weight     convolution    (Mbits)         (M)       Bike     Vehicle Pedestrian      Mean
+      ANN            Float32      Float 32                  101.44         3.17       79.9      81.4       79.9        80.4
+   Yolov2 [24]       Float 32     Float 32                  1618.24        50.57      71.2      80.7       76.5        76.1
+      QNN             FXP 4       Float 32                  101.44         3.17       79.4      81.2       79.4        80.0
+      QNN             FXP 3       Float 32                  101.44         3.17       70.6      80.3       77.3        76.1
+      QNN             FXP 2       Float 32                  101.44         3.17       69.6      78.6       67.9        72.0
+  GUO et al. [34]     Hybrid       Hybrid                    17.2            6         -          -          -         71.1
+      BNN             Binary       Binary                    3.17          3.17       56.6      61.1       49.7        55.8
+     SNN-a            Binary      Float 32                  101.44         3.17       71.1      80.0       70.7        73.9
+    SNN-4T            Binary      Float 32                  101.44         3.17       71.3      80.0       70.9        74.1
+     SNN-d            Binary       FXP 8         X           7.68          0.96       68.4      77.7       68.4        71.5
+
+
+
+
+Fig. 15: The effect of mixed time steps on accuracy and
+operation count.                                                     Fig. 16: Chip layout and its implementation result
+
+1093 GOPS running at 500MHz when considering the weight
+                                                                we increase the Input SRAM size to be large enough (81KB)
+sparsity. The core power consumption is 30.5mW, measured by
+                                                                to store a 32×18 tile with 384 input channels and three time
+running the SNN-d model at 0.9V and 25◦ C. The accelerator
+                                                                steps, we can reduce the input access amount to 5.456 MB.
+can execute our object detection model at 29fps for 1024×576
+                                                                   Based on the above analysis, assuming that the external
+images and consume only 1.05mJ per frame.
+                                                                DRAM energy is 70pJ/bit for DDR3 DRAM [35], the total
+                                                                DRAM access of this design consumes 108.38mJ per frame
+D. External Memory Access Analysis                              when the Input SRAM is 36KB and 5.64mJ per frame when
+   To reduce high power external memory access, the size        the input SRAM is increased to 81KB. In contrast, the core
+of the NZ Weight SRAM and the Weight Map SRAM are               consumes 1.05mJ per frame.
+designed to be large enough to store the weight data of the        Fig. 17 compares the DRAM access amounts of network
+largest layer of the network so that the design will access     parameters with different representations. Our simple bit-mask
+the local buffer instead of the external DRAM. The size of      representation can reduce 59.1% and 16.4% of access com-
+the Input SRAM is designed to be enough to store a 32×18        pared with the original format and CSR format, respectively.
+tile with 512 input channels and one time step. However, our
+model runs with (1, 3) mixed time steps. Thus, the inputs of
+the last few layers will be accessed from the external DRAM     E. Analysis of Latency, Power and Area
+repeatedly whenever changing to process different output           To analyze the latency benefit due to the zero weight
+channels. Therefore, the external access amount for one input   skipping, we design a dense architecture as the baseline, which
+image can be divided into three parts: 188.928MB for input,     turns off the skipping to execute all weights. With the help
+3.327MB for output, and 1.292MB for model parameters. If        of zero weight skipping, we can save 47.3% of computing
+                                                                                                                                                          9
+
+
+
+                                                                             TABLE III: Comparison with other designs
+                                                                                            Our Work       [10]             [9]                [11]
+                                                                    Technology              28nm           28nm             28nm               65nm
+                                                                    Measurements            layout         layout           layout             Chip
+                                                                                                                                               SNN
+                                                                    Algorithm               SNN            SNN              SNN
+                                                                                                                                               (MLP)
+                                                                                            Object         Semantic                            CLS +
+                                                                    Task                                                    CLS
+                                                                                            Detection      Segment.                            learning
+                                                                    Sparse                  Y              Y                Y                  N
+                                                                    Voltage (V)             0.9            0.81             -                  0.8
+                                                                    Weight (bits)           8              8                8                  8
+                                                                    # of MAC                576 (adder)    -                128 (adder)        -
+                                                                    Clock(MHz)              500            500              200                20
+                                                                                            576            1150             51.2
+                                                                    Peak GOPSa                                                                 -
+                                                                                            1093b,c        1150b            51.2b
+Fig. 17: The comparison of DRAM access amounts of the               Core Area
+                                                                                          1.0              0.89             2.09               10.08
+network parameters with different representations                   (mm2 )
+                                                                    SRAM (KB)             288.5            240              585                353
+                                                                    Area eff.             576              1292.1           24.5
+                                                                                                                                               -
+                                                                    (GOPS/mm2 )           1093b,c          1292.1b          24.5b
+latency and execute the model at 29fps for 1024×576 images.         Core Power (mW) 30.5                   149.3            162.4              23.6
+The data bandwidth is 5.6GB/s, which is falling within the          Energy eff.           18.9             7.70             -                  3.4
+range of DDR3 DRAM bandwidth (12.8GB/s).                            (TOPS/W)              35.88c,d         6.24d            -                  6.24d
+                                                                    a 1 GMACS = 2 GOPS.
+   We simulate the design with a smaller dataset, which             b Technology scaling process .
+                                                                                                    
+                                                                                            28nm
+contains different patches of different layers, and use Synopsys    c Consider the weight sparsity.
+                                                                                                                                              2
+PrimeTime PX to estimate the power consumption. First, with
+                                                                                                                                
+                                                                    d Normalized                                process            voltage
+                                                                                    efficiency = efficiency ×    28nm
+                                                                                                                            ×        0.9V
+                                                                                                                                                   .
+zero activation gating, we can decrease 46.6% of PE dynamic
+power. The corresponding average sparsity of input maps is
+77.4% without counting the multibit inputs of the first layer.     power of the PEs by 46.6% due to the 77.4% sparsity of
+   Fig. 18 shows the power and area breakdown of our design.       input maps and the computing latency by 47.3% due to the
+For power, memory and PEs account for 48% and 41% of total         70% sparsity of weights. In addition, the sparse compressed
+power, respectively, because 576 calculation elements need to      weights enable us to use only 216 KB SRAM banks to store
+access large amounts of data and accumulate the partial sum.       the weights of the largest layer and reduce the DRAM access
+The input memory accounts for up to 73% of memory power            amounts of parameters by 59.1%. The experimental result of
+because of the 144 bit width and simultaneous access of four       the neural network shows 71.5% mAP with only (1, 3) mixed
+input SRAMs whenever the input channel is changed. The             time steps on the IVS 3cls dataset. The implementation result
+clock network consumes the 29% of total power because there        can achieve the detection rate at 1024×576@29 frames per
+are many registers in PE and LIF for accumulating data. For        second when operating at 500MHz clock frequency and an
+area, the memory occupies 86% of the total area, and the           energy efficiency of 35.88TOPS/W with the 1.05mJ energy
+rest only occupies 14%. PEs occupy 58% of the logic area           consumption per frame.
+due to 576 16-bit registers to accumulate the partial sum. NZ
+Weight and Weight Map occupy 49% and 24% of the total                                ACKNOWLEDGMENT
+area because they must be large enough to store an entire            The authors would like to thank TSRI for its support with
+layer of weights and thus avoid repeatedly accessing the same      EDA design tools.
+data from external memory.
+                                                                                                  R EFERENCES
+F. Design Comparison                                               [1] A. Khodamoradi, K. Denolf, and R. Kastner, “S2N2: A FPGA acceler-
+   Table III shows comparisons with other designs. The list of         ator for streaming spiking neural networks,” in The 2021 ACM/SIGDA
+                                                                       International Symposium on Field-Programmable Gate Arrays, 2021,
+comparison is selected based on the similarity of the approach         pp. 194–205.
+to our design. The proposed design achieves area efficiency of     [2] F. Akopyan, J. Sawada et al., “TrueNorth: design and tool flow of a 65
+1093 GOP S/mm2 and energy efficiency of 35.88 T OP S/W                 mw 1 million neuron programmable neurosynaptic chip,” IEEE trans-
+                                                                       actions on computer-aided design of integrated circuits and systems,
+that exceeds most of the other designs due to our simple               vol. 34, no. 10, pp. 1537–1557, Oct. 2015.
+calculation elements and simple control for skipping zero          [3] M. Davies, N. Srinivasa et al., “Loihi: A neuromorphic manycore
+weights. The area efficiency of [10] is better than ours because       processor with on-chip learning,” IEEE Micro, vol. 38, no. 1, pp. 82–99,
+                                                                       Jan. 2018.
+their input size is only 80×80, which is much smaller than our     [4] E. Painkras, L. A. Plana et al., “Spinnaker: A 1-w 18-core system-on-
+1024×576 input. Thus, the requirements of the I/O memory               chip for massively-parallel neural network simulation,” IEEE Journal of
+size are low.                                                          Solid-State Circuits, vol. 48, no. 8, pp. 1943–1953, 2013.
+                                                                   [5] J. Schemmel, D. Brüderle et al., “A wafer-scale neuromorphic hardware
+                                                                       system for large-scale neural modeling,” in 2010 IEEE International
+                      V. C ONCLUSION                                   Symposium on Circuits and Systems (ISCAS), 2010, pp. 1947–1950.
+   This paper proposes a sparse compressed spiking neural          [6] C. Frenkel, M. Lefebvre et al., “A 0.086-mm2 12.7-pj/sop 64k-synapse
+                                                                       256-neuron online-learning digital spiking neuromorphic processor in
+network accelerator for object detection with the gated one-to-        28-nm cmos,” IEEE transactions on biomedical circuits and systems,
+all product. The proposed approach can reduce the dynamic              vol. 13, no. 1, pp. 145–158, 2018.
+                                                                                                                                                               10
+
+
+
+
+Fig. 18: Power breakdown of the (a) core, (b) memory and (c) logic circuits. Area breakdown of the (d) core with memory,
+(e) memory, and (f) core only.
+
+
+ [7] J. Stuijt, M. Sifalakis et al., “µbrain: An event-driven and fully             [24] J. Redmon and A. Farhadi, “YOLO9000: better, faster, stronger,” in
+     synthesizable architecture for spiking neural networks,” Frontiers in               Proceedings of the IEEE conference on computer vision and pattern
+     neuroscience, vol. 15, p. 538, 2021.                                                recognition, 2017, pp. 7263–7271.
+ [8] S. Moradi, N. Qiao et al., “A scalable multicore architecture with het-        [25] G. Li, Z. Liu et al., “Block Convolution: towards memory-efficient infer-
+     erogeneous memory structures for dynamic neuromorphic asynchronous                  ence of large-scale CNNs on FPGA,” IEEE Transactions on Computer-
+     processors (dynaps),” IEEE Transactions on Biomedical Circuits and                  Aided Design of Integrated Circuits and Systems, May. 2021.
+     Systems, vol. 12, no. 1, pp. 106–122, 2018.                                    [26] S. Han, J. Pool et al., “Learning both weights and connections for
+ [9] S. Narayanan, K. Taht et al., “SpinalFlow: an architecture and dataflow             efficient neural networks,” arXiv preprint arXiv:1506.02626, Oct. 2015.
+     tailored for spiking neural networks,” in ACM/IEEE 47th Annual Inter-          [27] L. Deng, Y. Wu et al., “Comprehensive SNN compression using ADMM
+     national Symposium on Computer Architecture (ISCA), 2020, pp. 349–                  optimization and activity regularization,” IEEE Transactions on Neural
+     362.                                                                                Networks and Learning Systems, pp. 1–15, 2021.
+[10] Q. Chen, G. He et al., “A 67.5 µJ/Prediction accelerator for Spiking           [28] Y. Shi, L. Nguyen et al., “A soft-pruning method applied during training
+     Neural Networks in image segmentation,” IEEE Transactions on Circuits               of spiking neural networks for in-memory computing applications,”
+     and Systems II: Express Briefs, Jul. 2021.                                          Frontiers in neuroscience, vol. 13, p. 405, 2019.
+                                                                                    [29] N. Rathi, P. Panda, and K. Roy, “STDP-based pruning of connections
+[11] J. Park, J. Lee, and D. Jeon, “A 65nm 236.5 nJ/classification neuromor-
+                                                                                         and weight quantization in spiking neural networks for energy-efficient
+     phic processor with 7.5% energy overhead on-chip learning using direct
+                                                                                         recognition,” IEEE Transactions on Computer-Aided Design of Inte-
+     spike-only feedback,” in 2019 IEEE International Solid-State Circuits
+                                                                                         grated Circuits and Systems, vol. 38, no. 4, pp. 668–677, 2019.
+     Conference-(ISSCC). IEEE, 2019, pp. 140–142.
+                                                                                    [30] Y. Chen, Z. Yu et al., “Pruning of deep spiking neural networks through
+[12] S. Yin, S. K. Venkataramanaiah et al., “Algorithm and hardware design               gradient rewiring,” arXiv preprint arXiv:2105.04916, 2021.
+     of discrete-time spiking neural networks based on back propagation             [31] S. Kundu, G. Datta et al., “Spike-thrift: Towards energy-efficient deep
+     with binary activations,” in IEEE Biomedical Circuits and Systems                   spiking neural networks by limiting spiking activity via attention-guided
+     Conference (BioCAS), 2017, pp. 1–5.                                                 compression,” in Proceedings of the IEEE/CVF Winter Conference on
+[13] S. Narayanan, A. Shafiee, and R. Balasubramonian, “INXS: Bridging                   Applications of Computer Vision, 2021, pp. 3953–3962.
+     the throughput and energy gap for spiking neural networks,” in 2017            [32] C.-C. Tsai, Y.-H. Yang et al., “The 2020 embedded deep learning object
+     International Joint Conference on Neural Networks (IJCNN). IEEE,                    detection model compression competition for traffic in asian countries,”
+     2017, pp. 2451–2459.                                                                in IEEE International Conference on Multimedia & Expo Workshops
+[14] H.-H. Lien, C.-W. Hsu, and T.-S. Chang, “VSA: reconfigurable vec-                   (ICMEW), 2020, pp. 1–6.
+     torwise spiking neural network accelerator,” in IEEE International             [33] I. Loshchilov and F. Hutter, “Decoupled weight decay regularization,”
+     Symposium on Circuits and Systems (ISCAS), 2021, pp. 1–5.                           arXiv preprint arXiv:1711.05101, Jan. 2019.
+[15] A. Parashar, M. Rhu et al., “SCNN: An accelerator for compressed-              [34] J.-I. Guo, C.-C. Tsai et al., “Hybrid fixed-point/binary deep neural
+     sparse convolutional neural networks,” ACM SIGARCH Computer Ar-                     network design methodology for low-power object detection,” IEEE
+     chitecture News, vol. 45, no. 2, pp. 27–40, May. 2017.                              Journal on Emerging and Selected Topics in Circuits and Systems,
+[16] A. Gondimalla, N. Chesnut et al., “SparTen: a sparse tensor accelerator             vol. 10, no. 3, pp. 388–400, Sep. 2020.
+     for convolutional neural networks,” in Proceedings of the 52nd Annual          [35] K. T. Malladi, F. A. Nothaft et al., “Towards energy-proportional
+     IEEE/ACM International Symposium on Microarchitecture, 2019, pp.                    datacenter memory with mobile DRAM,” in 39th Annual International
+     151–165.                                                                            Symposium on Computer Architecture (ISCA), 2012, pp. 37–48.
+[17] G.-Q. Bi and M.-M. Poo, “Synaptic modifications in cultured hip-
+     pocampal neurons: dependence on spike timing, synaptic strength, and
+     postsynaptic cell type,” Journal of neuroscience, vol. 18, no. 24, pp.
+     10 464–10 472, Dec. 1998.
+[18] S. Kim, S. Park et al., “Spiking-YOLO: spiking neural network for
+     energy-efficient object detection,” in Proceedings of the AAAI Confer-
+     ence on Artificial Intelligence, vol. 34, no. 07, 2020, pp. 11 270–11 277.
+[19] N. Rathi and K. Roy, “Diet-snn: A low-latency spiking neural network
+     with direct input encoding and leakage and threshold optimization,”
+     IEEE Transactions on Neural Networks and Learning Systems, pp. 1–9,                                     Hong-Han Lien received the M.S. degree in the
+     2021.                                                                                                   graduate degree program of artificial intelligence
+                                                                                                             from the National Yang Ming Chiao Tung Uni-
+[20] G. Datta and P. A. Beerel, “Can deep neural networks be con-                                            versity, Hsinchu, Taiwan, in 2021. He is currently
+     verted to ultra low-latency spiking neural networks?” arXiv preprint                                    working in the MediaTek, Hsinchu, Taiwan, R.O.C.
+     arXiv:2112.12133, 2021.                                                                                 His research interest includes VLSI design and deep
+[21] Y. Wu, L. Deng et al., “Direct training for spiking neural networks:                                    learning.
+     faster, larger, better,” in Proceedings of the AAAI Conference on Artificial
+     Intelligence, vol. 33, no. 01, 2019, pp. 1311–1318.
+[22] H. Zheng, Y. Wu et al., “Going deeper with directly-trained larger
+     spiking neural networks,” arXiv preprint arXiv:2011.05280, Dec. 2020.
+[23] C.-Y. Wang, H.-Y. M. Liao et al., “CSPNet: A new backbone that can
+     enhance learning capability of CNN,” in Proceedings of the IEEE/CVF
+     conference on computer vision and pattern recognition workshops, 2020,
+     pp. 390–391.
+                                                                               11
+
+
+
+                        Tian-Sheuan Chang (S’93–M’06–SM’07) received
+                        the B.S., M.S., and Ph.D. degrees in electronic
+                        engineering from National Chiao-Tung University
+                        (NCTU), Hsinchu, Taiwan, in 1993, 1995, and 1999,
+                        respectively.
+                           From 2000 to 2004, he was a Deputy Manager
+                        with Global Unichip Corporation, Hsinchu, Taiwan.
+                        In 2004, he joined the Department of Electronics En-
+                        gineering, NCTU, where he is currently a Professor.
+                        In 2009, he was a visiting scholar in IMEC, Belgium.
+                        His current research interests include system-on-a-
+chip design, VLSI signal processing, and computer architecture.
+   Dr. Chang has received the Excellent Young Electrical Engineer from
+Chinese Institute of Electrical Engineering in 2007, and the Outstanding
+Young Scholar from Taiwan IC Design Society in 2010. He has been actively
+involved in many international conferences as an organizing committee or
+technical program committee member.
+

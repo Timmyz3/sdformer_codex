@@ -1,0 +1,1426 @@
+                                         Published as a conference paper at ICLR 2026
+
+
+
+
+                                         U NBIASED G RADIENT E STIMATION FOR E VENT B IN -
+                                         NING VIA F UNCTIONAL BACKPROPAGATION
+
+                                          Jinze Chen, Wei Zhai∗, Han Han, Tiankai Ma, Yang Cao, Bin Li, Zheng-Jun Zha
+                                          MoE Key Laboratory of Brain-inspired Intelligent Perception and Cognition,
+                                          University of Science and Technology of China
+                                          {chjz@mail.,wzhai056@,hanh@mail.,tiankaima@mail.}ustc.edu.cn
+                                          {forrest,binli,zhazj}@ustc.edu.cn
+
+
+
+                                                                                        A BSTRACT
+arXiv:2602.12590v1 [cs.CV] 13 Feb 2026
+
+
+
+
+                                                     Event-based vision encodes dynamic scenes as asynchronous spatio-temporal
+                                                     spikes called events. To leverage conventional image processing pipelines, events
+                                                     are typically binned into frames. However, binning functions are discontinuous,
+                                                     which truncates gradients at the frame level and forces most event-based algo-
+                                                     rithms to rely solely on frame-based features. Attempts to directly learn from
+                                                     raw events avoid this restriction but instead suffer from biased gradient estima-
+                                                     tion due to the discontinuities of the binning operation, ultimately limiting their
+                                                     learning efficiency. To address this challenge, we propose a novel framework for
+                                                     unbiased gradient estimation of arbitrary binning functions by synthesizing weak
+                                                     derivatives during backpropagation while keeping the forward output unchanged.
+                                                     The key idea is to exploit integration by parts: lifting the target functions to func-
+                                                     tionals yields an integral form of the derivative of the binning function during
+                                                     backpropagation, where the cotangent function naturally arises. By reconstruct-
+                                                     ing this cotangent function from the sampled cotangent vector, we compute weak
+                                                     derivatives that provably match long-range finite differences of both smooth and
+                                                     non-smooth targets. Experimentally, our method improves simple optimization-
+                                                     based egomotion estimation with 3.2% lower RMS error and 1.57× faster con-
+                                                     vergence. On complex downstream tasks, we achieve 9.4% lower EPE in self-
+                                                     supervised optical flow, and 5.1% lower RMS error in SLAM, demonstrating
+                                                     broad benefits for event-based visual perception. Source code can be found at
+                                                     https://github.com/chjz1024/EventFBP.
+
+
+                                         1       I NTRODUCTION
+                                         Event-based visual perception has recently emerged as a novel paradigm to encode highly dynamic
+                                         scenes with spatio-temporal event spikes. This paradigm shift brings new opportunities to high-
+                                         speed and low-latency visual information processing, such as fine-grained optical flow estimation
+                                         (Zhu et al., 2018; Gehrig et al., 2021b; Shiba et al., 2023; Hamann et al., 2024; Luo et al., 2024;
+                                         Wan et al., 2024; 2025; Han et al., 2025), high-speed robot localization (Vidal et al., 2018; Zhou
+                                         et al., 2021; Hines et al., 2025), and blurless video generation (Pan et al., 2019; Rebecq et al., 2019;
+                                         Tulyakov et al., 2021; Wu et al., 2024; Xu et al., 2025; Liao et al., 2025).
+                                         To leverage conventional image processing pipelines, a common practice is to apply data binning
+                                         techniques to convert irregular events into dense frames (Gallego et al., 2020), as shown in Figure 1.
+                                         However, binning functions are inherently discontinuous, which truncates gradients at the frame
+                                         level and forces most event-based algorithms to rely solely on frame-based features. Existing ap-
+                                         proaches often resort to smooth binning to restore differentiability to raw events, but such surrogates
+                                         inevitably introduce bias in the gradients, leading to suboptimal learning efficiency.
+                                         This challenge reflects a broader issue in learning with discontinuous nonlinearities in neuromor-
+                                         phic computing, where spiking neuron models introduce non-differentiable functions (Eshraghian
+                                         et al., 2023). Existing solutions, such as surrogate gradients (Neftci et al., 2019) or straight-through
+                                         estimators (Yin et al., 2019), provide heuristic gradients, but they lack unbiasedness guarantees.
+                                             ∗
+                                                 Correspondence to: Wei Zhai <wzhai056@ustc.edu.cn>
+
+
+                                                                                               1
+Published as a conference paper at ICLR 2026
+
+
+
+
+                        Events                                  Params                            Warped Events             IWE
+       Events                                                Forward                  Backward                                    Gfd
+
+                                                                                ...
+         E                                                                                                                              Gbp
+                            P(θ;E)                               hd                        vh d              vp      vθ    ⇒
+          θ
+                                                               IWE
+       Params Warped Events                                                                                                       Biased!
+
+
+Figure 1: Event binning and the gradient bias problem. Top: Spatio-temporal event clouds
+(Events) are geometrically warped using motion parameters (Params) and aggregated into an Im-
+age of Warped Events (IWE) using a binning function. Bottom Left (Forward): The warping
+function P (θ; E) transforms input events E and parameters θ into warped coordinates. These are
+processed by a discontinuous binning function hd to produce the IWE. Bottom Right (Backward):
+The adjoint (cotangent vector) of the IWE, denoted as vhd , is propagated back to update parameters.
+However, the discontinuity of hd results in non-computable Dirac delta functions when computing
+the gradient vp for the warped events. Result: The computed backpropagation gradient Gbp deviates
+from the true finite difference gradient Gf d , shown in the contour plot as a ”Biased!” estimation.
+
+
+From a mathematical perspective, weak derivatives (Kuttler, 2017) generalize classical derivatives
+to discontinuous functions. While their pointwise values may be non-computable (e.g., Dirac delta),
+their integrals are well-defined and can be computed via integration by parts. This observation is
+crucial: if we can computationally match the integral of weak derivatives, then the resulting gradient
+estimation recovers unbiasedness.
+                                                                                      To find such an integral, we dive into the backprop-
+                                                                                      agation process and find that if we lift the binning
+                                                                                      function to the space of functionals, an integral of the
+ P(θ;E)                    hd         ...   vh d                           vp         respective gradient and the cotangent function natu-
+                                                                                      rally arises, which is provably sampled by the cotan-
+                                               Reconstruct
+
+
+
+
+                                                                                      gent vector, as shown in Figure 2. Because cotan-
+                             Sample
+
+
+
+
+                                                                                      gent functions naturally encode continuous motion
+   Convolution
+                           hc         ...   vh c                                      flow, smooth priors can be utilized to reconstruct
+   Functional BP Path                                                                 them from the cotangent vector irrespective of the
+   Ordinary BP Path                                          Integration By Parts!
+                                                                                      forward pass. This allows us to derive an exact for-
+                                                                                      mula for the synthesized weak derivative of the bin-
+Figure 2: The proposed Functional Back-                                               ning function, which is provably shown to approxi-
+propagation (FBP) framework. To resolve                                               mate long-range finite differences of arbitrary target
+discontinuities in the ordinary path (top, dis-                                       functions. It also applies to continuous soft binning
+crete binning hd ), we lift the operation to                                          functions, where the synthesized gradients may help
+a functional space (bottom, continuous bin-                                           to skip local extremes.
+ning hc ). FBP bridges the two by recon-
+                                                                                      To validate all the above claims, we first conduct an-
+structing the continuous cotangent function
+                                                                                      alytical studies on simple tasks of event-based mo-
+vhc from the discrete samples vhd . Using in-
+                                                                                      tion estimation, with an impressive result on the con-
+tegration by parts, we replace the undefined
+                                                                                      vergence speed and increased accuracy. We then
+Dirac delta evaluation with a convolution (∗)
+                                                                                      conduct experiments on real-world tasks of optical-
+of vhc and the kernel derivative, synthesizing
+                                                                                      flow estimation and SLAM to show its wide appli-
+an unbiased gradient vp .
+                                                                                      cability.
+                                                                                      To summarize, our main contributions are:
+
+          1. We identify and formalize the fundamental issue of biased gradient estimation in event-
+             based pipelines, stemming from the discontinuity of binning functions.
+          2. We propose a novel functional backpropagation framework that lifts binning functions into
+             functional space, enabling gradient computation via weak derivatives. By applying inte-
+             gration by parts, our method avoids Dirac deltas and restores unbiasedness.
+
+
+                                                                                       2
+Published as a conference paper at ICLR 2026
+
+
+
+
+      3. We derive an exact formula for the synthesized weak derivative, proving its equivalence to
+         long-range finite differences for arbitrary functions, and show that it naturally generalizes
+         to both discontinuous and smooth kernels.
+      4. We demonstrate consistent improvements across tasks: 3.7% lower RMS velocity error
+         with 1.57× faster convergence in controlled settings, 9.4% lower EPE in optical flow, and
+         5.1% lower RMS trajectory error in SLAM.
+
+
+2   R ELATED W ORK
+
+Binning in Event-Based Vision. In event-based vision, binning extends beyond its canonical form
+to support learning diverse visual representations. Two main types can be distinguished depending
+on where the information resides. The first focuses on binning weights, such as constants or event
+polarities (Maqueda et al., 2018; Luo et al., 2025), latest event timestamps (Lagorce et al., 2016;
+Ghosh & Gallego, 2025), or relative event intervals (Pan et al., 2019; Teng et al., 2022), which
+are primarily used to model irradiance change, motion, and gradients, respectively. These methods
+typically ignore binning gradients during learning and thus suffer from information loss. The second
+type focuses on binning locations, where events undergo parametric transformations, and parameters
+are recovered by optimizing sharpness metrics of the resulting event frames (Gallego et al., 2018; Gu
+et al., 2021; Shiba et al., 2024). While this approach captures complex spatio-temporal dynamics,
+it is fundamentally limited by the non-differentiability of the binning function. Our work is mainly
+concerned with this latter category.
+Learning with Discontinuous Nonlinearities. There are three common approaches to restoring
+differentiability for discontinuous functions. The most direct is function relaxation (Huh & Se-
+jnowski, 2018), but it alters the output and may compromise its physical meaning. Straight-through
+estimators (STE) (Yin et al., 2019) heuristically replace the gradient with a surrogate, while sur-
+rogate gradients (SG) (Neftci et al., 2019) introduce continuous relaxations of the true gradients.
+However, none of these methods guarantee unbiasedness, and their effectiveness often depends on
+domain expertise in choosing appropriate relaxations. Our method instead reconstructs a continuous
+relaxation of the cotangent function, providing a complementary alternative to surrogate gradients
+with the key property of unbiasedness.
+Weak and Functional Derivatives. Our method draws on functional analysis, in particular weak
+derivatives and functional derivatives. Weak derivatives are defined through smooth test func-
+tions, where integration by parts provides an alternative characterization (Kuttler, 2017). Functional
+derivatives extend the notion of gradients to functionals, playing a central role in the calculus of
+variations (Frigyik et al., 2008). While these concepts are typically of theoretical interest due to
+computational intractability, we show that they naturally arise in backpropagation when lifting bin-
+ning functions to the space of functionals, thereby enabling their practical use in learning.
+
+
+3   M ETHODOLOGY
+
+This section is organized in four parts: First, we extend ordinary backpropagation to functionals
+where an integral form naturally arises alongside the cotangent function, by deriving the chain rule
+for arbitrary functionals besides integrals encountered in the calculus of variations. Then we prove
+that an ordinary backpropagation pass samples the cotangent function with cotangent vectors, so that
+signal reconstruction techniques can be applied to compute the weak derivative of binning functions.
+Subsequently, we present a pseudocode implementation to bridge the gap between the theoretical
+derivation and practical application in forward and backward modes. Finally, we experimentally
+validate that the method approximates long-range finite differences for various loss functions, and
+the formal proof of unbiasedness is included in the appendix.
+We start with a notational convention to distinguish between functionals and pointwise evaluation:
+
+       • Square brackets are used for functionals acting on elements of a function space; e.g., f [u].
+       • Parentheses are used for pointwise evaluation of ordinary functions; e.g., , g(x).
+
+
+                                                  3
+Published as a conference paper at ICLR 2026
+
+
+
+
+3.1   F UNCTIONAL BACKPROPAGATION
+
+A functional is defined by a rule, which associates a number with a function. Let H(X) := (X →
+R) represent the space of real-valued functions defined on X, then a functional f is defined as a
+mapping u ∈ H(X) 7→ f [u], where f [u] can itself be another function on space H (Y ). In this
+definition, functionals can be chained and used to derive the chain rule.
+Since functionals are functions that consume an entire function to give another function, their differ-
+entials are also functions. From the knowledge of the Fréchet derivative and the Riesz representation
+theorem in functional analysis, we have the following result:
+Definition 1. Assuming f is a differentiable functional on vectors spaces from H(X) to H(Y ), then
+the derivative of f at u ∈ H(X) is represented by the derivative kernel function δfδu(x)
+                                                                                      [u](y)
+                                                                                             , which
+satisfies the limit:
+                                                  R δf [u]
+                            ∥f [u + δu] − f [u] − X δu(x)  δu(x)dx∥H(Y )
+                       lim                                                  = 0.                 (1)
+                     ∥δu∥→0                   ∥δu∥H(X)
+
+With the above definition, the chain rule for functionals is described in terms of integrals.
+                          f            g
+Theorem 1. Let H(X) → H(Y ) → H(Z) where f and g are differentiable functionals, then the
+composite functional g ◦ f is also differentiable and has the representation:
+                                             Z
+                            δg[f [u]](z)        δg[f [u]](z) δf [u](y)
+                                          =                            dy.            (2)
+                               δu(x)          Y δf [u](y)     δu(x)
+
+When X, Y, Z are finite sets, Theorem 1 becomes the familiar chain rule Jg◦f = Jg · Jf where J·
+is the finite-dimensional Jacobian matrix, since integration becomes summation on finite sets. So
+any composable differentiable mappings have a chain rule, where every ordinary function induces
+a Jacobian-vector product and every functional induces an integral transform with the derivative
+kernel function.
+To compute the Jacobians, classical backpropagation recursively computes vJg◦f using the asso-
+ciative property of matrix multiplication on Jacobians as (vJg ) · Jf , where v ∈ H(Z) is called a
+cotangent vector (Shi et al., 2024). The extension for infinite-dimensional functionals is a function
+v(·) ∈ H(Z), and we call it the cotangent function. In analogy, we call the process of recursively
+computing the cotangent function using the chain rule Functional Backpropagation (FBP).
+
+3.2   S YNTHESIZING W EAK D ERIVATIVES OF T HE B INNING F UNCTION
+
+An event-based algorithm accepts a group of events as input, defined as
+                                     E = {ei = (ti , xi , yi , pi )}N
+                                                                    i=1 ,
+                                                                      e
+                                                                                                      (3)
+where ei represents an event with timestamp ti , pixel location (xi , yi ), and polarity pi ∈ {−1, +1}
+representing sign of brightness change, and Ne is the number of events. A parametric transform
+maps E to D-dimensional weighted points
+                                  P = {e′i = (x′i1 , · · · , x′iD , wi′ )}N
+                                                                          i=1 ,
+                                                                            e
+                                                                                                      (4)
+where x′id is the transformed   location and     wi′
+                                                is the weight. The binning function h is a map from
+P to RW1 ×···×WD where Wd       is the number of bins. The value at index (j1 , · · · , jD ) is defined as
+                                                Ne           D
+                                                X            Y            x′id − jd ∆d
+                                hj1 ,...,jD =          wi′         kd (                ),             (5)
+                                                i=1
+                                                                               ∆d
+                                                             d=1
+
+where kd (·) is the binning kernel with finite support and ∆d is the binning width. This section
+                                                                                    ∂h 1 ,··· ,jD
+provides an intuitive derivation of the formula for synthesizing the weak derivative j∂x   ′      . To
+                                                                                                id
+simplify the derivation, our discussion is restricted to the D = 1 case, but the result can be easily
+extended to arbitrary dimensions. A structured Theorem-Proof is provided in the appendix.
+
+
+                                                             4
+Published as a conference paper at ICLR 2026
+
+
+
+
+We restate the definition of 1D event binning function h with input points P as:
+                                                               Ne
+                                                              X         x′ − j∆
+                  h(P) = (h1 (P), · · · , hW (P)), hj (P) =       wi′ k( i       ).                       (6)
+                                                              i=1
+                                                                           ∆
+
+To learn the parameters, a scalar loss is constructed from the obtained h(P) using fd : h(P) 7→
+fd [h[P]] ∈ R. A continuous binning function h (P) ∈ H (R) can be obtained by replacing j∆ with
+a continuous parameter x:
+                                                Ne
+                                               X         x′ − x
+                                   h[P](x) =       wi′ k( i     ),                           (7)
+                                               i=1
+                                                            ∆
+A natural mapping exists from h [P] to h [P] using the sampling functional S : h [P] 7→ S[h [P]] :=
+(h(∆), · · · , h(W ∆)) = h [P]. The sampling operator induces a functional fc := fd ◦ S.
+We denote the space of discrete binning values as Hd and the space of continuous binning values as
+Hc , and represent their relationship using the following commutative diagram:
+                                                   Hc
+                                             h                   fc                                       (8)
+                                                        S
+                                             h              fd
+                                        P          Hd                 R
+                 ∂fc
+To compute       functional backpropagation computes the cotangent vector vx′i from vf by:
+                 ∂x′i ,
+                                                     Z
+                                       δfc                     ∂h(x)
+                          vh (x) = vf       , vx′i =    vh (x)       dx,                    (9)
+                                      δh(x)           R         ∂x′i
+The cotangent function vh (·) can also be computed during the normal backpropagation as fc =
+fd ◦ S. Using the chain rule, we have:
+                                     W               W
+                                    X        δhj    X
+                           vh (x) =     vhj       =     vh δ(x − j∆),                      (10)
+                                    j=1
+                                            δh(x) j=1 j
+where vhj is the classical cotangent vector of fd during backward pass and δ(·) is the Dirac delta.
+In signal processing terms, Equation (10) states that a normal backward pass of the binning function
+h surrogates the cotangent function with a Dirac comb modulated by the cotangent vector. Fixing
+W ∆, this surrogate becomes exact as ∆ → 0, and at this time, we have:
+                                              1
+                                         lim vhj = vh (j∆).                                     (11)
+                                        ∆→0 ∆
+This result connects the cotangent function and cotangent vector by the sampling rule, so we can use
+normal signal reconstruction methods to reconstruct the cotangent function and derive an exact for-
+          ∂fc
+mula for ∂x  ′ . Since cotangent functions naturally encode smooth motion flow, one simple solution
+             i
+                                                        1
+is to replace δ(·) in Equation (10) with another kernel ∆ l( ∆· ), then we have:
+                     W Z                                          W
+                    X         w′ x − j∆        x′ − x      (a) X ′ ∂          x′ − j∆
+            ṽx′i =       vhj i2 l′ (       )k( i     )dx =          wi ′ κ( i        )vhj ,            (12)
+                    j=1 R
+                              ∆        ∆          ∆              j=1
+                                                                        ∂xi      ∆
+                                                                                                dl(x)
+where ṽx′i is the synthesized cotangent vector, (a) relies on integration-by-parts, l′ (x) =    dx     and
+                                       Z
+                               κ(x) =     l(y)k(x − y)dy = (l ∗ k)(x).                                  (13)
+                                         R
+In other words, the synthesized weak derivative of hj is
+                                    ˜j
+                                   ∂h          ∂     x′ − j∆
+                                      ′ = wi′ ′ κ( i         ).                                         (14)
+                                   ∂xi        ∂xi        ∆
+                                                            ∂h            x′i −j∆
+Comparing Equation (14) with the formal derivative ∂xj′ = wi′ ∂x  ∂
+                                                                    ′ k(  ∆ ), we see that it’s equal
+                                                          i         i
+to a surrogate gradient of kernel κ(·). It’s possible to demonstrate the unbiasedness of our method
+using the concept of weak derivatives, compared to other heuristic surrogates. In fact, it has finite-
+order approximation precision to long-range finite differences of arbitrary targets. Detailed proofs
+are provided in the appendix. For the multidimensional case in Equation (5), the result also holds
+when to replace kd with κd for each dimension. Implementation is provided in the following section.
+
+
+                                                    5
+Published as a conference paper at ICLR 2026
+
+
+
+
+3.3   A LGORITHM I MPLEMENTATION
+
+To simplify the implementation of FBP despite the theoretical density, we observe that our method
+only modifies the backward pass gradient accumulation. To demonstrate how different dimensions
+interact, a 2D example Algorithm 1 illustrates that the discontinuous kernel derivative is substituted
+with the synthesized weak derivative κ′ (·), while the forward pass remains unchanged.
+
+Input: Locations x′i = (x′i , yi′ ), weights wi′ , Grid params (W × H, spacing ∆).
+Input: Kernels: Binning k, Reconstruction l. Optional: Tangents ẋ′i = (ẋ′i , ẏi′ ), Adjoints H̄.
+Output: Frame H ∈ RW ×H . Optional: Tangent Frame Ḣ, Gradients ∇x′ L.
+κ(u) ← (l ∗ k)(u);      κ′ (u) ←    d
+                                   du κ(u);          // Synthesize derivative kernel
+H ← Zeros(W, H); for i ← 1 to N do // 1. Primal Pass: Standard Binning
+   foreach bin index (u, v) in support of k around (x′i , yi′ ) do
+       dx ← (x′i − u∆)/∆; dy ← (yi′ − v∆)/∆                        // Norm. distances
+       H[u, v] ← H[u, v] + wi′ · k(dx ) · k(dy );
+   end
+end
+if Tangents ẋ′ are provided then // 2. Forward Mode: Tangent Propagation
+    Ḣ ← Zeros(W, H); for i ← 1 to N do
+        foreach bin index (u, v) in support of κ around (x′i , yi′ ) do
+            dx ← (x′i − u∆)/∆; dy ← (yi′ − v∆)/∆; valx ← ∆              1 ′
+                                                                           κ (dx ) · κ(dy ) · ẋ′i ;
+                               1 ′
+             valy ← κ(dx ) · ∆  κ (dy ) · ẏi′ ; Ḣ[u, v] ← Ḣ[u, v] + wi′ · (valx + valy );
+        end
+    end
+end
+if Adjoints H̄ are provided then // 3. Backward Mode: Adjoint Propagation
+    ∇x′ L ← Zeros(N, 2); for i ← 1 to N do
+        gx ← 0; gy ← 0; foreach bin index (u, v) in support of κ around (x′i , yi′ ) do
+            dx ← (x′i − u∆)/∆; dy ← (yi′ − v∆)/∆;
+              gx ← gx + H̄[u, v] · wi′ · ∆
+                                         1 ′
+                                           κ (dx ) · κ(dy );
+                                    ′            1 ′
+              gy ← gy + H̄[u, v] · wi · κ(dx ) · ∆  κ (dy );
+        end
+        (∇x′ L)i ← (gx , gy );
+    end
+end
+return H, Ḣ, ∇x′ L
+Algorithm 1: 2D Functional Binning: Primal, Forward Mode (JVP), and Backward Mode (VJP)
+
+
+3.4   B IAS A NALYSIS
+
+Before applying the method to complex tasks, we explicitly validate its ability to approximate long-
+range finite differences. Following the methodology of (Gallego et al., 2019), we proceed with the
+following steps for an event packet {ek = (xk , yk , tk , pk )}Ne
+                                                               k=1 .
+
+      1. Events are warped to the mean time using rotational models:
+                     Trot : ek 7→ (tref − t)ω × xk + xk ,          xk = (xk , yk , 1) 7→ x′k . (15)
+      2. An Image of Warped Events (IWE) of resolution 200 × 150 is constructed using non-
+         differentiable (rect), differentiable (linear), and biased (gauss) binning kernels:
+       krect (x) = 1|x|< 12 ,   klinear (x) = (1 − |x|)1|x|<1 ,                            1
+                                                                                       2
+                                                                  kgauss (x) =   √1 e−x /2      3.     (16)
+                                                                                  2π       |x|< 2
+
+      3. Synthesized gradients are computed with l(x) = max(1 − |x|, 0) with respect to Variance
+         (Var) (Gallego et al., 2018) and Log-Likelihood (LL) (Gu et al., 2021) scores:
+                                   X                        X
+                        Var = N1p      (hi,j − µH )2 , LL =     log(NB(hi,j |r, p)),        (17)
+                                      i,j                         i,j
+
+
+                                                     6
+Published as a conference paper at ICLR 2026
+
+
+
+
+         where µH is the frame mean, and (r, p) = (0.3, 0.8). Theoretical results show that this
+         rectangular kernel has second-order accuracy in approximating the gradient of a score.
+
+We analyze bias using 20,000 events from the dynamic rotation sequence of the Event Camera
+Dataset (ECD) (Mueggler et al., 2017). A uniform grid of candidate angular velocities is sampled
+within [−5, 5]3 , yielding 1,331 score evaluations and 3,993 analytic gradients. Finite-difference bias
+is estimated by subtracting numerical gradients computed via central difference with a step size of
+1.0. The results are shown in Figure 3.
+
+                                                     Gfd>0                                                            Gfd>0
+                                                       False                                                            False
+                                                       True                                                             True
+
+
+
+
+                                                                                                            Gfd>0
+                                                                                                              False
+                                                                                                              True
+
+       Rect    FuncRect   Gauss   FuncGauss Linear FuncLinear       Rect    FuncRect   Gauss   FuncGauss Linear FuncLinear
+
+              (a) Normalized Var score bias.                               (b) Normalized LL score bias.
+
+Figure 3: Bias analysis results. The analytical gradients are subtracted by numerical gradients to
+obtain the finite-difference bias, colored by the sign of finite-difference gradients Gf d .
+
+As shown in Figure 3(a), the variance score exhibits strong bias with the rect and gauss kernels due
+to discontinuities, while the linear kernel remains unbiased. Our gradient estimation substantially
+reduces bias across all kernels, even improving the linear kernel by better approximating long-range
+finite differences.
+For the log-likelihood score (Figure 3(b)), results are mixed: rect kernel bias is reduced at the cost
+of higher variance, while the linear kernel bias increases. Consistent with our theoretical analysis,
+this reflects the limited second-order accuracy of the triangular reconstruction l(x) in approximating
+the nonlinear LL score. This suggests the exact gradient estimation method should be application-
+dependent, which our framework supports via adaptable cotangent reconstruction constraints.
+
+4     E XPERIMENTS
+This section further validates the proposed method on event-based motion estimation tasks, specif-
+ically angular and linear velocity estimation, where the computed gradients guide the optimization.
+Besides the rotational motion model defined in Equation (15), we introduce a linear motion model:
+                          Ttrans : ek 7→ (tref − t)v + xk , xk = (xk , yk , 1) 7→ x′k .                                  (18)
+We evaluate all model–kernel–score combinations on eight sequences from the Event Camera
+Dataset (ECD), namely boxes, dynamic, poster, and shapes (both rotation and translation). The
+sequences are partitioned into non-overlapping packets of Ne = 20, 000 events to estimate motion
+parameters. Accuracy is quantified using Root Mean Square (RMS) error in °/s for rotation and m/s
+for translation. Images of Warped Events (IWEs) are constructed from projected coordinates with a
+resolution of 200 × 150 and a binning step of ∆ = 0.01. Experiments were conducted on a laptop
+equipped with an NVIDIA RTX 4090 GPU using the JAX framework (Bradbury et al., 2018). We
+employed distinct optimizers tailored to the kernel properties: L-BFGS-B (Liu & Nocedal, 1989)
+for the rect and linear kernels, and trust-ncg (Steihaug, 1983) for the gauss kernel.
+
+4.1   O PTIMIZATION R ESULTS
+
+The mean performance across all sequences is presented in Figure 4. It is evident that our method
+improves both accuracy and convergence speed for angular velocity estimation, achieving a 10.3%
+reduction in RMS error and a 1.66× acceleration in convergence. In the case of linear velocity,
+
+
+                                                                7
+Published as a conference paper at ICLR 2026
+
+
+
+
+                                                                                              Average Convergence Time (ms)
+
+
+
+
+                                                                                                                                                                                                                      Average Convergence Time (ms)
+                                                                                                                                  RMS Translation Error (m/s)
+                                    Variance                          Log-likelihood                                                                                    Variance
+                                                                                                                                                                         Variance               Log-likelihood
+
+
+ RMS Rotation Error (°/s)
+                                               Gradient                                                                                                                           Gradient
+                                                   Raw                                                                                                                                Raw
+                                                   Func                                                                                                                               Func
+
+
+
+
+                             Rect      Gauss     Linear        Rect       Gauss    Linear                                                                        Rect     Gauss     Linear   Rect    Gauss   Linear
+
+                                     (a) Angular Velocity Estimation                                                                                                       (b) Linear Velocity Estimation
+
+Figure 4: Optimization results for motion estimation, with combined bar charts showing RMS esti-
+mation accuracy and line charts showing the mean convergence time for every Ne = 20000 events.
+
+
+singularities of this task (Guo & Gallego, 2024) lead to a marginal 3.9% increase in RMS error,
+yet the method maintains a 1.48× faster convergence rate. Overall, the proposed method yields a
+3.2% improvement in RMS error alongside a 1.57× speedup. Since our approach modifies only the
+gradients without altering the solution space, these performance gains indicate that our synthesized
+gradients provide more effective update directions. Although the gradient computation incurs higher
+theoretical complexity (Equation (13)), the empirical results demonstrate that this cost is outweighed
+by the benefits in optimization efficiency. For complete results, please refer to the appendix.
+
+4.2                         A BLATION S TUDIES AND BASELINE C OMPARISONS
+
+This subsection investigates the efficacy of Functional Backpropagation (FBP) using the linear re-
+construction kernel. To isolate the effects of the reconstruction method, we focus on the rotational
+case utilizing the krect binning kernel and the Var and LL score function.
+Sensitivity to Reconstruction Kernels. For the reconstruction kernel l(x), we additionally evaluate
+the Cubic kernel (assuming a C 2 smooth cotangent function) and the Lanczos kernel (assuming a
+band-limited cotangent function), defined as:
+                                        3         2
+                                
+                                1.5|x| − 2.5|x| + 1             |x| < 1
+                   lCubic (x) = 2.5|x| − 0.5|x|3 − 4|x| + 2 1 < |x| ≤ 2 ,
+                                        2
+
+                                                                                               (19)
+                                
+                                   0                             otherwise
+                                                                                            2 sin(πx) sin( π2 x)
+                                                                 lLanczos (x) =                                  1|x|≤2 .
+                                                                                                   π 2 x2
+
+Table 1: Ablation study on reconstruction kernels. Different cotangent reconstruction kernels are
+compared in angular velocity estimation in Accuracy/Time (°/s and ms). Bold: best value.
+
+                                        boxes rotation                      dynamic rotation                                                                    poster rotation                 shapes rotation
+    Kernel
+                                       Var                LL                 Var             LL                                                                 Var               LL           Var               LL
+    Bicubic 12.47/7.37 10.17/9.17 6.70/8.56 5.88/10.78 14.39/7.61 12.48/9.54 16.47/11.31 13.82/ 18.07
+    Lanzcos 12.46/8.84 10.10/10.12 6.72/10.36 5.86/12.37 14.15/9.01 12.45/10.66 17.93/14.83 14.25/21.12
+    Linear 12.44/6.50 10.14/8.07 6.67/7.44 5.88/9.57 14.26/6.55 12.42/8.17 15.89/10.26 14.26/15.18
+
+As shown in Table 1, the Linear kernel achieves the optimal trade-off between accuracy and effi-
+ciency. While higher-order kernels offer greater smoothness, they increase computational runtime
+with diminishing returns in estimation accuracy. Consequently, we utilize the Linear reconstruction
+kernel for the remainder of our experiments.
+Comparison vs. Heuristic Surrogate Gradients (SG). We compare FBP against standard Surro-
+gate Gradients commonly used in Spiking Neural Networks: the Straight-Through-Estimator (STE)
+(Yin et al., 2019) and the Sigmoid Surrogate (Neftci et al., 2019), defined as:
+                                                  1                 1                 1
+ κ′ST E = −sgn(x)1|x|<1 , κ′sigmoid = σ ′ (10(x + ) − σ ′ (10(x − )), σ(x) =                . (20)
+                                                  2                 2           1 + exp(−x)
+
+                                                                                                                              8
+Published as a conference paper at ICLR 2026
+
+
+
+
+Table 2: Comparisons with heuristic surrogate gradients. Different gradient surrogates are com-
+pared in angular velocity estimation in Accuracy/Time (°/s and ms). Bold: Best value.
+
+                 boxes rotation      dynamic rotation           poster rotation         shapes rotation
+ Surrogate
+                 Var        LL        Var          LL           Var        LL           Var           LL
+ STE        36.29/7.18 14.32/8.88 10.92/8.45 9.00/10.36 29.00/7.38 16.22/8.91 96.89/ 13.07 55.83/ 17.35
+ Sigmoid    13.94/7.55 10.17/8.49 7.12/8.74 5.88/9.84 15.60/7.70 12.51/8.68 18.76/11.41 14.23/15.44
+ FBP (Ours) 12.44/6.50 10.14/8.07 6.67/7.44 5.88/9.57 14.26/6.55 12.42/8.17 15.89/10.26 14.26/15.18
+
+From Table 2, FBP achieves a significantly lower error floor and reduced convergence time com-
+pared to heuristic SGs. This confirms that deriving the gradient via integration by parts captures the
+underlying binning geometry more effectively than imposing arbitrary smooth shapes.
+
+4.3      C OMPUTATIONAL C OMPLEXITY
+
+To supplement the optimization analysis in Section 4.1, we verify the computational cost of the
+proposed method by comparing the execution time of a single call to the original binning function
+versus the gradient computation function. As Jacobian-vector products (JVPs) inherit the structure
+of the forward pass without requiring intermediate storage, we present the computation time for a
+single JVP call in float32 on both CPU and GPU in Table 3, where our method for different binning
+kernels is prefixed with Func. The data indicates that the computation time approximately doubles
+compared to the standard deduced JVP. However, when combined with the optimization results in
+Section 4.1, the overall efficiency and effectiveness of the method are confirmed.
+
+Table 3: Computation time in microseconds. Our modified gradient computation is shown in bold.
+
+    Platforms                       CPU (R9-7945HX)                             GPU (4090-laptop)
+    Ne                      20000        50000          100000         20000         50000          100000
+    Rect                     37.1           69.9         110            31.1          29.6           29.7
+    FuncRect JVP             635            893         1440            42.3          62.4           78.8
+    Gauss                    536          820            1380           44.9          61.7           75.6
+    Gauss JVP                638          946            1600           40.6          62.3           77.7
+    FuncGauss JVP            1090         2130           5890           83.5          114            158
+    Overhead                1.71×        2.25×          3.68×          2.06×         1.83×          2.03×
+    Linear                   473           551            774           26.8          37.1           55.6
+    Linear JVP               440           543            772           28.1          37.3           51.5
+    FuncLinear JVP           736          1190           2120           66.8          83.1           117
+    Overhead                1.67×        2.19×          2.75×          2.38×         2.23×          2.27×
+
+
+
+5     A PPLICATIONS
+To test the applicability of the proposed gradient computation method on modern learning pipelines,
+we conduct further experiments on the latest event-based optical flow estimation network Motion-
+PriorCMax (Hamann et al., 2024) and SLAM algorithm CMax-SLAM (Guo & Gallego, 2024).
+
+5.1      M OTION P RIOR CM AX
+
+MotionPriorCMax (MPC) is the SOTA self-supervised optical flow estimation network that uses the
+linear binning kernel k2 to construct a contrast loss for learning, which is trained against the latest
+DSEC (Gehrig et al., 2021a) dataset. We changed the binning kernel to krect using the modified
+gradient computation method and retrained the model on eight RTX A6000 GPUs. Reported metrics
+are End Point Error (EPE), Angular Error (AE), and percentage of outliers with EPE>3px (3PE).
+Results. We present the average DSEC benchmark performance in Figure 5 where our method
+improves the EPE error by 9.4%, confirming that the new gradient computation method helps to find
+the optimal parameters even for a complex neural network. A visualization presented in the right
+
+
+                                                    9
+Published as a conference paper at ICLR 2026
+
+
+
+
+ Method     EPE ↓      AE ↓     3PE ↓
+ MPC         2.81       8.96     14.5
+ Ours        2.54       8.33     13.3
+
+                                                  (a) MPC          (b) Ours         (c) ERAFT (Vis)
+
+Figure 5: Left: all sequence average performance on DSEC. Right: Predicted optical flow (ERAFT
+only for qualitative visualization). Our method exhibits more robustness with fewer artifacts.
+
+
+
+                    shapes     poster     boxes      dynamic
+ Method
+                 Abs Rel       Abs Rel   Abs Rel     Abs Rel
+ CMax-SLAM       4.95 6.71 5.65 6.36 5.42 6.75 3.38 3.59
+ Ours            4.84 6.76 5.27 6.29 5.23 6.60 3.11 3.61
+                                                               (a) CMax-SLAM            (b) Ours
+Figure 6: Left: CMax-SLAM results on real-world sequences from ECD. We report Absolute (Abs)
+and Relative (Rel) trajectory errors (best results in bold). Right: Mapping result on the full se-
+quence, showing that CMax-SLAM fails on long sequences while our method preserves correctness.
+
+
+
+of Figure 5, where optical flow output by ERAFT (Gehrig et al., 2021b) is regarded as ground truth
+since it is not available on test sequences. It’s observed that the network learns more robust features
+with a sharper IWE, which is only trainable with our method. For a complete result on all 7 test
+sequences, please refer to the appendix.
+
+
+5.2   CM AX -SLAM
+
+CMax-SLAM (Guo & Gallego, 2024) is the SOTA rotation-only SLAM algorithm that uses the
+Contrast Maximization framework (Gallego et al., 2018) on both the frontend and backend, where a
+panoramic IWE is constructed as the map. We changed the binning kernel from klinear to krect and
+report the RMS absolute trajectory error (Abs) in [°] and the RMS relative error (Rel) in [°/s] for the
+first 30s of data of the sequences in ECD (Mueggler et al., 2017) for a fair comparison.
+Results. The overall ECD benchmark results are shown in Figure 6, where our method mainly
+improves the Abs RMS error by 5.1% with comparable Rel RMS error. On the right side of Figure 6,
+we show the reconstruction results of the two methods: the baseline fails on long sequences due to
+accumulated errors, while our method preserves correctness and yields more robust reconstructions,
+showing that sharp IWE helps reduce the mapping ambiguity.
+
+
+6     C ONCLUSION
+
+In this work, we addressed the long-standing challenge of biased gradient estimation in event bin-
+ning for event-based vision. By lifting binning functions to the functional space and leveraging weak
+derivatives through integration by parts, we derived an exact formula for synthesizing unbiased gra-
+dients. This framework, termed Functional Backpropagation, reconstructs cotangent functions
+during backpropagation and guarantees unbiasedness without altering the forward outputs. Our the-
+oretical analysis established the correctness and unbiasedness of the synthesized gradients, while
+extensive experiments on motion estimation, optical flow, and SLAM demonstrated consistent im-
+provements in both accuracy and convergence speed. Looking forward, our framework opens up
+opportunities to extend unbiased gradient estimation to a wider class of discontinuous operators in
+neuromorphic computing and to generalizations to nonuniform binning grids and nonlinear recon-
+struction methods.
+
+
+                                                    10
+Published as a conference paper at ICLR 2026
+
+
+
+
+ACKNOWLEDGEMENTS
+This work is supported by the National Natural Science Foundation of China (NSFC) under Grants
+62225207, 62436008, 62306295, and 62576328. The AI-driven experiments, simulations and model
+training were performed on the robotic AI-Scientist platform of Chinese Academy of Sciences.
+
+R EFERENCES
+James Bradbury, Roy Frostig, Peter Hawkins, Matthew James Johnson, Chris Leary, Dougal
+  Maclaurin, George Necula, Adam Paszke, Jake VanderPlas, Skye Wanderman-Milne, and Qiao
+  Zhang. JAX: composable transformations of Python+NumPy programs, 2018. URL http:
+  //github.com/jax-ml/jax.
+Jason K Eshraghian, Max Ward, Emre O Neftci, Xinxin Wang, Gregor Lenz, Girish Dwivedi, Mo-
+  hammed Bennamoun, Doo Seok Jeong, and Wei D Lu. Training spiking neural networks using
+  lessons from deep learning. Proceedings of the IEEE, 111(9):1016–1054, 2023.
+Béla A Frigyik, Santosh Srivastava, and Maya R Gupta. An introduction to functional derivatives.
+   Dept. Electr. Eng., Univ. Washington, Seattle, WA, Tech. Rep, 1, 2008.
+Guillermo Gallego, Henri Rebecq, and Davide Scaramuzza. A unifying contrast maximization
+  framework for event cameras, with applications to motion, depth, and optical flow estimation.
+  In Proceedings of the IEEE conference on computer vision and pattern recognition, pp. 3867–
+  3876, 2018.
+Guillermo Gallego, Mathias Gehrig, and Davide Scaramuzza. Focus is all you need: Loss functions
+  for event-based vision. In Proceedings of the IEEE/CVF Conference on Computer Vision and
+  Pattern Recognition, pp. 12280–12289, 2019.
+Guillermo Gallego, Tobi Delbrück, Garrick Orchard, Chiara Bartolozzi, Brian Taba, Andrea Censi,
+  Stefan Leutenegger, Andrew J Davison, Jörg Conradt, Kostas Daniilidis, et al. Event-based vision:
+  A survey. IEEE transactions on pattern analysis and machine intelligence, 44(1):154–180, 2020.
+Mathias Gehrig, Willem Aarents, Daniel Gehrig, and Davide Scaramuzza. Dsec: A stereo event
+ camera dataset for driving scenarios. IEEE Robotics and Automation Letters, 6(3):4947–4954,
+ 2021a.
+Mathias Gehrig, Mario Millhäusler, Daniel Gehrig, and Davide Scaramuzza. E-raft: Dense optical
+ flow from event cameras. In 2021 International Conference on 3D Vision (3DV), pp. 197–206.
+ IEEE, 2021b.
+Suman Ghosh and Guillermo Gallego. Event-based stereo depth estimation: A survey. IEEE Trans-
+  actions on Pattern Analysis and Machine Intelligence, 2025.
+Cheng Gu, Erik Learned-Miller, Daniel Sheldon, Guillermo Gallego, and Pia Bideau. The spatio-
+  temporal poisson point process: A simple model for the alignment of event camera data. In
+  Proceedings of the IEEE/CVF International Conference on Computer Vision, pp. 13495–13504,
+  2021.
+Shuang Guo and Guillermo Gallego. Cmax-slam: Event-based rotational-motion bundle adjustment
+  and slam system using contrast maximization. IEEE Transactions on Robotics, 40:2442–2461,
+  2024.
+Friedhelm Hamann, Ziyun Wang, Ioannis Asmanis, Kenneth Chaney, Guillermo Gallego, and
+  Kostas Daniilidis. Motion-prior contrast maximization for dense continuous-time motion esti-
+  mation. In European Conference on Computer Vision, pp. 18–37. Springer, 2024.
+Han Han, Wei Zhai, Yang Cao, Bin Li, and Zheng-jun Zha. Mate: Motion-augmented temporal
+  consistency for event-based point tracking. In Proceedings of the IEEE/CVF International Con-
+  ference on Computer Vision (ICCV), pp. 8340–8349, October 2025.
+Adam D Hines, Michael Milford, and Tobias Fischer. A compact neuromorphic system for ultra–
+  energy-efficient, on-device robot localization. Science Robotics, 10(103):eads3968, 2025.
+
+
+                                                11
+Published as a conference paper at ICLR 2026
+
+
+
+
+Dongsung Huh and Terrence J Sejnowski. Gradient descent for spiking neural networks. Advances
+  in neural information processing systems, 31, 2018.
+Kenneth Kuttler. Weak derivatives. In Modern Analysis (1997), pp. 355–370. CRC Press, 2017.
+Xavier Lagorce, Garrick Orchard, Francesco Galluppi, Bertram E Shi, and Ryad B Benosman. Hots:
+  a hierarchy of event-based time-surfaces for pattern recognition. IEEE transactions on pattern
+  analysis and machine intelligence, 39(7):1346–1359, 2016.
+Bohao Liao, Wei Zhai, Zengyu Wan, Zhixin Cheng, Wenfei Yang, Yang Cao, Tianzhu Zhang, and
+  Zheng-Jun Zha. EF-3DGS: Event-aided free-trajectory 3d gaussian splatting. In The Thirty-
+  ninth Annual Conference on Neural Information Processing Systems, 2025. URL https://
+  openreview.net/forum?id=shFhW4zqd6.
+Dong C Liu and Jorge Nocedal. On the limited memory bfgs method for large scale optimization.
+  Mathematical programming, 45(1):503–528, 1989.
+Xinglong Luo, Ao Luo, Zhengning Wang, Chunyu Lin, Bing Zeng, and Shuaicheng Liu. Efficient
+  meshflow and optical flow estimation from event cameras. In Proceedings of the IEEE/CVF
+  Conference on Computer Vision and Pattern Recognition, pp. 19198–19207, 2024.
+Xinglong Luo, Ao Luo, Kunming Luo, Zhengning Wang, Ping Tan, Bing Zeng, and Shuaicheng
+  Liu. Learning efficient meshflow and optical flow from event cameras. IEEE Transactions on
+  Pattern Analysis and Machine Intelligence, 2025.
+Ana I Maqueda, Antonio Loquercio, Guillermo Gallego, Narciso Garcı́a, and Davide Scaramuzza.
+  Event-based vision meets deep learning on steering prediction for self-driving cars. In Proceed-
+  ings of the IEEE conference on computer vision and pattern recognition, pp. 5419–5427, 2018.
+Elias Mueggler, Henri Rebecq, Guillermo Gallego, Tobi Delbruck, and Davide Scaramuzza. The
+  event-camera dataset and simulator: Event-based data for pose estimation, visual odometry, and
+  slam. The International journal of robotics research, 36(2):142–149, 2017.
+Emre O Neftci, Hesham Mostafa, and Friedemann Zenke. Surrogate gradient learning in spiking
+  neural networks: Bringing the power of gradient-based optimization to spiking neural networks.
+  IEEE Signal Processing Magazine, 36(6):51–63, 2019.
+Liyuan Pan, Cedric Scheerlinck, Xin Yu, Richard Hartley, Miaomiao Liu, and Yuchao Dai. Bringing
+  a blurry frame alive at high frame-rate with an event camera. In Proceedings of the IEEE/CVF
+  conference on computer vision and pattern recognition, pp. 6820–6829, 2019.
+Adam Paszke, Sam Gross, Soumith Chintala, Gregory Chanan, Edward Yang, Zachary DeVito,
+  Zeming Lin, Alban Desmaison, Luca Antiga, and Adam Lerer. Pytorch: An imperative style,
+  high-performance deep learning library. In Advances in Neural Information Processing Systems,
+  volume 32, 2019.
+Henri Rebecq, René Ranftl, Vladlen Koltun, and Davide Scaramuzza. High speed and high dy-
+  namic range video with an event camera. IEEE transactions on pattern analysis and machine
+  intelligence, 43(6):1964–1980, 2019.
+Zekun Shi, Zheyuan Hu, Min Lin, and Kenji Kawaguchi. Stochastic taylor derivative estimator: Effi-
+  cient amortization for arbitrary differential operators. Advances in Neural Information Processing
+  Systems, 37:122316–122353, 2024.
+Shintaro Shiba, Friedhelm Hamann, Yoshimitsu Aoki, and Guillermo Gallego. Event-based
+  background-oriented schlieren. IEEE transactions on pattern analysis and machine intelligence,
+  46(4):2011–2026, 2023.
+Shintaro Shiba, Yannick Klose, Yoshimitsu Aoki, and Guillermo Gallego. Secrets of event-based
+  optical flow, depth, and ego-motion by contrast maximization. IEEE Trans. Pattern Anal. Mach.
+  Intell. (T-PAMI), pp. 1–18, 2024. doi: 10.1109/TPAMI.2024.3396116.
+Trond Steihaug. The conjugate gradient method and trust regions in large scale optimization. SIAM
+  Journal on Numerical Analysis, 20(3):626–637, 1983.
+
+
+                                                12
+Published as a conference paper at ICLR 2026
+
+
+
+
+Minggui Teng, Chu Zhou, Hanyue Lou, and Boxin Shi. Nest: Neural event stack for event-based
+ image enhancement. In European Conference on Computer Vision, pp. 660–676. Springer, 2022.
+Stepan Tulyakov, Daniel Gehrig, Stamatios Georgoulis, Julius Erbach, Mathias Gehrig, Yuanyou Li,
+  and Davide Scaramuzza. Time lens: Event-based video frame interpolation. In Proceedings of
+  the IEEE/CVF conference on computer vision and pattern recognition, pp. 16155–16164, 2021.
+Antoni Rosinol Vidal, Henri Rebecq, Timo Horstschaefer, and Davide Scaramuzza. Ultimate slam?
+  combining events, images, and imu for robust visual slam in hdr and high-speed scenarios. IEEE
+  Robotics and Automation Letters, 3(2):994–1001, 2018.
+Zengyu Wan, Ganchao Tan, Yang Wang, Wei Zhai, Yang Cao, and Zheng-Jun Zha. Event-based op-
+  tical flow via transforming into motion-dependent view. IEEE Transactions on Image Processing,
+  33:5327–5339, 2024.
+Zengyu Wan, Wei Zhai, Yang Cao, and Zhengjun Zha. Emotive: Event-guided trajectory modeling
+  for 3d motion estimation. In Proceedings of the IEEE/CVF International Conference on Computer
+  Vision (ICCV), pp. 9342–9351, October 2025.
+Yuliang Wu, Ganchao Tan, Jinze Chen, Wei Zhai, Yang Cao, and Zheng-Jun Zha. Event-based
+  asynchronous hdr imaging by temporal incident light modulation. Optics Express, 32(11):18527–
+  18538, 2024.
+Senyan Xu, Zhijing Sun, Mingchen Zhong, Chengzhi Cao, Yidi Liu, Xueyang Fu, and Yan Chen.
+  Motion-adaptive transformer for event-based image deblurring. In Proceedings of the AAAI Con-
+  ference on Artificial Intelligence, volume 39, pp. 8942–8950, 2025.
+Penghang Yin, Jiancheng Lyu, Shuai Zhang, Stanley J. Osher, Yingyong Qi, and Jack Xin. Under-
+  standing straight-through estimator in training activation quantized neural nets. In International
+  Conference on Learning Representations, 2019. URL https://openreview.net/forum?
+  id=Skh4jRcKQ.
+Yi Zhou, Guillermo Gallego, and Shaojie Shen. Event-based stereo visual odometry. IEEE Trans-
+  actions on Robotics, 37(5):1433–1450, 2021.
+Alex Zhu, Liangzhe Yuan, Kenneth Chaney, and Kostas Daniilidis. Ev-flownet: Self-supervised op-
+  tical flow estimation for event-based cameras. In Proceedings of Robotics: Science and Systems,
+  Pittsburgh, Pennsylvania, June 2018. doi: 10.15607/RSS.2018.XIV.062.
+
+
+A     A PPENDIX
+A.1   U SE OF LLM S
+
+This paper uses ChatGPT only for text polishing, correcting mathematical symbols, and searching
+relevant work. The surrogate gradient (SG) method is one that was new knowledge to the authors
+and provides useful insights into the presentation of this paper.
+
+A.2   F UNCTIONAL AUTOMATIC D IFFERENTIATION
+
+This section supplements the discussion in Section 3.1 to cover general automatic differentiation,
+and to make the text self-contained with the necessary mathematical results proved.
+To simplify the expression of functional automatic differentiation, we introduce the following con-
+ventions:
+
+       • Vertical bar notation. For an operator f , we write
+                                           f (u|y) := [f (u)](y),
+         meaning that f takes a function u ∈ H(X) as input, produces a function in H(Y ), and
+         then we evaluate this function at y ∈ Y . This notation is non-standard, but convenient
+         for distinguishing between function mapping and function evaluation. Given no risk of
+         ambiguity, we may write f (y) := f (u|y) for brevity.
+
+
+                                                13
+Published as a conference paper at ICLR 2026
+
+
+
+
+        • Variational symbol δ. We use δ in analogy to Leibniz’s differential d, but acting on func-
+          tions instead of scalar values. The quotient
+                                                       δf (y)
+                                                       δg(x)
+          denotes the operator derivative of f (y) with respect to g(x).
+
+A.2.1    T HE C HAIN RULE OF F UNCTIONALS
+Fundamental to automatic differentiation is the decomposition of differentials provided by the chain
+rule of partial derivatives of composite functions. However, since functionals are functions that con-
+sume an entire function to give a value, the input dimension is infinite, so the derivatives cannot
+be expressed by finite-dimensional Jacobian matrices. To extend the chain rule to functionals, re-
+member that derivatives are unique local linear approximations to the function. This leads to the
+definition of the Fréchet derivative:
+Definition 2 (Fréchet). Let V and W be normed vector spaces, and U ⊆ V be an open subset of
+V . A function f : U → W is called Fréchet differentiable at x ∈ U if there exists a bounded linear
+operator A : V → W such that
+                                     ∥f (x + h) − f (x) − Ah∥W
+                                lim                            = 0.                              (21)
+                             ∥h∥V →0            ∥h∥V
+If there exists such an operator A, it is unique, so we write Df [x] = A and call it the Fréchet
+derivative of f at x. A function f is Fréchet differentiable if ∀x ∈ U , Df [x] exists.
+
+For the Fréchet derivative, the well-known Fermat’s theorem also applies to identify critical points
+of a given functional by solving an equation involving the derivative. This result makes it possible
+to treat the Fréchet derivative like an ordinary derivative when solving an optimization problem.
+Theorem 2 (Fermat). Let V be a normed vector space and f : V → R is a functional that is
+Fréchet differentiable on V . Then if x0 is a point where f has a local extremum, Df [x0 ] = 0 (the
+zero functional).
+
+Proof. Without loss of generality, let x0 be the local maxima. Then there exists δ > 0 such that
+when ∥h∥V < δ,
+                                        f (x0 + h) ≤ f (x0 ).                              (22)
+According to Definition 2, we have
+                           f (x0 + h) − f (x0 ) − Df [x0 ](h) = o(∥h∥V ).                        (23)
+For all v ∈ V , we can find a t that satisfy ∥tv∥V < δ, substitute h for tv:
+                         f (x0 + tv) − f (x0 ) = t · Df [x0 ](v) + o(|t|) ≤ 0.                   (24)
+               +                                                  −
+Taking t → 0 , gives Df [x0 ](v) ≤ 0, likewise with t → 0 , we have Df [x0 ](v) ≥ 0. Thus
+Df [x0 ](v) = 0, ∀v ∈ V and hence Df [x0 ] = 0.
+
+The chain rule has an analogous form as ordinary derivative, but expressed as composition of linear
+operators.
+                                                                                    f      g
+Theorem 3 (The Chain Rule). Let U , V and W be normed vector spaces and U → V → W . If f
+is Fréchet differentiable at u ∈ U and g is Fréchet differentiable at f (u) ∈ V , then the composite
+function h = g ◦ f is Fréchet differentiable at u with the chain rule
+                                      Dh[u] = Dg[f (u)] ◦ Df [u].                                (25)
+
+Proof. From Definition 2, we have for a small perturbation δu such that h is differentiable at u + δu,
+  h(u + δu) = g(f (u + δu)),                                                              (26)
+            = g(f (u) + Df [u](δu) + rf (δu)),                                            (27)
+            = h(u) + Dg[f (u)](Df [u](δu)) + Dg[f (u)](rf (δu)) + rg (Df [u](δu) + rf (δu)),
+                                                                                          (28)
+
+
+                                                  14
+Published as a conference paper at ICLR 2026
+
+
+
+
+                  ∥r (ε)∥
+                    f    V                    ∥r (η)∥
+such that limε→0 ∥ε∥   U
+                           = 0, and limη→0 g∥η∥V W = 0. Since Df [u] and Dg[f (u)] are bounded,
+there exist constants C1 and C2 such that ∥Df [u](ε)∥V ≤ C1 ∥ε∥U and ∥Dg[f (u)](η)∥W ≤
+C2 ∥η∥V . So for the remainder, we have
+                            ∥Dg[f (u)](rf (δu))∥W      ∥rf (δu)∥V
+                                                  ≤ C2            →0                              (29)
+                                   ∥δu∥U                 ∥δu∥U
+and
+  ∥rg (Df [u](δu) + rf (δu))∥W   ∥rg (Df [u](δu) + rf (δu))∥W ∥Df [u](δu) + rf (δu)∥V
+                               =                                                      , (30)
+              ∥δu∥U                ∥Df [u](δu) + rf (δu)∥V            ∥δu∥U
+                                 ∥rg (Df [u](δu) + rf (δu))∥W       ∥rf (δu)∥V
+                               ≤                              (C1 +             ) → 0. (31)
+                                   ∥Df [u](δu) + rf (δu)∥V            ∥δu∥U
+So h(u + δu) = h(u) + (Dg[f (u)] ◦ Df [u])(δu) + o(∥δu∥U ).
+
+In automatic differentiation, closed-form expressions are required rather than abstract operators. To
+derive this, we add the additional constraint that all vector spaces are Hilbert spaces, so that we can
+apply the Riesz Representation Theorem. To simplify the expression, we introduce a new notation
+analogous to Leibniz’s notation for operators.
+Theorem 4 (Riesz). Denote H(X) = L2 (X) ∩ C(X) as the space of continuous and square-
+                                          f             g
+integrable functions on X. Let H(X) → H(Y ) → H(Z), f is Fréchet differentiable in H(X)
+and g is Fréchet differentiable in H(Y ). Denote point evaluation functionals on H(Y ) and H(Z)
+as Ly : v 7→ v(y), ∀v ∈ H(Y ) and Lz : w 7→ w(z), ∀w ∈ H(Z) respectively and the Riesz
+representation of D(Ly ◦ f )[u] as δf  (u|y)
+                                     δI(u|x) , where I represents the identity mapping, then the Riesz
+representation of composite functional D(Lz ◦ g ◦ f )[u] is:
+                                               Z
+                              δg(f (u)|z)         δg(f (u)|z) δf (u|y)
+                                           =                           dy.                        (32)
+                                δI(u|x)         Y  δf (u|y) δI(u|x)
+
+Proof. From the definition, L∗ is a linear operator so DL∗ [·] = L∗ . D(Lz ◦ g ◦ f )[u] = Lz ◦
+Dg[f (u)] ◦ Df [u] from the chain rule, then ∀v ∈ H(X), we have
+                                              Z
+                                                 δg(f (u)|z)
+              Lz ◦ Dg[f (u)] ◦ Df [u](v) =                   (Df [u](v))(y)dy,            (33)
+                                               Y  δf (u|y)
+                                              Z
+                                                 δg(f (u)|z)
+                                           =                 (Ly ◦ Df [u])(v)dy,          (34)
+                                               Y  δf (u|y)
+                                              Z                 Z
+                                                 δg(f (u)|z)        δf (u|y)
+                                           =                 dy              v(x)dx,      (35)
+                                               Y  δf (u|y)       X δI(u|x)
+                                              Z
+                                                    δg(f (u)|z) δf (u|y)
+                                           =                             v(x)dxdy.        (36)
+                                               X×Y    δf (u|y) δI(u|x)
+Since v ∈ H(X) is arbitrary, the theorem is proved.
+
+A.2.2    I NTERPRETATION OF AUTOMATIC D IFFERENTIATION OF F UNCTIONALS
+In ordinary AD, the task is to compute Jacobian-Vector products (forward mode) or Vector-Jacobian
+products (reverse mode) so that entries of the full Jacobian matrix can be computed by selecting the
+test vectors to be the standard basis e(i) in the tangent or cotangent spaces. In functional AD, the
+analogue is the integration of the product of the functional derivative representation and the tangent
+(cotangent) function.
+Definition 3 (Functional Forward Mode AD). Given a Fréchet differentiable function f : H(X) →
+H(Y ) and tangent function at u ∈ H(x) as v ∈ Tu H(X), the functional forward mode AD program
+computes the tangent function at f (u) ∈ H(Y ) as w ∈ Tf (u) H(Y ).
+                                              Z
+                                                  δf (u|y)
+                                     w(y) =                v(x)dx.                                (37)
+                                               X δI(u|x)
+
+
+                                                  15
+Published as a conference paper at ICLR 2026
+
+
+
+
+Definition 4 (Functional Reverse Mode AD). Given a Fréchet differentiable function f : H(X) →
+H(Y ) and cotangent function at f (u) ∈ H(Y ) as w∗ ∈ Tf∗(u) H(Y ), the functional reverse mode
+AD program computes the cotangent function at u ∈ H(X) as v ∗ ∈ Tu∗ H(X).
+                                           Z
+                                              δf (u|y) ∗
+                                 v ∗ (x) =            w (y)dy.                              (38)
+                                            Y δI(u|x)
+
+Now, with the formal definition of functional AD, it’s possible to derive a recursive procedure to
+compute the Riesz representation of composite functionals:
+Corollary 1. Let fi : H(Xi ) → H(Xi+1 ) be Fréchet differentiable in H(Xi ) and Fn = fn−1 ◦
+fn−2 ◦ ... ◦ f1 . The functional forward mode AD states that the tangent function of Fn at Fn (u) can
+be recursively computed as:
+                                      Z
+                                            δfm (Fm (u)|xm+1 )
+                         w(xm+1 ) =                               w(xm )dxm                      (39)
+                                       Xm  δfm−1 (Fm−1 (u)|xm )
+
+and the functional reverse mode AD states that the cotangent function of Fn at u can be recursively
+computed as:                      Z
+                       ∗                δfm−1 (Fm−1 (u)|xm ) ∗
+                      v (xm−1 ) =                                v (xm )dxm                    (40)
+                                   Xm  δf m−2 (Fm−2 (u)|xm−1 )
+where we define f−1 = f0 = I as the identity map so F0 = F1 = I.
+
+A.2.3    T HE C ONNECTION B ETWEEN F UNCTIONS AND S AMPLED D IRAC C OMBS
+In Equation (11), we make an equation between the cotangent function and the sampled cotangent
+vector. This is understood in the distributional sense. In fact, we have:
+Theorem 5. For any smooth function g(x) ∈ H(R), if Equation (11) hold, we have:
+                            Z                     W Z
+                                                  X
+                        lim     g(x)vh (x)dx =           g(x)vhj δ(x − j∆)dx.             (41)
+                        ∆→0
+                                                  j=1
+
+
+Proof. Select simple functions g(x) = max(1 − | x−j∆ ∆ |, 0), the equation is proved by observing
+that the right-hand side constitutes the Riemann sum. As any smooth function can be approximated
+by summing such simple functions, the result is proved.
+
+A.3     T HE U NBIASEDNESS C ONSTRAINT
+
+The problem of ensuring unbiasedness is how to quantify the bias when the true gradients don’t
+exist. To achieve that, we resort to line integrals so that the bias can be measured in the distributional
+sense. Let ϕ be an arbitrary smooth function that accepts a binned event frame h ∈ Hd to return
+a scalar ϕ(h), then by the fundamental theorem of calculus for line integrals, we have for every
+piecewise-smooth curve h : [a, b] → Hd :
+                                                     Z b
+                            ϕ(h(b)) − ϕ(h(a)) =           ∇ϕ(h(t)) · h′ (t)dt,                        (42)
+                                                     a
+where h′ (t) should be understood in the weak sense. Assuming we want to find the optimal his-
+togram parameters by inferring the extreme values of some smooth objective, then the derivative
+h′ (t) is the only function that makes the above equation true. In this view, if the above equation is
+nearly true with h̃′ (t), then we call it an unbiased gradient estimation.
+For a simplified equation that can be used to check the unbiasedness, we pick each entry hj (t) inside
+the vector dot product and approximate ∇j ϕ(h(t)) with another arbitrary smooth function φj (t),
+then the above argument translates to:
+                                Z                     Z
+                                   φj (t)h′j (t)dt = − φ′j (t)hj (t)dt,                           (43)
+
+when hj ϕn vanishes at the boundaries. Since there’s no h̃′ (t) other than h′ (t) to ensure the equality
+for arbitrary φi and curve h, we only require the equality to hold for a family of simple functions
+
+
+                                                   16
+Published as a conference paper at ICLR 2026
+
+
+
+
+on simple paths. In practice, we select the pow functions and paths on directly related parameters
+x′id s. Since both sides of Equation (45) are linear functionals of φi , equality only needs to hold for
+the elementary power functions. So we have the following definition.
+Definition 5. If for all polynomial functions φn (t) of degree n, equality
+                                Z                       Z
+                                    φn (t)h̃′ (t)dt = −    φ′n (t)h(t)dt                            (44)
+                                    T                              T
+
+holds for all n ≤ m but not for n > m, we say h̃ (t) estimates the weak derivative h′ (t) with a
+                                                               ′
+
+degree of precision of m on path T . If m ≥ 1, we say the estimation is unbiased.
+
+The definition above quantifies how well the estimation of a weak derivative is. The definition of
+biasedness conforms to the fact that the derivative is the best local linear approximation. For a
+multidimensional gradient field approximated by the cumulative product of 1D functions, we have
+the same result if each function satisfies Definition 5.
+It’s now easy to derive the unbiasedness constraint of the proposed method. In fact, we have the
+following result.
+                                             ˜
+                                            ∂h
+Corollary 2. The synthetic weak derivative ∂xj′ in Equation (14) is an unbiased estimation of the
+                                                      i
+                  ∂hj
+weak derivative   ∂x′i   on path T if the reconstruction kernel l(·) satisfies
+                                 Z              Z Z
+                                     k(x)dx =          l(y)k(x − y)dydx.                            (45)
+                                   T              T       R
+
+Corollary 2 provides a minimum requirement for the gradient estimation to be unbiased. However,
+since the binning function is evaluated on a regular grid, the neighborhood information of h can
+provide useful information when selecting l(·) instead of a random guess. In many cases, ϕ(·)
+attributes to hi a similar contribution as hj if i is in a neighborhood of j, then we have vhi ≈ vhj . In
+other words, we can assume the underlying cotangent function space to be smooth, such that local
+information provides enough characterization. One simple assumption is that the underlying space
+should have a minimum slope, then we drive the linear spline kernel l(x) = max(1 − |x|, 0), which
+has a minimum support such that Equation (45) holds for a short path T . In fact, It can be proved
+that the resulting (l ∗ k)′ (x) provides a second-order accurate estimate of the weak derivative k ′ (x)
+along any path containing supp(k) ∩ [−1, 1], provided that k(·) is symmetric with respect to some
+vertical axis. We conduct the following experiments on this linear reconstruction kernel.
+
+A.4   P Y T ORCH /JAX I MPLEMENTATION OF FBP
+
+This part provides the detailed implementation in PyTorch and JAX for implementing the proposed
+FBP.
+PyTorch (Paszke et al., 2019) is based on reverse-mode automatic differentiation (VJP). A function
+with custom AD rules should be implemented as a subclass of torch.autograd.Function as follows.
+                Listing 1: PyTorch implementation of FBP as custom VJP rules.
+import t o r c h
+
+class FunctionalBinning ( torch . autograd . Function ) :
+    @staticmethod
+    def forward ( ctx , xarray , yarray , weights , g r i d s i z e ) :
+        ctx . save for backward ( xarray , yarray , weights )
+        # S t a n d a r d b i n n i n g w i t h k ( Forward p a s s i s u n c h a n g e d ! )
+        return k k e r n e l b i n n i n g ( xarray , yarray , weights , g r i d s i z e )
+
+      @staticmethod
+      def backward ( ctx , g r a d f r a m e ) :
+          xarray , yarray , weights = ctx . saved tensors
+          # Use s y n t h e s i z e d t r a n s p o s e d d e r i v a t i v e w i t h kappa ( Eq . 1 4 )
+          x a r r a y d o t = k a p p a k e r n e l d x t r a n s p o s e d (\
+
+
+                                                          17
+Published as a conference paper at ICLR 2026
+
+
+
+
+                     grad frame ,            xarray , yarray , g r i d s i z e )
+             yarray dot = kappa             k e r n e l d y t r a n s p o s e d (\
+                     grad frame ,            xarray , yarray , g r i d s i z e )
+             return x a r r a y d o t *      w e i g h t s , y a r r a y d o t * w e i g h t s , None , None
+
+The only extra work to do is to derive the transposed derivative kernel of κ(·). JAX (Bradbury et al.,
+2018) is based on forward-mode automatic differentiation (JVP). A function with custom AD rules
+should be implemented by decorating it with custom jvp and implementing the custom JVP rules as
+follows.
+                     Listing 2: JAX implementation of FBP as custom JVP rules.
+import j a x
+
+@jax . c u s t o m j v p
+def FunctionalBinning ( xarray , yarray , weights , g r i d s i z e ) :
+    # S t a n d a r d b i n n i n g w i t h k ( Forward p a s s i s u n c h a n g e d ! )
+     return k k e r n e l b i n n i n g ( xarray , yarray , weights , g r i d s i z e )
+
+@FunctionalBinning . defjvp
+def FunctionalBinning JVP ( primals , t a n g e n t s ) :
+    xarray , yarray , weights , g r i d s i z e = primals
+    xarray dot , yarray dot , * = tangents
+
+      # 1 . Run s t a n d a r d f o r w a r d p a s s
+      frame = F u n c t i o n a l B i n n i n g ( xarray , yarray , weights , g r i d s i z e )
+
+      # 2 . Compute s y n t h e s i z e d d e r i v a t i v e u s i n g kappa ( Eq . 1 4 )
+      # i n s t e a d of e v a l u a t i n g Dirac d e l t a s .
+      frame dot = kappa kernel dx binning (\
+                    x a r r a y , y a r r a y , x a r r a y d o t * w e i g h t s , g r i d s i z e ) +\
+                             kappa kernel dy binning (\
+                    xarray , yarray , y a r r a y d o t * weights , g r i d s i z e )
+
+      r e t u r n frame , f r a m e d o t
+
+A.5    E XPERIMENTAL D ETAILS
+
+We first provide the exact formula of κrect , κlinear , and κgauss , which are used to surrogate the
+gradient rule of the respective kernels krect , klinear , and kguass :
+                                                3
+                                                4 − x ,
+                                                           2
+                                                                        |x| < 21
+                                 κrect (x) = 18 (3 − 2|x|)2 , 12 ≤ |x| < 23                             (46)
+                                                                        |x| ≥ 23
+                                                
+                                                  0.
+                                          1                              2
+                                           6 (4 + 3(−2 + |x|)|x| ), |x| < 1
+                                              1
+                        κlinear (x) = 6 (2 − |x|)3 ,                           1 ≤ |x| < 2              (47)
+                                                                               |x| ≥ 2
+                                          
+                                             0.
+                                                       
+                     1                  x−1                  x
+                     2 (x − 1)erf               − xerf √2
+                                       √
+                                          2
+                  
+                  
+                                                        1       2          1    
+                                                      e− 2 (x+1) e2x −2ex+ 2 +1
+                  
+                                              
+                        1                 x+1
+                                                                                            |x| < 12
+                  
+                  
+                  
+                  
+                    + 2 (x + 1)erf √2 +                           √
+                                                                      2π
+                                                                                    ,
+                                                                               
+                    1                      |x|−1                   x             3
+                   2 (|x| − 1)erf q 2 − 2xerf                           + erf 2√       |x|
+                  
+                                            √                     √
+                                                                     2              2 
+                                                                                   √
+                  
+                                                                                      2
+                                                             q
+    κgauss (x) = +erf √                              x2                                                 (48)
+                                                                    1      2
+                  
+                              2
+                                 3
+                                   2
+                                       − 2 π2 e− 2 + π2 e− 2 (|x|−1) + e9/8π , 12 ≤ |x| < 23
+                  
+                                                               
+                    1                   x−1         1         3
+                  
+                  
+                  
+                    2 (|x|  −   1)erf    √
+                                            2
+                                                  −  2 erf     √
+                                                              2 2
+                                                                     (|x| − 1)
+                         − 1 (|x|−1)2
+                  
+                     + e √2π           − e9/81√2π ,                                         3         5
+                          2
+                                                                                            2 ≤ |x| < 2
+                  
+                  
+                  
+                  
+                                                                                                   5
+                  
+                     0.                                                                     |x| ≥ 2
+                  
+
+
+                                                    18
+Published as a conference paper at ICLR 2026
+
+
+
+
+Although the expressions are definite, they are scaled to match the exact binning function, so they
+are adaptive to the specific scene.
+
+A.6     A DDITIONAL E XPERIMENTAL R ESULTS
+
+Due to space limitations, detailed results for the analysis and applications are presented here. Table 4
+and Table 5 provide the optimization results for all the sequences, where our methods are in bold with
+optimizer L-BFGS-B suffixed by 1 and trust-ncg suffixed by 2. These tables demonstrate another
+benefit of our method, which is to provide second-order information to facilitate optimization.
+
+Table 4: Angular velocity estimation results. Accuracy in °/s. The optimization time is in millisec-
+onds. n/a means the optimization process has early stops due to abnormal function values.
+
+                                   boxes           dynamic                poster              shapes
+ Score       Methods
+                             acc       time      acc      time      acc        time     acc        time
+              Rect          44.61      22.42    16.03    23.38     47.09      22.60    44.47      32.34
+           FuncRect 1       12.44       6.50     6.67    7.44      14.26       6.55    15.89      10.26
+           FuncRect 2       10.91       3.00     6.11    4.24      12.83       3.30    23.94       9.96
+             Linear         10.21       6.38     5.63    6.60      12.58       6.36    15.82       9.18
+          FuncLinear 1       9.82       5.26     5.53     5.82     12.16       5.39    15.75       9.06
+  Var
+          FuncLinear 2       9.66       2.61     5.50     4.77     12.01       3.19    14.93      13.07
+            Gauss 1         10.93       7.14     6.59    8.38      12.51       7.41    14.29      11.13
+            Gauss 2          9.61       5.01     6.22     8.36     10.80       5.49    15.79      33.87
+          FuncGauss 1       10.27       6.91     6.22    7.98      11.91       7.22    13.81      11.45
+          FuncGauss 2        9.95       2.46     5.98     5.59     11.59       3.26    13.85      14.78
+              Rect          17.47      21.02    8.58     21.50     17.45      20.00    18.62      27.73
+           FuncRect 1       10.14       8.07    5.88     9.57      12.42       8.17    14.26      15.18
+           FuncRect 2       10.95       4.31    8.48     8.73      13.80       5.67     n/a        n/a
+             Linear          9.04       7.29    5.33      8.93     11.53       7.98    13.36      13.30
+          FuncLinear 1       8.77       6.74    5.21      7.97     11.30       6.71    13.74      13.72
+   LL
+          FuncLinear 2       8.70       3.29    5.21      7.35     11.22       4.05    14.62      34.21
+            Gauss 1          8.99       8.68    5.64     10.28     10.97       8.80    13.46      15.89
+            Gauss 2          7.93       5.95    5.36     12.10      9.97       6.85    14.54      57.10
+          FuncGauss 1        8.89       8.64    5.49     10.17     10.91       8.59    13.37      16.75
+          FuncGauss 2        8.64       3.80    5.35      9.51     10.74       5.30    13.41      29.52
+
+
+For additional optical flow estimation results, refer to Table 6 and Figure 7. The results are consistent
+with the main text that our method improves the overall robustness.
+
+
+
+
+                                                   19
+Published as a conference paper at ICLR 2026
+
+
+
+
+     interlaken_00_b
+     interlaken_01_a
+     thun_01_a
+     thun_01_a
+     zurich_city_14_c zurich_city_12_c
+     zurich_city_15_a
+
+
+
+
+                                         (a) MPC   (b) Ours         (c) ERAFT (Vis)
+ Figure 7: Optical flow estimation results on all 7 test sequences of DSEC (Gehrig et al., 2021a).
+
+
+                                                    20
+Published as a conference paper at ICLR 2026
+
+
+
+
+Table 5: Linear velocity estimation results. Accuracy in m/s. The optimization time is in millisec-
+onds. n/a means the optimization process has early stops due to abnormal function values.
+
+                                     boxes                   dynamic                      poster               shapes
+ Score      Methods
+                              acc           time        acc          time           acc        time      acc          time
+              Rect           0.924           n/a       0.447          n/a          0.326      19.45     0.913           n/a
+           FuncRect 1        0.875           n/a       0.209         7.93          0.304       6.45     0.739           n/a
+           FuncRect 2        0.679          3.40       0.208         5.18          0.304       3.55     0.257         10.73
+             Linear          0.680          6.28       0.208         6.75          0.304       6.22     0.250          8.33
+          FuncLinear 1       0.683          5.63       0.208         6.78          0.303       5.64     0.249          8.16
+  Var
+          FuncLinear 2       0.683          3.48       0.208         6.77          0.303       3.71     0.250         12.73
+            Gauss 1          1.069           n/a       0.209         8.14          0.803        n/a     0.796           n/a
+            Gauss 2          0.689          5.26       0.209         8.67          0.305       5.44     0.249         24.64
+          FuncGauss 1        0.688          6.84       0.209         8.81          0.304       7.02     0.248         11.45
+          FuncGauss 2        0.689          3.85       0.209         8.38          0.305       4.22     0.249         15.35
+              Rect           0.763          18.34      0.217      20.05            0.308      18.00     0.258         25.84
+           FuncRect 1        0.681           7.97      0.432        n/a            0.303       8.10     0.673          n/a
+           FuncRect 2        0.683           6.00      0.218      12.12            0.304       6.28     0.663          n/a
+             Linear          0.684           7.91      0.215      10.11            0.304       7.89     0.706          n/a
+          FuncLinear 1       0.685           6.96      0.215       9.61            0.304       7.13     0.257         14.01
+  LL
+          FuncLinear 2       0.685           6.00      0.216      11.47            0.304       5.30     0.256         28.93
+            Gauss 1          1.108            n/a      0.450        n/a            0.304       8.76     0.861          n/a
+            Gauss 2          0.689           7.65      0.217      15.62            0.305       7.99     0.257         50.15
+          FuncGauss 1        0.688           8.59      0.218      12.34            0.710        n/a     0.795          n/a
+          FuncGauss 2        0.689           6.72      0.218      15.39            0.305       7.24     0.257         31.05
+
+
+
+
+Table 6: Comparison of MPC and MPC (w/ FBP) across multiple sequences. Metrics are End-Point
+Error (EPE), Angular Error (AE), and percentage of outliers (%Out).
+
+                            All                    interlaken 00 b           interlaken 01 a                 thun 01 a
+ Method
+                  EPE      AE       %Out      EPE       AE      %Out        EPE      AE       %Out    EPE      AE       %Out
+ MPC              2.81     8.96     14.48     3.33      5.11    19.41       2.42     6.17     16.15   1.48     6.70      8.33
+ MPC (w/ FBP)     2.54     8.33     13.31     3.26      5.05    18.96       2.36     5.70     15.70   1.42     6.39      7.52
+                         thun 01 b              zurich city 12 a             zurich city 14 c          zurich city 15 a
+ Method
+                  EPE      AE       %Out      EPE       AE      %Out        EPE      AE       %Out    EPE      AE       %Out
+ MPC              1.47     5.88      8.18     5.98      21.56 21.02         1.97     9.74     15.25   1.54     6.71      9.25
+ MPC (w/ FBP)     1.45     5.64      7.67     4.71      19.65 17.67         1.90     9.22     13.82   1.50     6.22      7.95
+
+
+
+
+                                                           21
+

@@ -1,0 +1,871 @@
+                                                                                                                                                                                       1
+
+
+
+
+                                         Event-triggered Implicit Perturbation for Zeroth-Order Fine-Tuning of
+                                                                                              Spiking Transformers
+                                                                      Tengteng Lei, Prabodh Katti, Rashi Dutt, Houssem Sifaou, Tan Peng,
+                                                                                  Osvaldo Simeone, Kai Xu, Bipin Rajendran
+
+
+
+                                            Abstract—Zeroth-order (ZO) optimization estimates gradients                on resource-constrained edge platforms, a challenge further
+                                         using only forward-pass evaluations, making it suitable for fine-             exacerbated by the memory-wall bottleneck of traditional Von
+                                         tuning non-differentiable, event-driven spiking neural networks               Neumann architectures [5]. To mitigate these hardware lim-
+                                         (SNNs). However, its deployment on in-memory computing (IMC)
+                                         accelerators is constrained by the repeated read-modify-write                 itations, neuromorphic accelerators integrating spiking trans-
+arXiv:2608.21223v1 [cs.AR] 21 Aug 2026
+
+
+
+
+                                         (RMW) operations arising from explicit weight perturbation and                formers with in-memory computing (IMC) have emerged as
+                                         the prohibitive hardware footprint of random number generators                a promising paradigm [6]–[8]. By executing matrix-vector
+                                         (RNGs) for statistically independent per-weight perturbations.                multiplications (MVMs) directly within memory arrays, IMC
+                                         To address these challenges, we propose an implicit-perturbation              eliminates prohibitive data-movement overhead between mem-
+                                         ZO (IPZO) architecture in which perturbation sums computed
+                                         by an event-triggered perturbation generation unit (PGU) are                  ory and computation. Binary spike activations further simplify
+                                         combined with the weighted sums produced by the IMC ar-                       MVM computation by reducing multiply-accumulate (MAC)
+                                         ray, eliminating perturbation-induced RMW operations while                    operations to additions. Spike sparsity, in turn, limits synaptic
+                                         preserving weight-stationary execution of IMC. By exploiting                  computation to active events, thereby reducing unnecessary
+                                         spike sparsity, the PGU generates and accumulates perturbation                operations and energy consumption [9], [10]. While existing
+                                         contributions only for spike-activated weight rows, reducing the
+                                         required row dimension of the RNG array. An address-driven                    accelerators are highly optimized for inference [11]–[13],
+                                         XOR recombination scheme (PGU-XOR) is further introduced                      achieving efficient on-chip learning for adaptive and privacy-
+                                         to mitigate the spatial correlations caused by direct RNG reuse               preserving edge intelligence remains a formidable challenge.
+                                         (PGU-Reuse). The results show that (1) PGU-XOR matches                        Compared with inference, training incurs substantially higher
+                                         software RNGs in accuracy on Spikingformer/CIFAR-10 (76.41%                   memory and computational overhead, placing stringent con-
+                                         vs. 76.53%) and perplexity (PPL) on SpikeGPT/WikiText-2
+                                         (54.20 vs. 53.23), whereas PGU-Reuse degrades accuracy by 9.56                straints on hardware implementation [14]–[16].
+                                         percentage points and increases PPL by 11.8; (2) implemented                     Zeroth-order (ZO) optimization has attracted growing at-
+                                         in a TSMC 16-nm CMOS technology, PGU-XOR incurs 40.3%–                        tention for on-chip learning as a memory-efficient alternative
+                                         46.0% area overhead and 15.2%–48.9% energy overhead per                       to conventional backpropagation (BP) [17]–[19]. Unlike BP,
+                                         matrix-vector multiplication (MVM) relative to PGU-Reuse, yet                 which requires storing intermediate activations and computing
+                                         its faster convergence reduces the total perturbation energy to
+                                         0.51× that of PGU-Reuse at iso-accuracy; (3) IPZO reduces the                 gradients through a backward pass [20], [21], ZO optimization
+                                         perturbation energy to 0.46×–0.83× that of conventional explicit              estimates gradients using only forward-pass evaluations [22],
+                                         weight perturbation for a batch size of B = 64 and T = 4 time                 [23]. This distinction is particularly important for spiking
+                                         steps, with the advantage growing as BT decreases.                            neural networks (SNNs), where backpropagation through time
+                                            Index Terms—On-chip learning, fine-tuning, zeroth-order op-                (BPTT) requires retaining neuron states across multiple time
+                                         timization, random number generation, spiking transformers, in-               steps, further increasing the memory overhead of training [24],
+                                         memory computing.                                                             [25]. The forward-only nature of ZO optimization is naturally
+                                                                                                                       compatible with non-differentiable activations, making it well
+                                                                  I. I NTRODUCTION                                     suited for training event-driven SNNs on resource-constrained
+                                                                                                                       edge hardware.
+                                         T     HE transformer architecture has established itself as a
+                                               dominant framework in artificial intelligence, driving
+                                         state-of-the-art advances across fields ranging from natural lan-
+                                                                                                                          However, efficiently implementing ZO optimization in IMC-
+                                                                                                                       based accelerators is far from straightforward due to the mis-
+                                         guage processing [1], [2] to computer vision [3], [4]. Despite                match between its algorithmic requirements and the underlying
+                                         this success, the intensive computation and large memory foot-                hardware architecture. Firstly, ZO optimization requires sta-
+                                         print of transformers often preclude their efficient deployment               tistically independent random perturbations for every weight
+                                                                                                                       parameter. Although uniformly distributed perturbations have
+                                            T. Lei, P. Katti, R. Dutt, H. Sifaou, O. Simeone, and B. Rajendran         been demonstrated as an effective alternative to Gaussian
+                                         are affiliated with the Institute for Intelligent Networked Systems (INSI),
+                                         Northeastern University London, London E1 8PH, U.K. T. Peng and K. Xu         perturbations [26]–[28], supporting per-weight generation of
+                                         are with the Centre for Intelligent Information Processing Systems (CIIPS),   uniform random numbers still incurs a prohibitive hardware
+                                         Department of Engineering, King’s College London, London WC2R 2LS,            cost. Even when implemented using compact linear-feedback
+                                         U.K. (b.rajendran@nulondon.ac.uk).
+                                            This project is funded by the Advanced Research + Invention Agency         shift registers (LFSRs), the area footprint of a single-bit
+                                         (ARIA). The work of O. Simeone and B. Rajendran was also supported            uniform random number generator (RNG) far exceeds that
+                                         by Open Fellowships of the EPSRC (EP/W024101/1, EP/X011356/1) and             of a memory cell storing one weight bit in an IMC array.
+                                         by the EPSRC project (EP/X011852/1). The work of O. Simeone was also
+                                         supported by the European Research Council (ERC) under the European           This footprint mismatch limits the scalability of per-weight
+                                         Union’s Horizon Europe Programme (grant agreement No. 101198347).             perturbation generation in IMC-based accelerators. While
+                                                                                                                                     2
+
+
+
+random-number reuse can alleviate the RNG overhead [26],               The remainder of this paper is organized as follows. Sec-
+it introduces spatial correlations among the resulting pertur-      tion II introduces the necessary preliminaries, and Section
+bations and degrades the learning accuracy with insufficient        III analyzes the hardware implementation challenges of ZO
+random numbers. Secondly, conventional explicit-perturbation        optimization. Section IV presents the architectural design of
+ZO optimization (EPZO) requires repeatedly reading the en-          the PGU within the proposed IPZO framework. Section V
+tire weight matrix, applying the perturbations, and writing         evaluates both the algorithmic effectiveness and hardware
+the perturbed weights back into the IMC array during each           efficiency of the design, and Section VI concludes the work.
+forward pass for gradient estimation. The resulting frequent
+read-modify-write (RMW) operations compromise the energy                                  II. P RELIMINARIES
+advantage of IMC by reintroducing extensive data movement           A. Spiking Transformers
+[29]–[31].
+                                                                       A standard transformer comprises multiple stacked blocks,
+   To overcome these bottlenecks, we propose an implicit-
+                                                                    each consisting of a multi-head self-attention (MHSA) module
+perturbation ZO optimization (IPZO) architecture for IMC-
+                                                                    and a feedforward network (FFN), together with residual
+based SNN accelerators that combines event-triggered pertur-
+                                                                    connections and layer normalization. In each MHSA module,
+bation generation with accumulation-domain perturbation in-
+                                                                    the input representations are linearly projected into queries Q,
+jection. Specifically, an event-triggered perturbation generation
+                                                                    keys K, and values V using the weight matrices WQ , WK ,
+unit (PGU) generates and accumulates perturbation contribu-
+                                                                    and WV , respectively. Scaled dot-product
+                                                                                                          √          attention is then
+tions only for spike-activated weight rows at each time step.
+                                                                    computed as A = softmax(QK ⊤ / dk )V , where dk denotes
+Given the inherent sparsity of SNNs, the PGU thus reduces
+                                                                    the head dimension [32]. The attention computation and the
+the required row dimension of the RNG array well below
+                                                                    linear transformations within the FFN rely heavily on dense
+that of the weight matrix. To mitigate the spatial correlations
+                                                                    MVMs and typically require high-precision activations, posing
+introduced by directly reusing perturbations from the reduced
+                                                                    considerable challenges for resource-constrained edge hard-
+RNG array across weight rows, an address-driven XOR re-
+                                                                    ware.
+combination scheme is employed to construct independent
+                                                                       Spiking transformers extend this architecture into the tem-
+perturbations across the entire weight matrix. Furthermore,
+                                                                    poral domain by incorporating leaky integrate-and-fire (LIF)
+accumulation-domain perturbation injection combines the per-
+                                                                    neurons into the MHSA and FFN modules [33], [34]. Follow-
+turbation sums computed by the PGU with the weighted sums
+                                                                    ing the linear projections, Q, K and V are encoded as temporal
+produced by the IMC array. By keeping the weights stationary
+                                                                    spike sequences Qt , Kt , and Vt over T discrete time steps,
+throughout each optimization step, IPZO eliminates repeated
+                                                                    where t = 1, . . . , T . At each time step, attention is computed
+perturbation-induced RMW operations while preserving the
+                                                                    directly in the spike domain as At = LIF LIF Qt Kt⊤ Vt 
+                                                                                                                                  
+energy efficiency of IMC.
+   The effectiveness of IPZO is demonstrated through compre-        [35]. The intermediate attention scores St = LIF Qt Kt⊤
+hensive evaluations spanning algorithmic validation and hard-       are regulated by the firing dynamics of LIF neurons in-
+ware implementation, highlighting its potential for efficient       stead of being normalized by softmax, thereby eliminating
+on-chip learning in IMC-based SNN accelerators. The main            the hardware-intensive exponential and division operations
+contributions of this work are summarized as follows:               required by conventional softmax attention.
+   • We propose an IPZO architecture that injects perturbation
+      contributions into the accumulation domain rather than        B. In-Memory Computing
+      the stored weight domain, preserving weight-stationary           In-memory computing (IMC) alleviates the memory-wall
+      execution and eliminating the repeated RMW operations         bottleneck by performing computations directly within mem-
+      required by EPZO.                                             ory arrays. Depending on how the MAC operations are per-
+   • We develop an event-triggered perturbation generation          formed, IMC can be implemented in either the analog or the
+      unit (PGU) that generates perturbations only for spike-       digital domain. Analog IMC typically activates multiple word
+      activated weight rows, decoupling the RNG array size          lines (WLs) simultaneously and accumulates the resulting
+      from the weight matrix dimensions. To eliminate the           currents or charges along bit lines (BLs), producing MAC
+      spatial correlations introduced by direct RNG reuse, we       outputs in the analog domain. Digital IMC instead computes
+      design an address-driven XOR recombination scheme             bitwise products using arithmetic logic embedded within the
+      within the PGU.                                               memory macro and accumulates the resulting partial prod-
+   • We validate the proposed framework through algorithmic         ucts via digital circuits (e.g., adder trees), thereby generating
+      evaluation and post-layout hardware implementation in         digitally encoded MAC outputs [36]. Despite their different
+      TSMC 16-nm CMOS. PGU-XOR achieves performance                 circuit implementations, both commonly employ a weight-
+      comparable to software RNGs across SNN image classi-          stationary dataflow, in which weights remain stored within
+      fication and language modeling, while its faster conver-      the array while input activations are streamed through it for
+      gence reduces the total perturbation energy to 0.51× that     computation.
+      of PGU-Reuse. At the architecture level, IPZO equipped           IMC can be implemented using diverse memory technolo-
+      with PGU-XOR reduces perturbation energy to 0.46–             gies, each offering different trade-offs among density, reliabil-
+      0.83× that of EPZO under practical SNN fine-tuning            ity, and manufacturability. Among volatile memories, static
+      settings.                                                     random access memory (SRAM) is widely adopted for its
+                                                                                                                                   3
+
+
+
+compatibility with standard CMOS processes, mature foundry          resulting gradient estimate is then used to update the model
+support, and robust operation, although its multi-transistor bit    parameters according to the stochastic gradient descent (SGD)
+cell imposes considerable area overhead [37], [38]. Emerging        rule,
+non-volatile memories (NVMs), including resistive random-                                  θt+1 = θt − ηĝ,                    (2)
+access memory (ReRAM), phase change memory (PCM) and
+magnetic random-access memory (MRAM), enable higher                 where η is the learning rate. Each optimization step therefore
+storage density and compact crossbar integration. However,          requires 2q forward-pass evaluations, corresponding to the
+they remain subject to technology-dependent device nonideal-        positive and negative perturbations for each zi .
+ities, including conductance drift, limited on/off ratios, device
+variability, and finite write endurance [39]–[41].                                        III. C HALLENGES
+   When mapped onto analog IMC implementations based                A. Massive Random Number Generation
+on these memory technologies, spiking transformers bene-               Implementing ZO optimization requires an independently
+fit not only from inherent array-level parallelism but also         sampled perturbation element for every weight parameter at
+from simplified computations enabled by binary, event-driven        each optimization step, creating a substantial demand for
+spike activations. In an IMC-based spiking transformer, input       on-chip random number generation. Although uniformly dis-
+activations are represented as spike trains over time steps.        tributed perturbations have been shown to be an effective al-
+Accordingly, the voltage applied to each WL switches between        ternative to Gaussian-distributed perturbations [26]–[28], their
+a fixed read voltage and ground, corresponding to spike             generation still incurs prohibitive hardware overhead in a fully
+values of ‘1’ and ‘0’, respectively. This binary gating reduces     parallel implementation. For a perturbation vector that matches
+each computation from MAC to a pure accumulation, with              the dimensionality of the weight matrix, the area required
+only spike-activated rows contributing to the BL currents or        for the LFSR-based uniform RNGs comprising multiple flip-
+charges. This sparsity-aware mechanism can improve energy           flops and feedback logic is much larger than that of the
+efficiency while retaining the parallelism and compact hard-        SRAM or NVM cells storing the corresponding weights.
+ware footprint offered by analog IMC.                               Consequently, this pronounced footprint mismatch between
+                                                                    stochastic perturbation generation and static weight storage
+C. Zeroth-Order Optimization                                        makes fully parallel per-weight RNGs impractical for large-
+   ZO optimization estimates gradients from finite differences      scale IMC-based on-chip learning.
+of loss evaluations, making it applicable to non-differentiable        To alleviate this footprint mismatch, perturbation-efficient
+objectives in which first-order derivatives are unavailable         ZO optimization (PeZO) [26] reuses the outputs of a small
+or prohibitively expensive to obtain [42]. By relying solely        uniform RNG array across multiple weights, constructing
+on forward-pass evaluations, ZO optimization eliminates the         full perturbation vectors through output concatenation and
+backward pass and avoids retaining intermediate activations         cyclically shifted remapping over time. Motivated by the
+for gradient computation [43]. This advantage is particularly       low intrinsic dimensionality of language-model updates, PeZO
+pronounced for SNNs, as BPTT must retain neuronal states            effectively reduces the required number of RNGs. Neverthe-
+at every time step, causing the activation memory to grow           less, the resulting statistical correlations among perturbation
+approximately linearly with the number of time steps T . De-        elements can degrade learning accuracy when insufficient
+spite avoiding this activation-storage overhead, conventional       random numbers are provided. Moreover, the RNG configura-
+ZO implementations still require storing a random perturbation      tion required to avoid such degradation varies across models
+vector whose dimensionality equals the total number of train-       and tasks, complicating hardware provisioning and limiting
+able model parameters. MeZO [44] reduces this requirement           portability across workloads. Consequently, reducing RNG
+by regenerating the perturbation vector from a shared random        overhead while maintaining sufficient perturbation diversity re-
+seed rather than explicitly storing it. The same vector can         mains a critical challenge for scalable IMC-based ZO training.
+therefore be reproduced on demand during the positive and
+negative forward evaluations and the subsequent parameter           B. Frequent Read-Modify-Write Operations
+update, bringing the memory consumption of ZO optimization             Although IMC architectures derive much of their efficiency
+close to that of inference.                                         from a weight-stationary dataflow, this advantage can be
+   For a model with parameters θ ∈ Rd and a mini-batch B =          undermined in the on-chip implementation of ZO training.
+{x1 , . . . , xB } of size B sampled from the data distribution     During inference, weights are written to the memory array
+D, let LB (θ) denote the empirical loss over B. The gradient        once and remain stationary as successive input activations are
+estimate ĝ of ZO optimization is then given by                     processed, allowing the weight-loading cost to be amortized
+                    q
+                 1 X LB (θ + ϵzi ) − LB (θ − ϵzi )                  over all subsequent MVMs. During explicit-perturbation ZO
+          ĝ =                                     zi ,      (1)    training, however, each optimization step perturbs the model
+                 q i=1             2ϵ
+                                                                    parameters, requiring the stored weight matrix to be repeatedly
+where q denotes the number of random perturbations for each         read from the array, modified, and written back. A cost
+gradient estimation, ϵ > 0 controls the perturbation magnitude,     incurred only once during inference therefore becomes a
+and zi ∈ Rd is sampled from isotropic distributions such as         recurring per-step overhead during training. These repeated
+the standard Gaussian N (0, I) or uniform distribution. The         RMW operations not only consume considerable energy but
+                                                                                                                                                  4
+
+
+
+also impose a throughput penalty because of sequential row-           a
+wise reads and writes. Furthermore, frequent reprogramming is             Spikes         IMC Array                         PGU Array
+particularly detrimental to NVM-based arrays as it exacerbates
+write-endurance limitations and shortens operational lifetime.
+As a result, explicitly injecting perturbations into the memory
+array disrupts the weight-stationary dataflow central to IMC
+efficiency, making repeated RMW operations a bottleneck for
+on-chip ZO training.
+   While PeZO reduces the hardware overhead of RNGs, it still             Read
+explicitly applies perturbations to the stored weights, leaving
+                                                                             Perturbation
+frequent RMW operations largely unchanged. To mitigate the
+write-endurance constraints of NVMs, a dedicated eDRAM-                      Write back
+IMC array has been introduced to store and accumulate the
+dynamic perturbations while retaining the weights in the                           MAC
+RRAM crossbar [45]. Although this avoids repeatedly repro-
+                                                                      b
+gramming the RRAM weights, the perturbations must still be                Spikes         IMC Array                         PGU Array
+read from and written to an additional memory array, shifting
+rather than eliminating the associated energy consumption.
+NoiseZO [46] instead maps the same weight matrix onto two
+RRAM crossbars and exploits the conductance differences
+induced by independent programming noise as perturbations.
+Although this approach avoids repeated RMW operations, it
+relies on device-specific write-noise characteristics, limiting its
+                                                                          MAC
+portability across memory technologies. Therefore, a solution
+that preserves weight stationarity without requiring dedicated                      1     2                           1     2
+perturbation storage across different IMC technologies is still
+lacking.
+                                                                                                    1     2
+
+                                                                                 Perturbation
+              IV. A RCHITECTURE AND D ESIGN
+
+A. Implicit-Perturbation ZO Architecture                              Fig. 1. Comparison of (a) EPZO and (b) IPZO architectures for computing
+                                                                      perturbed MVM outputs. The symbols x, θ, zi , and ϵ denote the input
+                                                                      spike vector, weight matrix, i-th random perturbation vector, and perturbation
+   In an IMC-based ZO accelerator, the random perturbation            scaling factor, respectively.
+can be injected either onto the stored weights before MAC
+computation or onto the accumulated output afterward. Since
+ZO fundamentally perturbs the model weights, the most direct          the perturbed output, which is functionally equivalent to the
+realization adopts the former, adding the perturbation to the         EPZO baseline by the distributivity of the MVM,
+stored weight matrix explicitly, as illustrated in Fig. 1a. In                            x · (θ ± ϵzi ) = x · θ ± x · ϵzi .                    (3)
+this EPZO scheme, the weight matrix θ is first read from the
+IMC array while the PGU generates the random vectors zi in            This separation allows IPZO to decouple the stochastic per-
+parallel. The weights are then perturbed by +ϵzi and written          turbation from the two-dimensional weight-matrix domain
+back as θ+ϵzi for the positive evaluation. A subsequent −2ϵzi         and remap it onto the one-dimensional accumulation-sum
+then flips them to θ−ϵzi for the negative evaluation, and a final     domain, leaving the stored weights untouched during a single
++ϵzi restores the array to θ, a step that becomes indispensable       optimization step.
+under multiple perturbations. Driven by the input spike vector
+x, the MVM operation over the modified weights produces               B. Event-Triggered Weight Perturbation
+the perturbed output x · (θ ± ϵzi ) at the cost of three full-array      1) Dimension Reduction: When deploying the IPZO ar-
+RMW cycles per perturbation.                                          chitecture on SNNs, the PGU dimension can be reduced by
+   Rather than perturbing the stored weights explicitly, the          leveraging the event-driven sparsity of spiking activations.
+proposed IPZO architecture injects the perturbation into the          At each time step, only the rows activated by input spikes
+accumulated output, thereby preserving the weight stationarity        contribute to the MVM, while the remaining rows remain
+of the IMC array. As illustrated in Fig. 1b, the IMC array            inactive. The stochastic perturbation therefore only needs to
+executes the standard MVM with the input spike vector                 be generated for the weights associated with these active
+x to generate the unperturbed sum x · θ, while the PGU                rows rather than for the entire crossbar. This sparsity-induced
+dynamically generates random perturbations and computes the           decoupling allows the PGU row dimension to be determined
+scaled perturbation sum x·ϵzi through a corresponding MVM.            by the number of concurrently active rows rather than the
+These two intermediate results are then merged to reconstruct         physical row dimension of the IMC array.
+                                                                                                                                                      5
+
+
+
+
+                                                                               a                           PGU-Reuse
+  Spikes
+                                      IMC Array
+
+                                                                                   Spike Address
+                                                                                      Mapping                       LFSR             LFSR
+
+                                                                                                                    LFSR             LFSR
+                                                                                                                             shift
+
+
+                                                                                                                    LFSR             LFSR
+                     adc adc                             adc adc
+  Row
+Reduction             1     2
+                                                                               b                            PGU-XOR
+                                     PGU Array
+
+                                                                                                               LFSR           LFSR        LFSR
+                                                                                                               LFSR           LFSR        LFSR
+                                                                               Spike Address                                              LFSR
+                                   accumulation                                   Mapping                      LFSR           LFSR
+
+                      1     2                                                                                  LFSR           LFSR
+
+Fig. 2. Block diagram of the sparse IPZO architecture with a row-dimension-
+reduced PGU array. m and n denote the numbers of rows and columns of
+the IMC array, and k represents the number of PGU rows (k ≪ m).
+                                                                                                               LFSR           LFSR
+                                                                                                               LFSR           LFSR        LFSR
+   Fig. 2 illustrates the resulting row-reduced PGU. Given an
+m × n IMC array storing n multi-bit weights per row, the
+input spike vector x activates k rows on average at each
+time step, where k ≪ m. The PGU is therefore provisioned                      Fig. 3. Perturbation generation schemes for the row-dimension-reduced PGU:
+with k physical rows, which are dynamically mapped to the                     (a) PGU-Reuse with group-based perturbation sharing across rows; (b) PGU-
+active IMC rows according to their spike addresses. When                      XOR with address decomposition and XOR-based combination of quotient-
+                                                                              and remainder-associated LFSRs.
+the number of active rows transiently exceeds this capacity
+because of sparsity fluctuations, the remaining active rows
+are processed over successive cycles. Therefore, this row-
+reduced design generates perturbations covering all weights                   inevitably introduces statistical correlations.
+participating in the MVM while substantially reducing the                        To address this, we introduce a new PGU-XOR scheme
+hardware overhead.                                                            through address-driven XOR recombination, enabling statis-
+   2) Perturbation Independence: While row-dimension re-                      tically independent perturbations across the entire weight
+duction effectively minimizes the PGU hardware overhead,                      matrix. As shown in Fig. 3b, the address-driven XOR recom-
+mapping the reduced-row PGU across the full weight matrix                     bination first decomposes each spike address ai ∈ [0, m) into
+makes it challenging to ensure independence of perturbations.                 a quotient qi ∈ [0, l) and a remainder ri ∈ [0, k) such that
+A baseline solution termed PGU-Reuse realizes this mapping                    ai = k · qi + ri . When k is a power of two, qi and ri are
+by sharing the perturbation vectors generated by the reduced-                 extracted directly from the high- and low-order address bits,
+row PGU across multiple weight rows. As shown in Fig. 3a,                     eliminating the need for a hardware divider. Therefore, the
+PGU-Reuse partitions the m-row weight matrix into l inter-                    PGU-XOR comprises two independent LFSR groups including
+leaved row groups (l = ⌊m/k⌋), allowing multiple weight                       l quotient-associated LFSRs (Q-LFSRs) and a k × n array of
+rows to share the same set of k ×n perturbation vectors gener-                remainder-associated LFSRs (R-LFSRs), which generate the
+ated by the LFSR array. To randomize the perturbation sharing                 corresponding random numbers qrn and rrn, respectively.
+pattern across iterations, the spike address ai is first shifted              For a given spike address ai , the single qrn selected by
+by an iteration-dependent offset δ, yielding an intermediate                  qi is bitwise XORed with the corresponding row of rrn
+address αi = ai − δ. This intermediate address αi is then                     indexed by ri , producing the n-element perturbation vector
+mapped to a specific PGU row through the modulo operation                     associated with that address. Because every Q-LFSR and
+ri = (αi + qi ) (mod k), where the quotient qi = ⌊αi /k⌋.                     R-LFSR is configured with a distinct primitive polynomial,
+Although this dynamic remapping changes the assignment of                     the resulting quotient–remainder XOR combinations generate
+shared perturbation vectors across weight rows over different                 statistically independent perturbation vectors for all m spike
+iterations, the repeated reuse of the same random number bank                 addresses. Consequently, PGU-XOR eliminates the perturba-
+                                                                                                                                                6
+
+
+
+
+  a                                                                          gated rrn as rn. As illustrated in Fig. 4b, each w-bit rn is
+                                                        PGU-Reuse            partitioned into v overlapping u-bit segments arn with a stride
+      CLU             CLU                 CLU                                of s bits, where w = s · (v − 1) + u. This overlapping bit-
+                                                                             slicing scheme improves the utilization of every generated bit.
+                                                                 &           Finally, these segments arn aligned to the same column are
+                                                                             summed by the downstream adders and accumulated over c
+                                                         PGU-XoR             cycles to yield the perturbation sum.
+                                                                                The accumulation cycle count c serves as a configurable
+                                                                             design parameter that balances hardware area against accumu-
+      CLU             CLU                 CLU                &       &
+                                                                             lation latency. A larger c shrinks the CLU array (β = k/c) but
+                                                                             distributes the random-number generation and accumulation
+                                                                             over more cycles. This multi-cycle accumulation, however,
+                                                                             typically does not introduce a system-level latency penalty
+            add              add                  add                        within the IPZO architecture. Since the IMC pipeline in-
+   psum                                                                      herently spends multiple clock cycles on MAC operations,
+                accumulation cycles                                          column-level analog-to-digital conversion and partial-sum ag-
+                                                                             gregation, the PGU accumulation is overlapped within these
+   sum      1     2                                                          cycles as long as c stays within the IMC pipeline latency.
+                                                                             This relaxed timing allows c to be configured according to
+  b                                                                          the available hardware budget while keeping the accumulation
+                                                                             latency effectively hidden.
+  stride
+                                          -bit                               C. Data Flow
+                                                                                Fig. 5 illustrates the data flow of the PGU-XOR across the
+                                                                             alternating forward-pass and weight-update phases. Following
+                                   -bit                                      the ZO training framework, PGU-XOR generates perturbations
+                                                                             for gradient estimation during the forward pass and reproduces
+Fig. 4. (a) Circuit diagram of the perturbation accumulation architecture    the identical perturbations for the weight parameter update af-
+with a β × φ CLU array for PGU-Reuse and PGU-XOR, requiring c =              terward. This reproducibility is achieved by holding the LFSR
+k/β accumulation cycles. (b) Overlapping bit-slicing scheme using stride s   states constant throughout a single optimization iteration, so
+to partition the w-bit CLU output rn into v pseudo-random segments.
+                                                                             that the same random numbers can be regenerated on demand
+                                                                             without being stored.
+tion correlations introduced by PGU-Reuse, thereby restoring                    The two phases, however, differ in their perturbation gen-
+the perturbation diversity required for effective ZO gradient                eration process. During the forward pass, only the spike-
+estimation.                                                                  activated rows participate in the computation and perturbations
+                                                                             are therefore generated exclusively for these active rows. As
+   3) Accumulation Contention: While XOR recombination
+                                                                             illustrated in Fig. 5, three spikes are active at time step t, caus-
+restores perturbation independence, it forces multiple spike
+                                                                             ing the mask Mi to assert its three least significant bits. The
+addresses to share access to the Q-LFSR and R-LFSR re-
+                                                                             resulting addresses ai are then decomposed into (ri , qi ) pairs to
+sources. Under multi-row concurrent activation, addresses that
+                                                                             generate the associated perturbation segments arn . In contrast
+decompose to the same remainder contend for the same R-
+                                                                             to the event-driven forward pass, the update phase sequentially
+LFSR row within a single cycle, creating row-level resource
+                                                                             traverses the entire weight matrix to regenerate perturbations
+contention along the XOR-and-accumulation datapath. Rather
+                                                                             for every row. Accordingly, a single bit of the mask M0 is
+than over-provisioning the LFSR resources, we resolve this
+                                                                             asserted while the address a0 increments sequentially from 0
+contention with an accumulation network (Fig. 4a) that serial-
+                                                                             to m−1. As a0 advances, r0 cycles repeatedly from 0 to k −1
+izes the contending accesses across c cycles, trading a bounded
+                                                                             whereas q0 increments every k cycles. This sequential traversal
+latency for a compact hardware footprint.
+                                                                             ensures that the perturbations used during parameter updates
+   This accumulation network is organized as a β × φ array
+                                                                             remain identical to those employed for gradient estimation.
+of combinational logic units (CLUs), where β = k/c and
+φ = n/v are set by the accumulation cycle count c and the
+                                                                                            V. E XPERIMENTS AND R ESULTS
+segmentation number v. Within each CLU of PGU-XOR, the
+qrn and rrn selected by the corresponding qi and ri are first                A. Spatial Sparsity Analysis
+gated by a mask M through AND operations, passing only                          Fig. 6 presents the mean firing rates ρ of Q, K, and V LIF
+those associated with valid spikes so that the network adapts                neurons in Spikingformer [34] at each time step for three rep-
+to a varying number of active rows (≤ β) per cycle. The                      resentative datasets. The shaded regions indicate the variation
+gated qrn and rrn are then combined by an XOR to produce                     across multiple transformer blocks. Across all three datasets,
+the wide w-bit random number rn. PGU-Reuse follows the                       the Q, K and V LIF neurons exhibit consistently sparse firing
+same datapath but bypasses the XOR, directly forwarding the                  activity throughout the inference. The mean firing rates ρ of
+                                                                                                                                                           7
+
+
+
+                                                                            Time
+                          LFSR State 0                          LFSR State 1                                   LFSR State n
+                     Forward Pass            Update        Forward Pass           Update                  Forward Pass           Update
+
+                               3 spikes              7 spikes
+                                0 111              01111111                                                     1
+                                  67                 32                                           10                 15
+                              03742 0              029 17 3                               0123456789
+                                     127                 101
+                                0 307              02901753                               0123            0123
+                                      15                  12
+                                0 80               000400 0                                      0               1
+                                                         8
+                                  0                0
+                                                                                                                    rows
+
+Fig. 5. Data flow of the PGU-XOR across forward pass and parameter update phases.
+
+
+
+
+Fig. 6. Mean firing rate ρ of Q, K, and V LIF neurons across transformer         Fig. 7. Evolution of bit probability distribution in 128 random sequences rn
+blocks at each time step. Shaded regions indicate its range across transformer   generated by (a) PGU-Reuse and (b) PGU-XOR.
+blocks.
+
+                                                                                 20% observed in Fig. 6. These additional cycles can be largely
+all three neuron types, averaged across transformer blocks,                      overlapped within the IMC pipeline, thereby limiting their
+remain below 15% at every time step. Among them, the Q                           impact on system-level latency.
+LIF neurons exhibit the highest firing activity, with block-
+wise maxima reaching approximately 20% for CIFAR-10 and
+CIFAR-100 and 15% for ImageNet, while the K and V LIF                            B. Statistical Property Evaluation
+neurons remain predominantly below 10%. These consistently                          Using the k = 8 configuration for a 128 × 16 weight
+low firing rates demonstrate the inherent sparsity of spiking                    matrix, we evaluate the statistical properties of perturbations
+activity and justify the row-dimension reduction adopted in                      generated by PGU-Reuse and PGU-XOR in terms of bit-level
+the PGU design. Guided by this observation, both PGU-XOR                         uniformity, temporal randomness, and spatial independence. In
+and PGU-Reuse are configured with k = 8 physical rows                            this setup, PGU-Reuse employs an 8 × 2 array of R-LFSRs,
+for an m × n = 128 × 16 IMC array, providing a single-                           while PGU-XOR additionally incorporates 16 Q-LFSRs, each
+cycle capacity of 6.25%. Each of the 16 columns stores an                        implemented as a 36-bit (w = 36) LFSR with a distinct
+8-bit weight, resulting in 128 bit-columns at the cell level.                    primitive polynomial. Through overlapping bit slicing and
+Rather than provisioning additional physical rows for firing                     quotient–remainder address expansion, these reduced LFSR
+rates above 6.25%, multi-cycle scheduling is employed to trade                   resources are logically expanded to generate perturbations
+latency for area. For an instantaneous firing rate ρ, the required               covering the entire 128 × 16 weight matrix.
+number of scheduling cycles is Nc = ⌈mρ/k⌉. With m = 128                            We first examine bit-level uniformity, which requires a bal-
+and k = 8, four scheduling cycles can accommodate firing                         anced distribution of bits 0 and 1 in each generated sequence.
+rates of up to 25%, exceeding the maximum of approximately                       Fig. 7 presents the evolution of the bit probabilities for the 128
+                                                                                                                                                       8
+
+
+
+
+Fig. 8. Statistical correlation properties of random sequences rn: autocorre-   Fig. 9. Cross-correlation characteristics of 8-bit (u) random sequences
+lation coefficient of a single sequence generated by (a) PGU-Reuse and (b)      arn extracted from a 36-bit (w) PGU-XOR sequence with different stride
+PGU-XOR; cross-correlation matrix among 128 sequences generated by (c)          configurations: (a) s = 1 with 29 sequences; (b) s = 2 with 15 sequences;
+PGU-Reuse and (d) PGU-XOR.                                                      (c) s = 4 with 8 sequences; (d) s = 7 with 5 sequences.
+
+
+
+perturbation sequences (rn) associated with the first column                    directions required for unbiased ZO gradient estimation.
+of the weight matrix, each extended to a length of 10,000.                         The overlapping bit-slicing scheme introduces an additional
+For both configurations, the probabilities of bit 0 (P (0)) and                 source of correlation between the generated perturbation seg-
+bit 1 (P (1)) rapidly converge toward 0.5 as the sequence                       ments. Because adjacent segments share overlapping bits,
+length grows, confirming that both PGU-Reuse and PGU-                           a smaller stride inevitably leads to stronger inter-segment
+XOR produce uniform binary sequences. Bit-level uniformity                      correlation. We therefore evaluate the influence of the stride
+therefore does not distinguish the two architectures, motivating                s on the cross-correlation among the partitioned 8-bit (u = 8)
+a further evaluation of their temporal and spatial statistical                  perturbation segments arn , generated from a 36-bit (w = 36)
+properties.                                                                     LFSR output. For narrow strides of s = 1 (v = 29, Fig. 9a)
+   Figs. 8a and b show the autocorrelation of a single sequence                 and s = 2 (v = 15, Fig. 9b), the resulting segments exhibit
+generated by PGU-Reuse and PGU-XOR, respectively. In both                       pronounced cross-correlations exceeding 0.5 between adjacent
+cases, the autocorrelation peaks only at zero lag due to the                    segments along the main diagonal. Increasing the stride to
+self alignment, whereas the coefficients across all non-zero                    s = 4 (v = 8, Fig. 9c) reduces the maximum cross-correlation
+lags remain close to zero, indicating negligible temporal self-                 between distinct segments below 0.1, while a further increase
+correlation. The distinction emerges in the spatial domain,                     to s = 7 (v = 5, Fig. 9d) suppresses the off-diagonal
+where the cross-correlation among the 128 sequences differs                     correlations to nearly zero. These results reveal a clear trade-
+sharply between the two architectures. As shown in Fig. 8c,                     off between statistical independence and hardware efficiency.
+PGU-Reuse exhibits pronounced periodic cross-correlations                       Larger strides effectively reduce inter-segment correlation but
+among different perturbation sequences. These structured cor-                   simultaneously decrease the number of available perturbation
+relations arise from the repeated reuse of shared LFSR states                   segments. We therefore adopt s = 4, which maintains low
+across parallel rows under the fixed cyclic remapping scheme.                   inter-segment correlation while preserving a sufficient segment
+In contrast, the cross-correlation matrix of PGU-XOR (Fig. 8d)                  count (v = 8).
+remains close to zero except along the self-correlation diag-
+onal, indicating that the 128 sequences are mutually uncor-
+related. By eliminating structured spatial correlations, PGU-                   C. Accuracy Evaluation
+XOR restores statistically independent perturbations across                       The training performance of a ZO-based SNN is evaluated
+all weight rows, thereby preserving the isotropic perturbation                  using different perturbation generators, including the hardware
+                                                                                                                                                         9
+
+
+
+
+                                                                                Fig. 11. (a) Effective rank and (b) Frobenius norm ∥∆W ∥F of the weight
+                                                                                change ∆W = Wfinal − Winit for the first layer of SNN-MLP trained from
+                                                                                scratch using MeZO under four perturbation schemes including PGU-Reuse,
+Fig. 10. Accuracy of a three-layer SNN-MLP (1024-128-10) trained from           PGU-XOR, Randint, and Randn.
+scratch on MNIST with MeZO under four perturbation schemes including
+PGU-Reuse, PGU-XOR, Randint, and Randn: (a) accuracy versus training
+epoch and (b) final accuracy and standard deviation over 10 independent runs.                                   TABLE I
+                                                                                     F INE - TUNING P ERFORMANCE U SING M E ZO U NDER D IFFERENT
+                                                                                                           R ANDOM N UMBERS .
+
+implementations PGU-Reuse and PGU-XOR, as well as two                                             Spikingformer [34]            SpikeGPT [47]
+software references, namely uniformly distributed integer per-                                        CIFAR-10           WikiText-2      WikiText-103
+turbations (Randint) and normally distributed perturbations                                       Acc. (%)   Epochs†    PPL    Steps†    PPL    Steps†
+(Randn). To ensure a fair comparison, the 8-bit integer
+                                                                                    PGU-Reuse      66.85       247     66.01    3944    94.73    4000
+perturbations (∈ [−128, 128)) generated by PGU-Reuse, PGU-                          PGU-XOR        76.41        84     54.20     687    83.98     777
+XOR √ and Randint are normalized to [−0.5, 0.5) and scaled                          Randint        76.53        80     53.23     633    82.67     641
+by 12 to match the unit variance of Randn. Experiments                              Randn          76.56        83     53.07     653    82.32     742
+are conducted on a three-layer SNN-based multilayer per-                        † Training epochs (Spikingformer) or steps (SpikeGPT) required to reach the
+ceptron (MLP) (1024-128–10) trained on MNIST, with ten                          final performance of PGU-Reuse.
+independent runs from different random initializations for
+each perturbation scheme. As shown in Fig. 10a, PGU-
+XOR exhibits nearly identical convergence behavior to both                      sequences into 16 groups, and because the shifts repeat every
+software references (Randint and Randn), with all three                         8 groups, the last 8 groups merely duplicate the first 8. The
+achieving stable optimization and narrow variance envelopes                     row space of the perturbation matrix is therefore effectively
+across ten independent runs. In contrast, PGU-Reuse exhibits                    capped at m/2 = 64, closely matching the measured 61.5 and
+substantially larger run-to-run variability, as reflected by its                confining every update to the same low-dimensional subspace.
+considerably wider error band. This is further confirmed by                     As shown in Fig. 11b, the Frobenius norm ∥∆W ∥F is nearly
+the final test accuracies in Fig. 10b. PGU-XOR, Randint,                        identical across all four schemes at about 1.74 × 103 . PGU-
+and Randn reach comparable mean accuracies of 88.8%,                            Reuse perturbs the weights by the same overall magnitude as
+89.1%, and 88.7% with tightly bounded standard deviations of                    the others, but concentrates this displacement in half as many
+0.34%, 0.31%, and 0.30%, respectively, whereas PGU-Reuse                        independent directions. This restriction also accounts for the
+attains only 82.7% with a substantially elevated deviation                      elevated run-to-run variability (Fig. 10a), since the alignment
+of 4.10%. This degradation directly reflects the structured                     between the gradient directions and the low-dimensional sub-
+spatial correlations identified in Fig. 8c. By reusing random                   space varies with the random initialization. By decorrelating
+perturbations across the rows of each weight matrix, PGU-                       the perturbation rows, PGU-XOR removes this duplication
+Reuse violates the isotropy assumption underlying ZO gradient                   and restores near-full-rank exploration of the parameter space,
+estimation, so the perturbations span far fewer independent                     which underlies its accuracy and stability on par with the
+directions than the dimension of the parameter space.                           software references.
+   This loss of directional diversity is quantified by the effec-                  The impact of this rank deficiency is further examined on
+tive rank of the first-layer weight update ∆W = Wfinal −Winit                   two large-scale spiking models including Spikingformer [34]
+accumulated over training, which is bounded above by m =                        and SpikeGPT [47], fine-tuned with ZO optimization under
+128. As shown in Fig. 11a, PGU-XOR, Randint, and Randn                          the same four perturbation schemes. A 66.34M-parameter
+all reach a near-full rank of about 120, indicating that the                    Spikingformer pre-trained on ImageNet-1K is fine-tuned on
+optimization explores a broad set of independent directions.                    CIFAR-10 with 75% of its parameters frozen, leaving 16.6M
+PGU-Reuse, in contrast, collapses to 61.5, roughly half that of                 trainable parameters, whereas a 216M-parameter SpikeGPT
+the other schemes. The 128 perturbation rows of PGU-Reuse                       pre-trained on OpenWebText2 is fully fine-tuned and evaluated
+are produced by cyclically shifting 8 rows of base random                       on WikiText-2 and WikiText-103.
+                                                                                                                                            10
+
+
+
+   The results are summarized in Table I. Across all three                      PGU-Reuse                           PGU-XOR
+tasks, PGU-XOR consistently matches the optimization per-
+formance achieved with the software perturbation generators
+(Randint and Randn), whereas PGU-Reuse exhibits a clear
+performance degradation. On CIFAR-10, PGU-XOR achieves                             CLUs                                     CLUs
+76.41% accuracy, closely matching Randint (76.53%) and
+Randn (76.56%), whereas PGU-Reuse reaches only 66.85%,
+9.56 percentage points lower than PGU-XOR. A similar trend
+
+
+
+
+                                                                    102 µm
+holds on WikiText-2 and WikiText-103, where PGU-XOR                                                       R-LFSRs
+attains perplexities (PPLs) of 54.20 and 83.98, respectively,
+close to the software references, while PGU-Reuse yields
+higher values of 66.01 and 94.73. With the final performance
+of PGU-Reuse as a common reference, PGU-XOR reaches                                                                         Q-LFSRs
+the same accuracy on CIFAR-10 in 84 epochs compared with                        R-LFSRs
+247 epochs for PGU-Reuse, reducing training epochs by a
+factor of about 2.9. On WikiText-2 and WikiText-103, PGU-
+XOR reaches the corresponding reference PPLs in 687 and
+777 steps against 3944 and 4000 steps, corresponding to 5.7×                       50 µm                               73 µm
+and 5.1× fewer iterations, respectively. These results demon-
+                                                                    Fig. 12. Layout comparison of the PGU-Reuse and PGU-XOR implementa-
+strate that the spatial correlations introduced by PGU-Reuse        tions in 16-nm CMOS technology under accumulation cycles of c = 8.
+impair convergence speed and degrade the final accuracy and
+perplexity at large model scales, whereas PGU-XOR preserves
+performance comparable to software perturbation generators
+across both vision and language tasks.
+
+
+D. Hardware Implementation
+   PGU-Reuse and PGU-XOR are implemented in TSMC 16-
+nm CMOS technology using a standard-threshold-voltage dig-
+ital cell library. Both designs support configurable 1-bit (BIT1)
+Rademacher (±1) and 8-bit (BIT8) signed perturbation gener-
+ation for a 128 × 16 IMC array. All hardware results reported
+in this section are obtained from post-layout implementations,
+with throughput evaluated at a target frequency f of 1 GHz
+and power evaluated at the typical-typical (TT) process corner,
+0.8 V supply voltage, and 25 ◦ C. The following subsections
+evaluate their area, throughput, and energy consumption.
+   1) Area and Throughput: Fig. 12 compares the post-layout
+implementations of PGU-Reuse and PGU-XOR under the
+most area-efficient configuration (c = 8), corresponding to
+a single-row CLU array (β = 1). The layouts are partitioned
+into color-coded functional regions, including the CLUs, the        Fig. 13. (a) Normalized post-layout area and (b) throughput of PGU-
+                                                                    Reuse and PGU-XOR under different accumulation cycles c in 16-nm CMOS
+R-LFSRs, and the Q-LFSRs exclusive to PGU-XOR. Under                technology. All designs are placed at ∼ 66% cell utilization. One operation
+a cell utilization of approximately 66%, PGU-Reuse occupies         (OP) denotes one multiplication or one addition.
+50 µm×102 µm (≈ 5,100 µm2 ), whereas PGU-XOR occupies
+73 µm × 102 µm (≈ 7,446 µm2 ), corresponding to a 46.0%
+area overhead introduced by the additional Q-LFSRs for XOR-         which can represent an 8-bit realization of the same 128 × 16
+based perturbation generation. Beyond this single configura-        weight matrix targeted by the PGU-XOR. Such a referenced
+tion, Fig. 13a evaluates the post-layout area for c ∈ {2, 4, 8}     IMC macro occupies 0.124 mm2 in 65-nm CMOS technology
+with all values normalized to the largest configuration (c = 1,     [48], corresponding to ∼ 16,000 µm2 after scaling to 16-nm
+PGU-XOR). Increasing c progressively reduces the size of            technology [49]. As c increases, the relative area cost of PGU-
+the CLU array through β = k/c, lowering the normalized              XOR with respect to the IMC macro decreases further.
+area from 1.00 to 0.47 for PGU-XOR and from 0.70 to 0.32               Fig. 13b presents the perturbation throughput of both PGU-
+for PGU-Reuse, while the overhead of PGU-XOR over PGU-              Reuse and PGU-XOR under different accumulation cycles.
+Reuse stays within 40.3%–46.0% across all configurations.           Since PGU-XOR introduces the additional Q-LFSRs and XOR
+   Despite the additional hardware required for perturbation        logic without increasing the pipeline depth, both designs
+decorrelation, the area of PGU-XOR at c = 1 remains                 produce one perturbation result every Tc cycles and therefore
+comparable to that of a representative 128 × 128 IMC macro,         achieve identical throughput. Within the IPZO architecture,
+                                                                                                                                                                11
+
+
+
+
+                                                                                  Fig. 15. (a) Operation energies of a 128×64 SRAM in TSMC 16-nm
+                                                                                  technology: 64-bit read er , 64-bit write ew , and 8-bit addition ea . (b) Energy
+                                                                                  comparison between IPZO (PGU-XOR, per MVM) obtained from post-layout
+                                                                                  simulation, and EPZO (RMW, per batch) estimated from (a). (c) Energy ratio
+                                                                                  R = EIPZO /EEPZO as a function of batch size and number of time steps.
+
+
+
+
+Fig. 14. Post-layout (a) power and (b) energy per MVM of PGU-Reuse
+                                                                                  per MVM increases with c as shown in Fig. 14b because the
+and PGU-XOR under different accumulation cycles c in 16-nm CMOS                   reduced power is outweighed by the longer cycle interval Tc .
+technology, evaluated for 8-bit signed (BIT8, open bars) and 1-bit Rademacher     In BIT8 mode, the energy rises from 11.5 to 24.7 pJ for PGU-
+(BIT1, hatched bars) perturbations. One MVM denotes one spike–perturbation
+product x · zi , where x is the spike vector and zi is the perturbation matrix.
+                                                                                  Reuse and from 17.1 to 28.5 pJ for PGU-XOR. The resulting
+(c) Energy cost of PGU-Reuse and PGU-XOR at iso-accuracy on CIFAR-10,             energy overhead of PGU-XOR over PGU-Reuse therefore
+normalized to PGU-Reuse.                                                          narrows from 48.9% at c = 1 to 15.2% at c = 8, falling
+                                                                                  below the corresponding area overhead of 40.3%–46.0% for
+                                                                                  c ≥ 2. This discrepancy arises because the Q-LFSRs occupy
+the perturbation MVM (x · ϵzi ) computed by the PGU follows
+                                                                                  additional area but exhibit low switching activity during each
+the same computational structure as the weight MVM (x · θ)
+                                                                                  optimization iteration, contributing much less dynamic energy
+in the IMC array. Each perturbation element contributes one
+                                                                                  than their physical footprint would suggest. Consequently,
+multiplication and one addition, amounting to 2mn operations
+                                                                                  increasing c reduces area and power at a proportional cost
+for an m × n PGU array. The throughput is thus given by
+                                                                                  in throughput and energy per MVM, leaving c bounded by
+                                           2mn · f                                the IMC pipeline latency and the available energy and area
+                        Throughput =               ,                       (4)
+                                             Tc                                   budget.
+where f = 1 GHz and Tc = c cycles. Increasing c serializes                           The per-MVM energy advantage of PGU-Reuse, however,
+more accumulation operations onto a smaller CLU array,                            does not translate directly into lower energy during training.
+raising Tc and lowering the throughput from 4.10 TOPS at                          Fig. 14c further compares the energy required by both PGU-
+c = 1 to 2.05, 1.02 and 0.51 TOPS at c = 2, 4, and 8. Together                    Reuse and PGU-XOR to reach the same target accuracy of
+with the area scaling at larger c, these results illustrate a direct              66.85% for Spikingformer fine-tuning on CIFAR-10. Because
+tradeoff between hardware cost and throughput, in which the                       the correlated perturbations of PGU-Reuse confine the update
+reduced throughput incurs no system-level penalty as long as                      to a low-dimensional subspace, it requires 247 epochs to
+the PGU sustains the throughput of the IMC array.                                 reach this accuracy, whereas PGU-XOR converges within
+   2) Energy Consumption: Fig. 14 presents the post-layout                        84 epochs. Despite its higher per-MVM energy, PGU-XOR
+power and energy of PGU-Reuse and PGU-XOR under dif-                              therefore reduces the total perturbation energy to 0.51× that
+ferent c, evaluated in both BIT8 and BIT1 perturbation modes.                     of PGU-Reuse, demonstrating that the modest hardware cost of
+The energy is reported per MVM, denoting one computa-                             perturbation decorrelation can be offset by improved training
+tion between the spike vector x and the perturbation matrix                       convergence and ultimately yields a more favorable hardware–
+zi ∈ R128×16 . As shown in Fig. 14a, the power of both                            algorithm trade-off.
+designs decreases monotonically with increasing c owing to                           The energy advantage of the proposed IPZO architecture
+the reduced CLU array size, falling by over 3× from c = 1                         over the conventional EPZO architecture stems from the
+to c = 8, while BIT1 consumes about 55%–60% of the                                pronounced energy disparity among the primitive operations
+BIT8 power at every configuration. In contrast, the energy                        involved in weight perturbation. Fig. 15a characterizes the
+                                                                                                                                               12
+
+
+
+energy of these operations using a 128 × 64 SRAM imple-                                        VI. C ONCLUSION
+mented in TSMC 16-nm technology. A 64-bit read (er ) and a             This work presented IPZO, which is a hardware-algorithm
+64-bit write (ew ) consume 4.68 pJ and 4.20 pJ, respectively,       co-designed architecture for efficient ZO-based on-chip learn-
+whereas an 8-bit addition (ea ) consumes only 0.01 pJ. This         ing in IMC-based spiking transformers. IPZO relocates ran-
+disparity of more than two orders of magnitude reveals that         dom perturbations from the stored weight domain to the
+memory accesses, rather than arithmetic operations, dominate        accumulation domain, eliminating the repeated RMW opera-
+the energy cost of weight perturbation. IPZO exploits this          tions of explicit weight perturbation while preserving weight-
+gap by replacing costly weight reads and writes with low-cost       stationary IMC execution. Within IPZO, the event-triggered
+additions in the accumulation domain.                               PGU-XOR generates perturbations only for spike-activated
+   Based on these primitive-operation energies, Fig. 15b com-       rows, decoupling the RNG array size from the weight matrix
+pares the estimated energy of EPZO with the post-layout             dimensions, while address-driven XOR recombination elimi-
+energy of IPZO using PGU-XOR at c = 1. In EPZO, weight              nates the spatial correlations introduced by the resulting RNG
+perturbation is performed through an RMW operation, where           reuse. PGU-XOR achieves near-full-rank exploration of the
+the weights and perturbations are read from the memory array,       parameter space and optimization performance comparable to
+added element-wise, and written back. For 8-bit weights, an         software RNGs across both image classification and language
+m × n weight matrix contains 8mn bits and is accessed in 64-        modeling. Post-layout implementation in TSMC 16-nm CMOS
+bit words, requiring mn/8 read accesses each for the weights        shows that, despite the additional hardware for perturbation
+and perturbations, mn/8 write accesses, and mn additions.           decorrelation, PGU-XOR reduces the total perturbation energy
+The energy of one RMW operation is given by                         to 0.51× that of PGU-Reuse through faster convergence.
+                                                                  At the architecture level, IPZO with PGU-XOR reduces the
+                                2er + ew                            perturbation energy to 0.46–0.83× that of EPZO at B =
+               eRMW = mn                 + ea ,              (5)
+                                    8                               64 and T = 4. These results demonstrate that combining
+                                                                    accumulation-domain perturbation with sparsity-driven, decor-
+where the factor of two on er accounts for reading both             related perturbation generation provides an efficient hardware
+weights and perturbations. For the 128 × 16 weight array,           approach to ZO-based on-chip learning for IMC-based SNN
+this yields eRMW = 3.50 nJ. Each ZO optimization iteration          accelerators.
+requires three RMW operations for q = 1, two for the positive
+and negative forward passes and one for the weight restoration,                                   R EFERENCES
+resulting in a fixed energy cost of EEPZO = 3 eRMW = 10.5 nJ
+                                                                     [1] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+per optimization iteration. In contrast, the post-layout energy          Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” Advances in
+of PGU-XOR is ePGU-XOR = 17.1 pJ in BIT8 mode and                        neural information processing systems, vol. 30, 2017.
+9.37 pJ in BIT1 mode per input per time step. Accounting             [2] T. Wolf, L. Debut, V. Sanh, J. Chaumond, C. Delangue, A. Moi,
+                                                                         P. Cistac, T. Rault, R. Louf, M. Funtowicz et al., “Transformers: State-
+for the positive and negative evaluations, the corresponding             of-the-art natural language processing,” in Proceedings of the 2020
+IPZO energy scales with 2BT .                                            conference on empirical methods in natural language processing: system
+                                                                         demonstrations, 2020, pp. 38–45.
+   The different scaling behaviors of the IPZO and EPZO              [3] B. Wu, C. Xu, X. Dai, A. Wan, P. Zhang, Z. Yan, M. Tomizuka,
+determine the operating regime in which each architecture is             J. Gonzalez, K. Keutzer, and P. Vajda, “Visual transformers: Token-
+more energy-efficient. To quantify this trade-off, Fig. 15c plots        based image representation and processing for computer vision,” arXiv
+                                                                         preprint arXiv:2006.03677, 2020.
+the energy ratio                                                     [4] K. Han, Y. Wang, H. Chen, X. Chen, J. Guo, Z. Liu, Y. Tang, A. Xiao,
+                                                                         C. Xu, Y. Xu et al., “A survey on vision transformer,” IEEE transactions
+                     EIPZO   2ePGU-XOR · BT                              on pattern analysis and machine intelligence, vol. 45, no. 1, pp. 87–110,
+               R=          =                ,                (6)         2022.
+                     EEPZO       3eRMW                               [5] C. Wolters, X. Yang, U. Schlichtmann, and T. Suzumura, “Memory is all
+                                                                         you need: An overview of compute-in-memory architectures for acceler-
+as a function of B and T . Since R scales linearly with BT ,             ating large language model inference,” arXiv preprint arXiv:2406.08413,
+the break-even condition R = 1 occurs at BT ≈ 307 in BIT8                2024.
+                                                                     [6] Z. Song, P. Katti, O. Simeone, and B. Rajendran, “Xpikeformer: Hybrid
+mode and BT ≈ 560 in BIT1 mode, as indicated by the two                  analog-digital hardware acceleration for spiking transformers,” IEEE
+dashed contours. Below the respective contours, IPZO is more             Transactions on Very Large Scale Integration (VLSI) Systems, vol. 33,
+energy-efficient, whereas above them, its accumulated per-               no. 6, pp. 1596–1609, 2025.
+                                                                     [7] T. Das, K. P. Vu, H. Chen, H. Oh, and M. Imani, “Aster: Attention-based
+input perturbation cost eventually exceeds the fixed RMW cost            spiking transformer engine for event-driven reasoning,” arXiv preprint
+of EPZO. At B = 64 and T = 4, as adopted for Spikingformer               arXiv:2511.06770, 2025.
+fine-tuning, IPZO consumes only 0.83× the energy of EPZO             [8] P. Jiang, L. Wang, Y. Fang, Y. Wang, M. Zhu, X. Miao, and X. Wang,
+                                                                         “Sparta: Spike-aware token skipping co-optimization with heterogeneous
+in BIT8 mode and 0.46× in BIT1 mode. The energy advantage                reram-cim architecture for spiking transformer acceleration,” in 2025
+of IPZO becomes increasingly pronounced at smaller BT ,                  IEEE/ACM International Conference On Computer Aided Design (IC-
+which is particularly relevant to real-time on-chip learning on          CAD). IEEE, 2025, pp. 1–9.
+                                                                     [9] K. Roy, A. Jaiswal, and P. Panda, “Towards spike-based machine
+resource-constrained edge devices. These results demonstrate             intelligence with neuromorphic computing,” Nature, vol. 575, no. 7784,
+that injecting perturbations in the accumulation domain, rather          pp. 607–617, 2019.
+than explicitly modifying stored weights, preserves the weight-     [10] M. Davies, N. Srinivasa, T.-H. Lin, G. Chinya, Y. Cao, S. H. Choday,
+                                                                         G. Dimou, P. Joshi, N. Imam, S. Jain et al., “Loihi: A neuromorphic
+stationary execution of IMC while substantially reducing per-            manycore processor with on-chip learning,” Ieee micro, vol. 38, no. 1,
+turbation energy across practical training configurations.               pp. 82–99, 2018.
+                                                                                                                                                                13
+
+
+
+[11] B. Keller, R. Venkatesan, S. Dai, S. G. Tell, B. Zimmer, C. Sakr,                  mechanism,” IEEE Journal of Solid-State Circuits, vol. 55, no. 7, pp.
+     W. J. Dally, C. T. Gray, and B. Khailany, “A 95.6-tops/w deep learning             1888–1897, 2020.
+     inference accelerator with per-vector scaled 4-bit quantization in 5 nm,”   [31]   Y.-K. Yeh, J.-W. Su, T.-H. Hsu, M. Tseng, J.-C. Tien, K.-C. Chen, C.-
+     IEEE Journal of Solid-State Circuits, vol. 58, no. 4, pp. 1129–1141,               Y. Yue, Y.-E. Lin, Y.-J. Hu, L.-J. Hsieh et al., “A 16nm, 1mb, 1-to-
+     2023.                                                                              8b-configurable 444.21 tops/w fully digital sram compute-in-memory
+[12] H. Mun, J. Meng, X. Hu, Y. Liao, C.-T. Chen, and J.-s. Seo, “Asap:                 macro for hybrid snn-cnn edge computing,” in 2026 IEEE International
+     A 28-nm transformer training accelerator with alternating sparsity and             Solid-State Circuits Conference (ISSCC), vol. 69. IEEE, 2026, pp.
+     asymmetrical microscaling precision,” IEEE Journal of Solid-State Cir-             526–528.
+     cuits, 2026.                                                                [32]   Q. Fournier, G. M. Caron, and D. Aloise, “A practical survey on faster
+[13] S. Nag, G. Datta, S. Kundu, N. Chandrachoodan, and P. A. Beerel, “Vita:            and lighter transformers,” ACM Computing Surveys, vol. 55, no. 14s,
+     A vision transformer inference accelerator for edge applications,” in              pp. 1–40, 2023.
+     2023 IEEE International Symposium on Circuits and Systems (ISCAS).          [33]   B. Cessac, “A discrete time neural network model with spiking neurons
+     IEEE, 2023, pp. 1–5.                                                               II. Dynamics with noise,” Journal of Mathematical Biology, vol. 62,
+[14] P.-S. Wu, Y.-C. Lin, and C.-H. Yang, “A 99.2 tops/w transformer learning           no. 6, pp. 863–900, 2011.
+     processor with approximated attention score gradient computation and        [34]   C. Zhou, L. Yu, Z. Zhou, H. Zhang, J. Wang, H. Zhou, Z. Ma,
+     ternary vector-based speculation,” in 2024 IEEE Symposium on VLSI                  and Y. Tian, “Spikingformer: A key foundation model for spiking
+     Technology and Circuits (VLSI Technology and Circuits). IEEE, 2024,                neural networks,” in Proceedings of the AAAI Conference on Artificial
+     pp. 1–2.                                                                           Intelligence, vol. 40, no. 3, 2026, pp. 2236–2244.
+[15] Y. Wang, X. Yang, Y. Qin, Z. Zhao, R. Guo, Z. Yue, H. Han, S. Wei,          [35]   Z. Song, P. Katti, O. Simeone, and B. Rajendran, “Stochastic spiking
+     Y. Hu, and S. Yin, “A 22nm 54.94 tflops/w transformer fine-tuning pro-             attention: Accelerating attention with stochastic computing in spiking
+     cessor with exponent-stationary re-computing, aggressive linear fitting,           networks,” in 2024 IEEE 6th International Conference on AI Circuits
+     and logarithmic domain multiplicating,” in 2024 IEEE Symposium on                  and Systems (AICAS), 2024, pp. 31–35.
+     VLSI Technology and Circuits (VLSI Technology and Circuits). IEEE,
+                                                                                 [36]   Y. Chich et al., “An 89 tops/w and 16.3 tops/mm 2 all-digital sram-based
+     2024, pp. 1–2.
+                                                                                        full-precision compute-in memory macro in 22nm for machine-learning
+[16] L. Shen, Y. Sun, Z. Yu, L. Ding, X. Tian, and D. Tao, “On efficient                edge applications,” in ISSCC, 2021, pp. 252–253.
+     training of large-scale deep learning models,” ACM Computing Surveys,
+                                                                                 [37]   C.-J. Jhang, C.-X. Xue, J.-M. Hung, F.-C. Chang, and M.-F. Chang,
+     vol. 57, no. 3, pp. 1–36, 2024.
+                                                                                        “Challenges and trends of SRAM-based computing-in-memory for AI
+[17] Y. Zhang, P. Li, J. Hong, J. Li, Y. Zhang, W. Zheng, P.-Y. Chen, J. D.
+                                                                                        edge devices,” IEEE Transactions on Circuits and Systems I: Regular
+     Lee, W. Yin, M. Hong et al., “Revisiting zeroth-order optimization
+                                                                                        Papers, vol. 68, no. 5, pp. 1773–1786, 2021.
+     for memory-efficient llm fine-tuning: A benchmark,” arXiv preprint
+     arXiv:2402.11592, 2024.                                                     [38]   A. Kneip and D. Bol, “Impact of analog non-idealities on the design
+                                                                                        space of 6T-SRAM current-domain dot-product operators for in-memory
+[18] K. Sugiura and H. Matsutani, “Elasticzo: A memory-efficient on-
+                                                                                        computing,” IEEE Transactions on Circuits and Systems I: Regular
+     device learning with combined zeroth-and first-order optimization,”
+                                                                                        Papers, vol. 68, no. 5, pp. 1931–1944, 2021.
+     arXiv preprint arXiv:2501.04287, 2025.
+[19] J. Gu, C. Feng, Z. Zhao, Z. Ying, R. T. Chen, and D. Z. Pan, “Efficient     [39]   F. Aguirre, A. Sebastian, M. Le Gallo, W. Song, T. Wang, J. J.
+     on-chip learning for optical neural networks through power-aware sparse            Yang, W. Lu, M.-F. Chang, D. Ielmini, Y. Yang et al., “Hardware
+     zeroth-order optimization,” in Proceedings of the AAAI conference on               implementation of memristor-based artificial neural networks,” Nature
+     artificial intelligence, vol. 35, no. 9, 2021, pp. 7583–7591.                      communications, vol. 15, no. 1, p. 1974, 2024.
+[20] D. Han and H.-J. Yoo, On-Chip Training NPU-Algorithm, Architecture          [40]   R. Khaddam-Aljameh, M. Stanisavljevic, J. F. Mas, G. Karunaratne,
+     and SoC Design. Springer, 2023.                                                    M. Braendli, F. Liu, A. Singh, S. M. Müller, U. Egger, Petropoulos et al.,
+[21] M. Dampfhoffer, T. Mesquida, A. Valentian, and L. Anghel,                          “HERMES core–a 14nm CMOS and pcm-based in-memory compute
+     “Backpropagation-based learning techniques for deep spiking neural                 core using an array of 300ps/LSB linearized CCO-based ADCs and
+     networks: A survey,” IEEE Transactions on Neural Networks and                      local digital processing,” in 2021 Symposium on VLSI Circuits. IEEE,
+     Learning Systems, vol. 35, no. 9, pp. 11 906–11 921, 2023.                         2021.
+[22] S. Liu, P.-Y. Chen, B. Kailkhura, G. Zhang, A. O. Hero III, and P. K.       [41]   G. Verma, A. Nisar, S. Dhull, and B. K. Kaushik, “Neuromorphic
+     Varshney, “A primer on zeroth-order optimization in signal processing              accelerator for spiking neural network using SOT-MRAM crossbar
+     and machine learning: Principals, recent advances, and applications,”              array,” IEEE Transactions on Electron Devices, 2023.
+     IEEE Signal Processing Magazine, vol. 37, no. 5, pp. 43–54, 2020.           [42]   A. Chen, Y. Zhang, J. Jia, J. Diffenderfer, K. Parasyris, J. Liu, Y. Zhang,
+[23] J. Larson, M. Menickelly, and S. M. Wild, “Derivative-free optimization            Z. Zhang, B. Kailkhura, and S. Liu, “Deepzero: Scaling up zeroth-order
+     methods,” Acta Numerica, vol. 28, pp. 287–404, 2019.                               optimization for deep model training,” in International Conference on
+[24] Q. Meng, M. Xiao, S. Yan, Y. Wang, Z. Lin, and Z.-Q. Luo, “Towards                 Learning Representations, vol. 2024, 2024, pp. 50 185–50 206.
+     memory-and time-efficient backpropagation for training spiking neural       [43]   R. C. Suwandi, F. Yin, and T.-H. Chang, “Breaking the curse of
+     networks,” in 2023 IEEE/CVF International Conference on Computer                   dimensionality in gaussian process training with zeroth-order adaptive
+     Vision (ICCV). IEEE, 2023, pp. 6143–6153.                                          perturbation,” in ICASSP 2026-2026 IEEE International Conference on
+[25] H. Zhang and Y. Zhang, “Memory-efficient reversible spiking neural net-            Acoustics, Speech and Signal Processing (ICASSP). IEEE, 2026, pp.
+     works,” in Proceedings of the AAAI conference on artificial intelligence,          22 497–22 501.
+     vol. 38, no. 15, 2024, pp. 16 759–16 767.                                   [44]   S. Malladi, T. Gao, E. Nichani, A. Damian, J. D. Lee, D. Chen, and
+[26] Q. Tan, S.-E. Chang, R. Xia, H. Ji, C. Yang, C. Zhang, J. Liu, Z. Zhan,            S. Arora, “Fine-tuning language models with just forward passes,” Ad-
+     Z. Fang, Z. Zou et al., “Perturbation-efficient zeroth-order optimization          vances in Neural Information Processing Systems, vol. 36, pp. 53 038–
+     for hardware-friendly on-device training,” in 2025 IEEE/ACM Interna-               53 075, 2023.
+     tional Conference On Computer Aided Design (ICCAD). IEEE, 2025,             [45]   M. Chen, L. Zheng, J.-Y. Lin, P. D. Ye, and H. Li, “Analog multilevel
+     pp. 1–9.                                                                           edram-rram cim for zeroth-order fine-tuning of llms,” in 2025 IEEE
+[27] M. Qin, S. Yin, Q. Guo, P. Liu, X. Huang, and F. Wen, “Zeroth-order                International Memory Workshop (IMW). IEEE, 2025, pp. 1–4.
+     forward-only snn training inspiring neuromorphic on-chip learning,” in      [46]   S. Wang, Z. Liu, C. Ding, C. Zhang, T. Wu, J. Zhou, and N. Wong,
+     Forty-third International Conference on Machine Learning.                          “Noisezo: Rram noise-driven zeroth-order optimization for efficient
+[28] S. Liu, X. Li, P.-Y. Chen, J. Haupt, and L. Amini, “Zeroth-order                   forward-only training,” in 2025 62nd ACM/IEEE Design Automation
+     stochastic projected gradient descent for nonconvex optimization,” in              Conference (DAC). IEEE, 2025, pp. 1–7.
+     2018 IEEE Global Conference on Signal and Information Processing            [47]   R.-J. Zhu, Q. Zhao, G. Li, and J. Eshraghian, “SpikeGPT:
+     (GlobalSIP). IEEE, 2018, pp. 1179–1183.                                            Generative pre-trained language model with spiking neural networks,”
+[29] M. E. Sinangil, B. Erbagci, R. Naous, K. Akarvardar, D. Sun, W.-                   Transactions on Machine Learning Research, 2024. [Online]. Available:
+     S. Khwa, H.-J. Liao, Y. Wang, and J. Chang, “A 7-nm compute-in-                    https://openreview.net/forum?id=gcf1anBL9e
+     memory sram macro supporting multi-bit input, weight and output and         [48]   V. Sharma, J.-E. Kim, H. Kim, L. Lu, and T. T.-H. Kim, “A recon-
+     achieving 351 tops/w and 372.4 gops,” IEEE Journal of Solid-State                  figurable 16kb and8t sram macro with improved linearity for multibit
+     Circuits, vol. 56, no. 1, pp. 188–198, 2020.                                       compute-in memory of artificial intelligence edge devices,” IEEE Jour-
+[30] Z. Jiang, S. Yin, J.-S. Seo, and M. Seok, “C3sram: An in-memory-                   nal on Emerging and Selected Topics in Circuits and Systems, vol. 12,
+     computing sram macro based on robust capacitive coupling computing                 no. 2, pp. 522–535, 2022.
+                                                                                 14
+
+
+
+[49] A. Stillmaker and B. Baas, “Scaling equations for the accurate prediction
+     of cmos device performance from 180 nm to 7 nm,” Integration, vol. 58,
+     pp. 74–81, 2017.
+

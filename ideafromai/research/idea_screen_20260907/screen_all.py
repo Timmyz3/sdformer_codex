@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path("/home/zhumd/work")
-OUT = Path("/home/zhumd/work/ideafromai/research/idea_screen_20260907")
+OUT = Path("/home/zhumd/work/sdformer_codex/ideafromai/research/idea_screen_20260907")
 HW = ROOT / "sdformer_codex/SDformer/hw_autoresearch_nts07"
 IDEA = ROOT / "ideafromai/research"
 QK_DIR = (

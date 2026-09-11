@@ -1,0 +1,1101 @@
+                                                                                   This paper has been accepted to be published in
+                                                                         IEEE Journal on Emerging and Selected Topics in Circuits and Systems
+
+
+                                          BitFair: A 12-nm Bit-Serial CNN Accelerator with
+                                            Learnable Early Termination and Adaptive Bit
+                                              Ordering for Ultra-Low-Power XR Vision
+                                                                                                     Ang Li , Chang Gao
+
+
+
+                                            Abstract—Extended Reality (XR) wearables require always-                  Meta Quest 3 and Apple Vision Pro consume 5–30 W at
+                                         on perception within tight power envelopes of a few watts and                the system level [8], [9], leaving only tens of milliwatts
+                                         motion-to-photon latency budgets below 20 ms, leaving only a                 for a dedicated neural-network accelerator that must operate
+                                         few milliseconds for neural-network inference. Bit-serial com-
+                                         puting is attractive for such energy-efficient neural network                continuously without draining the battery. The motion-to-
+                                         acceleration, but many existing architectures still process all              photon latency budget, i.e., the total delay from user motion
+                                         bits even when ReLU sets the final output to zero. This pa-                  to the corresponding visual update, must remain below 20 ms
+                                         per presents BitFair, a software-hardware co-designed bit-serial             to prevent simulator sickness [10], of which only 2–5 ms
+                                         CNN accelerator with learnable bit-level early termination and
+arXiv:2607.05445v2 [cs.AR] 10 Aug 2026
+
+
+
+
+                                                                                                                      can be allocated to neural-network inference after accounting
+                                         adaptive bit ordering, working under the ultra-low-power and
+                                         strict latency requirements of XR applications. BitFair exploits             for sensor readout, rendering, and display scanout [5]. Post-
+                                         dynamic bit-level sparsity by learning per-layer thresholds that             layout results using the GlobalFoundries 12-nm technology
+                                         trigger early termination when partial sums reliably predict that            show BitFair’s inference latency of 0.12–1.55 ms and power
+                                         the final ReLU output will be zero. Furthermore, it searches for             consumption of 0.8–13.7 mW comfortably fit within both
+                                         layer-wise bit orders that prioritize informative bits, maximizing           envelopes, making it a practical candidate for always-on XR
+                                         early termination without sacrificing accuracy. A 12-nm FinFET
+                                         implementation with a core area of 0.34 mm2 , 104 KB on-chip                 perception. We use this term in a specific sense: continuous,
+                                         memory, and voltage scaling from 0.55 to 0.70 V achieves sub-                on-device perception over sparse or low-resolution inputs
+                                         millisecond latency, up to 234.0 BTOPS/W, and 0.07 pJ/SOP. On                under strict power and latency budgets. This is distinct from
+                                         IBM DVS128 Gesture and N-MNIST, BitFair achieves 96.5% and                   high-resolution, compute-heavy scene understanding. Our ac-
+                                         97.7% accuracy, respectively, while improving effective energy               celerator targets always-on lightweight visual perception work-
+                                         efficiency by 4.0–22.1× and accuracy by up to 9.2% over prior
+                                         fabricated XR vision accelerators.                                           loads, such as digit recognition, hand gesture recognition, and
+                                                                                                                      person detection [11] using either event- or frame-based vision
+                                            Index Terms—convolutional neural network, edge comput-                    sensors.
+                                         ing, neural network accelerator, bit-serial computing, software-
+                                         hardware co-design, dynamic sparsity, extended reality                          To address these demands, Spiking Neural Networks
+                                                                                                                      (SNNs) have emerged as a leading paradigm for energy-
+                                                                                                                      efficient, event-driven vision, as evidenced by several recently
+                                                                  I. I NTRODUCTION                                    fabricated accelerators targeting XR workloads [2], [3], [12],
+                                            In recent years, extended reality (XR), encompassing vir-                 [13]. SNNs exploit temporal sparsity through integrate-and-fire
+                                         tual reality (VR), augmented reality (AR), and mixed reality                 dynamics: neurons remain silent in the absence of input spikes,
+                                         (MR), has driven a paradigm shift in computing, introducing                  naturally reducing switching activity and energy consumption.
+                                         natural interaction technologies such as gesture recognition                 However, practical limitations constrain their broader deploy-
+                                         and object detection [1]–[3]. To deliver immersive, interac-                 ment. Surrogate-gradient training complicates convergence in
+                                         tive, and comfortable user experiences, XR wearables impose                  deeper architectures, and SNNs typically suffer an accuracy
+                                         stringent constraints: sub-millisecond latency is required to                gap compared to equivalent Convolutional Neural Networks
+                                         support real-time responsiveness and prevent motion sickness,                (CNNs) on the same tasks. Furthermore, their efficiency ad-
+                                         while ultra-low power consumption is critical for extending                  vantage diminishes on dense inputs where spike rates approach
+                                         battery life in untethered devices [4], [5]. As XR applications              saturation. These observations raise a fundamental question:
+                                         increasingly rely on Neural Networks (NNs) for accurate                      can mature CNNs, with their well-understood training frame-
+                                         perception, traditional algorithms and hardware encounter                    works and outstanding baseline accuracy, achieve SNN-like
+                                         significant challenges in meeting these power and latency                    event-driven efficiency?
+                                         demands, highlighting the need for efficient hardware-software                  To deploy CNNs on resource-constrained edge devices,
+                                         co-design [6], [7].                                                          quantization techniques have been widely adopted to reduce
+                                            Hand gesture recognition is a representative workload that                computational costs by representing weights and activations
+                                         crystallizes these constraints. Modern XR headsets such as                   with lower bit widths [6], [14]. However, conventional im-
+                                                                                                                      plementations process all bits atomically, leaving significant
+                                           Corresponding author: Chang Gao (chang.gao@tudelft.nl).                    opportunities for bit-level optimization unexploited. Conse-
+                                           The authors are with the Department of Microelectronics, Delft Uni-
+                                         versity of Technology, Delft, The Netherlands. (Emails: ang.li@tudelft.nl,   quently, bit-serial accelerators [7], [15]–[17] have emerged
+                                         chang.gao@tudelft.nl)                                                        as an energy-efficient alternative. Bit-serial architectures de-
+
+                                            © 2026 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or
+                                           future media, including reprinting/republishing this material for advertising or promotional purposes, creating new collective works, for
+                                                       resale or redistribution to servers or lists, or reuse of any copyrighted component of this work in other works
+        Bit-serial Weights                            Partial Sum - 𝑃𝑘                                  termination (with bit positions indexed from LSB to MSB,
+                                                                                             ReLU
+                                                                              𝑃𝑘 ≤ 𝜃𝑙                   where 0 denotes the LSB), resulting in computational savings
+
+
+
+
+                              Adaptive bit ordering
+                                                      𝑃0                         𝑃1 𝜃𝑙                  without compromising accuracy.
+                    B0
+                                                                                         0                 The BitFair hardware accelerator is implemented in 12-
+                                                                𝜃
+                                                                    𝑙
+                                                                                                        nm FinFET technology to validate the proposed techniques.
+I
+    *   N
+                    B1
+                                                      𝑃1
+                                                                                                        The design features a bit-serial Processing Element (PE) array
+                    …
+
+                                   …
+                         KW                                  Early
+              ICH
+                                …                            Terminate                                  with an output-stationary dataflow, effectively leveraging par-
+                                                                                  Saved Cycles          allelism while accommodating the bit-level early termination
+         KH                                       𝑃N-1
+                    BN-1
+                                                                                                        mechanism. Post-layout evaluation shows a compact core area
+                                                                        k=1      Computing Cycles       of 0.34 mm2 , 104 KB of on-chip memory, and operation at a
+                                                                                                        500 MHz clock frequency, achieving sub-millisecond latency
+Fig. 1. BitFair with early termination and adaptive bit ordering. Inputs are                            with a low power consumption of 13.7 mW.
+multiplied with bit-serial weights in an adaptive order to maximize early
+termination opportunities. When the partial sum Pk falls below the layer-                                  The main contributions of this paper include:
+specific threshold θl , the final ReLU output is predicted to be zero and
+computation terminates early, saving the processing of the remaining bits.
+                                                                                                          1) Bit-level early termination with learnable thresholds:
+                                                                                                             A trainable threshold mechanism that learns layer-wise
+                                                                                                             early termination decisions through gradient-based opti-
+compose operations into sequences of single-bit computations,                                                mization, replacing fixed-threshold methods to automat-
+enabling fine-grained control that can exploit bit-level sparsity                                            ically balance efficiency and accuracy.
+within the binary representation of data to reduce Multiply-                                              2) Adaptive bit ordering optimization: An algorithm that
+Accumulate (MAC) energy consumption.                                                                         adopts a greedy search strategy to determine a layer-
+                                                                                                             wise bit processing order, further improving the early-
+   Despite these advances, existing bit-serial accelerators per-
+                                                                                                             termination rate and computational efficiency while pre-
+form substantial redundant computation due to the structure
+                                                                                                             serving accuracy.
+of CNNs. ReLU activation functions clamp negative outputs
+                                                                                                          3) Hardware validation on XR-class deployment: A
+to zero, inducing significant data-dependent runtime sparsity.
+                                                                                                             hardware accelerator in GlobalFoundries 12-nm FinFET
+However, most conventional bit-serial accelerators fail to ex-
+                                                                                                             technology that achieves 0.34 mm2 area and 13.7 mW
+ploit this dynamic sparsity, processing all non-zero bits re-
+                                                                                                             power, compatible with wearable XR budgets, evaluated
+gardless of the final result’s sign. While previous works [18]–
+                                                                                                             on both event-driven and frame-based vision classifica-
+[20] have proposed prediction-based early termination, these
+                                                                                                             tion benchmarks, and demonstrating 4.0×–22.1× energy
+approaches operate at value-level granularity and are thus not
+                                                                                                             efficiency improvements and up to 9.2% higher accuracy
+directly compatible with bit-serial processing. BitSET [21]
+                                                                                                             over prior fabricated SNN-based edge vision accelera-
+introduces an early termination mechanism for bit-serial ar-
+                                                                                                             tors.
+chitectures, but it is limited by the use of static thresholds and
+a rigid bit ordering.
+   This paper introduces BitFair, an ultra-low-power bit-serial                                                     II. BACKGROUND AND M OTIVATION
+accelerator enhanced with early termination and adaptive bit
+ordering to satisfy the rigorous latency and power constraints                                          A. Spiking Neural Networks for XR Vision
+of XR applications. Figure 1 illustrates the idea of BitFair.                                              The demand for ultra-efficient edge processing has made
+First, we propose learnable per-layer thresholds that optimize                                          SNNs a highly attractive paradigm, driving significant silicon
+early termination decisions through gradient-based training,                                            investment in SNN-based accelerators [2], [3], [12], [13], [22].
+adapting to layer-specific characteristics. By employing soft                                           Operating on an integrate-and-fire model, neurons in these
+thresholding with temperature annealing, we enable end-to-end                                           networks accumulate input spikes over discrete time steps
+differentiable optimization to maximize computational savings                                           and emit an output spike only when their membrane potential
+under strict accuracy constraints. Conceptually, this threshold-                                        exceeds a firing threshold, after which the potential resets. The
+driven mechanism shares a similar spirit with the integrate-                                            key appeal of this event-driven computation is its ability to in-
+and-fire dynamics of SNNs: just as a spiking neuron remains                                             herently skip silent neurons, seamlessly achieving conditional
+silent and produces no output until its membrane potential                                              computation without explicit prediction mechanisms.
+crosses a firing threshold, BitFair’s bit-serial computation                                               Despite these advantages, SNNs face several practical lim-
+terminates early and predicts a zero ReLU output whenever                                               itations. The non-differentiable spike function necessitates
+the evolving partial sum falls below the learned threshold.                                             surrogate gradient estimators during training [23], [24], which
+   Moreover, BitFair introduces an adaptive bit-ordering strat-                                         complicate convergence for deeper networks and limit the
+egy that moves beyond the traditional Most Significant Bit                                              model architectures that can be effectively trained [25]. These
+(MSB)-first approach. It performs a greedy search to de-                                                training difficulties translate into a measurable accuracy gap:
+termine a layer-specific bit processing order that enhances                                             on DVSGesture, ReckOn [2] achieves 87.3% and the recent
+opportunities for early termination while prioritizing bits most                                        CICC’25 design [12] reaches 90.5%, compared to 96.5% for
+critical to accuracy. For instance, when a layer’s weights                                              a CNN of comparable size (Table III). Furthermore, when
+are predominantly clustered near ±32 (binary: 00100000),                                                processing dense RGB frames, high spike rates across all
+processing bit position 5 before bits 6 and 7 can trigger earlier                                       pixels saturate the temporal coding, degrading the efficiency
+
+                                                                                                    2
+advantage that SNNs enjoy on sparse event streams. A re-               representation of quantized values. To enable early termination
+cent comprehensive analysis of digital hardware accelerators           within bit-serial processing, several works have explored bit-
+for both Artificial Neural Networks (ANNs) and SNNs [26]               level prediction mechanisms. Song et al. [19] propose a two-
+corroborates these observations, demonstrating that on static          stage predict-and-execute approach that processes weights in
+vision tasks, ANN accelerators Pareto-dominate their SNN               MSB-first order. In the prediction stage, a manually deter-
+counterparts in both energy efficiency and accuracy. While             mined number of MSBs is computed to predict whether the
+SNNs show competitive efficiency on temporal tasks, the                final result will be negative. If predicted negatively, the remain-
+study highlights that classification workloads employing bio-          ing LSBs are skipped. Similarly, PredictiveNet [18] employs
+inspired sensors such as event cameras remain underexplored,           MSB-first bit-serial processing with empirically determined
+motivating BitFair’s approach of applying CNN-based pro-               values for the number of MSBs required to reliably predict
+cessing to event-driven data. These limitations have motivated         final results and perform early termination. BitSET [21] further
+exploring conditional computation within conventional CNN              advances bit-serial early termination by introducing predefined
+frameworks, where bit-serial processing offers a natural sub-          thresholds derived from batch normalization parameters and
+strate for fine-grained computation control.                           dedicated encoding schemes to facilitate early termination
+                                                                       decisions.
+B. Bit-Serial Neural Network Acceleration                                 However, these bit-level approaches have fundamental limi-
+                                                                       tations as shown in Figure 2(c). First, MSB-first ordering may
+   Bit-serial computing has emerged as a promising paradigm
+                                                                       be suboptimal for layers where weight distributions do not
+for energy-efficient neural network inference [7], [15]–[17].
+                                                                       align with positional bit significance. Second, these methods
+Unlike conventional parallel processing that consumes all bits
+                                                                       rely on manually determined or empirically fixed thresholds
+simultaneously (Figure 2(a)), bit-serial architectures process
+                                                                       that cannot adapt to layer-specific characteristics, leading to
+quantized values sequentially, one bit at a time (Figure 2(b)).
+                                                                       suboptimal early termination decisions. Third, BitSET [21]
+This enables fine-grained control, exploiting bit-level sparsity
+                                                                       makes early predictions reliable under a fixed threshold by
+in activations or weights. For example, PRAGMATIC [16]
+                                                                       moving away from the standard signed-integer format. It uses
+exploits bit-level sparsity by skipping computation cycles
+                                                                       a custom weight encoding in which every bit contributes
+corresponding to zero bits in the binary representation. Bit-
+                                                                       ±2i . Although this encoding is a one-to-one mapping of
+Wave [27] and BitPattern [28] further optimize bit-serial
+                                                                       the quantized values, it changes the numerical meaning of
+processing through structuring the bit-level sparsity to achieve
+                                                                       each weight bit. As a result, the datapath needs dedicated
+higher energy efficiency.
+                                                                       encoding logic, and the network has to undergo BitSET-aware
+   However, these bit-serial accelerators only focus on static
+                                                                       fine-tuning until the weight distribution is compatible with
+bit-level sparsity, i.e., zero bits already present in the quan-
+                                                                       the encoding. This couples early termination to both a non-
+tized representation, without considering the runtime dynamic
+                                                                       standard representation and a specialized retraining procedure.
+sparsity introduced by activation functions. In CNNs, ReLU
+                                                                       These limitations motivate BitFair, shown in Figure 2(d),
+activation functions clamp negative outputs to zero, inducing
+                                                                       which combines learnable thresholds with adaptive bit order-
+activation sparsity exceeding 50% in deep layers [29]. Conven-
+                                                                       ing to improve early-termination efficiency while preserving
+tional bit-serial accelerators fail to exploit the ReLU-induced
+                                                                       accuracy, without changing the underlying numerical format.
+sparsity, processing all non-zero bits without considering the
+sign of the final accumulated value. This leaves substantial
+optimization opportunities unexplored, particularly for layers                           III. B IT FAIR A LGORITHM
+where many intermediate computations produce negative val-             A. Bit-Serial Processing with Early Termination
+ues that ReLU will ultimately zero out.
+                                                                          For a quantized N -bit sign-magnitude weight w, with one
+                                                                       sign bit s and N − 1 magnitude bits, the value can be
+C. Early Termination in CNNs                                           decomposed as:
+   While SNNs achieve conditional computation implicitly                                               N −2
+through the integrate-and-fire mechanism, CNN-based ap-                                                X
+                                                                                            w =s×             bj × 2j                 (1)
+proaches can approximate a similar effect by predicting and
+                                                                                                        j=0
+skipping computations whose outputs will be zeroed by ReLU.
+The data-dependent sparsity introduced by ReLU activation              where bj ∈ {0, 1} represents the bit at position j, and s ∈
+functions during runtime, which is one form of dynamic spar-           {−1, +1} is the sign bit.
+sity [30], brings significant opportunities for computational             1) Conventional Bit-Serial Processing: For a CNN layer,
+and memory access savings.                                             let I = {i0 , i1 , . . . , iM −1 } denote the input positions con-
+   SnaPEA [20] computes partial sums in a value-based man-             tributing to an output, where M = KH × KW × ICH for
+ner and skips the remaining weight values based on prediction          kernel dimensions KH, KW and input channels ICH. The
+results. When the accumulated partial sum indicates the final          output y of this layer with bit-serial weight processing and
+output will be negative, SnaPEA terminates the computation             bit-parallel activations is:
+for that output position. While effective at reducing computa-                          M −1 N −2
+tion, SnaPEA’s value-level granularity limits its ability to ex-
+                                                                                        X    X       j                
+                                                                                   y=                2 × si × bi,j × ai + b̃          (2)
+ploit finer-grained optimization opportunities within the binary                         i=0 j=0
+
+
+                                                                   3
+                                                                                                    Bit-Serial Computing
+      Conventional Bit-Parallel Computing     Conventional Bit-Serial Computing                    with Early Termination                    BitFair Computing (This work)
+
+                T0                                     T3 T2 T1 T0                              T3 T2 T1 T0              Static θ             T3 T2 T1 T0            Optimizer
+
+                                ReLU
+       Input    -3                             Input       -3                   ReLU                -3                                              -3
+                            C                                               C                                        C                                           C
+                            O                                               O                                        O                                           O
+                                                                                                                          <θ?   ReLU                                   <θ?   ReLU
+                            N                                               N                                        N                                           N
+                                                4-bit
+                            V                                               V                                        V                                           V
+     Weight     10                             serial 0 1 0 1                                   0 1 0 1                                        0 0 1 1
+                                              weight
+                                                                                                                                             Adaptive
+                                                                MSB                                                                         Bit ordering
+                                                                                                         Terminate                                         Terminate
+
+                      (a)                                         (b)                                           (c)                                            (d)
+
+Fig. 2. Execution paths for a ReLU-enabled convolution layer with different computing paradigms. (a) Conventional bit-parallel MAC units compute all bits
+in parallel. (b) Bit-serial processing consumes one bit per cycle. (c) Bit-serial processing with MSB-first early termination skips remaining bits once the partial
+sum is predicted to be negative. The fixed threshold θ is usually initialized from the normalization parameters or bias values and keeps static during inference.
+(d) Our proposed BitFair augments early termination with learnable thresholds and adaptive bit ordering to maximize skipped efficiency while preserving
+accuracy.
+
+
+
+where ai is the signed bit-parallel activation for input position                           remaining bit-plane processing for that output. The threshold
+i ∈ I, bi,j is the weight bit at position j for the i-th input                              is learned to make this prediction accurate while trading off
+position. si is the sign bit of the sign-magnitude weight, and                              accuracy and saved bit-cycles.
+b̃ is the bias term.
+    Equation 2 shows that conventional bit-serial implementa-                               B. Learnable Per-Layer Thresholds
+tions process the inner sum over bits j first, then accumu-
+late across inputs i. While computationally straightforward,                                   Conventional methods such as BitSET [21] employ fixed
+this ordering prevents bit-level early termination, as partial                              thresholds initialized from Batch Normalization (BN) layer
+sums aggregate only the processed inputs, providing limited                                 parameters or bias values that remain static during inference.
+information about the final output’s sign. Moreover, while                                  For a convolutional layer fused with a BN layer, the threshold
+MSB-first processing accounts for positional bit significance, it                           θ0l is initialized from the BN parameters:
+overlooks the actual distribution of weight bits within a layer.
+                                                                                                                          p
+                                                                                                                        β
+When LSBs dominate substantially over MSBs, this ordering                                                      θ0l = −     × σ2 + ϵ + µ                (5)
+                                                                                                                        γ
+becomes inefficient, leading to “unfair” bit treatment.
+    2) BitFair’s Bit-Level Early Termination: To incorporate                                where µ, σ, γ, β, and ϵ are the mean, variance, scale, shift,
+early termination into bit-serial processing, BitFair first re-                             and small constant parameters of the BN layer, respectively.
+verses the computation order, processing each bit position                                  For fully connected layers or convolutional layers without a
+across all inputs before moving to the next bit. A custom                                   subsequent BN layer, the threshold simplifies to θ0l = −b̃,
+ordering ω is applied to define the bit processing sequence,                                which can be derived as a special case of Equation 5 by setting
+instead of using the default MSB-first order. In this way,                                  µ = 0, σ = 1, γ = 1, and β = b̃. However, fixed thresholds fail
+BitFair achieves “bit-fair” processing by prioritizing the most                             to adapt to varying input statistics, likely leading to suboptimal
+informative bits, rather than relying solely on their inherent                              early termination.
+positional significance.                                                                       1) Threshold Parameterization: BitFair uses the same ini-
+    On this basis, an early termination decision can be made                                tialization but makes thresholds trainable. For each layer l, we
+at bit-level granularity. Let Pk represent the partial sum after                            maintain a learnable threshold parameter θl initialized as:
+processing k bits under a given ordering ω:                                                                                         θl = θ0l + θxl                                  (6)
+                      k M −1 h
+                                                                                            where θ0l is computed using Equation 5 for layers with BN or
+                      X X                                               i
+               Pk =              2ω(j) × si × bi,ω(j) × ai                        (3)
+                      j=0 i=0
+                                                                                            θ0l = −b̃l for layers without BN, and θxl is a learnable offset
+                                                                                            parameter.
+When k = N − 2, all magnitude bits are processed. For                                           2) Differentiable Soft Thresholding: The direct application
+convolutional layers followed by ReLU activation, early ter-                                of hard threshold comparisons creates non-differentiable de-
+mination can occur at k < N − 2 when the partial sum Pk                                     cision points that prevent gradient flow. To enable end-to-end
+reliably predicts that the final output will be negative and thus                           training, we use a temperature-controlled sigmoid gate. At bit
+zeroed by ReLU. Specifically, early termination occurs at step                              position k, the early-termination gate is:
+k when:
+                                                                                                                             Plk − θl
+                                                                                                                                     
+                              Pk ≤ θ l                        (4)                                                  l
+                                                                                                                 Gk = σ −                               (7)
+                                                                                                                                 T
+where θl is BitFair’s learned layer-specific threshold. The
+threshold θl is defined on this bias-free partial sum and absorbs                           where σ(·) denotes the sigmoid function, Plk represents the
+the layer bias or fused BN affine parameters, as detailed in                                stacked partial sums Pk across all outputs at layer l, and
+Section III-B. When this condition holds, BitFair predicts that                             T is the temperature parameter. This formulation directly
+the final output will be zeroed by ReLU and terminates the                                  relaxes the hard early termination condition Plk ≤ θl : when
+
+                                                                                        4
+                                                                                                                      batch input. For logits ẑ and labels t, the total loss takes the
+                                                                  ends
+                        1.0                                                        T = 1.0 (start)
+                                                                                                                      conventional form
+                                                                                   T = 0.5
+                                                                                   T = 0.2
+                                                                                   T = 0.05 (end)
+                        0.8             Training starts                                                                                   L = LCE (ẑ, t) + λbit Lbit                    (11)
+                                                                                   Plk = θ l (threshold)
+     Gate Value (Glk)
+
+
+
+
+                        0.6
+                                                                                                                      where LCE is the cross-entropy task loss and λbit balances
+                                                                                                                      accuracy against efficiency. The regularizer Lbit penalizes high
+                               Early Termination                              Continue                                survival probabilities across magnitude-bit positions in the
+                        0.4          Plk ≤ θ l                              Computation
+                                                                                                                      early-termination layers L,
+                        0.2                                                                                                                                    Nl −2
+                                                                                                                                           1 X 1 X         1   X
+                                                                                                                                 Lbit =                              Sl,u                (12)
+                               Glk = σ(−                    )
+                                             Plk   −θ   l
+                                                                                                                                                                      k
+                                                   T                                                                                      |L| |U l |   N l − 1
+                        0.0                                                                                                                   l∈L    l  u∈U                k=0
+                                −4        −2        0         2           4
+                                Partial Sum Relative to Threshold (Plk − θ l)                                         where U l is the index set of output elements in layer l,
+                                                                                                                      Sl,u
+                                                                                                                        k   is the survival probability of output element u after
+                                                                                                                      processing bit position k, and Nl − 1 P      is the number of
+Fig. 3. Effect of temperature annealing on sigmoid gate sharpness: high                                                                                                 l,u
+temperatures enable soft decisions during training, while low temperatures                                            magnitude-bit positions. The inner sum         k Sk   gives the
+produce hard decisions approaching the step function used at inference.                                               expected number of magnitude-bit positions processed for
+                                                                                                                      output u. Normalizing by Nl −1 gives the expected processed-
+                                                                                                                      bit fraction. Minimizing Lbit therefore encourages earlier
+Plk − θl ≤ 0, we obtain high Glk ≈ 1 (early termination                                                               termination, while LCE preserves task accuracy.
+likely); conversely, when Plk − θl > 0, we obtain low Glk ≈ 0                                                            4) Temperature Annealing: To transition from soft deci-
+(continue to next bit).                                                                                               sions during training to hard decisions at inference, we anneal
+   A single gate relaxes one termination decision. Because the                                                        the temperature T using an exponential decay schedule:
+decisions are sequential and the output is zeroed as soon as
+the first gate fires, we compose the per-position gates into a                                                                                                     e/E
+                                                                                                                                                               TE
+prefix-product survival probability. Let K = Nl −2 denote the                                                                              T (e) = T0 ×                                  (13)
+                                                                                                                                                               T0
+final magnitude-bit position of layer l and define
+                                         k
+                                                                                                                      where e is the current epoch and E is the total training
+                              Slk   =
+                                         Y
+                                                   (1 −         Glm ),   k = 0, . . . , K.                  (8)       epochs. We decay T from T0 = 1.0 to TE = 0.05 over
+                                         m=0
+                                                                                                                      training. At high temperatures (early training), the sigmoid
+                                                                                                                      gate remains smooth, yielding soft early-termination decisions
+Here, Slk is the soft probability that no early-termination gate                                                      that support stable end-to-end optimization of θl . As T de-
+has fired through bit position k. Any fired gate drives this                                                          creases, the gate progressively sharpens, approaching the hard
+product toward zero and suppresses the output. Thus, only                                                             comparison Plk ≤ θl used during inference. Consequently, the
+outputs that survive through the final bit position contribute to                                                     model learns thresholds under a differentiable relaxation while
+the differentiable training output:                                                                                   converging toward the discrete early-termination behavior de-
+                                                                                                                      ployed at inference time. Intuitively, a larger T prevents the
+                                    Âl = SlK ⊙ ReLU(PlK + b̃l )                                            (9)
+                                                                                                                      gate from saturating too early, enabling thresholds to adapt to
+During inference, the soft gates are replaced by the hard se-                                                         evolving activation statistics. As annealing progresses, lower
+quential comparison Plk ≤ θl . The first satisfying bit position                                                      T reduces ambiguity around the boundary and makes early
+terminates the output and writes zero. If no comparison fires                                                         termination more decisive, minimizing train–test mismatch
+through k = K, the layer emits the conventional full-bit                                                              when switching to hard comparisons at inference.
+output.
+   3) Training Objective: Equation 9 casts each early-
+termination layer l ∈ L as a differentiable transfer function                                                         C. Adaptive Bit Ordering Optimization
+Âl = f l (Âl−1 ; Wl , θl ), where Wl is the layer’s quantized N -                                                      To maximize the effectiveness of early termination, an
+bit sign-magnitude weight matrix. In a neural network model,                                                          appropriate bit ordering strategy is crucial. While MSB-first
+composing all L layers propagates the input x to the output                                                           ordering processes large-magnitude bits first, layer-specific
+logits,                                                                                                               weight distributions may benefit from alternative orderings
+                                                                                                                      prioritizing bits with the highest discriminative power. BitFair
+                          ẑ = f L ◦ f L−1 ◦ · · · ◦ f 1 (x),                     Â0 = x                  (10)
+                                                                                                                      employs a greedy search strategy to discover an effective bit
+so each threshold θl influences the prediction through the                                                            ordering for each layer.
+smooth survival probability Sl of Equation 8. Hence the logits                                                           1) Problem Formulation: For N -bit weights in sign-
+ẑ are differentiable with respect to all thresholds {θl }l∈L ,                                                       magnitude representation, the processing order of the N − 1
+which lets us train them end-to-end. The thresholds are trained                                                       magnitude bits needs optimization. We seek an ordering
+with the standard task loss plus a bit-position survival reg-                                                         ω l = [ω l (0), ω l (1), . . . , ω l (N − 2)], where ω l (j) denotes the
+ularizer. For clarity, the loss below is written for a single                                                         original magnitude-bit position processed at ordering slot j.
+
+                                                                                                                  5
+Algorithm 1 Greedy Bit Ordering Search                                 greedy approach uses N − 1 iterations. At ordering slot j,
+Require: Model M, calibration dataset Dcal , thresholds {θl },         it evaluates N − 1 − j candidates, resulting in a total of
+    baseline accuracy Accbaseline                                      N (N −1)/2 evaluations. This makes the search tractable while
+Ensure: Greedy-selected bit ordering ω l for each layer l              still capturing the dominant benefits of bit ordering. While
+ 1: for each layer l in M do                                           more sophisticated search methods such as reinforcement
+ 2:   selected order ← [] {Initialize empty ordering}                  learning could potentially find further gains, the current greedy
+ 3:   remaining bits ← [N − 2, N − 3, . . . , 1, 0]                    search already provides significant improvements over the
+ 4:   for each ordering slot j from 0 to N − 2 do                      fixed MSB-first baseline with limited offline cost, as shown in
+ 5:      best score ← 0                                                Figure 6. A broader exploration of the ordering search space
+ 6:      best bit ← NULL                                               is left to future work.
+ 7:      for each candidate bit b in remaining bits do
+ 8:         test order ← selected order + [b] {Fill the remain-                 IV. B IT FAIR H ARDWARE A RCHITECTURE
+            ing bits by MSB-first order}                               A. Architecture Overview
+ 9:         ETR ← EvaluateETR(M, Dcal , test order, θl )
+10:         Acc ← EvaluateAcc(M, Dcal , test order, θl )                  Figure 4 shows the BitFair accelerator. An AXI interface
+11:         AccLoss ← Accbaseline − Acc                                configures layer dimensions, bit ordering, thresholds, and loads
+12:         score ← ETR/(AccLoss + ϵ)                                  weights and activations into on-chip SRAM. A 16×16 PE
+13:         if score > best score then                                 array exploits parallelism over output channels and spatial
+14:            best score ← score                                      positions, with column-shared input buffers, per-filter weight
+15:            best bit ← b                                            banks, and local output buffers aggregated into a global
+16:         end if                                                     output memory. The distributed termination controllers enable
+17:      end for                                                       independent early termination per PE and allow clock-gating
+18:      selected order.append(best bit)                               when new data is not yet available. A lightweight Finite State
+19:      remaining bits.remove(best bit)                               Machine (FSM) controller coordinates the system operation by
+20:   end for                                                          managing the bit-serial processing flow and aggregating early-
+21:   ω l ← selected order                                             termination signals from all PEs to control data movement
+22: end for                                                            between memory and the PE array.
+23: return {ω l } for all layers
+                                                                       B. Processing Element Microarchitecture
+                                                                          Each PE integrates bit-serial computation with early ter-
+The optimization objective balances Early Termination Rate             mination capability. The datapath receives a weight bit (W ),
+(ETR) against accuracy preservation:                                   an 8-bit input activation (I), and a bit-position significance
+                                 ETR(ω)                                ω(j), where ω(j) maps the current bit position j to its cor-
+                 score(ω) =                                (14)        responding significance. The AND gate computes the partial
+                              AccLoss(ω) + ϵ
+                                                                       product between the weight bit and the activation, with sign
+where ETR(ω) measures the early-termination rate under or-             handling logic that derives the partial product sign from the
+dering ω, AccLoss(ω) = Accbaseline −Acc(ω) is the calibration          sign bits of both operands. A barrel shifter scales the result
+accuracy loss, and ϵ is a small constant to prevent division           by 2ω(j) , implementing the bit-position significance according
+by zero. Higher scores indicate orderings achieving high               to the layer-specific ordering rather than the fixed MSB-first
+termination rates with minimal accuracy loss.                          sequence. At the end of the datapath, an accumulator maintains
+   2) Greedy Search Procedure: Algorithm 1 presents the                the running partial sum Pk across bit positions. It receives the
+proposed greedy search approach. Starting with an empty                current bit-level product from the multiplier and the previous
+ordering, we iteratively select one bit at a time over the N-          partial sum from the feedback path.
+1 positions. At each position k, all remaining unselected bit             The early termination logic compares the partial sum Pk
+positions are candidates for the next position in the ordering.        against the layer-specific threshold using a comparator. When
+A test order is constructed by appending the candidate bit             Pk ≤ θl , the terminate signal is asserted, halting further
+b, then completing the remaining unselected bit positions in           bit processing for the current output. A multiplexer selects
+MSB-first order, ensuring a complete (N-1)-bit ordering before         between the accumulated partial sum (normal completion) or
+evaluation.                                                            zero (early termination) before applying ReLU activation to
+   For each test order, we evaluate the early-termination rate         produce the final output.
+and calibration accuracy by running inference on Dcal with
+the current layer-specific threshold θl . The candidate with the
+largest score in Equation 14 is selected. This process repeats         C. PE Array Organization
+until all N − 1 magnitude-bit positions are ordered.                     The 16×16 PE array follows an output-stationary dataflow,
+   Greedy search is proven effective in practice when dealing          where each PE accumulates partial sums for a specific output
+with neural-network layer-wise optimization problems [20],             activation. Input activations are broadcast to rows of PEs,
+[31]. For our problem, given N − 1 magnitude bits, instead             while weights are distributed to columns, minimizing partial
+of exhaustively searching all (N − 1)! permutations, the               sum movement throughout the accumulation process.
+
+                                                                   6
+                                             Activation SRAM
+                             Output 0            Output 1           Output 15
+                                                                                                                           ω(j)             PE
+              AXI           Input 0             Input 1
+                                                             16 ×
+                                                                    Input 15                       I      …
+                                                                                                          …
+
+                                                                                                                     8
+
+
+
+
+                                  …
+
+
+
+
+                                                      …
+
+
+
+
+                                                                           …
+                                                              …
+
+
+
+
+                              …
+
+
+
+
+                                                  …
+
+
+
+
+                                                                       …
+                                                                                                                           8
+                                                                                                  W       …    N                            ReLU
+                                                                                                                     1
+           Weight SRAM                                                                                        sign                           R
+                                                                                                                                                         …
+
+                                                                                            O_prev
+                …
+                             PE                 PE           16 ×     PE                                                                       0       Output
+                                                              …
+              Filter 0      (0, 0)             (0, 1)               (0, 15)               Terminate           COMP             𝑃𝑘
+            TERMINATION
+               CTRL
+                                                                                                               𝜃𝑙
+                  16 ×            16 ×                16 ×                 16 ×
+               …
+
+
+
+
+                              …
+
+
+
+
+                                                  …
+
+
+
+
+                                                                       …
+            Weight SRAM                                                                   for(oh = 0; oh < OH; oh++):                   Compute Flow
+                                                                                           par_for(oc = 0; oc < OCH; oc += PEA_H):
+                …
+                             PE                  PE          16 ×     PE                    par_for(ow = 0; ow < OW; ow += PEA_W):
+                                                              …
+             Filter 15     (15, 0)             (15, 1)              (15, 15)                 for (j=0; j < N-1; j ++):                Skip these for-loops when
+            TERMINATION                                                                       bp = ω(j)                                Pk ≤ 𝜃 𝑙(Early Termination)
+               CTRL
+                                                                                              for(kh = 0; kh < KH; kh ++):
+                                                                                               for (kw = 0; kw < KW; kw ++):
+                                                                                                 for(ic = 0; ic < ICH; ic ++ ):
+                                         FSM Controller                                             Pk [oc][oh][ow] += W[oc][ic][kh][kw][bp] * I[ic][oh+kh][ow+kw]
+
+
+Fig. 4. The BitFair accelerator architecture: (left) a 16×16 PE array with its activation and weight memory hierarchy, AXI interface, and FSM controller; (top
+right) the PE microarchitecture, featuring a bit-serial datapath and early-termination logic; (bottom right) the nested-loop compute flow of the architecture.
+
+
+
+   The output-stationary approach is particularly advantageous                                                        TABLE I
+for BitFair’s early termination mechanism. Since each PE inde-                                         N UMERICAL FORMAT SUMMARY FOR B IT FAIR .
+pendently accumulates a single output value, early termination
+                                                                                      Operand                            Representation                  Precision (bits)
+decisions are made locally without coordination across PEs.
+When a PE detects that its output will be negative, it halts                          Activation                         2’s complement                              8
+immediately without affecting neighboring PEs processing                              Weight  1
+                                                                                                                         sign-magnitude                              8
+different outputs. This distributed decision-making eliminates                         sign bit                                 -                                    1
+global synchronization overhead and enables fine-grained per-                          magnitude bits                       unsigned                                 7
+output efficiency gains.                                                              Partial sum                        2’s complement                              16
+                                                                                      1 Experimental results use 8-bit weights. BitFair’s weight-bit-serial datapath
+D. FSM Controller                                                                     also supports 1∼7 serial magnitude bits plus a sign bit.
+
+   At the start of each layer, the FSM controller loads layer-
+specific parameters from configuration registers, including the
+                                                                                      PE accumulates partial sums for an output activation. To
+bit ordering ω l , threshold θl , and layer dimensions (channels,
+                                                                                      compute the partial sum in a bit-serial manner, we introduce an
+spatial size, and kernel size). It then initializes the address
+                                                                                      extra loop over weight bit positions, since each PE processes
+generators and schedules the movement of activations and
+                                                                                      weights bit-serially. The termination control logic continuously
+weights between on-chip SRAM buffers and the 16×16 PE
+                                                                                      monitors these partial sums, comparing them against the layer
+array.
+                                                                                      threshold. When the early termination condition is satisfied
+   During execution, the controller orchestrates the nested
+                                                                                      within a PE, that PE halts computation for the current output
+loops of the convolution and advances the bit-serial compu-
+                                                                                      and notifies the controller, effectively skipping the remaining
+tation by broadcasting the current bit-select and shift-amount
+                                                                                      unprocessed bits and saving energy.
+signals corresponding to ω l to all PEs. In each bit step, it
+collects early-termination indications from the array and uses
+them to suppress further work for outputs that have already                                                              V. R ESULTS
+converged to zero after ReLU, while allowing other PEs to                             A. Experimental Setup
+continue. The controller manages write-back of completed
+                                                                                         1) Algorithm: To validate the computational performance
+outputs to the global output memory and triggers the next
+                                                                                      and efficiency of BitFair on edge vision tasks, we employ VG-
+output tile or channel group once resources are available.
+                                                                                      GNet [32]-like network architectures with a CONV-BN-ReLU
+To maintain correctness under bandwidth limits, it can stall
+                                                                                      structure. All networks are trained and evaluated using the
+the compute pipeline when operand data is not ready, and it
+                                                                                      PyTorch [33] framework. Table I summarizes the numerical
+enables clock-gating opportunities for idle PEs and buffers to
+                                                                                      formats used in our experiments: 8-bit 2’s-complement acti-
+reduce wasted switching activity.
+                                                                                      vations, 8-bit sign-magnitude weights (one sign bit and seven
+                                                                                      magnitude bits), and 16-bit partial sums in 2’s-complement
+E. Compute Flow                                                                       format. The 8-bit weight setting corresponds to the maximum
+   Figure 4 also shows the nested loop structure of the compute                       configured precision in our evaluation while the same weight-
+flow adopted in the BitFair accelerator controller. The flow                          bit-serial datapath also supports 1∼7 serial magnitude bits plus
+follows an output-stationary dataflow pattern, where each                             a sign bit.
+
+                                                                                  7
+   Table II summarizes the evaluated network architectures and
+specifications for different datasets. It also lists the input type,
+input size, normalization setting, and number of event bins for
+event datasets. Frame datasets are processed as single static
+images. For the event datasets, N-MNIST and DVSGesture,
+raw events are integrated into 16 event bins using the equal-
+event-count partitioning method from SpikingJelly [34]: each
+bin accumulates an equal share of the recording’s total events,
+rather than spanning a fixed time interval, so it holds on
+average about 262 events per bin for N-MNIST and 19.8K
+for DVSGesture.
+   To implement BitFair’s bit-level early-termination algo-
+rithm, we decompose weights into sign-magnitude representa-
+tion and proceed in three stages. First, we train the quantized
+baseline and initialize layer-wise thresholds θl using Equa-
+tion 5 from the fused BN or bias parameters, with learnable                Fig. 5. Ablation study of the learnable early-termination threshold: accuracy
+                                                                           and efficiency vs. model-wise threshold values on DVSGesture [1] dataset.
+offsets θxl initialized to zero. Second, using the default MSB-            Here, “speed-up” is the ratio between the vanilla 8-bit bit-serial compute
+first order, we optimize the thresholds end-to-end as described            latency and the BitFair compute latency under the same layer schedule,
+in Section III-B, with temperature annealing from T = 1.0 to               computed from bit-serial calculation cycles.
+T = 0.05. Third, we fix the learned thresholds and run the
+Adaptive Bit Ordering (ABO) search in Algorithm 1 on the
+calibration set to determine the final layer-wise bit-processing
+order. This final ABO step is performed once per trained
+model and dataset and does not affect inference-time latency
+or energy.
+   2) Hardware: We implement the BitFair accelerator in
+Verilog HDL and synthesize it using Cadence Genus, followed
+by place-and-route in Cadence Innovus using the Global-
+Foundries 12 nm FinFET technology. We evaluate the design
+across a range of supply voltages and clock frequencies,                                                       (a)
+from 0.55 to 0.80 V and from 20 to 500 MHz, respectively.
+Power analysis is performed using Synopsys PrimePower with
+post-layout parasitic extraction from Synopsys StarRC and
+realistic activity factors obtained from functional simulations
+in Synopsys VCS.
+
+
+B. Accuracy and Efficiency
+   Table II summarizes BitFair’s accuracy across edge vision
+tasks. Networks are first trained in floating-point, then quan-
+tized to 8-bit, and fine-tuned with BitFair’s learnable thresh-                                                (b)
+olds and adaptive bit ordering. BitFair maintains high accuracy            Fig. 6. Ablation study of adaptive bit ordering (ABO), comparing results
+on all datasets, with at most 1.6% degradation compared to the             with and without ABO across datasets: (a) accuracy and (b) speed-up.
+floating-point baselines.
+   1) Impact of Threshold Values: Figure 5 illustrates the
+accuracy–efficiency trade-off by sweeping a single model-                  to 70.03% (2.79×), and at θ = 2.5 it collapses to 12.26%
+wise threshold on DVSGesture [1]. Here and in Figure 6,                    even though speed-up saturates near 2.98×. This sensitivity
+“speed-up” is defined as the ratio between the vanilla 8-bit               motivates BitFair’s learnable, layer-wise thresholds, which
+bit-serial compute latency and the BitFair compute latency                 avoid manual tuning while optimizing efficiency under an
+under the same layer schedule. It is computed from the                     accuracy constraint.
+number of bit-serial calculation cycles, which decreases as the              2) Impact of Adaptive Bit Ordering: Figure 6 quantifies
+early-termination rate increases. Conservative settings (e.g.,             the benefit of ABO. Compared to fixed MSB-first ordering,
+θ = −10) rarely trigger early termination, achieving 97.22%                ABO consistently improves speed-up (e.g., from 1.68× to
+accuracy but no speed-up (1.00×). Relaxing the threshold                   1.74× on N-MNIST and from 1.83× to 1.92× on SVHN)
+increases early termination and improves speed-up to 2.12×                 while preserving or improving accuracy. The largest gain is on
+at θ = −1.2 and 2.47× at θ = −0.5, with accuracy                           DVSGesture, where speed-up increases from 1.89× to 2.12×
+degrading to 92.33% and 90.65%, respectively. Beyond this                  and accuracy improves from 95.91% to 96.53%. MNIST
+regime, accuracy drops sharply: at θ = 0.5, accuracy falls                 shows a similar trend (1.75× to 1.78×, 96.88% to 97.46%),
+
+                                                                       8
+                                                                              TABLE II
+                                                   B IT FAIR ’ S NETWORK SPECIFICATIONS FOR DIFFERENT DATASETS .
+
+                                                 Input         Input                         Event Calib. Conv-BN-ReLU               Acc.     Acc.
+    Dataset             Task                                                   Norm.3                                       #Params
+                                                  type          size1                         bins  set2 Config. (Channels)         (Float) (BitFair)
+    N-MNIST [35]        Handwritten digit event  34×34×2  None                                16         8K         16–16–32–32                 9.9K       98.43%        97.72%
+    DVSGesture [1]      Hand gesture      event 128×128×2 None                                16        256        8–16–16–32–32               18.5K       97.40%        96.53%
+    MNIST [36]          Handwritten digit frame 28×28×1 Mean/std                               -        8K          8–16–32–32                 8.6K        98.66%        97.46%
+    SVHN [37]           Street-view digit frame 32×32×3 Mean/std                               -        8K        16–16–16–32–64               28.9K       93.35%        91.83%
+    VWW [11]            Person detection frame 96×96×3    None                                 -        12K      8–16–28–30–32–34              31.7K       87.84%        86.52%
+1 Input image size (height× width × channels). For VWW, images are downscaled from their original resolution.
+2 Calibration-set size used
+                          for the adaptive bit-ordering search.
+3 Mean/std denotes standard per-channel normalization with training-set statistics.
+
+
+
+                                                                          TABLE III
+                                         C OMPARISON OF B IT FAIR WITH STATE - OF - THE - ART EDGE VISION ACCELERATORS .
+
+                                                                                                                                      N-MNIST                  DVSGesture
+
+    Work             Tech Voltage Model SRAM Freq Area W-Prec. Power Eff.1 ↓     Eff.2 ↑ Acc↑ FPS↑ EDP↓ Acc↑ FPS↑ EDP↓
+                     (nm)   (V)          (KB) (MHz) (mm²) (bits) (mW) (pJ/SOP) (BTOPS/W) (%) (FPS) (nJ·s) (%) (FPS) (nJ·s)
+
+    ISSCC’22 [2]  28           0.50     SRNN 138              13       0.45        8      <0.08         5.3          3.0          —    —    —   87.3 1.67 27E3
+    ISSCC’23 [3]  28           0.56     SFNN 266.5            40       1.25        8       2.91         1.5         10.6         96.0 8489 0.04 92.0 746 5.23
+    ISSCC’24 [22] 22           0.55     SCNN   —              51       2.23       4/8      0.52        3.78          4.2         97.0 137 27.7 94.0 20.2 1279
+    CICC’25 [12]  40           0.72      SNN  161             60       1.42       4/8      4.63        0.62         25.8         95.6 21K 0.009 90.5 2629 0.54
+    VLSI’25 [13] 130           0.9       SNN  128             2.5      6.75        4      <0.1         0.28         57.2         97.1 —     —   90.1 —     —
+    TCASI’24 [38] 65           0.7      CNN    12             0.5      0.68        8       0.03        —3           38.23         —    —    —   92.4 58.5 10.15
+
+                               0.55                            40                            0.8       0.08         204.8             1700 0.28        645                  1.92
+                               0.55                           200                             3.5      0.07         234.0             8500 0.049      3225                  0.34
+    This Work          12                CNN        104                0.34        8                                             97.7            96.5
+                               0.65                           400                             9.4      0.10         174.4             17K 0.033       6448                  0.23
+                               0.70                           500                            13.7      0.11         149.6             21K 0.030       8060                  0.21
+1
+  Power efficiency in pJ/SOP (↓lower is better). SOP (Synaptic Operations Per Second) measures operations between a 1-bit spike and a #Wbits weight. This definition is equivalent
+to the weight-bit-serial operations on 8-bit activations used in this work.
+2
+  Power efficiency in BTOPS/W (↑higher is better) [39], where BTOPS (Binary Tera-Operations Per Second) is a bit-normalized throughput defined as BTOPS = #Wbits × #Abits ×
+TOPS, where TOPS denotes Tera Operations per Second and #Wbits, #Abits are the weight and activation bit-precisions. For SNN-based works the activations are single-bit spikes
+(#Abits = 1), so this reduces to BTOPS = #Wbits × TSOPS, with TSOPS the Tera Spiking Operations per Second. For this work, the bit-serial datapath processes one weight
+bit per cycle (#Wbits = 1), so the metric reduces to BTOPS = #Abits × TOPS. Following [39], one multiplication or one addition is counted as one operation; therefore, one
+multiply-accumulate operation corresponds to two operations. For the bit-parallel TCASI’24, the full weight and activation precisions are used. This bit-normalized metric provides a
+precision-aware reference across designs with different operand widths. Nevertheless, because CNN and SNN accelerators use different coding schemes and dataflows, we interpret
+it together with same-workload accuracy, FPS, and EDP rather than as a standalone absolute comparison.
+3
+  TCASI’24 [38] is a bit-parallel CNN accelerator, so the pJ/SOP metric (defined for single-bit spike operations) does not apply. Its BTOPS/W is computed from the bit-normalized
+definition above using its reported model architecture and per-inference energy.
+
+
+                             TABLE IV                                                        first ordering is not generally optimal, and that dataset- and
+    C OMPARISON OF CNN EARLY- TERMINATION METHODS ACROSS EDGE                                layer-aware bit ordering can prioritize informative bits early
+                         VISION DATASETS .
+                                                                                             to amplify early-termination opportunities without sacrificing
+                            Vanilla1           BitSET2 [21] BitFair (Ours)                   accuracy.
+Dataset           Accuracy(%) Speed Acc.                  Spd.      Acc.       Spd.             Notably, DVSGesture and N-MNIST are event-camera
+                                                                                             datasets that inherently exhibit high temporal sparsity, which
+MNIST                  98.23           1.00×   96.44      1.59×     97.46     1.78×
+                                                                                             naturally favors early termination. Therefore, we include
+N-MNIST                98.17           1.00×   97.03      1.68×     97.72     1.74×
+DVSGesture             97.11           1.00×   95.20      1.96×     96.53     2.12×          SVHN, a dense RGB digit-recognition task where activations
+SVHN                   92.94           1.00×   89.77      1.72×     91.83     1.92×          are substantially less sparse. Pure SNN solutions typically lose
+VWW                    87.17           1.00×   85.81      1.61×     86.52     1.80×          efficiency on dense inputs because high spike rates signifi-
+1 Vanilla denotesan 8-bit vanilla bit-serial baseline without early termination.             cantly increase synaptic event processing, reducing the sparsity
+2 BitSET results are reproduced following the methodology in [21], as the                    advantage of event-driven computation. In contrast, BitFair
+original work did not evaluate on these datasets.
+                                                                                             still delivers 1.92× speed-up at 91.83% accuracy on SVHN,
+                                                                                             demonstrating that its bit-serial early termination remains
+                                                                                             effective even when the input lacks event-driven sparsity.
+while N-MNIST also benefits in accuracy (97.03% to 97.72%).
+Visual Wake Words (VWW) follows the same trend: speed-                                         3) Comparison with CNN Early-Termination Baselines:
+up increases from 1.65× to 1.80×, and accuracy improves                                      Table IV summarizes the CNN early-termination design space
+from 85.87% to 86.52%. These results confirm that MSB-                                       across all five datasets. An 8-bit vanilla bit-serial scheme with-
+
+                                                                                         9
+                            TABLE V                                                    0.55 V/200 MHz operating point (3.5 mW), where the BTOPS
+O FFLINE TRAINING COST ACROSS DATASETS , MEASURED IN WALL - CLOCK                      metric captures the bit-serial processing of quantized weights
+           SECONDS ON A SINGLE NVIDIA RTX 4090 GPU.
+                                                                                       and activations [39].
+Method             MNIST N-MNIST DVSGesture SVHN VWW                                      1) Area breakdown.: The component-level area breakdown
+        1
+                                                                                       is shown in Table VI. The total cell area is 0.277 mm2 ,
+Vanilla               324         1620           1675         5885      1092
+BitSET [21]          1168         9072          10215        33544      4696
+                                                                                       with the memory subsystem dominating at 51.2%, followed
+BitFair (Ours)       779          5994          7535         17654      3058           by the PE array at 44.4%. The controller and other peripheral
+                                                                                       logic together account for only 2.9%, reflecting the lightweight
+∆vs. BitSET (%)2    −33.3        −33.9          −26.2        −47.4 −34.9
+                                                                                       control overhead of the bit-serial architecture.
+1 Vanilla  denotes an 8-bit quantization-aware training (QAT) without early               2) Power Analysis.: Figure 8 provides a finer-grained
+termination.
+2∆
+   vs. BitSET = (TBitFair − TBitSET )/TBitSET × 100% is the relative training-
+                                                                                       power decomposition at the nominal 500 MHz operating point
+time change of BitFair over the BitSET-style baseline. Negative values indicate        under the typical corner (TT, 0.70 V, 25◦ C), where the total
+time saved (35.1% on average).                                                         power consumption is 13.7 mW. At this corner, dynamic
+                                                                                       power overwhelmingly dominates at 13.46 mW (98.2%), while
+                                                                                       leakage contributes only 0.24 mW (1.8%). The PE array ac-
+                                                                                       counts for the largest share (49%), followed by the memory
+                                                                                       subsystem (43%), control logic (5%), and other peripheral
+                                                                                       circuitry (3%).
+                                                                                          The memory subsystem occupies 51.2% of the cell area
+                                                                                       (Table VI) and consumes 43% of the dynamic power, about
+                                                                                       5.8 mW of the 13.46 mW dynamic budget, as shown in Fig-
+                                                                                       ure 8. Because dynamic power accounts for more than 98% of
+                                                                                       the total power at this corner, this share mainly reflects active
+                                                                                       read/write energy rather than standby leakage. Several archi-
+Fig. 7. BitFair layout and post-layout specification.                                  tectural choices keep this energy bounded. First, the 104 KB
+                                                                                       on-chip SRAM stores target-network weights and activation
+                                                                                       buffers, eliminating off-chip DRAM traffic during inference
+out early termination serves as the baseline. A BitSET [21]-
+                                                                                       for these workloads. Second, the output-stationary dataflow
+style baseline, which employs early termination with MSB-
+                                                                                       keeps each partial sum in a local accumulator, minimizing
+first ordering and fixed thresholds derived from batch nor-
+                                                                                       write-backs. Third, activations are broadcast across PE rows
+malization, can improve speed-up but at the cost of reduced
+                                                                                       while weights are reused down columns, reducing redun-
+accuracy. BitFair consistently achieves the best accuracy–
+                                                                                       dant SRAM reads. Early termination further lowers memory-
+speed-up trade-off by combining learnable thresholds with
+                                                                                       related switching activity: once a PE terminates, the remaining
+ABO, reaching up to 2.12× on DVSGesture with only 0.58%
+                                                                                       weight-bit operands for that output are no longer consumed
+accuracy degradation from the vanilla bit-serial baseline. Ta-
+                                                                                       by that PE, and the local operand latches and datapath can
+ble V reports the offline training cost in wall-clock seconds
+                                                                                       be gated. When all PEs sharing a weight-memory access have
+on a single NVIDIA RTX 4090 GPU. BitFair’s full pipeline,
+                                                                                       terminated for the current bit plane, the corresponding SRAM
+including learnable thresholds and the bit-ordering search,
+                                                                                       read can also be suppressed. Otherwise, the read is amortized
+takes 2.4–4.5× the vanilla QAT time. This is consistently
+                                                                                       over the still-active PEs. Thus, the bit-cycle speed-ups reported
+lower than the 3.6–6.1× overhead of the BitSET-style baseline,
+                                                                                       in Table IV translate into reduced weight-operand delivery
+mainly because BitFair avoids BitSET’s costly encoding-aware
+                                                                                       and datapath activity, with the exact SRAM-read reduction
+retraining step. As summarized by the ∆vs. BitSET row in
+                                                                                       depending on tile-level termination patterns.
+Table V, BitFair reduces the offline training time by 26.2–
+                                                                                          To characterize the design’s adaptability to varying power
+47.4% relative to BitSET across the five datasets, for an
+                                                                                       envelopes, we performed power analysis based on post-
+average saving of 35.1%. Note that this offline training cost
+                                                                                       layout parasitic extraction at multiple voltage and frequency
+is a one-time expense, which does not affect the inference
+                                                                                       points. As Figure 9 shows, BitFair exhibits a wide dynamic
+speed-up.
+                                                                                       power range spanning from sub-milliwatt operation (0.5 mW
+                                                                                       @20 MHz, 0.55 V) to 18.2 mW at the highest operating point
+C. Hardware Implementation Results                                                     (500 MHz, 0.80 V). Reducing the supply voltage constrains
+   Figure 7 shows the post-layout diagram and specification                            the maximum achievable frequency yet substantially lowers
+of BitFair. Implemented in 12-nm FinFET technology, BitFair                            total power and further enhances energy efficiency. This broad
+occupies 0.34 mm2 and reaches a maximum frequency of                                   voltage-frequency scaling range enables dynamic voltage-
+500 MHz. The 104 KB on-chip memory provides sufficient                                 frequency scaling strategies tailored to real-time XR workload
+storage for the target edge vision tasks while maintaining a                           demands: lighter tasks such as idle tracking can operate at
+small silicon footprint. Post-layout simulation under a 0.70 V                         reduced voltage and frequency to extend battery life, while
+supply voltage at the typical process corner (TT) and 25◦ C                            computationally intensive gesture recognition bursts can lever-
+yields a power consumption of 13.7 mW at 149.6 BTOPS/W.                                age the full 0.80 V, 500 MHz operating point for maximum
+Peak power efficiency of 234.0 BTOPS/W is achieved at the                              throughput.
+
+                                                                                  10
+                          TABLE VI
+       C ELL AREA BREAKDOWN OF THE B IT FAIR ACCELERATOR .
+                                                                                               0.55 V   0.5   0.8   1.5   1.8    3.5    —      —
+
+                                             2                                                                                                       15
+             Component        Area (mm )              Percentage
+
+
+
+
+                                                                                                                                                          Total Power(mW)
+                                                                                                        0.7   1.1   2.1   2.5    4.8   9.4     —
+
+
+
+
+                                                                                  Voltage(V)
+                                                                                               0.65 V
+             PE Array               0.123               44.4%
+             Memory                 0.142               51.2%                                                                                        10
+             Control                0.008                2.9%                                  0.70 V   0.8   1.3   2.4   2.9    5.6   11.0   13.7
+             Other                  0.004                1.5%                                                                                        5
+
+             Total                  0.277               100%
+                                                                                               0.80 V   1.0   1.7   3.2   3.9    7.5   14.6   18.2
+
+
+                                                                                                        20    40    80    100    200   400    500
+                     500MHz @ TT-0.70V-25 ∘ C                                                                        Frequency(MHz)
+
+                                        Leakage (0.24 mW)
+
+                                                                                Fig. 9. Power scaling heatmap across supply voltages and frequencies at TT
+                                                                                corner.
+                              Control
+                                  5%
+                                             Others
+                                             3%                                 on vision classification, while extending this to event-driven
+                        PE Array
+                          49%
+                                     Total                                      data with bit-serial early termination.
+                                   13.7 mW   Memory
+                                              43%                                  As shown in Table III, BitFair achieves the highest accuracy
+                                                                                on both datasets: 97.7% on N-MNIST and 96.5% on DVSGes-
+                                                                                ture. At the 0.55 V operating point, BitFair achieves superior
+                                                                                energy efficiency of 0.07 pJ/SOP, representing 4.0× and 8.9×
+                                                                                improvements over [13] (0.28 pJ/SOP) and [12] (0.62 pJ/SOP),
+              Dynamic (13.46 mW)                                                respectively. Using the bit-level throughput power-efficiency
+                                                                                metric adopted in [39], BitFair achieves 234.0 BTOPS/W,
+                                                                                the highest among all compared works, demonstrating 9.1×
+Fig. 8. Power breakdown at 500 MHz under the typical corner (TT, 0.70 V,
+25◦ C). The outer ring distinguishes dynamic (13.46 mW) from leakage            and 22.1× improvements over [12] (25.8 BTOPS/W) and [3]
+(0.24 mW) power; the inner ring decomposes dynamic power by functional          (10.6 BTOPS/W), respectively. For the energy-delay product
+block.                                                                          (EDP), BitFair achieves 0.21 nJ·s on the DVSGesture [1]
+                                                                                dataset at the 0.70 V operating point, representing 2.6× and
+                                                                                24.9× improvements over [12] and [3], respectively.
+D. Real-Time Latency Analysis for XR Interaction
+                                                                                   Implemented in 12-nm FinFET technology, BitFair achieves
+   Extended reality applications, particularly natural hand-                    the smallest area of 0.34 mm2 and the highest frequency of
+gesture recognition, require sub-millisecond inference to pre-                  500 MHz among the compared works. We evaluate perfor-
+serve visual-motor synchrony and avoid simulator sickness.                      mance across multiple voltages and frequencies to characterize
+We evaluate BitFair on DVSGesture as a representative event-                    power scaling. The lowest voltage point yields the best energy
+driven workload and report end-to-end throughput in Table III.                  efficiency, while the 0.70 V point maximizes throughput and
+Converting these throughput numbers to per-frame latency,                       minimizes EDP. Although the absolute power at higher volt-
+BitFair achieves 645 FPS at 0.55 V/40 MHz (1.55 ms),                            ages exceeds that of ultra-low-power designs [2], this is offset
+3225 FPS at 0.55 V/200 MHz (0.31 ms), and 8060 FPS at                           by higher throughput and lower latency. When normalized
+0.70 V/500 MHz (0.12 ms). These results show that BitFair                       by computational throughput, BitFair demonstrates superior
+meets the stringent < 1 ms XR latency target at moderate-to-                    efficiency across all operating points.
+high operating points, while still offering a low-power mode
+(< 1 mW) when latency constraints are relaxed.                                                          VI. L IMITATIONS AND F UTURE W ORK
+                                                                                   BitFair’s efficiency gains come from ReLU-induced dy-
+                                                                                namic sparsity that early termination can skip later bit-cycles
+E. Comparison with State-of-the-Art
+                                                                                only for outputs that ReLU will eventually clamp to zero.
+   While several bit-serial architectures exist [15], [27],                     The attainable speed-up is therefore bounded by the fraction
+[28], they target high-performance computing rather than                        of negative pre-activations in each layer and is highest when
+energy-constrained edge applications. Furthermore, most re-                     this sparsity is high. When activation sparsity is low, whether
+port synthesis-based estimates without post-layout or silicon                   because of the layer type, model architecture, or dataset,
+validation. Therefore, we compare BitFair against fabricated                    there are fewer opportunities to terminate early. In these
+state-of-the-art edge vision accelerators, as shown in Table III.               cases, speed-up degrades gracefully toward the vanilla bit-
+These works primarily employ SNN architectures targeting the                    serial baseline (1.00×), while accuracy is preserved because
+same application domain. As analyzed in [26], the relative                      the learned thresholds suppress only reliably negative outputs.
+efficiency of ANN and SNN accelerators depends on task                          This trend appears in our results. A high-sparsity event-camera
+type and data modality. Our results align with their finding                    workload such as DVSGesture yields the largest gain, with
+that ANN-based approaches can achieve superior efficiency                       a 2.12× speed-up and an average model ReLU activation
+
+                                                                           11
+sparsity of 68%. The denser RGB SVHN task, with a lower                                [6] B. Jacob, S. Kligys, B. Chen, M. Zhu, M. Tang, A. Howard, H. Adam,
+model ReLU activation sparsity of 55%, shows a more modest                                 and D. Kalenichenko, “Quantization and training of neural networks
+                                                                                           for efficient integer-arithmetic-only inference,” Proceedings of the IEEE
+but still useful 1.92× speed-up while maintaining 91.83%                                   Conference on Computer Vision and Pattern Recognition, pp. 2704–
+accuracy. The mechanism also relies on activation functions                                2713, 2018.
+with a hard-zero region. Networks using smooth non-ReLU                                [7] J. Lee, C. Kim, S. Kang, D. Shin, S. Kim, and H.-J. Yoo, “Unpu:
+                                                                                           An energy-efficient deep neural network accelerator with fully variable
+activations, such as GELU, rarely produce exact zeros and                                  weight bit precision,” IEEE Journal of Solid-State Circuits, vol. 54,
+would benefit less.                                                                        no. 1, pp. 173–185, 2018.
+   Nevertheless, the core ideas of early termination and adap-                         [8] Meta Community Forums, “Quest 3 power usage tests and approximate
+                                                                                           battery       life,”    https://communityforums.atmeta.com/t5/Talk-VR/
+tive bit ordering remain applicable beyond the present network                             Quest-3-Power-Usage-Tests-and-Approximate-Battery-Life/td-p/
+size, which is tailored to lightweight visual perception under                             1094433, 2024, accessed: 2025-03-15.
+tight on-chip memory and input-resolution constraints. In                              [9] Apple Inc., “Apple vision pro – technical specifications,” https://www.
+the future, we plan to scale it to heavier XR workloads,                                   apple.com/apple-vision-pro/specs/, 2024, accessed: 2025-03-15.
+                                                                                      [10] M. Warburton, M. Mon-Williams, F. Mushtaq, and J. R. Morehead,
+such as pose estimation or object detection on the COCO                                    “Measuring motion-to-photon latency for sensorimotor experiments with
+dataset [40]. Other potential directions include combining Bit-                            virtual reality systems,” Behavior research methods, vol. 55, no. 7, pp.
+Fair’s dynamic early termination with static bit-level sparsity                            3658–3678, 2023.
+                                                                                      [11] A. Chowdhery, P. Warden, J. Shlens, A. Howard, and R. Rhodes, “Visual
+and adapting it for non-ReLU activations.                                                  wake words dataset,” arXiv preprint arXiv:1906.05721, 2019.
+                                                                                      [12] J. Yang, Z. Zhu, L. Xv, A. Xiao, Z. Yang, L. Zheng, and Z. Zou, “A
+                          VII. C ONCLUSION                                                 40nm 0.05-1.4 uj/inference sample-wise-adaptive spiking neural network
+                                                                                           processor with dynamic neuron-pruning and unstructured-model-aware
+   This paper presents BitFair, an ultra-low-power bit-serial                              architecture,” in 2025 IEEE Custom Integrated Circuits Conference
+                                                                                           (CICC). IEEE, 2025, pp. 1–3.
+CNN accelerator that balances accuracy and efficiency by                              [13] H. Fu, H. Zheng, Y. Zhou, X. Wen, Y. Chen, H. Ren, X. Lin, Z. Zong,
+employing learnable per-layer thresholds and adaptive bit or-                              L. Wu, and B. Cheng, “Neuc-cim: A 1.3 pj/sop neuromorphic charge-
+dering. BitFair uses gradient-based optimization to learn layer-                           domain compute-in-memory macro for spiking neural network,” in 2025
+                                                                                           Symposium on VLSI Technology and Circuits (VLSI Technology and
+specific thresholds and employs a greedy search to identify bit                            Circuits). IEEE, 2025, pp. 1–3.
+orders that maximize early termination. Implemented in Glob-                          [14] S. Zhou, Y. Wu, Z. Ni, X. Zhou, H. Wen, and Y. Zou, “Dorefa-net:
+alFoundries 12-nm FinFET technology, BitFair demonstrates                                  Training low bitwidth convolutional neural networks with low bitwidth
+4.0× to 22.1× energy efficiency improvements over state-of-                                gradients,” in arXiv preprint arXiv:1606.06160, 2016.
+                                                                                      [15] S. Sharify, A. D. Lascorz, M. Mahmoud, M. Nikolic, K. Siu, D. M.
+the-art edge vision accelerators, with an accuracy loss of less                            Stuart, Z. Poulos, and A. Moshovos, “Laconic deep learning inference
+than 1.6% compared to floating-point baselines, validating our                             acceleration,” in Proceedings of the 46th International Symposium on
+approach for resource-constrained XR vision applications.                                  Computer Architecture, 2019, pp. 304–317.
+                                                                                      [16] J. Albericio, A. Delmás, P. Judd, S. Sharify, G. O’Leary, R. Genov,
+                                                                                           and A. Moshovos, “Bit-pragmatic deep neural network computing,” in
+                     VIII. ACKNOWLEDGMENT                                                  Proceedings of the 50th annual IEEE/ACM international symposium on
+                                                                                           microarchitecture, 2017, pp. 382–394.
+   This work was partially supported by the Dutch Research                            [17] P. Judd, J. Albericio, T. Hetherington, T. M. Aamodt, and A. Moshovos,
+Council (NWO) under the Talent Programme Veni 2023                                         “Stripes: Bit-serial deep neural network computing,” in 2016 49th
+                                                                                           Annual IEEE/ACM International Symposium on Microarchitecture (MI-
+scheme in Applied and Engineering Sciences (AES), Grant                                    CRO). IEEE, 2016, pp. 1–12.
+No. 21132 (Energy-Efficient Real-Time Edge Intelligence for                           [18] Y. Lin, C. Sakr, Y. Kim, and N. Shanbhag, “Predictivenet: An energy-
+Wearable Healthcare Devices). We thank GlobalFoundries                                     efficient convolutional neural network via zero prediction,” in 2017 IEEE
+for providing us the 12LP-PLUS PDK through the GF12+                                       international symposium on circuits and systems (ISCAS). IEEE, 2017,
+                                                                                           pp. 1–4.
+University Partnership Programme.                                                     [19] M. Song, J. Zhao, Y. Hu, J. Zhang, and T. Li, “Prediction based execution
+                                                                                           on deep neural networks,” in 2018 ACM/IEEE 45th Annual International
+                                                                                           Symposium on Computer Architecture (ISCA). IEEE, 2018, pp. 752–
+                              R EFERENCES                                                  763.
+ [1] A. Amir, B. Taba, D. Berg, T. Melano, J. McKinstry, C. Di Nolfo,                 [20] V. Akhlaghi, A. Yazdanbakhsh, K. Samadi, R. K. Gupta, and H. Es-
+     T. Nayak, A. Andreopoulos, G. Garreau, M. Mendoza et al., “A low                      maeilzadeh, “Snapea: Predictive early activation for reducing compu-
+     power, fully event-based gesture recognition system,” in Proceedings of               tation in deep convolutional neural networks,” in 2018 ACM/IEEE
+     the IEEE conference on computer vision and pattern recognition, 2017,                 45th Annual International Symposium on Computer Architecture (ISCA).
+     pp. 7243–7252.                                                                        IEEE, 2018, pp. 662–673.
+ [2] C. Frenkel and G. Indiveri, “Reckon: A 28nm sub-mm2 task-agnostic                [21] Y. Pan, J. Yu, A. Lukefahr, R. Das, and S. Mahlke, “Bitset: Bit-serial
+     spiking recurrent neural network processor enabling on-chip learning                  early termination for computation reduction in convolutional neural
+     over second-long timescales,” in 2022 IEEE International Solid-State                  networks,” ACM Transactions on Embedded Computing Systems, vol. 22,
+     Circuits Conference (ISSCC), vol. 65. IEEE, 2022, pp. 1–3.                            no. 5s, pp. 1–24, 2023.
+ [3] J. Zhang, D. Huo, J. Zhang, C. Qian, Q. Liu, L. Pan, Z. Wang, N. Qiao,           [22] Y. Liu, Y. Ma, N. Shang, T. Zhao, P. Chen, M. Wu, J. Ru, T. Jia,
+     K.-T. Tang, and H. Chen, “22.6 anp-i: A 28nm 1.5 pj/sop asynchronous                  L. Ye, Z. Wang et al., “30.2 a 22nm 0.26 nw/synapse spike-driven
+     spiking neural network processor enabling sub-o. 1 µj/sample on-chip                  spiking neural network processing unit using time-step-first dataflow and
+     learning for edge-ai applications,” in 2023 IEEE International Solid-                 sparsity-adaptive in-memory computing,” in 2024 IEEE International
+     State Circuits Conference (ISSCC). IEEE, 2023, pp. 21–23.                             Solid-State Circuits Conference (ISSCC), vol. 67. IEEE, 2024, pp.
+ [4] A. Moin, A. Zhou, A. Rahimi, A. Menon, S. Benatti, G. Alexandrov,                     484–486.
+     S. Tamakloe, J. Ting, N. Yamamoto, Y. Khan et al., “A wearable                   [23] Y. Bengio, N. Léonard, and A. Courville, “Estimating or propagating
+     biosensing system with in-sensor adaptive machine learning for hand                   gradients through stochastic neurons for conditional computation,” in
+     gesture recognition,” Nature Electronics, vol. 4, no. 1, pp. 54–63, 2021.             arXiv preprint arXiv:1308.3432, 2013.
+ [5] L. Liu, H. Li, and M. Gruteser, “Edge assisted real-time object detec-           [24] E. O. Neftci, H. Mostafa, and F. Zenke, “Surrogate gradient learning in
+     tion for mobile augmented reality,” in The 25th annual international                  spiking neural networks,” IEEE Signal Processing Magazine, vol. 36,
+     conference on mobile computing and networking, 2019, pp. 1–16.                        no. 6, pp. 51–63, 2019.
+
+
+                                                                                 12
+[25] Y. Guo, X. Huang, and Z. Ma, “Direct learning-based deep spiking                                             Chang Gao (Member, IEEE) received his Ph.D.
+     neural networks: a review,” Frontiers in Neuroscience, vol. 17, p.                                           degree with distinction in Neuroscience from the
+     1209795, 2023.                                                                                               Institute of Neuroinformatics, University of Zürich
+[26] F. Ottati, C. Gao, Q. Chen, G. Brignone, M. R. Casu, J. K. Eshraghian,                                       and ETH Zürich, Zürich, Switzerland, in March
+     and L. Lavagno, “To spike or not to spike: A digital hardware perspective                                    2022. He received his M.Sc. degree from Imperial
+     on deep learning acceleration,” IEEE Journal on Emerging and Selected                                        College London in September 2016 and his B.Eng.
+     Topics in Circuits and Systems, vol. 13, no. 4, pp. 1015–1025, 2023.                                         degree from the University of Liverpool and Xi’an
+[27] M. Shi, V. Jain, A. Joseph, M. Meijer, and M. Verhelst, “Bitwave: Ex-                                        Jiaotong–Liverpool University in July 2015. In Au-
+     ploiting column-based bit-level sparsity for deep learning acceleration,”                                    gust 2022, he joined Delft University of Technology,
+     in 2024 IEEE International Symposium on High-Performance Computer                                            The Netherlands, as a tenured Assistant Professor in
+     Architecture (HPCA). IEEE, 2024, pp. 732–746.                                                                the Department of Microelectronics. He leads the
+[28] G. Wang, S. Cai, Z. Li, W. Li, D. Lyu, Y. Sun, J. Jiang, and G. He,                 Lab of Efficient Machine Intelligence (EMI), where he conducts research
+     “Bitpattern: Enabling efficient bit-serial acceleration of deep neural              on hardware–software co-design for edge AI computing and embodied in-
+     networks through bit-pattern pruning,” in 2025 62nd ACM/IEEE Design                 telligence. He received the 2022 Misha Mahowald Early Career Award in
+     Automation Conference (DAC). IEEE, 2025, pp. 1–7.                                   Neuromorphic Engineering and a 2022 Marie Skłodowska-Curie Postdoctoral
+[29] W. Wen, C. Wu, Y. Wang, Y. Chen, and H. Li, “Learning structured                    Fellowship. He is a 2023 Dutch Research Council (NWO) Veni laureate
+     sparsity in deep neural networks,” Advances in neural information                   and a 2023 MIT Technology Review Innovator Under 35 in Europe for his
+     processing systems, vol. 29, 2016.                                                  contributions to algorithm–hardware co-design for efficient sparse recurrent
+[30] S. Zhou, C. Gao, T. Delbruck, M. Verhelst, and S.-C. Liu, “Exploiting               neural-network edge computing.
+     neuro-inspired dynamic sparsity for energy-efficient intelligent percep-
+     tion,” Nature Communications, vol. 16, no. 1, p. 9928, 2025.
+[31] A. Li, H. Mo, W. Zhu, Q. Li, S. Yin, S. Wei, and L. Liu, “Bitcluster:
+     Fine-grained weight quantization for load-balanced bit-serial neural
+     network accelerators,” IEEE Transactions on Computer-Aided Design of
+     Integrated Circuits and Systems, vol. 41, no. 11, pp. 4747–4757, 2022.
+[32] K. Simonyan and A. Zisserman, “Very deep convolutional networks for
+     large-scale image recognition,” arXiv preprint arXiv:1409.1556, 2014.
+[33] A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan,
+     T. Killeen, Z. Lin, N. Gimelshein, L. Antiga et al., “Pytorch: An
+     imperative style, high-performance deep learning library,” Advances in
+     neural information processing systems, vol. 32, 2019.
+[34] W. Fang, Y. Chen, J. Ding, Z. Yu, T. Masquelier, D. Chen, L. Huang,
+     H. Zhou, G. Li, and Y. Tian, “Spikingjelly: An open-source machine
+     learning infrastructure platform for spike-based intelligence,” Science
+     Advances, vol. 9, no. 40, p. eadi1480, 2023.
+[35] G. Orchard, A. Jayawant, G. K. Cohen, and N. Thakor, “Converting
+     static image datasets to spiking neuromorphic datasets using saccades,”
+     Frontiers in neuroscience, vol. 9, p. 437, 2015.
+[36] Y. LeCun, L. Bottou, Y. Bengio, and P. Haffner, “Gradient-based learning
+     applied to document recognition,” Proceedings of the IEEE, vol. 86,
+     no. 11, pp. 2278–2324, 2002.
+[37] Y. Netzer, T. Wang, A. Coates, A. Bissacco, B. Wu, A. Y. Ng et al.,
+     “Reading digits in natural images with unsupervised feature learning,”
+     in NIPS workshop on deep learning and unsupervised feature learning.
+     Granada, 2011, p. 7.
+[38] Z. Fu and W. Ye, “A 593nj/inference dvs hand gesture recognition
+     processor embedded with reconfigurable multiple constant multiplication
+     technique,” IEEE Transactions on Circuits and Systems I: Regular
+     Papers, vol. 71, no. 6, pp. 2749–2759, 2024.
+[39] M. Shi, V. Jain, W. Jiang, C. Fang, A. Joseph, W. Dehaene, and M. Ver-
+     helst, “Sparsecol: A 1320 btops/w precision-scalable npu exploiting
+     training-free structured bit-level sparsity and dynamic dataflow,” IEEE
+     Journal of Solid-State Circuits, 2025.
+[40] T.-Y. Lin, M. Maire, S. Belongie, J. Hays, P. Perona, D. Ramanan,
+     P. Dollár, and C. L. Zitnick, “Microsoft coco: Common objects in
+     context,” in European conference on computer vision. Springer, 2014,
+     pp. 740–755.
+
+
+
+
+                         Ang Li (Student Member, IEEE) received the B.S.
+                         degree in Microelectronics from the School of Mi-
+                         croelectronics, Xidian University, Xi’an, China, in
+                         2019, and the M.S. degree in Integrated Circuits
+                         from the School of Integrated Circuits, Tsinghua
+                         University, Beijing, China, in 2022. He is currently
+                         pursuing a Ph.D. in Microelectronics at Delft Uni-
+                         versity of Technology, The Netherlands. His research
+                         interests include deep learning, digital circuit design,
+                         computer vision, and VLSI digital signal process-
+                         ing.
+
+
+
+
+                                                                                    13
+

@@ -31,7 +31,7 @@ def main():
             pack['status'] = 'IMPLEMENTATION_EXPLORATION_NOT_HEADLINE_INNOVATION'
             pack['priority_override'] = REPORT+'synthesis.md'
     manifest = originals['MANIFEST.txt'].decode()
-    header = '# Canonical: /home/zhumd/work/ideafromai/\n# Latest: innovation-first audit; older experiments are preserved as implementation evidence.\n\n'
+    header = '# Canonical: /home/zhumd/work/sdformer_codex/ideafromai/\n# Latest: innovation-first audit; older experiments are preserved as implementation evidence.\n\n'
     paths = [REPORT+'README.md', REPORT+'C1C2创新逐条复审.html', REPORT+'report-source.md', REPORT+'audit-ledger.json', REPORT+'QA.json']
     body = [line for line in manifest.splitlines() if line and not line.startswith('#')]
     for path in inventory:

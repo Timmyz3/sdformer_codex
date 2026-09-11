@@ -1,6 +1,8 @@
 # ideafromai — AI idea drop zone (Codex reads here)
 
-**Canonical path:** `/home/zhumd/work/ideafromai/`
+**2026-09-11 目录迁移：本目录现由主仓直接管理。** 唯一实际位置为 /home/zhumd/work/sdformer_codex/ideafromai/；旧 /home/zhumd/work/ideafromai 是兼容链接。整个研究树已搬入，不再维护筛选同步副本。[Git与本地数据说明](README_SYNC.md)。
+
+**Canonical path:** `/home/zhumd/work/sdformer_codex/ideafromai/`
 
 **下一任 Agent（中文，只投 TCAS-II）：** `HANDOFF_NEXT_AGENT_20260905.md`
 

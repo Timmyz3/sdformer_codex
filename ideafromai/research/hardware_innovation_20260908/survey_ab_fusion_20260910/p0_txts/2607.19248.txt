@@ -1,0 +1,1274 @@
+                                                                                                                                                                               1
+
+
+
+
+                                             A Flexible Sparsity-Aware FPGA Accelerator with Column-Wise
+                                                                    Compression for Efficient CNN Inference
+                                                                                    Amirhossein Zarei and Shervin Vakili
+                                                               Institut national de la recherche scientifique (INRS-EMT), Montréal, Canada
+                                                                                 {amirhossein.zarei, shervin.vakili}@inrs.ca
+
+
+
+                                            Abstract—Efficient acceleration of convolutional neural net-      exploit this property by skipping computations involving zero-
+                                         works (CNNs) on resource-constrained platforms remains chal-         valued elements, thereby reducing both execution time and en-
+                                         lenging due to the irregularity of sparsity patterns and the         ergy consumption. However, the irregular and input-dependent
+                                         associated hardware overhead. While unstructured sparsity of-
+                                         fers high model accuracy, it introduces significant inefficiencies   nature of sparsity patterns introduces significant challenges in
+                                         in hardware mapping, whereas structured sparsity simplifies          designing flexible and unified microarchitectures capable of
+                                         execution at the cost of reduced flexibility.                        efficiently handling diverse workloads. To mitigate this issue,
+                                            This paper presents SparHiXcel-v2, a cost-effective and highly    several works enforce structured sparsity patterns that require
+                                         configurable FPGA-based CNN accelerator that achieves an             specialized pruning techniques to reshape model weights for
+                                         improved balance between sparsity flexibility and hardware effi-
+                                         ciency. The proposed architecture is built around a scalable two-    hardware efficiency. However, these constraints often lead
+arXiv:2607.19248v1 [cs.AR] 21 Jul 2026
+
+
+
+
+                                         dimensional MAC array and introduces a column-wise kernel            to greater accuracy degradation than unstructured pruning at
+                                         compression technique that enables efficient handling of irregular   equivalent sparsity levels. In general, the more restrictive the
+                                         sparsity patterns with minimal hardware overhead. To further         imposed sparsity pattern, the greater the potential loss in model
+                                         enhance performance, we propose a hardware–algorithm co-             accuracy [6]. Moreover, structured sparsity typically requires
+                                         design framework, including an ordering optimization scheme
+                                         and a multi-phase structured pruning and revival algorithm           carefully designed, model-specific pruning algorithms, and all
+                                         tailored to the microarchitecture.                                   target models must be re-pruned to match the hardware con-
+                                            Extensive evaluations on VGG16 and ResNet18 demonstrate           straints, limiting the usability of readily available unstructured
+                                         that SparHiXcel-v2 achieves substantial improvements in pro-         (randomly pruned) models.
+                                         cessing throughput and energy efficiency through the proposed           Adopting an appropriate dataflow plays a critical role in
+                                         optimizations. In structured sparsity mode, the accelerator
+                                         reaches over 2.5 TOPS and 210 GOP/s/W for VGG16, and over            the efficiency of 2D MAC-based deep learning accelerators.
+                                         1.1 TOPS and 72 GOP/s/W for ResNet18 on a cost-effective AMD         In optimized designs, input features and kernel weights are
+                                         Kintex UltraScale+ FPGA, while maintaining modest accuracy           streamed into the MAC array, while partial sums are accu-
+                                         degradation.                                                         mulated through dedicated reduction circuits. The choice of
+                                           Index Terms—deep learning hardware accelerators, field-            dataflow directly impacts MAC utilization, on-chip memory
+                                         programmable gate array, convolutional neural networks, hard-        requirements, and costly off-chip data movement, ultimately
+                                         ware–algorithm co-design.                                            determining overall performance. Common dataflows include
+                                                                                                              weight-stationary, row-stationary, and output-stationary, with
+                                                                I. I NTRODUCTION                              weight-stationary being widely adopted for CNNs due to its
+
+                                         T     HE rapid growth of deep learning applications has ex-
+                                               posed the high computational cost of core operations,
+                                         driving the need for efficient hardware acceleration. Ma-
+                                                                                                              ability to maximize kernel reuse and reduce memory traffic
+                                                                                                              [7], [8]. In dense convolutions, data movement and partial
+                                                                                                              sum accumulation follow deterministic and fixed patterns,
+                                         trix–vector and matrix–matrix multiplications constitute the         enabling straightforward cycle-accurate microarchitecture de-
+                                         primary computational bottleneck in most deep learning work-         sign. In contrast, supporting sparse, irregular, and input-
+                                         loads. Convolutional Neural Networks (CNNs) have emerged             dependent computations introduces significant challenges in
+                                         as highly effective feed-forward DL models, providing supe-          scheduling and control. Accommodating more flexible sparsity
+                                         rior spatial feature extraction across diverse applications. The     patterns, while beneficial for maintaining model accuracy,
+                                         design of CNN accelerators has therefore attracted significant       requires dynamic dataflow management and additional con-
+                                         attention from the computer architecture research community          trol logic, often incurring non-negligible hardware overhead.
+                                         to address the requirements of deploying CNNs under varied           Consequently, identifying an appropriate degree of sparsity
+                                         operational constraints [1], [2]. To achieve high computational      pattern flexibility that balances hardware efficiency and model
+                                         efficiency, most CNN accelerator microarchitectures are built        accuracy is a critical challenge in sparsity-aware accelerator
+                                         around two-dimensional arrays of multiply-and-accumulate             design. However, existing accelerators either restrict sparsity to
+                                         (MAC) units, enabling parallel execution of convolutional and        rigid structures or incur significant overhead when supporting
+                                         fully connected layers.                                              irregular patterns, leaving a gap for architectures that can
+                                            Inherent sparsity in convolutional filters and intermediate       efficiently bridge flexibility and hardware efficiency.
+                                         feature maps represents a key characteristic of CNNs that               In this work, we address this challenge by proposing a cost-
+                                         has motivated a growing body of research aimed at improv-            effective and highly configurable FPGA-based CNN hardware
+                                         ing accelerator efficiency [3]–[5]. Sparsity-aware architectures     accelerator that achieves an improved balance between sparsity
+                                                                                                                                     2
+
+
+
+flexibility and hardware overhead. The proposed architec-            Section IX reports FPGA implementation results and compares
+ture, termed SparHiXcel-v2, is built around a scalable two-          them with prior work. Finally, Section X concludes the paper.
+dimensional MAC array and is designed to efficiently support           The source codes of this work are available on GitHub1 .
+dynamically varying kernel column sizes, enabling flexible
+handling of irregular sparsity patterns. Some preliminary as-                            II. L ITERATURE R EVIEW
+pects of this design were explored in earlier work [9]; however,        Early CNN accelerator designs primarily target dense com-
+the present paper introduces several new optimization strate-        putations and rely on highly regular dataflows to maximize
+gies and a comprehensive evaluation framework that substan-          hardware utilization. Most architectures are based on 2D arrays
+tially broaden the scope and impact of the design. In particular,    of MAC units, often organized as systolic or spatial arrays,
+it incorporates a weight reorganization mechanism that shifts        to efficiently compute convolutional layers. The choice of
+nonzero kernel weights to replace zeros in preceding columns,        dataflow is a key design aspect, as it determines how input
+promoting the formation of fully zero-valued columns that can        features, weights, and partial sums are scheduled and reused
+be effectively pruned.                                               within the processing array. Representative works, including
+   The accumulation of partial sums across filter channels is        Eyeriss [2] and Gemmini [1], demonstrate that carefully
+handled through a flexible and carefully designed reduction          designed dataflows can significantly reduce costly off-chip
+interconnect among MAC units, enabling efficient aggrega-            memory accesses and improve energy efficiency. In addition
+tion under irregular computation patterns. Experimental re-          to dataflow optimization, algorithmic acceleration techniques
+sults demonstrate that SparHiXcel-v2 effectively accelerates         such as Winograd-based convolution have been explored to
+both unstructured and structured sparse CNNs. While the              reduce the arithmetic complexity of CNNs [10]. These ap-
+architecture already delivers substantial gains on off-the-shelf     proaches transform convolution into a domain with fewer
+randomly pruned models without retraining, we further show           multiplications, improving performance for dense workloads.
+that a dedicated hardware-aware structured pruning algorithm,        However, they assume regular computation patterns and are
+specifically designed for SparHiXcel-v2 and imposing only            not well-suited for sparse or irregular convolutions, where
+modest structural constraints, yields additional improvements        data-dependent execution and dynamic scheduling become
+in compression, throughput, and energy efficiency.                   necessary.
+   To summarize, the key contributions of this work are as              To improve efficiency beyond dense execution, a large
+follows:                                                             body of work has focused on exploiting unstructured spar-
+  •   We introduce a new technique for horizontally compress-        sity in CNN models. These works propose dataflows and
+      ing sparse convolution kernels. It minimizes the number        microarchitectures that allow skipping computations involving
+      of columns while preserving all nonzero elements.              zero-valued weights and activations, thereby reducing both
+  •   We design a cost-effective and highly configurable mi-         execution time and energy consumption without imposing
+      croarchitecture for the proposed SparHiXcel-v2 CNN             strict constraints on sparsity patterns. Representative architec-
+      accelerator. This architecture supports kernels with a vari-   tures, such as SCNN [11], DSTC [5], and EIE [12], lever-
+      able number of columns, enabling efficient exploitation        age compressed data representations and runtime scheduling
+      of column-wise compression.                                    techniques to dynamically process only nonzero elements.
+  •   We propose an optimization framework that automatically        While these methods offer high flexibility and can fully utilize
+      determines the execution order of filters for efficient exe-   sparsity in arbitrarily pruned models, they introduce signif-
+      cution and optimizes the size of the routing multiplexers      icant challenges in hardware design. In particular, irregular
+      to balance hardware cost and performance.                      memory access patterns, load imbalance across processing
+  •   We develop an iterative structured pruning algorithm           elements, dynamically varying partial sum reduction patterns,
+      tailored to the SparHiXcel-v2 architecture, further en-        and complex control logic can lead to underutilization of
+      hancing its efficiency.                                        compute resources and increased hardware overhead. As a
+  •   We implement and extensively evaluate SparHiXcel-v2            result, efficiently supporting unstructured sparsity remains a
+      on a Kintex UltraScale+ FPGA. We analyze the impact of         challenging task, especially when targeting high-throughput
+      architectural configuration parameters and optimization        and scalable accelerator designs.
+      strategies using benchmark CNN models, and compare                To address the hardware challenges associated with handling
+      the resulting hardware cost, energy efficiency, and per-       unstructured sparsity, a substantial body of work has focused
+      formance against state-of-the-art designs.                     on structured sparsity and hardware-friendly pruning tech-
+                                                                     niques. These approaches typically impose regular patterns on
+   The remainder of this paper is organized as follows. Sec-         weight sparsity, such as channel-wise, filter-wise, block-based,
+tion II briefly reviews the related work. Section III presents the   or fine-grained N:M sparsity, to enable predictable data move-
+SparHiXcel-v2 microarchitecture and dataflow, along with the         ment and simplified datapath control logic. By constraining the
+proposed compression method. Section IV provides prelimi-            sparsity structure, these methods facilitate efficient mapping
+nary performance analysis and identifies key bottlenecks using       of computations onto hardware and improve off-chip memory
+selected configurations. Sections VI and VII introduce opti-         access patterns, as well as load balancing across processing
+mization techniques to improve the efficiency of SparHiXcel-         elements. Representative accelerators in this category, such as
+v2 for unstructured sparse convolutions. Section VIII presents
+the proposed structured pruning algorithm and its evaluation.          1 https://github.com/INRS-ECCoLe/SparHiXcel   Optimized
+                                                                                                                                                3
+
+
+
+SIGMA [3] and SNAP [4], propose specific structured sparsity
+patterns along with corresponding supporting microarchitec-
+tures. However, these benefits come at the cost of reduced
+flexibility, often leading to accuracy degradation compared to
+unstructured pruning at similar sparsity levels. Furthermore,
+structured sparsity generally requires retraining or fine-tuning
+of all target models using hardware-aware pruning algorithms.
+The design of effective accelerator-specific pruning strategies
+remains an additional challenge in this approach.
+   FPGAs have emerged as a flexible platform for CNN ac-
+celeration, offering a favorable balance between performance,
+energy efficiency, and design adaptability. Their reconfigurable
+nature enables customized datapaths and memory hierarchies
+                                                                    Fig. 1. The proposed compression method applied to three example kernels
+that can be tailored to both dense and sparse workloads.            with different sparsity.
+Several FPGA-based accelerators exploit sparsity through
+zero-skipping, compressed representations, and specialized
+dataflows to reduce computation and memory traffic. The high
+cost of on-chip logic resources and routing networks leads
+most existing FPGA-based sparsity-aware designs to adopt
+structured sparsity approach [13] [14].
+   Overall, existing CNN accelerators exhibit a fundamental
+trade-off between sparsity flexibility and hardware efficiency.
+Designs that support arbitrary sparsity incur significant control
+and communication overhead, while those that enforce struc-
+tured patterns simplify implementation at the cost of reduced
+flexibility and potential accuracy loss. This trade-off motivates
+the need for architectures that can efficiently support flexible
+sparsity patterns while maintaining high hardware utilization
+and low overhead.
+
+                                                                    Fig. 2. (a) Three example sparse filters (F1 to F3) with two channels (Ch1 and
+          III. P ROPOSED C OMPRESSION M ETHOD ,                     Ch2) and their compressed versions, prepared for loading into the PE array;
+           M ICROARCHITECTURE AND DATAFLOW                          (b) Architecture of SparHiXcel with a 4 × 4 PE array and PE assignments for
+                                                                    three example filters with two channels. The dashed line indicates the partial
+A. Compression Method                                               result reduction path for F1 along its allocated V-Line.
+   SparHiXcel-v2 exploits the reduction of kernel columns
+to minimize hardware underutilization caused by zero-value
+                                                                    their original order; and (ii) in the second phase, any rightmost
+weights. For this purpose, a specialized compression method
+                                                                    columns containing only zero elements are removed from the
+has been designed and applied to each 2D convolution kernel.
+                                                                    kernel.
+The proposed method reduces the number of columns while
+                                                                       Fig. 1 illustrates three examples of 3×3 convolution kernels
+preserving both the rectangular structure of the kernel and all
+                                                                    with different sparsity patterns before and after applying the
+nonzero elements. Unlike classical formats such as compressed
+                                                                    proposed compression method. In the example of Fig. 1(a),
+sparse row (CSR) and compressed sparse column (CSC)
+                                                                    during the first compression phase, the element h1 is shifted to
+[15], the proposed technique allows controlled inter-column
+                                                                    the left within the second column, which originally contained
+movement of nonzero weights, providing additional flexibility
+                                                                    zeros. In the second phase, the third column, which now
+for column elimination. As discussed in Section III-B, main-
+                                                                    entirely contains zeros, is removed, achieving a compression
+taining a rectangular kernel shape simplifies the allocation of
+                                                                    ratio of nearly 33%. In the highly sparse example of Fig. 1(b),
+processing elements (PE) and the reduction network design,
+                                                                    h2 and i2 are first shifted left to the first column, after which
+thus incurring minimal hardware overhead.
+                                                                    both the second and third all-zero columns are removed. The
+   To maximize the compression ratio, the method permits
+                                                                    example in Fig. 1(c) is more complex, as elements from
+substituting zero elements with the nearest right-side nonzero
+                                                                    different original columns end up in the same column after
+elements within the same row. The original column index
+                                                                    compression. In the third row, g3 shifts to the second column
+of each element is retained and stored to inform each PE
+                                                                    while i3 shifts to the first column, followed by the removal of
+of the correct column position of its assigned weight. As
+                                                                    the rightmost all-zero column.
+will be described in subsequent sections, this information is
+necessary for the proper functionality of the microarchitecture.
+The proposed compression method consists of two phases: (i)         B. Proposed Microarchitecture and Dataflow
+in the first phase, the nonzero elements in each row are shifted      1) Microrchitecture: The microarchitecture of SparHiXcel-
+to the leftmost positions, replacing zeros while maintaining        v2 consists of a scalable two-dimensional array of PEs that
+                                                                                                                                   4
+
+
+
+                                                                   horizontal weight assignment capability, which allows a dy-
+                                                                   namically configurable number of PE columns to be allocated
+                                                                   to each kernel. This flexibility enables the proposed column-
+                                                                   wise compression method to minimize PE assignments to
+                                                                   zero-valued weights, thereby improving overall utilization
+                                                                   efficiency. For a two-dimensional kernel of size n × n, the
+                                                                   architecture can allocate n × n PEs in the dense case down
+                                                                   to n × 1 PEs in highly sparse scenarios with maximum one
+                                                                   nonzero element in each row. If all elements of the kernel are
+                                                                   zero, no PE is assigned.
+                                                                      Within each PE group, partial sums (PSUMs) are first
+                                                                   propagated vertically: each PE forwards its PSUM to the
+                                                                   PE below for accumulation. Once the last row is reached,
+Fig. 3. (a) V-Node internal circuit, (b) FSUM-Store circuit.       PSUMs are propagated horizontally along the bottom row,
+                                                                   where further accumulation occurs. Ultimately, the bottom-
+                                                                   right PE in the group holds the final kernel convolution
+                                                                   result. This result, referred to as the partial result, must be
+                                                                   accumulated with the corresponding partial results from other
+                                                                   channels of the same filter. To achieve this, the partial result
+                                                                   is transmitted to lower PE groups through an interconnection
+                                                                   network of switches known as vertical nodes (V-Nodes). Each
+                                                                   PE is associated with a nearby V-Node, and these nodes are
+                                                                   interconnected vertically to form reduction paths, referred to as
+                                                                   vertical lines (V-Lines). Partial results from different channels
+                                                                   of a given filter are directed to a common V-Line, where they
+                                                                   propagate downward and are accumulated with other channel
+                                                                   contributions.
+                                                                      To route partial results to the appropriate V-Line, each PE
+                                                                   is equipped with a local multiplexer (MUX-T), allowing it to
+Fig. 4. Internal architecture of PEs.                              transfer the partial result to its designated V-Node, as shown
+                                                                   in Fig. 2(b). Each MUX-T is connected to a maximum of T
+                                                                   output PEs located to its left, enabling the transfer of partial
+employs a weight-stationary dataflow. Weights, control param-      results to T vertical lines ahead without introducing additional
+eters, and feature maps are temporarily stored in an on-chip       delay. MUX-Ts and V-Lines collectively implement the partial
+Global Buffer cache. Data transfers between the Global Buffer      result forwarding and reduction network. Each V-Node sup-
+and external DRAM occur at the beginning of each layer             ports three operating modes: (i) pass-through, where data from
+or when buffer capacity is exceeded. Each PE integrates a          the upper node is forwarded downward without modification;
+MAC unit along with associated control and data management         (ii) accumulation, where the incoming data is summed with
+logic. Convolutional computations are executed over multiple       the output of the adjacent MUX-T, with the result registered
+processing rounds, depending on the model size and the             to introduce a single-cycle synchronization latency; and (iii)
+dimensions of the PE array.                                        buffering, where incoming data is stored without accumulation
+    At the beginning of each round, filter weights and corre-      to maintain synchronization. As illustrated in Fig. 3(a), each
+sponding control signals are loaded into the PEs. For a PE         V-Node includes an adder, a register, and a multiplexer to
+array with R rows and H columns, up to R × H weights               support these operations.
+can be loaded during this initialization phase in a pipelined         In the example of Fig. 2(b), V-Node1 operates in pass-
+manner. Once initialization is complete, the operational phase     through mode, as its adjacent MUX-T provides no valid partial
+begins, during which input feature values are fetched from         result. V-Node2 accumulates the incoming value with the out-
+on-chip memory and streamed into the PE array through row-         put of its adjacent MUX-T and stores the result corresponding
+wise shared buses. Fig. 2(b) illustrates the SparHiXcel-v2         to the first channel of Filter 1. V-Node3 again performs a pass-
+architecture featuring a 4 × 4 PE array and its PE assignment      through operation. Finally, V-Node4 accumulates the incoming
+scheme for three example filters.                                  partial result with the output of its adjacent MUX-T and stores
+    For filters of size n×n×c, where c is the number of channels   the result in the partial result memory. The buffering mode is
+(depth), each group of n PE rows in the architecture is assigned   activated when an entire channel of a filter contains only zero
+to one channel. Kernels from the same channel across different     values, requiring only synchronization of downstream data.
+filters are placed horizontally within each group of adjacent      This distributed reduction mechanism eliminates the need for
+PE rows, while kernels from subsequent channels are assigned       costly centralized reduction circuits.
+to the next row groups.                                               As shown in Fig. 2(b), the Partial Result Store unit com-
+    A key innovation of this microarchitecture is its flexible     prises a configurable number of FSUM-Store units, each
+                                                                                                                                     5
+
+
+
+responsible for accumulating results of individual filters.         Line mappings. Several control signals, including MUX-T
+Fig. 3(b) illustrates the internal structure of each unit, which    selectors and V-Node controls, depend on these assignments.
+includes a dual-port BRAM and two levels of multiplexers for        Due to the scalability of the PE array, centralized control signal
+selecting partial result columns. Pipeline registers are inserted   generation is challenging. To address this, a microprogrammed
+between multiplexer stages to avoid critical paths. An adder        control approach is adopted: control signals are pre-generated
+accumulates newly arrived partial results with stored values        by the scheduler, stored in memory, and loaded into the
+from previous channels.                                             PE array along with weights. Weight column information is
+    Once the assigned channels for the current set of filters       encoded within the control signals, eliminating the need for
+have been processed, the next round schedules a new set             separate storage.
+of filters for the same channels. With P FSUM-Store units,             2) Dataflow within PE Group: This subsection presents
+filters are processed in blocks of size P. For each block,          the cycle-accurate data and computation flow within the PE
+partial sums are accumulated across all channels before being       groups of SparHiXcel-v2 using an example. Table I illustrates
+written back to the global buffer. The FSUM-Store units are         the cycle-by-cycle computation of the top-left PE group cor-
+then reassigned to the next block. Increasing the number of         responding to the first channel of F1 in the example shown
+FSUM-Store units reduces the number of processing rounds            in Fig. 2. The table tracks how inputs, multiplications, and
+and improves throughput.                                            PSUMs propagate through the internal signals of the PEs. A0
+    Fig. 4 illustrates the internal structure of each PE, com-      to A8 denote the first nine input features in the first row, while
+prising a multiplier that computes the product of the input         B0 to B8 denote the first input elements in the second row.
+feature and its corresponding weight, along with two adders         The columns labeled IU0 and IU1 correspond to the two input
+(Adder-1 and Adder-2) that accumulate incoming PSUMs                registers within the In-Unit, while M0 and M1 denote the two
+from adjacent PEs located above and to the left. The computed       registers in the Multiply-Reg shown in Fig. 4.
+PSUM is then propagated to neighboring PEs either below or             In this example, the compressed kernel with nonzero
+to the right. Each adder operates under control signals that        weights w11 = 5 and w22 = 2 is mapped to PE11 and
+determine whether the local product should be added to the          PE21 , respectively. Since w22 originates from the second
+incoming PSUM. As mentioned earlier, PSUM accumulation              column, while w11 originates from the first kernel column,
+using Adder-1 and Adder-2 occurs within a single PE group           PE21 accesses the input features one clock cycle earlier. This
+and does not extend across different groups.                        is achieved by assigning a value of F SEL in PE21 that is one
+    Each PE contains an In-Unit with a shift register of N words,   unit smaller, ensuring synchronous arrival of the corresponding
+where N is configurable and represents the maximum number           PSUMs at Adder-1 and, subsequently, at Out Reg1 of PE21 .
+of kernel columns supported by the architecture. For a kernel          For instance, at the third clock cycle, PE11 produces the
+with n columns (n ≤ N ), the proposed compression method            partial result A0 × w11 . In the following cycle, this PSUM
+allows shifting elements within the kernel by up to n − 1           is propagated to PE21 , where it is accumulated with the
+positions. At each clock cycle, each PE must have access to         locally computed B1 × w22 . These PSUMs correspond to
+the input features from the most recent n cycles. The shift         the same convolution window; therefore, the valid partial
+register within the In-Unit temporarily stores a window of the      result is first stored in Out Reg1 and Out Reg2, and then
+last n inputs, and a multiplexer selects one of the N stored        forwarded through the MUX-T output to the assigned V-Line
+values. The multiplexer selection signal, F SEL, is a fixed         for this filter. Subsequent convolution windows are computed
+control parameter for each kernel, determined by the number         continuously in the following clock cycles.
+of column shifts applied during compression.                           Kernel compression may introduce shifts in the computation
+    For a dense 3 × 3 kernel with a PE array consisting of          timing across different PE groups (channels) of the same filter,
+three columns, the first PE column computes multiplications         depending on the compression pattern. The use of two out-
+for the current convolution window, while the second and third      put registers ensures proper synchronization when forwarding
+PE columns simultaneously compute multiplications for the           partial results to the MUX-T, such that corresponding partial
+previous one and two windows, respectively. Each PE uses N          results from different channels arrive at the V-Nodes in the
+registers in the Multiply-Reg unit to independently store results   same clock cycle.
+from different convolution windows. Additionally, depending            3) General Dataflow: Processing of each convolutional
+on the number of compressed and removed columns, a con-             layer in SparHiXcel-v2 begins by mapping the PE array to
+figurable delay is introduced at the output to synchronize the      the initial channels of the first set of filters loaded from the
+partial results sent to the MUX-T units. To support this, each      Global Buffer. After loading the weights, input features are
+PE includes a Delay-Reg unit that implements the required           streamed into the PEs, and convolutions for the assigned filters
+adjustable delay.                                                   and channels are computed and accumulated in the FSUM-
+    The proposed microarchitecture is scalable and flexible,        Store units. Once all input features have been processed, the
+allowing key parameters such as signal bitwidths, the num-          current round is completed.
+ber of PEs in both rows and columns, and the number of                 If P (the number of FSUM-Store units) exceeds the number
+FSUM-Store units to be configured. Filter compression and           of filters processed in the current round, the next round maps
+PE assignments are managed statically using a high-level            the same initial channels of the subsequent filters onto the
+Python-based scheduler and optimizer tool, which determines         PE array. This process continues until the first channels of all
+PE assignments, groupings, FSUM-Store allocations, and V-           P filters are computed. In the following rounds, subsequent
+                                                                                                                                                                                                                                                    6
+
+
+
+                                                                  TABLE I
+C YCLE - BY- CYCLE DATAFLOW OF THE TWO PE S IN THE TOP - LEFT PE GROUP IN THE EXAMPLE OF F IG . 2, (C H 1, F1) KERNEL . T HE TABLE ILLUSTRATES
+  THE PROPAGATION OF INPUTS , MULTIPLICATIONS , AND PSUM S ACROSS PIPELINE STAGES . IU AND M DENOTE THE I N -U NIT AND M ULTIPLY-R EG ,
+                                      RESPECTIVELY, WHILE D REPRESENTS THE D ELAY-R EG REGISTER .
+
+                                                      P E11                                                                                                                  P E21
+ clk   IU 0   IU 1   F SEL   W R ADDR   RD ADDR     M0          M1     Out Reg1   Out Reg2     D      MUX − T   IU 0   IU 1   F SEL   W R ADDR   RD ADDR     M0       M1          Out Reg1         Out Reg2            D             MUX − T
+  0     0      0       1         0         1         0           0         0          0        0         0       0      0       0         0         0         0        0              0                0                0                 0
+  1     A0     0       1         1         0         0           0         0          0        0         0       B0      0      0         1         1         0        0              0                0                0                 0
+  2     A1     A0      1         0         1         0           0         0          0        0         0       B1     B0      0         0         0         0     B0×w22            0                0                0                 0
+  3     A2     A1      1         1         0      A0×w11         0         0          0        0         0       B2     B1      0         1         1      B1×w22   B0×w22            0                0                0                 0
+  4     A3     A2      1         0         1      A0×w11      A1×w11    A0×w11        0        0         0       B3     B2      0         0         0      B1×w22   B2×w22        B0×w22 +0            0                0                 0
+  5     A4     A3      1         1         0      A2×w11      A1×w11    A1×w11     A0×w11      0         0       B4     B3      0         1         1      B3×w22   B2×w22     B1×w22 +A0×w11      B0×w22 +0            0                 0
+  6     A5     A4      1         0         1      A2×w11      A3×w11    A2×w11     A1×w11    A0×w11    A0×w11    B5     B4      0         0         0      B3×w22   B4×w22     B2×w22 +A1×w11   B1×w22 +A0×w11      B0×w22 +0         B0×w22 +0
+  7     A6     A5      1         1         0      A4×w11      A3×w11    A3×w11     A2×w11    A1×w11    A1×w11    B6     B5      0         1         1      B5×w22   B4×w22     B3×w22 +A2×w11   B2×w22 +A1×w11   B1×w22 +A0×w11    B1×w22 +A0×w11
+  8     A7     A6      1         0         1      A4×w11      A5×w11    A4×w11     A3×w11    A2×w11    A2×w11    B7     B6      0         0         0      B5×w22   B6×w22     B4×w22 +A3×w11   B3×w22 +A2×w11   B2×w22 +A1×w11    B2×w22 +A1×w11
+  9     A8     A7      1         1         0      A6×w11      A5×w11    A5×w11     A4×w11    A3×w11    A3×w11    B8     B7      0         1         1      B7×w22   B6×w22     B5×w22 +A4×w11   B4×w22 +A3×w11   B3×w22 +A2×w11    B3×w22 +A2×w11
+ 10     A9     A8      1         0         1      A6×w11      A7×w11    A6×w11     A5×w11    A4×w11    A4×w11    B9     B8      0         0         0      B7×w22   B8×w22     B6×w22 +A5×w11   B5×w22 +A4×w11   B4×w22 +A3×w11    B4×w22 +A3×w11
+
+
+
+
+                                                                                                                              metrics, the proposed effective PE efficiency measures the
+                                                                                                                              average number of dense-equivalent MAC operations com-
+                                                                                                                              pleted per PE per clock cycle, normalized to the equivalent
+                                                                                                                              dense convolution. Because the computation exploits sparsity,
+                                                                                                                              this metric may exceed 100%, indicating that the accelerator
+Fig. 5. An example illustrating PE assignment schedule in multiple rounds                                                     completes the equivalent dense workload in fewer cycles than
+with ten 2 × 2 × 4 filters and five FSUM-Store units (P = 5).
+                                                                                                                              required by dense execution. This metric is calculated as
+                                                                                                                              follows:
+channels of these filters are processed from the beginning,                                                                                                                              #Dense MAC Ops
+while the FSUM-Store units accumulate results across chan-                                                                       Effective PE Efficiency (%) =                                                                    × 100,
+                                                                                                                                                                                      #Clock Cycles × #PE
+nels. After all channels of the first P filters are processed, the                                                                                                                                                                           (1)
+final output features are stored in the FSUM-Store units and
+                                                                                                                              where the #M AC Operations corresponds to the number
+then transferred to the Global Buffer, freeing the FSUM-Store
+                                                                                                                              of MAC operations required to compute the equivalent dense
+resources for the next set of filters.
+                                                                                                                              convolutional layer, and #Clock Cycles represents the total
+    Fig. 5 illustrates this dataflow and PE assignment scheduling
+                                                                                                                              execution cycles required to complete the convolution using
+across multiple execution rounds using a simple example with
+                                                                                                                              the selected SparHiXcel-v2 configuration with a total of
+2 × 2 × 4 filters, a 4 × 4 PE array, and five FSUM-Store units.
+                                                                                                                              #P Es processing elements.
+In the first round, Channels 1 and 2 of Filters 1 and 2 are
+                                                                                                                                 Since most convolutional layers in the target models use
+processed, followed by the same channels of Filters 3 to 5
+                                                                                                                              either 3 × 3 or 1 × 1 kernels, efficient PE allocation favors
+in the next round. Since five FSUM-Store units are available,
+                                                                                                                              configurations where the number of PE rows is a multiple
+subsequent rounds process the remaining channels of these
+                                                                                                                              of three. However, ResNet models include an initial layer
+filters. After all channels of the five filters are computed, the
+                                                                                                                              with 7 × 7 kernels, which requires at least seven PE rows.
+final outputs are written back from the FSUM-Store units to
+                                                                                                                              Accordingly, for the first set of experiments, we select 15 × 15
+the Global Buffer. The FSUM-Store units are then reassigned
+                                                                                                                              and 7 × 15 PE array configurations, each with 256 FSUM-
+to the next set of filters, and the process repeats for Filters 6
+                                                                                                                              Store units. These configurations provide near-optimal support
+to 10.
+                                                                                                                              for dense kernels, ensuring that sparsity-based performance
+    The scheduler tool statically determines all PE assignments,
+                                                                                                                              improvements are evaluated against a well-optimized baseline.
+V-Line mappings, and data movement schedules across all
+                                                                                                                              To evaluate the impact of sparsity, two sparse versions of each
+processing rounds. It generates the corresponding micropro-
+                                                                                                                              model are generated using random pruning in PyTorch at 50%
+grammed control signals for each PE in each round. These
+                                                                                                                              and 70% sparsity levels.
+control signals are loaded from the Global Buffer into the PE
+                                                                                                                                 Figs. 6(a)–(b) present results for dense, 50% sparse,
+array, along with the weights, during the initialization phase
+                                                                                                                              and 70% sparse filters across each layer of ResNet18 and
+at the start of each round.
+                                                                                                                              VGG16 on SparHiXcel-v2 with a 15 × 15 PE array. Since
+                                                                                                                              EfficientNetV2-S comprises 170 convolutional layers, illus-
+       IV. P ERFORMANCE A NALYSIS WITH U NSTRUCTURED
+                                                                                                                              trating each layer individually is impractical. Instead, Fig. 6(c)
+                         S PARSITY
+                                                                                                                              reports the total PE efficiency for its eight stages (excluding
+A. Preliminary Performance Results                                                                                            depth-wise layers). PE efficiency values exceeding 100% arise
+   We evaluate the performance of SparHiXcel-v2 across                                                                        from the definition of PE efficiency relative to a dense base-
+the convolutional layers of three benchmark CNN models:                                                                       line, in which the total number of MAC operations includes
+ResNet18, VGG16, and EfficientNetV2-S, all pretrained on                                                                      computations on zero-valued weights, as defined in (1). This
+ImageNet [16] and obtained from the Torchvision library.                                                                      formulation ensures that the reported PE efficiency remains
+Specifically, we measure two critical performance metrics                                                                     directly comparable to a dense, non-compressed baseline
+under varying sparsity levels for each convolutional layer: (i)                                                                  The results show that for ResNet18 and VGG16,
+speedup and (ii) effective PE utilization efficiency or simply                                                                SparHiXcel-v2 with a 15 × 15 PE array achieves an average
+effective PE efficiency. Our scheduler tool, which determines                                                                 speedup of 9.9% and 8.8%, respectively, across all layers
+PE assignments, accurately computes both metrics with cycle-                                                                  at 50% pruning. When the pruning rate increases to 70%,
+accurate modeling. Unlike conventional hardware utilization                                                                   the speedup improves to 31.6% and 30.6%, respectively. The
+                                                                                                                                                         7
+
+
+
+
+Fig. 6. Performance results of SparHiXcel (15 × 15 PE array) at three sparsity levels, showing effective PE efficiency for (a) ResNet18, (b) VGG16, and (c)
+EfficientNetV2-S. In (a), CX Y nxn stS denotes a layer with n × n kernels and stride S.
+
+
+
+                                                                               improvements are lower in EfficientNetV2-S compared to the
+                                                                               other two models. To address this limitation, we explore
+                                                                               the idea of model-specific tuning of PE configurations for
+                                                                               EfficientNetV2-S in Section V.
+
+                                                                               B. Performance Bottleneck
+                                                                                  This section identifies and analyzes the main factors that
+                                                                               limit the performance and efficiency of SparHiXcel-v2. Un-
+                                                                               derstanding these bottlenecks is essential for characterizing
+Fig. 7. Performance results using 15 × 15 and 7 × 15 PE arrays.                the accelerator’s limitations and motivating the optimization
+                                                                               methods presented in subsequent sections.
+                                                                                  First, the limited number of V-Lines constrains filter-level
+effective PE efficiencies consistently improve as sparsity levels              parallelism. Each V-Line is exclusively allocated to one filter,
+increase across all models. These findings demonstrate the                     limiting the maximum number of filters that can be processed
+effectiveness of the proposed approach in leveraging filter                    in one computation round. This limitation becomes particularly
+sparsity to enhance resource utilization and reduce processing                 critical in 1 × 1 convolutions, where each PE row is allocated
+time, with greater gains achieved at higher sparsity levels.                   to a single channel. In such cases, even one active channel
+   The results in Fig. 6(a) for ResNet18 also show that                        requires a dedicated V-Line, leading to early exhaustion of
+SparHiXcel-v2 generally achieves higher sparsity-based per-                    available V-Lines before the PE array is fully utilized. As
+formance improvements in 3 × 3 convolution layers compared                     a result, additional filters cannot be scheduled, leaving part
+to 1 × 1 ones. This is because, in a 1 × 1 convolution layer,                  of the PE array idle. This bottleneck is further analyzed in
+each PE row is assigned to one filter channel. Consequently, in                Section V for the EfficientNetV2-S case, which heavily relies
+dense mode, fifteen single-element filter channels are mapped                  on 1 × 1 convolutions.
+simultaneously onto the 15 × 15 PE array. A V-Line must be                        Second, the maximum transfer length T of the MUX-T units
+occupied by a filter if at least one of its fifteen filter channels            introduces a scalability and mapping constraint. As the size
+is nonzero. Consequently, with 15 PE columns (and V-Lines),                    of the PE array, and particularly the number of PE columns,
+at most 15 filters can be processed concurrently. A filter can                 increases, supporting full connectivity across the array would
+only be removed when all of its channels in a round are zero,                  require a proportional increase in T to maintain flexibility
+limiting the benefits of sparsity. This implies that reducing the              in assigning V-Lines to filters. However, increasing T incurs
+number of PE rows could potentially lead to higher sparsity-                   significant hardware overhead in the MUX-T units and routing
+based savings, particularly in 1 × 1 convolutions.                             network, and may introduce critical path delays that reduce the
+   To investigate this hypothesis, in the second set of exper-                 maximum operating frequency. As a result, T must be limited
+iments, we evaluated a more cost-effective 7 × 15 PE array                     in practice, especially for large PE arrays. This constraint
+configuration to assess the impact of reducing the number of                   restricts PE group allocation, as each PE can only access up
+PE rows on performance. Fig. 7 summarizes the results for                      to T adjacent right-hand V-Lines for routing its partial results.
+both configurations. The findings confirm a slight improve-                    Consequently, some PEs may remain unused due to the lack of
+ment in the effective PE efficiency for both 1 × 1 and 3 × 3                   accessible V-Lines, leading to underutilization. This bottleneck
+convolution layers with the 7 × 15 configuration, leading to an                is further investigated in Section VI.
+overall performance improvement across all tested models.                         Third, convolution kernels exhibit varying sparsity patterns
+   While 1 × 1 convolutions appear in only three layers of                     across channels and filters due to unstructured weight sparsity.
+ResNet18, accounting for less than 1.5% of the total opera-                    After applying the proposed compression, this leads to differ-
+tions, VGG16 does not include any 1 × 1 convolution layers.                    ent numbers of remaining columns across channels, resulting
+In contrast, EfficientNetV2-S relies more heavily on 1×1 con-                  in non-uniform PE allocation within the PE array. Conse-
+volutions, which dominate both MBConv and Fused MBConv                         quently, some channels may fully occupy all available PEs in
+stages and together account for over 54% of the total opera-                   their allocated rows, while others may remain underutilized.
+tions. As a result, as shown in Fig. 7, the obtained performance               This limiting factor is further investigated in Section VII.
+                                                                                                                                                8
+
+
+
+   Fourth, although SparHiXcel-v2 can benefit from unstruc-
+tured sparsity by reducing the number of kernel columns, a
+portion of PEs may still remain underutilized since some zero-
+valued elements can persist after compression. In the proposed
+compression method, the number of retained columns is deter-
+mined by the densest row within each kernel. Consequently,
+additional sparsity in other rows does not translate into further
+compression and PE savings. Examples in Fig. 1 and Fig. 2
+illustrate that zero elements may remain after compression,
+leading to underutilized PEs in SparHiXcel-v2.
+                                                                    Fig. 8. Performance results of five SparHiXcel-v2 configurations for process-
+                                                                    ing the convolutional layers of EfficientNetV2-S.
+      V. E FFICIENT N ET V2 C ONFIGURATION S EARCH
+
+   As discussed in Section IV-A, EfficientNetV2 experiences
+performance degradations due to V-Line congestion in 1 × 1
+convolution layers. Reducing the number of PE rows is ex-
+pected to improve efficiency in these layers by increasing the
+likelihood that a filter contains no nonzero weights within a
+limited number of channels. Such filters do not require PE or
+V-Line allocation in the corresponding computation rounds.          Fig. 9. Illustration of PE underutilization caused by limited MUX-T size.
+In this section, we investigate the impact of PE array dimen-
+sions on the performance of SparHiXcel-v2 when processing
+                                                                                    VI. MUX-T S IZE O PTIMIZATION
+EfficientNetV2-S. In particular, we explore configurations with
+fewer PE rows to mitigate the V-Line contention issue in 1×1           As described in Section III-B, each MUX-T multiplexer
+convolutions.                                                       enables up to T left-hand PEs to access a corresponding V-
+   We evaluate five additional PE array configurations: (i) a       Line. It serves as an essential component in the combinational
+3 × 16 array with 128 FSUM-Store units (P = 128), (ii) a            routing of partial results to the assigned V-Line, thereby
+3 × 32 array with P = 160, (iii) a 3 × 48 array with P = 256,       enabling flexible and reconfigurable PE groupings across chan-
+(iv) a 4 × 48 array with P = 256, and (v) a 3 × 96 array            nels.
+with P = 256. Since EfficientNetV2-S also includes 3 × 3               In this section, we analyze the impact of constraining T
+convolution layers, the number of PE rows cannot be reduced         on hardware mapping efficiency and evaluate the associated
+below three.                                                        trade-offs between resource utilization and performance.
+   Fig. 8 presents the performance results of these configu-
+rations across different sparsity levels. A key observation is
+that both effective PE efficiency and sparsity-driven speedup       A. Impact of MUX-T Size Constraint
+degrade as the size of the PE array increases. More than               Increasing MUX-T input size, T , allows greater freedom
+half of the convolutional layers in EfficientNetV2-S contain        in assigning PEs to V-Lines, improving packing efficiency
+256 or fewer filters. When the number of filters is small,          and potentially reducing the number of processing rounds.
+increasing the number of PE columns can reduce efficiency, as       However, this flexibility comes at the expense of increased
+the remaining filters in the final processing rounds may only       hardware overhead, including larger multiplexers and more
+partially occupy the PE array, leaving some PEs idle. Con-          complex routing networks. For large values of T , the MUX-T
+versely, increasing the number of PE rows limits performance        units and associated routing paths may form the critical path,
+gains due to increased V-Line contention.                           effectively limiting the maximum achievable clock frequency.
+   Comparing the results of 3 × 48 configuration in Fig. 8 with        Limiting T , on the other hand, can negatively impact
+the 7 × 15 configuration in Fig. 7 shows that, despite having       sparsity-driven performance gains. Specifically, when the tar-
+a larger number of PEs, the 3 × 48 configuration achieves           get V-Line of a filter lies beyond the allowable transfer
+higher PE efficiency at 70% sparsity. Furthermore, comparing        range, i.e., farther than T , the corresponding kernel must be
+the 3 × 96 and 6 × 48 configurations demonstrates that, for         assigned to PEs within the reachable region. As a result, some
+the same total number of PEs, a smaller number of rows leads        intermediate PEs are left unused to ensure that partial results
+to higher sparsity-driven performance gains due to reduced          can be correctly routed.
+V-Line contention.                                                     An example of this underutilization is illustrated in Fig. 9,
+   A potential approach to mitigate V-Line contention in 1 × 1      where the partial results from Channel 1 of Filter 2 cannot
+convolutions is to introduce additional V-Lines that are not        reach their designated V-Line due to the limited value of T.
+exclusively associated with PEs, thereby increasing routing         Consequently, the PE assignment must be adjusted by shifting
+capacity without expanding the PE array. This can be achieved       Channel 1 of Filter 2 one column to the right to ensure
+by duplicating selected V-Lines to alleviate congestion. Ex-        reachability to the assigned V-Line. This shift leaves two PEs
+ploring this solution is left for future work.                      in the second column unused, resulting in reduced efficiency.
+                                                                                                                                           9
+
+
+
+                                                                           using a 4×4 SparHiXcel-v2 PE array. With four PE rows, two
+                                                                           channels can be accommodated per processing round. Under
+                                                                           the original filter and channel ordering shown in Fig. 11(a),
+                                                                           the first and second channels (Ch1 and Ch2) of Filters F1
+                                                                           and F2 are compressed and mapped onto the array in the first
+                                                                           round. However, the first channel of F3 requires two columns,
+                                                                           while only one PE column remains available; therefore, the
+                                                                           processing of F3 is deferred to the next round.
+                                                                               In Round 2, the kernels of Filters F3 and F4 are assigned
+Fig. 10. Variation of hardware cost and processing speed with MUX-T size   to the PE array. In Round 3, only one column is utilized by
+(T ). Red circles denote the minimum T values that maintain processing     Filters F5 and F6, while the remaining three columns remain
+performance without significant degradation.                               idle. Processing all filters requires six rounds, resulting in an
+                                                                           overall effective PE efficiency of (52/96) × 100 ≈ 54%.
+B. Preliminary Evaluation of MUX-T Size                                        Fig. 11(b) shows the same filters with a different channel–
+                                                                           filter ordering. In this reordered configuration, Ch1 and Ch3
+   To quantitatively evaluate the impact of limiting T , we
+                                                                           are grouped together, and F5 is scheduled immediately after
+measure hardware resource utilization and the number of re-
+                                                                           F2. As shown in the corresponding PE assignment schedule,
+quired processing rounds as T varies. For hardware utilization
+                                                                           the first processing round accommodates three filters, and
+measurements, the corresponding designs are implemented on
+                                                                           all filters are processed in four rounds. This results in an
+an AMD-Xilinx Kintex UltraScale+ FPGA. The evaluation is
+                                                                           approximate 33% speedup compared to the original ordering,
+conducted on several large layers of the benchmark model.
+                                                                           while the PE efficiency increases to (52/64) × 100 ≈ 81%.
+   Fig. 10 presents the total number of utilized LUTs along
+                                                                               This example demonstrates that a simple reordering of
+with the number of required rounds for three convolutional
+                                                                           filters and channels can significantly improve the efficiency
+layers of VGG16 using a 33 × 45 PE array configuration.
+                                                                           of SparHiXcel-v2. The improvement arises from better align-
+As expected, reducing T leads to a significant decrease in
+                                                                           ment of sparsity patterns across adjacent filters and channels,
+hardware resource consumption due to smaller multiplexers
+                                                                           enabling higher kernel packing density in each processing
+and reduced routing complexity.
+                                                                           round. Notably, this optimization does not incur any additional
+   Notably, the number of required processing rounds remains
+                                                                           hardware cost.
+relatively stable as T decreases. Specifically, reducing T
+from 45 to 10 results in only a negligible increase in the
+number of rounds. This indicates that larger values of T do                B. Search Space Size Assessment
+not necessarily improve processing speed and may instead                     The optimal channel and filter ordering depends on both
+introduce unnecessary hardware overhead.                                   sparsity patterns and the PE array configuration. Therefore,
+   To address this trade-off, we develop a simple decremental              the optimization must be performed for each pruned layer
+search algorithm to automatically determine an appropriate                 and target SparHiXcel configuration independently. The search
+value of T for a given model and PE array configuration.                   space size for this problem in a CNN layer is denoted by S
+Integrated into the scheduler and optimization tool, this al-              and is given by
+gorithm identifies the smallest T that does not exceed a
+user-defined threshold on additional processing rounds. This                                     |S| = c! × Nfilters !,                 (2)
+approach enables designers to balance hardware cost and
+performance according to design priorities.                                where c and Nfilters denote the number of channels and filters
+                                                                           in the layer, respectively. For example, in a layer with 256
+ VII. R EORDERING O PTIMIZATION FOR U NSTRUCTURED                          filters, each having 256 channels, the total number of possible
+                      S PARSITY                                            orderings is
+A. Impact of Channel–Filter Ordering on PE Assignment
+    When unstructured pruning is employed, kernels may ex-                               |S| = 256! × 256! ≈ 7.3 × 101013 .             (3)
+hibit arbitrary sparsity patterns. After applying the proposed                This extremely large search space demonstrates that exhaus-
+compression method, kernels from different channels of a                   tive search is computationally infeasible. Therefore, a meta-
+filter may retain varying numbers of columns, leading to non-              heuristic optimization approach is required. To address this
+uniform PE allocation across channels. Consequently, during                challenge, we propose a genetic algorithm (GA) to determine
+execution in SparHiXcel-v2, denser channels may occupy                     an effective ordering of channels and filters for each CNN
+multiple PE columns, while sparser channels require fewer. If              layer.
+several consecutive filters exhibit higher density in the same
+channels, mapping these filters onto the PE array can result
+in imbalanced PE utilization, leaving rows assigned to sparser             C. Proposed Genetic Algorithm for Ordering Optimization
+channels underutilized.                                                       In the proposed genetic algorithm, each chromosome en-
+    Fig. 11(a) illustrates an example in which six convolutional           codes a specific ordering of channels and filters within a CNN
+filters with 2 × 2 kernels across four channels are processed              layer. An example of such a chromosome is illustrated in
+                                                                                                                                                    10
+
+
+
+
+Fig. 11. Example illustrating the impact of filter and channel ordering optimization on PE assignment efficiency and overall processing speed. Ordering
+optimization achieves approximately 33% speedup without altering filter sparsity.
+
+
+
+
+Fig. 12. An example chromosome, illustrating the channel and filter permu-
+tation encoding, corresponding to Fig. 11(b) example.
+
+
+
+Fig. 12, corresponding to the optimized ordering shown in                    Fig. 13. An example crossover operation in the proposed GA-based ordering
+Fig. 11(b).                                                                  optimization.
+    The initial population is generated randomly, where each
+individual represents a valid permutation of channels and                    offspring. The remaining positions are then filled using the
+filters. The fitness function is defined as                                  order from the second parent, ensuring that only elements not
+                                               
+                                        Rsparse                              already present in the offspring are inserted. This crossover
+                 Fitness = 100 × 1 −              ,       (4)
+                                        Rdense                               process is applied independently to both channel and filter
+where Rsparse and Rdense denote the number of processing                     permutations. An example of this process is illustrated in Fig.
+rounds required for the sparse and dense executions, respec-                 13, where two parent chromosomes are combined to generate
+tively. This fitness value represents the percentage speedup                 an offspring.
+achieved by a given ordering (chromosome) relative to the                       To promote diversity and avoid premature convergence, a
+dense baseline. The values of Rsparse and Rdense are obtained                mutation operator is applied with a predefined probability.
+using the cycle-accurate scheduler. Chromosomes that result                  In this step, two randomly selected elements in the channel
+in fewer processing rounds (i.e., higher fitness) are selected               ordering and two randomly selected elements in the filter
+for reproduction in subsequent generations.                                  ordering are swapped.
+   Since the sequence of channel-filter orders is the key                       Additionally, elitism is employed, where the top-performing
+characteristic of each chromosome, the crossover operation                   chromosomes are directly carried over to the next generation
+is designed to preserve partial sequences from the parents.                  to preserve the best solutions.
+Specifically, a segment of length m, where m ∈ [1, L] and
+L denotes the length of the permutation (i.e., the number of                 D. Preliminary Evaluation of Channel-Filter Ordering Opti-
+channels or filters), is randomly selected from the first parent,            mization
+starting at a randomly chosen index i, where i ∈ [0, L − m].                   In this subsection, we evaluate the effectiveness of the
+This segment is copied into the corresponding positions of the               proposed GA for channel and filter ordering optimization.
+                                                                                                                                      11
+
+
+
+                          TABLE II                                         To obtain more realistic results, we adopt unstructured
+    D EFAULT GA PARAMETERS U SED IN P RELIMINARY E VALUATION            pruning methods from two related works. Specifically, the
+                         Parameter          Value                       pruning approach of Ma et al. [6] is used for ResNet18, while
+                      Population Size       2000                        the method of Han et al. [17] is applied to VGG16. Consistent
+                   Number of Generations    5000                        with the original studies, ResNet18 employs a uniform pruning
+                       Mutation Rate        0.04
+                     Tournament Size          6                         ratio across all layers, whereas VGG16 uses non-uniform
+                       Elitism Count          5                         sparsity. For EfficientNetV2-S, unstructured magnitude-based
+                                                                        pruning is applied with a sparsity level of 70% for each
+                                                                        convolutional layer.
+                                                                           Fig. 15 shows the effective PE efficiency for each layer
+                                                                        of ResNet18 and VGG16. The results indicate that applying
+                                                                        the proposed channel–filter ordering optimization significantly
+                                                                        improves hardware utilization across layers. This demonstrates
+                                                                        that the proposed method effectively mitigates the adverse
+                                                                        effects of unstructured sparsity on hardware efficiency.
+                                                                           For EfficientNetV2-S, Fig. 16 presents the speedup and PE
+                                                                        efficiency results across different configurations. While the
+                                                                        results demonstrate the effectiveness of the proposed ordering
+                                                                        optimization, a comparison between the 3 × 96 and 6 × 48
+                                                                        configurations reveals that, for the same total number of PEs,
+                                                                        the optimization is more effective when the array has more
+                                                                        rows. This behavior arises because a larger number of PE
+Fig. 14. Convergence behavior of the genetic algorithm–based ordering   rows increases the number of channels processed per round,
+optimizer for different population sizes. Conv4 2 layer of VGG16.
+                                                                        thereby raising the chance that a denser channel becomes a
+                                                                        bottleneck, leaving PEs assigned to other channels underuti-
+                                                                        lized. The proposed ordering optimization mitigates this effect
+First, the convergence behavior of the GA is analyzed under             by redistributing sparsity across adjacent channels, leading to
+different population sizes. Then, the resulting improvements            more balanced PE efficiency across channels.
+in hardware utilization are evaluated for several CNN models,
+including ResNet18, VGG16, and EfficientNetV2-S.
+   The default GA parameters used in the experiments, along                 VIII. H ARDWARE -AWARE S TRUCTURED P RUNING
+with their corresponding values, are listed in Table II.                   Although SparHiXcel-v2 can benefit from unstructured
+   Fig. 14 shows the convergence behavior of the GA for the             sparsity, a significant portion of PEs may remain underutilized.
+Conv4 2 layer of VGG16, selected as a representative exam-              As discussed in Section IV-B, these utilization bottlenecks
+ple. This layer contains 512 filters with 3×3 kernels across 512        primarily arise from non-uniform sparsity distributions across
+channels. Unstructured magnitude-based pruning is applied               channels and filters.
+with a sparsity level of 73%. The figure illustrates the evolution         The proposed pruning algorithm consists of four phases,
+of the fitness value over generations for different population          detailed in the following subsections. The pruning stage is
+sizes, while all other parameters listed in Table II are kept           followed by quantization to INT8 format using a quantization-
+fixed. The results indicate that increasing the population size         aware training (QAT) approach.
+improves the exploration capability of the GA and enhances
+the quality of the final solution up to a certain point. Beyond
+this point, the improvement saturates, highlighting a trade-off         A. Proposed Surgical Iterative Pruning and Revival (SIPR)
+between optimization effort and solution quality. The optimal              1) Phase 1 (Row-Density-Aware Magnitude-Based Prun-
+population size may vary across layers due to differences in            ing): The first phase includes an algorithm that progressively
+search space size; smaller layers typically converge faster and         removes low-magnitude weights while enforcing a balanced
+achieve near-optimal solutions with smaller populations. Based          sparsity distribution across the rows of each convolutional
+on empirical evaluations across all layers of the target models,        kernel. Rather than allowing pruning to concentrate on rows
+a population size of 2000 is used in the remaining experiments,         that naturally contain smaller magnitude weights, this phase
+as larger populations yield only marginal improvements in               prevents excessive pruning in such rows and promotes a
+solution quality.                                                       more uniform sparsity pattern. This constraint is important
+   Next, we experimentally evaluate the impact of the proposed          for efficient hardware utilization in SparHiXcel-v2, where bal-
+GA-based ordering optimization on the performance of the                anced row-wise sparsity improves column-wise compression
+benchmark models. The results are reported for three config-            and enhances PE efficiency. The pseudocode for this phase is
+urations: the dense model, the sparse model without ordering            presented in Algorithm 1.
+optimization, and the sparse model after applying the proposed             At the beginning of the process, a binary mask with the
+GA-based optimization, across three benchmark CNN models,               same dimensions as the weight tensor is initialized, where each
+including ResNet18, VGG16, and EfficientNetV2-S.                        element is set to one, indicating that the corresponding weight
+                                                                                                                                                        12
+
+
+
+
+Fig. 15. Impact of ordering optimization on the effective PE efficiency across different layers of (a) VGG16 and (b) ResNet18.
+
+
+                                                                              Algorithm 1 SIPR Phase 1 and Phase 2 Pruning Engine
+                                                                               1: Input: Pre-trained dense weights Wdense , Sparse weights Wsparse ,
+                                                                                  Target sparsity Starget
+                                                                               2: Definitions: Current sparsity Scurr , Sparse mask M
+                                                                               3: Initialize: M ← 1, Scurr ← 0, Wsparse ← Wdense
+                                                                               4: while Scurr < ThresholdP hase2 do
+                                                                               5:    Etrain ← MaxEpochs, τdrop ← MaxDropTolerance
+                                                                               6:    ∆step ← min(StepPct, Starget − Scurr )
+                                                                               7:    Nprune ← Calculate total elements to drop based on ∆step
+                                                                               8:    if Scurr < ThresholdP hase1 then
+                                                                               9:        Phase 1 (Row-Density-Aware Magnitude-Based Pruning):
+Fig. 16. Impact of ordering optimization on processing speed and PE           10:        for step = 1 to Nprune do
+efficiency for EfficientNetV2-S across different PE array configurations.     11:           for each kernel k ∈ Wsparse do
+                                                                              12:              C[r] ← count zeros(k, row = r)
+                                                                              13:           end for
+                                                                              14:           Restrict candidates to rows where C[r] = min(C)
+is retained. When a weight is pruned, the corresponding mask                  15:           Select single element w∗ with smallest |Wij | within candidates
+element is set to zero.                                                       16:           Update M by pruning w∗
+                                                                              17:        end for
+   The pruning process is performed iteratively at the level                  18:    else
+of individual weights. At each iteration, candidate weights for               19:        Phase 2 (Dense-Row-Focused Pruning):
+pruning are selected from the set of currently nonzero weights                20:        for step = 1 to Nprune do
+                                                                              21:           for each kernel k ∈ Wsparse do
+with the smallest magnitudes. An example is illustrated in                    22:              for each row r: C[r] ← count zeros(M, kernel k, row r)
+Fig. 17(a), which shows three filters with two channels.                      23:              G[k][r] ← max(C) − C[r] {slack in each row}
+Candidate weights with the lowest magnitudes are highlighted                  24:           end for
+                                                                              25:           Limit candidates to rows r of kernels k where G[k][r] =
+in green. One candidate is then randomly selected and pruned,                               max(G)
+as shown in Fig. 17(b).                                                       26:           Select single element w∗ with smallest |Wij | within candidates
+   The following constraint is applied during candidate selec-                27:           Update M by pruning w∗
+                                                                              28:        end for
+tion to ensure uniform pruning across kernel rows: a weight is                29:    end if
+considered a valid candidate only if it belongs to a row with                 30:    Wsparse , Recovered ← Retrain(Wsparse , M, Etrain , τdrop )
+the minimum number of previously pruned elements within its                   31:    if not Recovered then
+                                                                              32:        Rollback M to previous checkpoint and Exit
+kernel. For example, in Fig. 17(b), the second element in the                 33:    end if
+first row of F3-Ch1 (highlighted in solid red) is not a valid                 34:    Scurr ← CalculateSparsity(M )
+candidate until at least one weight has been pruned in the other              35: end while
+                                                                              36: return M, Wsparse
+two rows of that kernel. This condition ensures that sparsity
+is distributed evenly across rows.
+   To preserve model accuracy, pruning is performed in mul-
+tiple steps in this phase. In each step an adjustable portion                    2) Phase 2 (Dense-Row-Focused Pruning): While the prun-
+of weights is pruned. After each pruning step, the model                      ing strategy in Phase 1 enforces row-balanced sparsity, it does
+is retrained for a limited number of epochs. The validation                   not guarantee that all kernel rows converge to an equal number
+accuracy is then compared with the baseline accuracy. If the                  of remaining weights, which is necessary for optimal column-
+accuracy drop exceeds a predefined threshold, τdrop , retraining              wise compression. This limitation arises because magnitude-
+continues until either the accuracy is recovered or a maximum                 based pruning prioritizes weights with smaller magnitudes
+number of epochs Etrain is reached. If recovery is not achieved,              without considering their contribution to column elimination.
+the model is rolled back to the last checkpoint that satisfies                For example, pruning a low-magnitude weight in one row may
+the accuracy constraint.                                                      not enable the removal of any column if the corresponding
+   This procedure is applied across all layers in parallel until              positions in other rows remain nonzero. In contrast, pruning
+the sparsity of each layer reaches a predefined target. This                  a slightly larger-magnitude weight may allow the removal of
+phase establishes a balanced sparsity foundation, which is                    an entire column, thereby improving compression efficiency.
+essential for enabling effective hardware-aware pruning and                      To enhance compression effectiveness, once the sparsity
+maximizing PE efficiency in subsequent stages.                                level reaches a predefined threshold in Phase 1, denoted
+                                                                                                                                                          13
+
+
+
+
+Fig. 17. Four phases of the proposed SIPR structured pruning and revival algorithm illustrated through an example. Phase 1: (a) Three original dense filters,
+each with two channels. Weights with the smallest absolute values (highlighted in green) are selected as pruning candidates. (b) After pruning w11 in (F3,
+Ch1), other weights in the same row are preserved to avoid increasing row-wise sparsity imbalance. Phase 2: (d)–(f) Pruning is restricted to rows with
+the highest number of remaining weights. In each step, one weight with the smallest magnitude is pruned from the selected rows to promote column-wise
+compression. Phase 3: (g)–(j) Remaining sparse filters and their mapping onto a 6 × 4 PE array are shown. Bottleneck rows are identified in each round,
+candidate pruning groups are generated, and the group with the smallest total magnitude is pruned. In this example, the first candidate is selected in (h),
+followed by the third candidate in (i), reducing the number of processing rounds to one in (j). Phase 4-1: (k) Weights with the largest magnitudes from
+the sparsest rows in each kernel are revived. For instance, w32 in (F1, Ch1) and w11 , w23 in (F2, Ch2) are restored. Phase 4-2: (n)–(p) When unused PE
+columns remain within a channel, candidate groups of weights are identified to fill these gaps. The group with the largest total magnitude is selected and
+revived. Ultimately, all filters and channels are mapped within the PE array in a single round, achieving 100% PE mapping and utilization.
+
+
+
+as ThresholdPhase1 , the algorithm transitions to Phase 2. In                   directing pruning efforts toward kernels with greater internal
+this phase, a refined pruning strategy prioritizes rows where                   imbalance.
+removing a weight most effectively contributes to column-                          Fig. 17(d)–(f) illustrates the pruning process in Phase 2
+wise compression. The pseudocode for Phase 2 is provided                        using the same example. The imbalance scores are recomputed
+in Algorithm 1.                                                                 after each pruning step. Among the rows with the highest
+   To this end, a row-wise imbalance score is defined for each                  scores, weights with the smallest absolute magnitudes are
+row of a kernel. This score quantifies how dense a row is                       identified, and one is randomly selected for pruning. To pre-
+relative to the sparsest row in the same kernel and is computed                 serve model accuracy, the same iterative pruning and retraining
+as the difference between the number of remaining elements                      procedure used in Phase 1 is applied in this phase.
+in the given row and that of the sparsest row. Consequently,                       3) Phase 3 (Hardware-Aware Selected Channel Pruning):
+denser rows receive higher scores, indicating a greater need for                While Phases 1 and 2 focus on achieving balanced weight-
+pruning. Phase 2 prioritizes rows with higher scores, thereby                   level sparsity and effective column reduction within each
+                                                                                                                                                 14
+
+
+
+kernel, channel-level sparsity imbalance remains a critical          Algorithm 2 Subroutine: Retrain
+performance-limiting factor. During each processing round,            1:   Input: Input weights Wi , M , Etrain , τdrop
+                                                                      2:   Output: Weights Wout , Boolean Recovered
+multiple channels are mapped onto the PE array. If sparsity is        3:   Wsparse ← Wi ⊙ M
+uneven across channels, denser channels tend to fully occupy          4:   Recovered ← False
+their assigned PE rows, while sparser channels underutilize           5:   for epoch = 1 to Etrain do
+                                                                      6:      Train(Wsparse ) using SGD
+their allocated resources. Fig. 17(g)–(h) illustrates this effect     7:      Wsparse ← Wsparse ⊙ M {Crush momentum ghost weights}
+using an example with three sparse filters mapped onto a 6×4          8:      if Accuracy loss ≤ τdrop then
+PE array, where higher density in the second channel leads to         9:         Recovered ← True
+                                                                     10:          break {Accuracy successfully recovered early}
+reduced overall PE efficiency.                                       11:      end if
+   Improving channel-level sparsity balance requires awareness       12:   end for
+of PE allocation across processing rounds. To this end, Phase 3      13:   if Recovered then
+                                                                     14:      return True, Wsparse {Return the trained sparse weights}
+integrates hardware-level information from the scheduler into        15:   else
+the pruning process. The objective is to reduce the number           16:      return False, Wi {Return Input weights without change}
+of PE rounds per layer by enabling more filters to be ac-            17:   end if
+commodated within each round, thereby improving overall PE
+efficiency.
+                                                                        4) Phase 4 (Cost-Free Weight Revival): Although the three
+   Specifically, the scheduler provides the pruning algorithm        preceding pruning phases are designed to mitigate imbalance,
+with: (i) the number of required PE rounds, (ii) the filters         some PEs may remain underutilized after Phase 3. Phase 4
+and channels assigned in each round, and (iii) the number of         addresses this by selectively reviving pruned weights from
+unused PEs per channel per round. This information allows the        earlier phases to occupy these otherwise unused PEs. The
+identification of bottleneck channels (those occupying more          objective is to recover part of the accuracy lost during pruning
+PE columns than others and limiting further compression).            while maintaining efficient hardware utilization. Importantly,
+   To alleviate this bottleneck, Phase 3 selectively prunes entire   these weight revivals do not introduce additional processing
+columns from kernels in the identified channels. Removing a          rounds and therefore do not impact processing speed. Instead,
+column from such a kernel frees one column in the PE array,          they improve the effective PE efficiency by reducing the
+increasing the likelihood that filters from subsequent rounds        number of idle PEs. This phase is divided into two steps,
+can be scheduled earlier.                                            described in the following subsections.
+   As described in Section III, the SparHiXcel-v2 dataflow
+begins with processing the initial channels of the first P filters   Algorithm 3 SIPR Phase 4 (Step 1 and Step 2) Revival Engine
+over multiple rounds, followed by subsequent channels of the          1: Input: Wdense , Wsparse , M , Hardware constraints H
+same filters. After all channels are processed, the computation       2: Definitions: Field array tracking PE row densities F , Filters and channels
+                                                                         assigned A, Number of rounds in sequences C, Active sequence trackers
+proceeds to the next set of P filters. For kernels of size n × n         G, Target proposal set W ∗
+and a PE array with R rows, the number of channels processed          3: Output: Optimized sparse model Wf inal
+per round is given by                                                 4: Phase 4-Step 1 (Intra-Kernel Row Balancing Revival):
+                                                                      5: for each kernel K ∈ Wsparse do
+                                                                    6:    Compute number of pruned weights per row: pr
+                                   R                                  7:    pmin ← minr pr
+                           cpr =       .                       (5)
+                                   n                                  8:    In Wsparse , revive up to (pr − pmin ) highest-magnitude pruned
+                                                                            weights from Wdense in each row of Wsparse and update M
+                                                                      9: end for
+Processing of these cpr channels for P filters occurs in a           10: Retrain the model (Wsparse ) for 30 Epochs.
+sequence of rounds. The sequence in which a given channel            11: Phase 4-Step 2 (Column-Wise Back-filling Revival):
+of a filter is processed is indexed by two elements (gf , gc ),      12: Fbase , Abase , Cbase ← PE Assignment(Wsparse , H)
+                                                                     13: Initialize G with all sequences, g ∈ G
+defined as:                                                          14: while G is not empty do
+                                                                   15:    {1. Parallel Proposal & Verification}
+                          Filter Number                              16:    Within G, propose one max-magnitude pruned weight column w per
+                  gf =                    ,                (6)              sequence to revive regarding empty spots in Fbase . W ∗ is the set of
+                                 P
+                                                                          candidates of all sequences (w ∈ W ∗ ).
+                          Channel Number                             17:     Temporarily unmask proposals and update Wsparse : M [W ∗ ] ← 1
+                   gc =                       .            (7)       18:     Fnew , Anew , Cnew ← PE Assignment(Wsparse , H)
+                                 cpr
+                                                                     19:    for each candidate weight column w proposed for sequence g do
+                                                                     20:        if w violates Cnew [g] > Cbase [g] or Anew [g] ̸= Abase [g] then
+   Since filters cannot be moved across sequences, Phase 3           21:            Reject: Hardware leak – Revert M [w] ← 0 and mark slot failed
+aims to minimize the number of rounds required for each              22:        else
+sequence independently. In each iteration, one column is re-         23:            Accept: Confirm revival with reviving from Wdense for se-
+                                                                                   quence g and update M
+moved from the identified bottleneck channels by selecting the       24:        end if
+column with the minimum absolute sum of weights, thereby             25:    end for
+minimizing the impact on model accuracy.                             26:    Remove finished or stuck sequences from G
+                                                                     27:    Fbase , Abase , Cbase ← PE Assignment(Wsparse , H)
+   This process is repeated until the number of PE rounds for        28: end while
+the targeted sequence is reduced by one. The same reduction is       29: Retrain the model (Wsparse ) for 50 Epochs.
+                                                                     30: return Wf inal ← Wsparse
+then applied across all selected sequences, followed by model
+retraining before proceeding to the next pruning iteration.
+                                                                                                                                           15
+
+
+
+     a) Step 1— Intra-Kernel Row Balancing Revival: This
+step operates at the level of individual convolutional ker-
+nels. As described earlier, Phases 1 and 2 perform element-
+wise weight pruning. Although these phases aim to main-
+tain a balanced sparsity distribution across kernel rows, they
+do not guarantee that all rows retain the same number of
+nonzero weights upon completion. In the proposed compres-
+sion scheme, the number of remaining weights in the densest
+row determines the number of PE columns allocated to the
+kernel. Consequently, pruning other rows beyond this level
+does not further improve processing speed, but instead leads to
+unnecessary accuracy loss and reduced effective PE efficiency.
+   Such over-pruned weights from Phases 1 and 2 can therefore
+be safely restored without affecting processing speed. For each
+kernel, let pr denote the number of pruned weights in row
+r, and let pmin = minr pr represent the minimum number
+of pruned weights across all rows. The number of weights
+eligible for revival in row r is given by:
+
+                        nr = pr − pmin .                       (8)
+
+   For each row, up to nr pruned weights are restored by
+selecting those with the largest magnitudes from the original
+pretrained model. This strategy prioritizes weights that are
+more likely to contribute to model accuracy while preserving          Fig. 18. Progression of performance improvement and corresponding model
+                                                                      accuracy across different phases of the proposed SIPR structured pruning
+processing efficiency. Fig. 17(k)–(m) illustrate how this step        algorithm for the C4 3 st1 layer of ResNet18 ((a), (b)) and the Conv5 3
+selects three weights for revival and improves PE efficiency          layer of VGG16 ((c), (d)).
+in the example.
+   After completing this step, the model is retrained for several
+epochs to recover accuracy and update the weights before              weight revival improves utilization and potentially accuracy
+proceeding to the second step.                                        without incurring any additional computational overhead.
+                                                                         After processing a channel, the algorithm proceeds to the
+      b) Step 2— Column-Wise Back-Filling Revival: Phase 3
+                                                                      next channel within the same round. Once all channels in the
+improves channel-level sparsity balance to mitigate PE under-
+                                                                      round have been visited, it returns to the first channel and
+utilization caused by variations across channels within each
+                                                                      repeats the process if additional PE capacity remains. This
+sequence. However, since Phase 3 terminates based on an
+                                                                      iterative procedure continues until either all available PE slots
+accuracy degradation constraint, it does not guarantee full
+                                                                      are filled or all channels are blacklisted. The same procedure
+utilization of all channels at convergence. This step, therefore,
+                                                                      is then applied to all rounds within each sequence.
+aims to revive selected weights in underutilized channels
+                                                                         This step can also recover utilization losses caused by
+without introducing additional processing rounds.
+                                                                      constraints on the maximum MUX-T size. During the revival
+   As outlined in Algorithm 3, this step operates on each
+                                                                      process, any candidate that does not increase processing time
+processing round independently. For a given round, it first
+                                                                      can be accepted, allowing the algorithm to also fill gaps
+identifies target channels that contain unutilized PEs. It then
+                                                                      introduced by the limited routing range.
+iteratively explores candidate weights for revival within each
+kernel of the selected channels. For each row, the candidate is
+chosen as the pruned weight with the largest magnitude in the         B. Preliminary Evaluation of Hardware-Surgical Iterative
+original pretrained model. For each kernel, the magnitudes of         Pruning and Revival
+its candidate weights are summed to form a selection score.              In this subsection, we evaluate the effectiveness of the
+Among all kernels in the target channel, the kernel with the          proposed hardware-aware structured pruning and revival al-
+highest score is selected for weight revival. Fig. 17(n)–(p)          gorithm in improving the efficiency of SparHiXcel-v2. We
+illustrates the selection and revival process in this step, leading   first analyze the progression of inference speedup and model
+to full utilization of the remaining PEs and achieving 100%           accuracy across the pruning and revival phases using the
+PE utilization.                                                       VGG16 and ResNet18 models. We then present the final
+   To ensure that the revival does not increase processing time,      effective PE efficiency achieved with the proposed structured
+the updated layer is evaluated using the scheduler tool to deter-     pruning approach and compare the results with the techniques
+mine the resulting number of processing rounds. If the number         discussed in previous sections.
+of rounds increases, the candidate is rejected and added to a            Initial dense pretrained models are obtained from the
+blacklist for the corresponding channel and round. Otherwise,         Torchvision library. The models are retrained multiple times
+the revival is accepted. This validation step guarantees that         during the proposed structured pruning process using the
+                                                                                                                                               16
+
+
+
+ILSVRC2012 ImageNet dataset with a batch size of 256.
+Retraining is performed using stochastic gradient descent
+(SGD) with a momentum of 0.9 and a weight decay of 10−4
+under a cross-entropy loss objective. While a cosine annealing
+scheduler is employed during the initial pruning stages, the
+revival and QAT stages use a fixed, reduced learning rate (e.g.,
+10−3 ) to stabilize the optimization of the remaining weights.
+   In the first set of experiments, we evaluate how performance
+and model accuracy evolve across different phases of the
+proposed structured pruning algorithm when applied to rep-
+resentative layers of ResNet18 and VGG16. Fig. 18 illustrates
+the progression of performance improvement, measured in
+terms of Fitness (as defined in Eq. (4)), along with the
+corresponding model accuracy throughout the pruning process
+                                                                   Fig. 19. Comparison of effective PE efficiency and sparsity across four config-
+for the C4 3 st1 layer of ResNet18 and the Conv5 3 layer of        urations: dense processing, unstructured sparsity before ordering optimization,
+VGG16. The sparsity thresholds for terminating Phase 1 and         unstructured sparsity after ordering optimization, and SIPR-based structured
+Phase 2 are set to 25% and 75% for ResNet18, and 25% and           pruning, for (a) VGG16 and (b) ResNet18. Accuracy degradation is marginal
+                                                                   across all sparse models.
+70% for VGG16, respectively, in these tests.
+   In both Phase 1 and Phase 2, the maximum allowed accu-
+racy drop is set to 2%, and at least one epoch of retraining
+                                                                   within each round. As indicated in Fig. 18, this substantial
+is performed after each pruning step. If the accuracy drop
+                                                                   increase in revived weights leads to a temporary drop in
+stays more than 2%, retraining continues for up to 50 epochs
+                                                                   accuracy. However, accuracy recovers rapidly during the sub-
+until acceptable accuracy is recovered. Once the accuracy is
+                                                                   sequent 50-epoch retraining phase, as the model adapts to and
+restored, the next pruning step begins.
+                                                                   effectively utilizes the revived weights.
+   The results in Fig. 18 show that pruning in Phase 1 does
+not yield significant performance improvement, as its primary         Before and during Step 2, some unpruned weights may
+objective is to establish a balanced magnitude-based sparsity      have magnitudes close to zero. The scheduler treats these
+distribution across CNN layers rather than directly reducing       weights as negligible and therefore does not assign them to
+the number of kernel columns. This phase, therefore, provides      PEs during computation. However, subsequent retraining may
+a foundation that shapes the pruning patterns in the subsequent    increase their magnitudes, potentially altering PE assignment
+phases.                                                            patterns and affecting processing time. To prevent this, two
+   Building on this foundation, Phase 2 achieves a rapid           sanitization steps are applied before and during Step 2 to prune
+improvement in hardware efficiency, exhibiting a steep per-        weights with very small absolute values. This sanitization may
+formance gain with limited impact on model accuracy. This          introduce slight variations in the sparsity level during Phase 4,
+is mainly due to its pruning strategy, which prioritizes kernel    as observed in Fig. 18. Overall, the revival process in Phase 4
+rows where removing a weight most effectively contributes to       demonstrates a strong ability to compensate for the accuracy
+column-wise compression.                                           degradation introduced in the preceding pruning phases. This
+   The performance improvement closely follows the sparsity        is achieved while maintaining the same processing speed,
+level up to approximately 70%. Beyond this point, the rate of      despite a reduction in the effective sparsity of the layer.
+improvement begins to diminish, while accuracy degradation            For a comprehensive comparison of the final performance,
+becomes more pronounced. These observations motivate the           Fig. 19 presents the effective PE efficiency as well as the spar-
+transition to Phase 3, where hardware-aware pruning focuses        sity level for each layer of ResNet18 and VGG16 using four
+on reducing the number of processing rounds through fine-          approaches: (i) dense model, (ii) unstructured pruned model
+tuned sparsity patterns.                                           without ordering optimization, (iii) unstructured pruned model
+   Accordingly, the performance traces show a renewed in-          with ordering optimization, (iv) structured pruned model.
+crease during Phase 3. In this phase, the maximum allowable           Early convolutional layers are more sensitive to pruning
+accuracy drop is increased to 3% for ResNet18 and 3.5% for         [18]; aggressive sparsification can significantly degrade accu-
+VGG16, enabling more aggressive pruning and leaving room           racy. Accordingly, stricter sparsity constraints are applied to
+for the subsequent revival phase to recover part of the accuracy   early layers, while deeper layers are allowed higher sparsity
+loss.                                                              to maximize speedup within the accuracy budget. Specifically,
+   Since Phases 2 and 3 already enforce a balanced pruning         Conv1 1 in VGG16 is limited to 50% sparsity, and Conv1 in
+strategy, Step 1 of Phase 4 typically revives only a small num-    ResNet18 to 60%, with deeper layers permitted higher sparsity
+ber of weights, filling a limited number of previously unused      for improved hardware efficiency.
+PEs. After this step, the model is retrained for 30 epochs to         As the results in Fig. 19 show, the sparsity levels in the
+recover as much accuracy as possible before proceeding to          unstructured and structured pruned models can be slightly
+Step 2.                                                            different but remain very close, allowing a fair comparison.
+   In Step 2, a significantly larger number of weights are         The accuracy of all tested models also remains in a close
+revived by exploiting the unused PE capacity across channels       range. The results indicate that the proposed structured pruning
+                                                                                                                                                                          17
+
+
+
+                                                                      TABLE III
+                                   C OMPARISON OF E NERGY E FFICIENCY WITH P REVIOUS 8- BIT ACCELERATORS ON VGG16
+
+                                                                                               VGG16
+                   [13] TCAS-I’25     [10] TCAS-I’25      [14] TVLSI’25     [19] TVLSI’25       [20] TCAS-II’23   [21] TCAS-I’24      SparHiXcel-V2 (33 × 60), T = 10
+                                      Winograd and        70% Unstru.             -%                  -%               -%                   67%      67% Opt.     82%
+ Sparsity              Dense                                                                                                       Dense
+                                        Sparsity             Sparse            Sparse               Sparse           Sparse                Unstru. & Unstru.      Stru.
+Platform                VC709           VCU118             XCZU15EG            VCU118              VCU118            ZU3EG                      XCKU19P
+Clock (MHz)                300            300                 200                300                  200              150                         217
+Precision                 8-bit           8-bit               8-bit              8-bit             Fixed 4/8          8-bit                        8-bit
+LUT (K)                  310.00          601.00              231.84             433.59              151.33            40.78                       533.50
+FF (K)                   405.00            NA                  NA               267.66                NA              45.25                       549.18
+BRAM                       909            792                 1305               909                 259.5             118                         333
+DSP                       2432            1024                1907               1152                 533              257                         1080
+Top-1 Accuracy
+                           NA                 2.04∗∗             3.3               NA                1.88              1.7          0.00    -0.33∗     -0.33∗     1.67
+Drop (%)
+Top-5 Accuracy
+                           NA                   NA               NA                NA                 NA               0.70         0.00    -0.41∗     -0.41∗     0.71
+Drop (%)
+GOP/s                    1369.5              3064.00           1529.16          1284.43             622.84            211.83       709.21   1015.15   1122.54    2574.45
+Power (W)                 16.20               26.80              NA               11.70              4.68              1.398                       15.36
+GOP/s/W                   84.53               114.33             NA              109.78             132.94            151.52       58.23     83.35     92.16     211.37
+*
+  A negative accuracy drop indicates an improvement in accuracy compared to the dense model.
+**
+   The accuracy loss is reported to be at least 2.04% in [10].
+
+
+                                                                    TABLE IV
+                                C OMPARISON OF E NERGY E FFICIENCY WITH P REVIOUS 8- BIT ACCELERATORS ON R ES N ET 18
+
+                                                                                         ResNet18
+                  [13] TCAS-I’25      [22] TCAS-I’21     [23] TCAS-I’25     [24] ASPLOS’23   [25] FCCM’21         [26] APCCAS’20      SparHiXcel-V2 (33 × 45), T = 8
+                                           90%               87.2%                -%                 76.1%            60%                  84%      84% Opt.      79%
+ Sparsity        Dense                                                                                                             Dense
+                                          Sparse             Unstru.            Sparse               Sparse          Sparse               Unstru. & Unstru.       Stru.
+Platform              VC709               SX660              ZU9EG              ZU9EG                Z7045           GX1150                    XCKU19P
+Clock (MHz)             300                170                 200               187.5                150              199                        217
+Precision              8-bit               8-bit              8-bit              8-bit               16-bit           16-bit                      8-bit
+LUT (K)               310.00              102.60             439.00             105.00               218.60            NA                        550.05
+FF (K)                405.00                NA                 NA                 NA                  NA               NA                        393.25
+BRAM                    909                465∗                848                843                 546              NA                         332
+DSP                    2432                512                1536               2264                 900              640                        1080
+Top-1 Accuracy
+                         0.00              NA                  NA                 1.40                5.40             NA           0.00      NA        NA        3.25
+Drop (%)
+Top-5 Accuracy
+                         0.00              1.00                NA                 NA                  NA               NA           0.00     0.00       0.00      1.92
+Drop (%)
+GOP/s                  991.4              89.29              366.54              157.57              217.31           603.90       386.92   844.84     964.19    1106.65
+Power (W)              16.20               4.60               11.40               NA                  NA               NA                          12.18
+GOP/s/W                61.20              19.41               32.15               NA                  NA               NA           25.19    55.00      62.77     72.05
+∗
+  SRAM M20k .
+
+
+
+
+and revival method consistently achieves higher PE efficiency                             which offers a favorable balance between performance and
+across various layers.                                                                    cost, making it suitable for both high-performance and edge-
+  Overall, the results demonstrate that the proposed hardware-                            oriented applications.
+aware structured pruning achieves PE efficiency of 171.54%                                   A 33 × 60 and a 33 × 45 PE array configurations are
+and 299.59% for ResNet18 and VGG16, respectively. In                                      selected for evaluation of VGG16 and ResNet18, respectively.
+addition, it provides speedups of 2.86× for ResNet18 and                                  These configurations are sufficiently large to demonstrate the
+3.63× for VGG16 compared to the corresponding dense                                       performance benefits of SparHiXcel-v2 while fitting within
+models. These gains represent a substantial improvement over                              the resource constraints of the XCKU19P device. The de-
+both unstructured pruning without ordering optimization and                               sign is synthesized and implemented using Vivado 2024.2.
+unstructured pruning with ordering optimization.                                          Power consumption was obtained from AMD Vivado’s post-
+                                                                                          implementation power analysis.
+      IX. H ARDWARE I MPLEMENTATION R ESULTS AND                                             Table III illustrates the results and comparisons for VGG16
+                     C OMPARISONS                                                         inference. For SparHiXcel-v2, results are reported across dif-
+   This section presents the FPGA implementation results of                               ferent sparsity levels and optimization settings. The structured
+the selected SparHiXcel-v2 configuration and compares its                                 pruning approach achieves substantial improvements over
+performance, energy efficiency, and hardware cost against                                 the unstructured sparse model in both processing throughput
+state-of-the-art designs. The implementation is carried out                               (GOP/s) and energy efficiency (GOP/s/W). Notably, even the
+on an AMD-Xilinx XCKU19P Kintex UltraScale+ FPGA,                                         unstructured sparse configurations remain competitive with
+                                                                                                                                              18
+
+
+
+most prior works. Among the compared designs, only the             while incurring marginal accuracy degradation. The results
+accelerator by Meng et al. [10] reports higher throughput than     highlight the effectiveness of jointly optimizing architecture,
+our structured sparse results. However, this gain is achieved      dataflow, and sparsity patterns for high-efficiency CNN accel-
+by combining Winograd-based computation with sparsity, at          eration.
+the cost of a larger accuracy degradation. In addition, its re-       While the proposed design achieves strong performance,
+ported energy efficiency is significantly lower than that of our   certain limitations remain. In particular, V-Line contention
+structured pruning approach. Overall, SparHiXcel-v2 achieves       in 1 × 1 convolution layers can limit efficiency in some
+improvements of 58.3% and 263.0% in processing throughput          models. A potential solution is to augment the interconnect by
+over dense execution for the optimized unstructured and struc-     introducing additional V-Lines independent of PE columns, for
+tured sparse modes, respectively. The corresponding gains in       example, by duplicating selected V-Lines to increase routing
+energy efficiency are 58.2% and 263.0%.                            capacity. Exploring such enhancements, along with extending
+   Table IV presents the results and comparisons for the           the framework to other models and sparsity formats, is left for
+ResNet18 model. The results again demonstrate the superior         future work.
+processing speed and energy efficiency of SparHiXcel-v2
+compared to prior works, particularly in the structured sparse                          ACKNOWLEDGMENTS
+mode. Relative to dense execution, the processing throughput          We acknowledge the support of the Natural Sciences and
+improves by 149.2% and 186.0% in the optimized unstructured        Engineering Research Council of Canada (NSERC), [RGPIN-
+sparse and structured sparse configurations, respectively. The     2024-06358]. This research was enabled in part by support
+corresponding improvements in energy efficiency are 149.1%         provided by the Digital Research Alliance of Canada (alliance-
+and 186.0%.                                                        can.ca) and by Calcul Québec (calculquebec.ca). The authors
+   A comparison between Table III and Table IV shows that          used the GPT-5 language model to assist with proofreading for
+both processing speed and energy efficiency are higher for         clarity. All technical content, figures and analysis are solely
+VGG16 than for ResNet18. This trend is consistent with             the work of the authors.
+observations reported in prior work and can be attributed
+                                                                                                 R EFERENCES
+to two model-specific factors. First, several key layers in
+ResNet18 employ convolutions with a stride of 2, which              [1] H. Genc et al., “Gemmini: Enabling systematic deep-learning archi-
+                                                                        tecture evaluation via full-stack integration,” in 2021 58th ACM/IEEE
+reduces data reuse and negatively impacts the efficiency of             Design Automation Conference (DAC), 2021, pp. 769–774.
+weight-stationary dataflows. Second, ResNet18 includes an           [2] Y.-H. Chen, T. Krishna, J. S. Emer, and V. Sze, “Eyeriss: An energy-
+initial 7 × 7 convolution layer. This requires the architectural        efficient reconfigurable accelerator for deep convolutional neural net-
+                                                                        works,” IEEE J. Solid-State Circuits, vol. 52, no. 1, pp. 127–138, 2017.
+parameter N —the maximum number of kernel columns sup-              [3] E. Qin et al., “Sigma: A sparse and irregular gemm accelerator with
+ported within each PE (see Section III-B)—to be set to 7.               flexible interconnects for dnn training,” in 2020 IEEE Intl. Symp. on
+In contrast, VGG16 uses only 3 × 3 convolutions, allowing               High Performance Computer Architecture (HPCA), 2020, pp. 58–70.
+                                                                    [4] J.-F. Zhang, C.-E. Lee, C. Liu, Y. S. Shao, S. W. Keckler, and Z. Zhang,
+N = 3. As shown in Fig. 4, increasing N enlarges several                “Snap: An efficient sparse neural acceleration processor for unstructured
+PE components, including multiplexers and shift registers,              sparse deep neural network inference,” IEEE Journal of Solid-State
+thereby increasing the hardware cost per PE. This also explains         Circuits, vol. 56, no. 2, pp. 636–647, 2021.
+                                                                    [5] Y. Wang, C. Zhang, Z. Xie, C. Guo, Y. Liu, and J. Leng, “Dual-
+why SparHiXcel-v2 configured with a smaller PE array for                side sparse tensor core,” in 2021 ACM/IEEE 48th Annual International
+ResNet18 consumes a similar amount of hardware resources                Symposium on Computer Architecture (ISCA), 2021, pp. 1083–1095.
+as the VGG16 accelerator with a larger PE array.                    [6] X. Ma et al., “Non-structured dnn weight pruning—is it beneficial in
+                                                                        any platform?” IEEE Transactions on Neural Networks and Learning
+                                                                        Systems, vol. 33, no. 9, pp. 4930–4944, 2022.
+                                                                    [7] F. Farshchi, Q. Huang, and H. Yun, “Integrating nvidia deep learning
+                      X. C ONCLUSION                                    accelerator (nvdla) with risc-v soc on firesim,” in 2019 2nd Workshop
+                                                                        on Energy Efficient Machine Learning and Cognitive Computing for
+   This paper presented SparHiXcel-v2, a cost-effective and             Embedded Applications (EMC2), 2019, pp. 21–25.
+highly configurable FPGA-based CNN accelerator that en-             [8] M. Ahmadi, S. Vakili, and J. M. P. Langlois, “Carla: A convolution
+ables efficient sparsity-aware inference while maintaining low          accelerator with a reconfigurable and low-energy architecture,” IEEE
+                                                                        Transactions on Circuits and Systems I: Regular Papers, vol. 68, no. 8,
+hardware overhead. By introducing a column-wise kernel                  pp. 3184–3196, 2021.
+compression technique, a flexible PE assignment scheme,             [9] A. Zarei and S. Vakili, “Sparhixcel: A cost-effective sparsity-aware
+and a hardware–algorithm co-design framework, SparHiXcel-               convolutional accelerator,” in 2025 IEEE 38th International System-on-
+                                                                        Chip Conference (SOCC), 2025, pp. 1–6.
+v2 effectively bridges the gap between unstructured sparsity       [10] Y. Meng, C. Yang, Q. Fu, J. Wang, S. Xiang, G. Li, and L. Geng,
+flexibility and structured sparsity efficiency. The proposed            “An efficient cnn accelerator exploiting novel tile-based near-structured
+multi-phase structured pruning and revival algorithm further            sparsity to achieve multi-level irregularity elimination,” IEEE Transac-
+                                                                        tions on Circuits and Systems I: Regular Papers, vol. 72, no. 11, pp.
+enhances performance by jointly optimizing sparsity patterns            6578–6591, 2025.
+and hardware utilization.                                          [11] A. Parashar, M. Rhu, A. Mukkara, A. Puglielli, R. Venkatesan,
+   Extensive evaluations demonstrate that SparHiXcel-v2                 B. Khailany, J. Emer, S. W. Keckler, and W. J. Dally, “Scnn: An
+                                                                        accelerator for compressed-sparse convolutional neural networks,” in
+achieves significant improvements in both processing through-           Proceedings of the 44th Annual International Symposium on Computer
+put and energy efficiency. Implemented on a cost-effective              Architecture (ISCA), 2017, pp. 27–40.
+AMD Kintex UltraScale+ FPGA, the accelerator, in structured        [12] S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. A. Horowitz, and
+                                                                        W. J. Dally, “Eie: Efficient inference engine on compressed deep neural
+sparsity mode, achieves over 2.5 TOPS and 210 GOP/s/W for               network,” in Proceedings of the 43rd Annual International Symposium
+VGG16, and over 1.1 TOPS and 72 GOP/s/W for ResNet18,                   on Computer Architecture (ISCA), 2016, pp. 243–254.
+                                                                                   19
+
+
+
+[13] Y. Meng, J. Wang, S. Xiang, J. Hou, Z. Lin, K. Mei, and C. Yang,
+     “Rethinking the designing of convolution engine for reconfigurable cnn
+     accelerator using sparse-based design scheme,” IEEE Transactions on
+     Circuits and Systems I: Regular Papers, vol. 72, no. 8, pp. 3983–3996,
+     2025.
+[14] J. Guo, T. Xu, Z. Wu, and H. Xiao, “An efficient sparse cnn inference
+     accelerator with balanced intra- and inter-pe workload,” IEEE Transac-
+     tions on Very Large Scale Integration (VLSI) Systems, vol. 33, no. 5,
+     pp. 1278–1291, 2025.
+[15] A. Buluç et al, “Parallel sparse matrix-vector and matrix-transpose-
+     vector multiplication using compressed sparse blocks,” ser. SPAA ’09.
+     Association for Computing Machinery, 2009, p. 233–244.
+[16] J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. Fei-Fei, “Imagenet:
+     A large-scale hierarchical image database,” in 2009 IEEE Conference on
+     Computer Vision and Pattern Recognition, 2009, pp. 248–255.
+[17] S. Han, H. Mao, and W. J. Dally, “Deep compression: Compressing
+     deep neural networks with pruning, trained quantization and huffman
+     coding,” 2016. [Online]. Available: https://arxiv.org/abs/1510.00149
+[18] S. Han, J. Pool, J. Tran, and W. J. Dally, “Learning both weights and
+     connections for efficient neural networks,” 2015. [Online]. Available:
+     https://arxiv.org/abs/1506.02626
+[19] Y. Meng, J. Wang, Q. Fu, J. Hou, S. Xiang, G. Li, and C. Yang, “A high-
+     performance scnn accelerator using parallel sparsity detection and index-
+     oriented computation workflow,” IEEE Transactions on Very Large Scale
+     Integration (VLSI) Systems, vol. 33, no. 9, pp. 2449–2461, 2025.
+[20] X. Hu, X. Liu, Y. Liu, H. Zhang, X. Huang, X. Guan, L. Liang,
+     C. Y. Tsui, X. Xiong, and K.-T. Cheng, “A tiny accelerator for mixed-
+     bit sparse cnn based on efficient fetch method of simo spad,” IEEE
+     Transactions on Circuits and Systems II: Express Briefs, vol. 70, no. 8,
+     pp. 3079–3083, 2023.
+[21] B. Wu, T. Yu, K. Chen, and W. Liu, “Edge-side fine-grained sparse cnn
+     accelerator with efficient dynamic pruning scheme,” IEEE Transactions
+     on Circuits and Systems I: Regular Papers, vol. 71, no. 3, pp. 1285–
+     1298, 2024.
+[22] X. Xie, J. Lin, Z. Wang, and J. Wei, “An efficient and flexible accelerator
+     design for sparse convolutional neural networks,” IEEE Trans. Circuits
+     and Systems I: Regular Papers, vol. 68, no. 7, pp. 2936–2949, 2021.
+[23] B. Yao, L. Liu, Y. Peng, X. Peng, R. Xu, H. Liu, and H. Zhang,
+     “Eyelet: A cross-mesh noc-based fine-grained sparse cnn accelerator for
+     spatio-temporal parallel computing optimization,” IEEE Transactions on
+     Circuits and Systems I: Regular Papers, vol. 72, no. 4, pp. 1634–1647,
+     2025.
+[24] Y. Gao, B. Zhang, X. Qi, and H. K.-H. So, “Dpacs: Hardware
+     accelerated dynamic neural network pruning through algorithm-
+     architecture co-design,” in Proceedings of the 28th ACM International
+     Conference on Architectural Support for Programming Languages
+     and Operating Systems, Volume 2, ser. ASPLOS 2023. New York,
+     NY, USA: Association for Computing Machinery, 2023, p. 237–251.
+     [Online]. Available: https://doi.org/10.1145/3575693.3575728
+[25] S. I. Venieris, J. Fernandez-Marques, and N. D. Lane, “unzipfpga:
+     Enhancing fpga-based cnn engines with on-the-fly weights genera-
+     tion,” in 2021 IEEE 29th Annual International Symposium on Field-
+     Programmable Custom Computing Machines (FCCM), 2021, pp. 165–
+     175.
+[26] J. Wen, Y. Ma, and Z. Wang, “An efficient fpga accelerator optimized
+     for high throughput sparse cnn inference,” in 2020 IEEE Asia Pacific
+     Conference on Circuits and Systems (APCCAS), 2020, pp. 165–168.
+

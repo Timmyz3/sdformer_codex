@@ -1,0 +1,574 @@
+                                         Lonic: Algorithm-Hardware Co-Design for Energy-Efficient Fully
+                                                  Local Online SNN Training with INT4 Precision
+                                                                            Peilin Chen                                                               Xiaoxuan Yang
+                                                                       peilin@virginia.edu                                                        xiaoxuan@virginia.edu
+                                                                      University of Virginia                                                       University of Virginia
+                                                                     Charlottesville, VA, USA                                                     Charlottesville, VA, USA
+                                         Abstract
+                                         Spiking neural networks (SNNs) have recently attracted increas-
+                                         ing attention as an energy-efficient learning paradigm. Existing
+                                         works also propose temporally and fully local online SNN train-
+                                         ing algorithms to address memory and computation overhead.
+                                         However, they do not consider whether the algorithmic advan-
+                                         tages can be effectively translated into real-device efficiency. To
+                                         address this challenge, we present Lonic, an algorithm-hardware
+                                         co-design for energy-efficient and scalable fully local online su-                      Figure 1: Runtime profile of OTTT, SLTT, and TESS under
+arXiv:2608.12500v1 [cs.AR] 12 Aug 2026
+
+
+
+
+                                         pervised SNN learning. On the algorithm side, we implement an                           Nvidia GPU across four datasets (training batch size=1).
+                                         INT4 low-precision training algorithm for fully local online SNN
+                                         learning while maintaining accuracy. On the hardware side, to
+                                                                                                                                 neural networks (ANNs) that rely on continuous-valued activations,
+                                         leverage the benefits of the proposed algorithm, we introduce re-
+                                                                                                                                 SNNs transmit information via binary spikes encoded over time,
+                                         configurable multiplier-free integer PE arrays, dual-optimization
+                                                                                                                                 enabling high spatial/temporal sparsity and low-precision compu-
+                                         zero-gating strategy, temporal prefix-accelerated local learning
+                                                                                                                                 tation [11, 16, 28, 35]. To achieve competitive accuracy as ANNs,
+                                         dataflow, and low-precision weight movement to significantly im-
+                                                                                                                                 most SNN training frameworks adopt the backpropagation through
+                                         prove training efficiency. Compared to Apple M4 and Nvidia V100
+                                                                                                                                 time (BPTT) algorithm with surrogate gradient [8, 18, 33, 38]. How-
+                                         GPUs, Lonic achieves average energy efficiency improvements of
+                                                                                                                                 ever, BPTT is incompatible with biological online learning and
+                                         17.44x and 66.28x, respectively, along with speedups of 3.25x and
+                                                                                                                                 requires storing past inputs and states in memory [11, 16, 24, 33].
+                                         1.02x, respectively. Moreover, Lonic achieves 15.95x (14.64x) and
+                                                                                                                                 As a result, BPTT’s memory usage is proportional to the product
+                                         1.52x (7.28x) energy efficiency (area efficiency) over ASIC TPU-
+                                                                                                                                 of time and the number of neurons [11, 33].
+                                         like and H2Learn accelerators, respectively. The code for Lonic is
+                                                                                                                                    Prior work proposes various online SNN learning algorithms
+                                         available at https://github.com/peilin-chen/Lonic.
+                                                                                                                                 to address these problems [3, 24, 33]. OTTT [33] enables forward-
+                                         CCS Concepts                                                                            in-time learning by tracking presynaptic activities and leveraging
+                                                                                                                                 instantaneous gradients. SLTT [24] claims that temporal gradients
+                                         • Hardware → Application-specific VLSI designs.                                         are unimportant and should be abandoned to reduce time complex-
+                                                                                                                                 ity. Different from OTTT and SLTT, which rely on the global error
+                                         Keywords                                                                                backpropagation (temporally local learning), TESS [3] proposes a
+                                         Spiking neural networks, Fully local online learning, Energy effi-                      scalable temporally and spatially local SNN learning rule to address
+                                         ciency, Low-precision training                                                          both memory and computation overhead while maintaining com-
+                                         ACM Reference Format:                                                                   parable accuracy. However, TESS [3] only demonstrates theoretical
+                                         Peilin Chen and Xiaoxuan Yang. 2026. Lonic: Algorithm-Hardware Co-                      reductions in MAC operations (205x-661x) and does not explore
+                                         Design for Energy-Efficient Fully Local Online SNN Training with INT4                   whether these benefits translate into practical hardware efficiency.
+                                         Precision. In IEEE/ACM International Conference on Computer-Aided Design                To understand the real-device efficiency of the fully local learning
+                                         (ICCAD ’26), November 08–12, 2026, San Jose, CA, USA. ACM, New York, NY,                rule, we profile the training latency of OTTT, SLTT, and TESS on
+                                         USA, 9 pages. https://doi.org/10.1145/3831252.3833983                                   the VGG11 network using Nvidia GPU (Fig. 1). We can observe
+                                                                                                                                 that element-wise computations dominate the overall latency, as
+                                         1    Introduction                                                                       the small matrix multiplications under the online learning rule are
+                                         Spiking neural networks (SNNs) have emerged as a promising par-                         efficiently handled by the GPU. Moreover, the theoretical MAC
+                                         adigm for energy-efficient machine learning due to their event-                         reduction of TESS does not translate into hardware-level speedup.
+                                         driven computation and biological plausibility [11]. Unlike artificial                     Despite its success on large networks and datasets, the fully lo-
+                                                                                                                                 cal learning algorithm TESS rarely considers hardware efficiency,
+                                                                                                                                 making the theoretical computation reduction difficult to realize on
+                                         This work is licensed under a Creative Commons Attribution 4.0 International License.   real hardware. To bridge this gap, we propose Lonic, an algorithm-
+                                         ICCAD ’26, San Jose, CA, USA                                                            hardware co-design for energy-efficient and low-latency local on-
+                                         © 2026 Copyright held by the owner/author(s).
+                                         ACM ISBN 979-8-4007-2873-0/2026/11                                                      line SNN learning. At the algorithm level, Lonic enables INT4
+                                         https://doi.org/10.1145/3831252.3833983                                                 low-precision training for SNNs based on the fully local learning
+ICCAD ’26, November 08–12, 2026, San Jose, CA, USA                                                                 Peilin Chen and Xiaoxuan Yang
+
+
+
+
+Figure 2: Comparison of three training algorithms of SNNs: BPTT, temporally local online learning, and fully local online
+learning. 𝑠𝑡𝑙 , 𝑢𝑡𝑙 , and 𝑣𝑡𝑙 denote the spike output, membrane potential after charging, and membrane potential after resetting of
+layer 𝑙 at timestep 𝑡. 𝐿 and 𝑤 𝑙 represent the loss and weights of SNN in layer 𝑙. LSG represents the learning signal generator.
+
+
+paradigm without accuracy degradation, allowing matrix multi-             However, BPTT with surrogate gradients (SG) [26] propagates
+plications to be computed using integer arithmetic and facilitat-      gradients along both temporal and spatial dimensions (Fig. 2(b)),
+ing low-overhead hardware implementation. At the hardware              which suffers from significant memory overhead and is inconsis-
+level, Lonic proposes a specialized training accelerator that trans-   tent with biological online learning [33]. Different from BPTT, tem-
+lates algorithmic advantages introduced by low-precision training      porally local online learning, such as OTTT [33] and SLTT [24],
+into practical hardware efficiency via multiplier-free integer PEs,    ignores the temporal dependency during error backpropagation
+increased weight sparsity, reduced off-chip data movement, etc.        and enables forward-in-time training, as shown in Fig. 2(c). To fur-
+Specifically, the contributions of this work are as follows:           ther reduce computational overhead, fully local online learning [3]
+   (1) To the best of our knowledge, Lonic is the first work to        relies only on locally available signals for spatial gradient rather
+       implement an INT4 low-precision training algorithm for          than global backpropagation across layers (Fig. 2(d)). The weight
+       fully local online SNN learning while maintaining accuracy.     gradient of this process can be formulated as follows:
+   (2) We design three types of multiplier-free PE arrays, includ-                                                            
+                                                                                    𝑡 ⊙𝛼 𝑝𝑟𝑒 Ψ 𝑢𝑡
+                                                                          ∇𝑤𝑡𝑙 = 𝑚𝑙+1                                                ⊗𝑠𝑡𝑙 , (4)
+                                                                                                  𝑙+1
+       ing reconfigurable PE supporting INT4/8/16, binary-ternary                                        ⊗𝑞𝑙+1     𝑙+1
+                                                                                                           𝑡 + 𝑚𝑡 ⊙𝛼 𝑝𝑜𝑠𝑡 ℎ𝑡
+                                                                                                                               𝑙+1
+
+       PE, and ternary-INT8/16 PE, to efficiently execute matrix          𝑞𝑙+1 = 𝜆𝑝𝑟𝑒 𝑞𝑙+1     𝑙
+                                                                                                                                             (5)
+                                                                                       𝑡 −1 + 𝑠𝑡 ,
+       multiplication using integer arithmetic.                            𝑡
+                                                                                                       
+   (3) We propose a dual-optimization zero-gating strategy that           ℎ𝑙+1
+                                                                           𝑡              𝑡 −1 + Ψ 𝑢𝑡 −1 ,
+                                                                                 = 𝜆𝑝𝑜𝑠𝑡 ℎ𝑙+1       𝑙+1
+                                                                                                                                             (6)
+       leverages spike sparsity and weight sparsity introduced by
+       low-precision training flow to reduce energy and improve        where ⊙ and ⊗ represent the element-wise and outer product, re-
+       throughput simultaneously.                                      spectively. 𝑞𝑙+1
+                                                                                     𝑡   and ℎ𝑙+1
+                                                                                              𝑡   are the recurrent variables. 𝛼 𝑝𝑟𝑒 and 𝜆𝑝𝑟𝑒
+   (4) We introduce a temporal prefix-accelerated local learning       control the magnitude and decay of the causal term, whereas 𝛼 𝑝𝑜𝑠𝑡
+       dataflow to enable simultaneous forward, backward, and          and 𝜆𝑝𝑜𝑠𝑡 characterize the non-causal term [4, 13]. Ψ(·) is an acti-
+       weight update across all timesteps for single SNN layer.        vation function that plays a role similar to SG. Moreover, the right
+   (5) Benefit from the low-precision training algorithm, Lonic        side of Fig. 2(d) demonstrates the generation of local learning signal
+       transfers only weights with INT4 bit-width between the            𝑡 , which can be formulated by the following equation:
+                                                                       𝑚𝑙+1
+       accelerator and off-chip memory to reduce data movement.                                                             
+                                                                                         𝑚𝑙+1
+                                                                                           𝑡  = (𝐵𝑙+1 )𝑇 𝑓 (𝐵𝑙+1𝑠𝑡𝑙+1 ) − 𝑦 ∗ ,           (7)
+2 Background
+2.1 Online Learning Algorithm for SNNs                                 where 𝐵𝑙+1 is the projection matrix (or fixed ternary matrix) [2] that
+                                                                       captures task-relevant information for the layer, 𝑓 (·) is the softmax
+As illustrated in Fig. 2, SNN training algorithms can be catego-
+                                                                       function, and 𝑦 ∗ denotes the labels. These learning methods rely on
+rized based on their temporal and spatial dependencies in gradient
+                                                                       floating-point (FP) matrix multiplications, and we aim to achieve
+propagation, ranging from BPTT to fully local online learning.
+                                                                       energy-efficient low-precision training for fully local online SNN
+These three learning rules share the same forward process (Fig. 2(a)
+                                                                       learning.
+and (d)) based on the popular leaky integrate-and-fire (LIF) neu-
+ron [12, 21], which can be formulated as follows:
+                                                                       2.2    Scaled Weight Standardization in SNNs
+                           𝑢𝑡𝑙+1 = 𝛽𝑣𝑡𝑙+1    𝑙 𝑙
+                                       −1 + 𝑤 𝑠𝑡 ,               (1)
+                                                                       Batch normalization (BN) [15, 27] is widely adopted in deep learning
+                           𝑠𝑡𝑙+1 = Θ(𝑢𝑡𝑙+1 − 𝜃 ),                (2)   to stabilize network training. However, BN relies on batch-level
+                                                                       statistics, making it unsuitable for online SNN learning, where a
+                           𝑣𝑡𝑙+1 = 𝑢𝑡𝑙+1 − 𝜃𝑠𝑡𝑙+1,               (3)
+                                                                       single training sample is provided at a time (batch size=1) [21]. To
+where 𝛽 is the leaky constant, modeling the decay of potential at      solve this issue, prior works such as OTTT [33], SLTT [24], and
+each timestep. Θ(𝑥) denotes the Heaviside step function. 𝜃 repre-      TESS [3] replace BN with scaled weight standardization (sWS) to
+sents the firing threshold.                                            eliminate the dependency on large batch sizes [27]. Specifically, the
+Lonic: Algorithm-Hardware Co-Design for Energy-Efficient Fully Local Online SNN Training with INT4 Precision          ICCAD ’26, November 08–12, 2026, San Jose, CA, USA
+
+
+
+
+Figure 3: Overview of the low-precision training flow under the fully local online SNN learning paradigm. 𝐶𝑖𝑛 /𝐶𝑜𝑢𝑡 , 𝐾ℎ /𝐾𝑤 , 𝑏𝑠,
+𝐻 /𝑊 , and 𝑁 represent input/output channel size, kernel height/width, batch size, feature map height/width, and class number.
+
+sWS can be formulated as follows:                                                       3 Lonic Algorithm Design
+                                 𝑤𝑖,𝑗 − 𝜇 𝑤𝑖,.
+                    𝑤ˆ 𝑖,𝑗 = 𝛾 ·       √ ,                                   (8)        3.1 Low Precision Training Algorithm for SNNs
+                                  𝜎𝑤𝑖,. 𝑁                                               Fully local SNN learning enables training signals to be computed lo-
+where 𝑤𝑖,𝑗 , 𝑤ˆ 𝑖,𝑗 , 𝑁 , 𝛾, 𝜇 𝑤𝑖,. , and 𝜎𝑤𝑖,. denote the original weight, stan-       cally and independently within each layer at each timestep (Fig. 2(d)),
+dardized weight, fan-in, scaling factor, and the mean and variance                      making it particularly suitable for low-precision training. Since gra-
+of weights, respectively. Although sWS for online SNN learning                          dients are generated locally without long-range dependency, the
+achieves comparable performance to BN with large batch sizes [33],                      introduced quantization errors do not accumulate across timesteps
+it introduces substantial hardware-unfriendly element-wise com-                         and layers. Based on this observation, we devise a novel low-precision
+putations, which dominate the overall latency. as shown in Fig. 1.                      training flow to reduce the computational overhead of general ma-
+Therefore, we need to replace this method with hardware-friendly                        trix multiplication (GEMM).
+computations to achieve efficient fully local online SNN learning.                         As illustrated in Fig. 3, fully local learning involves three types
+                                                                                        of GEMM operations across forward and backward passes: 1 𝑊 𝑙 𝑠𝑡𝑙
+2.3     Conventional PTQ and QAT                                                        for forward computation, and 2 𝑠𝑡𝑙+1 (𝐵𝑙+1 )𝑇 and 3 𝑒𝑡𝑙+1 𝐵𝑙+1 for
+Post-training quantization (PTQ) quantizes a pretrained floating-                       learning signal generation. The key idea behind our low-precision
+point model without retraining [14, 23, 34]. Quantization-aware                         training flow is to quantize the FP inputs of GEMM, perform integer-
+training (QAT) incorporates a fake quantization module (quanti-                         based GEMM, and then dequantize the results back to FP. This
+zation and dequantization operations) during training to simulate                       design trades off quantization error for significantly reduced train-
+quantization effects [36]. Therefore, computations are still per-                       ing cost, unlike QAT, which uses fake quantization and still relies
+formed in FP for QAT. Despite their effectiveness, PTQ and QAT                          on FP computation. Specifically, we adopt the hardware-friendly
+are primarily designed to improve inference performance rather                          per-output-channel symmetric quantization [37] in our training
+than reduce training cost. In fact, QAT even introduces additional                      flow. GEMM 1 in Fig. 3 can be formulated as follows:
+training overhead due to the fake quantization operation, making                                                               𝑊 𝑙 (𝐹 𝑃32)
+it more computationally expensive than standard FP training. To                               𝑊 𝑙 (𝐼 𝑁𝑇 𝑋 ) = 𝑐𝑙𝑖𝑝 (𝑟𝑜𝑢𝑛𝑑 (                ), −2𝑋 −1, 2𝑋 −1 ),        (9)
+                                                                                                                                    𝑓1
+improve the training efficiency of fully local online SNN learning,
+                                                                                              𝑢𝑡𝑙+1 (𝐹 𝑃32) = 𝑓1 × (Conv(𝑊 𝑙 (𝐼 𝑁𝑇 𝑋 ), 𝑠𝑡𝑙 )),                      (10)
+we propose a novel INT4 low-precision training flow that is distinct
+from PTQ and QAT, while preserving the accuracy (Section 3).                                                     𝑚𝑎𝑥 (|𝑊 𝑙 (𝐹 𝑃32)𝑚𝑎𝑥 |, |𝑊 𝑙 (𝐹 𝑃32)𝑚𝑖𝑛 |)
+                                                                                                         𝑓1 =                                               ,        (11)
+                                                                                                                                  2𝑋 −1
+2.4     Related SNN Training Accelerator                                                where 𝑓1 and 𝑋 denote the scale factor and integer bit-width, respec-
+Most existing works [22, 32, 35] focus on improving the efficiency                      tively. Our experiments show that the INT4 precision for GEMM 1
+of SNN inference by exploiting the inherent sparsity. For example,                      is sufficient to maintain training accuracy in some cases (Section 5.2).
+Prosperity [32] proposes product sparsity that uses the combinato-                      Different from GEMM 1 , GEMM 2 and 3 incur negligible quan-
+rial similarity feature in SNN activations to reduce computations.                      tization error, as 𝐵𝑙+1 is a ternary matrix with values in {−𝜖, 0, +𝜖},
+In contrast, hardware support for SNN training is limited, particu-                     where 𝜖 is a FP data, making its quantization inherently lossless.
+larly for the online SNN learning paradigm. H2Learn [20] targets at                     Although quantization of 𝑒𝑡𝑙+1 (𝐹 𝑃32) in GEMM 3 introduces error,
+reducing the overhead of BPTT-based SNN training. Although one                          it is negligible in practice at INT8/16 precision due to the small
+recent study [29] implements specialized hardware for its proposed                      batch size (bs=1) and limited class number. GEMM 2 and 3 can
+BP-based online SNN learning algorithm, it is constrained to the                        be formulated by following equations:
+small-scale dataset MNIST. To the best of our knowledge, Lonic                                   𝑧𝑡𝑙+1 (𝐹 𝑃32) = 𝑓2 × GEMM(𝑠𝑡𝑙+1, (𝐵𝑙+1 (𝑇 𝑒𝑟𝑛𝑎𝑟𝑦))𝑇 ),              (12)
+is the first accelerator to enable energy-efficient and scalable fully
+local online supervised training for SNNs.                                                 𝑓2 = 𝑚𝑎𝑥 |𝐵   𝑙+1
+                                                                                                               (𝐹 𝑃32)𝑚𝑎𝑥 |,   𝐵   𝑙+1
+                                                                                                                                         (𝑇 𝑒𝑟𝑛𝑎𝑟𝑦) ∈ {−1, 0, +1},   (13)
+ICCAD ’26, November 08–12, 2026, San Jose, CA, USA                                                                            Peilin Chen and Xiaoxuan Yang
+
+
+Algorithm 1 One training iteration of Lonic for layer 𝑙
+Input: Network parameters 𝑤 𝑙 , 𝛼𝑡𝑙 ; SNN timestep 𝑇 ; Learning rate
+    𝜂; Projection matrix 𝐵𝑙 ; Other required training parameters.
+ 1: Initialize: ∇𝑤 𝑙 =0.
+ 2: for 𝑡 = 0, 1, . . . ,𝑇 −1 do
+ 3:    Forward: Calculate 𝑢𝑡𝑙+1 , 𝑠𝑡𝑙+1 , and 𝑣𝑡𝑙+1 using equation (1), (2),
+       (3), (9), (10), (11) (weight 𝑤 𝑙 is rescaled and centralized by
+       equation (15));
+ 4:    Backward: Calculate instantaneous ∇𝑤𝑡𝑙 and ∇𝛼𝑡𝑙 by equation
+       (4)-(7), (12)-(14), and the corresponding gradient of (15);
+ 5:    Weight gradient accumulation: ∇𝑤 𝑙 =∇𝑤 𝑙 + ∇𝑤𝑡𝑙 ;
+ 6: end for                                                                      Figure 4: Lonic training accelerator’s overall architecture.
+ 7: Parameter update: 𝑤 𝑙 = 𝑤 𝑙 − 𝜂∇𝑤 𝑙 , 𝛼𝑡𝑙 = 𝛼𝑡𝑙 − 𝜂∇𝛼𝑡𝑙 ;                    The sizes of PE array (type 0/1/2) are 8×8, 4×4, and 8×8 PEs.
+Output: Trained SNN parameters 𝑤 𝑙 , 𝛼𝑡𝑙 .
+                                                                                 memory. This converts FP32 weight transfers into low-precision
+                                                                                 integer movement, thus reducing off-chip memory access.
+ 𝑚𝑙+1                      𝑙+1
+  𝑡 (𝐹 𝑃32)=𝑓2 ×𝑓3 ×(GEMM(𝑒𝑡 (𝐼 𝑁𝑇 𝑋 ), 𝐵
+                                          𝑙+1
+                                              (𝑇 𝑒𝑟𝑛𝑎𝑟𝑦))), (14)                 4 Lonic Hardware Architecture
+where 𝑓3 and 𝑒𝑡𝑙+1 (𝐼 𝑁𝑇 𝑋 ) are calculated in the same manner as
+                                                                                 4.1 Overview of Lonic Architecture
+𝑓1 in (11) and 𝑊 𝑙 (𝐼 𝑁𝑇 𝑋 ) in (9), respectively. Note that GEMM
+ 1 (𝐶𝑜𝑢𝑡 ∗𝐻 ∗𝑊 ∗𝐶𝑖𝑛 ∗𝐾ℎ ∗𝐾𝑤 ) dominates the overall computation                  To translate algorithmic benefits into practical hardware efficiency,
+cost among the three GEMM operations, and thus we focus on                       we design the specialized accelerator that enables energy-efficient
+minimizing its bit-width while maintaining training accuracy.                    and scalable fully local online supervised learning for SNNs. As
+   Moreover, to avoid the hardware-unfriendly sWS mentioned                      shown in Fig. 4, Lonic consists of 10 reconfigurable compute en-
+in Section 2.2, we propose using the scaled weight centralization                gines (RCEs), a 160-KB global SRAM, a memory controller, a single
+through time (sWCTT) [9] to achieve the same normalization effect                instruction multiple data (SIMD) engine, and a top controller. Each
+as sWS. The sWCTT can be described as follows:                                   RCE is responsible for one timestep in fully local online learning,
+                                                                                 and the 10 RCEs together enable simultaneous forward, backward,
+            𝑤 𝑙𝑡,𝑖,𝑗 = 𝑤𝑡,𝑖,𝑗
+                        𝑙
+                              − 𝜇 𝑤𝑙 , 𝑤ˆ 𝑡𝑙 = 𝛼𝑡𝑙 𝑤 𝑙𝑡 , 𝑤𝑡𝑙 = 𝑤 𝑙 ∀𝑡,   (15)   and weight update across all timesteps. The main components of
+                                   𝑡,𝑖,.
+                                                                                 the RCE are the on-chip quantizer (OCQ), data compressor (DCOM),
+where 𝑤𝑡𝑙 , 𝑤 𝑙𝑡 , and 𝑤ˆ 𝑡𝑙 denote the original, centralized, and scaled        PE arrays (type 0/1/2), on-chip dequantizer (OCDQ), pre-trace/post-
+weights, respectively. 𝛼𝑡𝑙 is a timestep-wise learnable parameters               trace calculators, and FP unit. OCQ, PE arrays, and OCDQ are uti-
+that rescales the centralized weights 𝑤 𝑙𝑡 . Compared to sWS, sWCTT              lized to support the proposed low-precision training flow in Fig. 3.
+avoids computing variance and simplifies gradient computation.                   DCOM leverages spike sparsity and weight sparsity introduced in
+                                                                                 GEMM 1 to achieve dual-optimization zero gating (Section 4.3).
+3.2     Overall Pseudo-code Implementation                                       Moreover, the SIMD engine performs element- and vector-wise
+Algorithm 1 describes the complete training procedure for a single               operations, such as max pooling, softmax, and LIF layers.
+SNN layer under the fully local online learning paradigm. At each
+timestep, forward computation updates neuronal states and gen-                   4.2    Reconfigurable Integer PE Design
+erates spike outputs based on the low-precision weights (Line 3).                We implement three types of reconfigurable multiplier-free inte-
+The backward process then computes instantaneous gradients for                   ger PE (Fig. 5) for GEMM 1 / 2 / 3 to leverage the benefits of the
+∇𝑤𝑡𝑙 and ∇𝛼𝑡𝑙 using locally available information (Line 4). Finally,             proposed low-precision training flow.
+model parameters are updated after processing all timesteps in a                     PE type 0. It supports configurable weight precision (INT4/8/16)
+single training iteration (Line 5 and 7).                                        through a mode-controlled bit-sliced architecture, enabling flexible
+                                                                                 trade-offs between accuracy and efficiency. The 16-bit weight is
+3.3     Hardware-friendly Properties                                             decomposed into four 4-bit segments (𝑤 0 −𝑤 3 ) by the weight slicer.
+The proposed low-precision training flow brings multiple key ad-                 The spike mapper selects the valid activation bits based on the
+vantages for energy-efficient SNN learning hardware implementa-                  mode (e.g., all 4 bits are used in INT4 mode). The sign generator
+tion. First, it allows integer processing elements (PEs) to replace FP           and shift enabler further adapt to the selected mode by determining
+PEs, leading to significant reductions in hardware area and power                the signed/unsigned extension and shift bit-width of 𝑤 0 /𝑤 1 /𝑤 2 /𝑤 3 .
+consumption (Section 4.2). Second, it introduces additional sparsity             For example, in INT16 mode, only 𝑤 3 is sign-extended, while 𝑤 1 ,
+beyond the inherent spike sparsity (Section 4.3). For example, in                𝑤 2 , and 𝑤 3 are left-shifted by 4, 8, and 12 bits, respectively. Three
+GEMM 1 , the quantized 𝑊 𝑙 (𝐼 𝑁𝑇 𝑋 ) contains more zero values                   INT16 adders and one INT32 adder are utilized to complete the
+compared to its FP counterpart 𝑊 𝑙 (𝐹 𝑃32). Third, it effectively re-            accumulation in Fig. 5(a). The partial result is accumulated over
+duces off-chip weight movement during training (Section 4.5). Since              multiple cycles, and the 𝑑𝑜𝑛𝑒 signal is asserted once the processed
+integer weights are directly used in GEMM 1 , updated weights                    data reaches the preset 𝑣𝑜𝑙𝑢𝑚𝑒. Note that PE type 0 achieves a
+can be quantized on-chip before being written back to off-chip                   throughput ratio of 4:2:1 under INT4, INT8, and INT16 modes.
+Lonic: Algorithm-Hardware Co-Design for Energy-Efficient Fully Local Online SNN Training with INT4 Precision      ICCAD ’26, November 08–12, 2026, San Jose, CA, USA
+
+
+
+
+Figure 5: Reconfigurable integer PE design. (a) PE type 0 that supports INT4/8/16. (b) Binary-ternary PE type 1. (c) Ternary-
+INT8/16 PE type 2. Ctrl.-Controller, Tr.-Transformer, Gen.-Generator, and En.-Enabler.
+
+
+
+
+                                                                                        Figure 7: Illustration of the proposed temporal prefixed-
+                                                                                        accelerated local SNN learning dataflow. FWD-Forward,
+                                                                                        BWD-Backward, and WU-Weight update.
+                                                                                        further proposes a structured 2:4 sparsity pattern to improve both
+                                                                                        throughput and energy efficiency. In contrast, we aim to fully
+                                                                                        exploit unstructured sparsity in weights and spikes, translating
+       Figure 6: Dual-optimization zero-gating method.
+                                                                                        algorithmic advantages into hardware efficiency through a dual-
+                                                                                        optimization zero-gating strategy (Fig. 6). Specifically, we design a
+   PE type 1. It is designed to efficiently complete the binary-ternary                 data compressor (DCOM) (Fig. 4) that processes spikes and integer
+GEMM 2 in Fig. 3. Due to the small output feature map size (𝑁 ),                        weights to extract and forward only non-zero act.-weight pairs to
+the processing parallelism is set to 8 to accelerate each output                        the PE array. As shown in Fig. 6, act. and weight indexers inside
+element’s computation. Specifically, 16-bit weights (ternary 𝐵𝑙 ) are                   DCOM first generate binary masks indicating non-zero data en-
+decomposed into eight 2-bit segments, while activations (spikes)                        tries. These masks are combined via bit-wise AND operations to
+are sliced into eight 1-bit segments. The signals 𝑠 0 −𝑠 7 determine                    identify valid act.-weight pairs. Based on the resulting mask, only
+whether 𝑤 0 −𝑤 7 contribute to the computation via multiplexers,                        non-zero pairs are extracted from the original inputs. For example,
+thus skipping zero operations. To reduce hardware overhead, a                           the pairs (𝑎 0, 𝑤 0 ) and (𝑎 6, 𝑤 6 ) are selected, yielding 𝑣𝑜𝑙𝑢𝑚𝑒=2 for
+lightweight three-level adder tree is adopted, consisting of INT3,                      PE0. Since the PE array contains 64 PEs, a data alignment step is
+INT4, and INT5 adders at each level, respectively. The INT32 adder                      introduced after data extraction to synchronize inputs across all
+and 𝑑𝑜𝑛𝑒 signal serve the same function as those in PE type 0.                          PEs, enabling simultaneous completion of computation and reduc-
+   PE type 2. It supports two modes for the ternary-INT8/16 GEMM                        ing control complexity. PEs with smaller 𝑣𝑜𝑙𝑢𝑚𝑒𝑠 are zero-padded
+ 3 in Fig. 3. Different from PE type 0, the input activations are                       to match the maximum 𝑣𝑜𝑙𝑢𝑚𝑒, and the aligned data are processed
+two ternary segments, where the value −1 requires sign inversion                        in parallel by 64 PEs. During execution, underutilized PEs apply
+of the corresponding weights. In INT8 mode, 𝑡 0 and 𝑡 1 determine                       zero-gating in later cycles, while fully loaded PEs remain active. For
+whether the 𝑤 0 and 𝑤 1 should be negated. In contrast, in INT16                        instance, PE0 performs computation in the first two cycles followed
+mode, the original 16-bit weight is first negated through the weight                    by zero-gating, whereas PE63 remains active across all cycles.
+transformer before being sliced into 𝑤 0 and 𝑤 1 , since independently
+negating 𝑤 0 /𝑤 1 leads to incorrect results.                                           4.4     Temporal Prefix-accelerated Dataflow
+                                                                                        Leveraging the characteristics of fully local online SNN learning, we
+4.3     Dual-optimization Zero-gating Strategy                                          design a temporal prefix-accelerated (TPA) local training dataflow (Fig. 7)
+To leverage the benefits of our low-precision training flow, which                      to improve throughput and reduce off-chip data movement (or on-
+introduces additional sparsity (Section 3.3), we are inspired to use                    chip memory pressure). Unlike conventional training flow that
+spike and weight sparsity to reduce energy consumption and im-                          processes each timestep’s forward (FWD), backward (BWD), and
+prove throughput simultaneously. Prior works [7, 10, 35] exploit                        weight update (WU) in order, the TPA dataflow enables simultane-
+activation (act.) sparsity or joint act.-weight sparsity to skip redun-                 ous FWD, BWD, and WU across all timesteps for single SNN layer.
+dant computations, reducing energy consumption. NVIDIA [25]                             As shown in Fig. 7, since all timesteps’ inputs to the first layer are
+ICCAD ’26, November 08–12, 2026, San Jose, CA, USA                                                                                          Peilin Chen and Xiaoxuan Yang
+
+
+Table 1: Performance comparison of different temporally and fully local online learning algorithms on CIFAR-10, CIFAR-
+100, DVS-CIFAR10, and DVS128-Gesture using NVIDIA GPU. “–” indicates results that are not reported, as GPU cannot
+exploit the hardware-level advantages of the proposed low-precision training method. GEMM 1 : 𝐼 𝑁𝑇 4/8/16−𝑆𝑝𝑖𝑘𝑒, GEMM 2 :
+𝑆𝑝𝑖𝑘𝑒−𝑇 𝑒𝑟𝑛𝑎𝑟𝑦, and GEMM 3 : 𝑇 𝑒𝑟𝑛𝑎𝑟𝑦−𝐼 𝑁𝑇 8.
+      Dataset     Method             Network              Params   Timesteps   Local Learning        Accuracy        Training Time/Epoch (s)   Training Energy/Epoch (J)
+                   OTTT            VGG11 (sWS)            9.23M        6       Partial (in time)       92.47%                2,829.10                   525,395.45
+                   SLTT            VGG11 (sWS)            9.23M        6       Partial (in time)       92.47%                2,048.03                   397,490.18
+                   TESS            VGG11 (sWS)            9.23M        6             Yes               89.49%                2,186.60                   447,864.42
+      CIFAR-10     Lonic         VGG11 (sWCTT)            9.22M        6             Yes               88.55%                1,826.20                   336,972.94
+                   Lonic   VGG11 (sWCTT+INT4 training)    9.22M        6             Yes               88.80%                   –                           –
+                   Lonic   VGG11 (sWCTT+INT8 training)    9.22M        6             Yes               87.80%                   –                           –
+                   Lonic   VGG11 (sWCTT+INT16 training)   9.22M        6             Yes               89.36%                   –                           –
+                   OTTT            VGG11 (sWS)            9.27M        6       Partial (in time)       70.16%                2,886.71                   524,567.27
+                   SLTT            VGG11 (sWS)            9.27M        6       Partial (in time)       70.29%                2,095.40                   401,829.07
+                   TESS            VGG11 (sWS)            9.27M        6             Yes               64.64%                2,195.90                   447,479.07
+    CIFAR-100      Lonic         VGG11 (sWCTT)            9.27M        6             Yes               63.62%                1,783.50                   333,700.62
+                   Lonic   VGG11 (sWCTT+INT4 training)    9.27M        6             Yes               62.66%                   –                           –
+                   Lonic   VGG11 (sWCTT+INT8 training)    9.27M        6             Yes               63.26%                   –                           –
+                   Lonic   VGG11 (sWCTT+INT16 training)   9.27M        6             Yes               63.10%                   –                           –
+                   OTTT            VGG11 (sWS)            9.23M       10       Partial (in time)       76.80%                  962.6                    180,017.09
+                   SLTT            VGG11 (sWS)            9.23M       10       Partial (in time)       78.70%                 707.94                    128,350.70
+                   TESS            VGG11 (sWS)            9.23M       10             Yes               75.60%                 720.68                    139,658.86
+  DVS-CIFAR10      Lonic         VGG11 (sWCTT)            9.22M       10             Yes               75.90%                 607.19                    111,159.12
+                   Lonic   VGG11 (sWCTT+INT4 training)    9.22M       10             Yes               75.60%                    –                          –
+                   Lonic   VGG11 (sWCTT+INT8 training)    9.22M       10             Yes               75.20%                    –                          –
+                   Lonic   VGG11 (sWCTT+INT16 training)   9.22M       10             Yes               75.80%                    –                          –
+                   OTTT            VGG11 (sWS)            9.23M       20       Partial (in time)       97.22%                 348.15                    72,046.33
+                   SLTT            VGG11 (sWS)            9.23M     20 (10)    Partial (in time)   97.92% (96.88%)        208.54 (120.74)          47,133.58 (25,468.13)
+                   TESS            VGG11 (sWS)            9.23M     20 (10)          Yes           97.22% (95.14%)        240.15 (123.30)          56,784.64 (29,173.64)
+                   Lonic         VGG11 (sWCTT)            9.22M     20 (10)          Yes           96.53% (95.49%)        198.73 (104.68)          46,533.55 (21,493.76)
+                   Lonic   VGG11 (sWCTT+INT4 training)    9.22M     20 (10)          Yes           96.18% (95.49%)               –                           –
+                   Lonic   VGG11 (sWCTT+INT8 training)    9.22M     20 (10)          Yes           96.88% (95.14%)               –                           –
+ DVS128-Gesture    Lonic   VGG11 (sWCTT+INT16 training)   9.22M     20 (10)          Yes           96.88% (95.14%)               –                           –
+
+
+available beforehand during training, the FWD computation can
+be parallelized across all timesteps (prefix-accelerated). Although
+temporal dependencies exist between timesteps, they only involve
+the 𝛽𝑣𝑡𝑙+1
+        −1 term in equation 1, which can be efficiently computed
+by the FPU module within RCE. Therefore, the induced delay is
+negligible and does not hinder the simultaneous execution across
+all timesteps. Moreover, the BWD computation across timesteps
+relies only on local learning signals, enabling it to be performed
+independently after the FWD pass. After all timesteps complete the
+BWD process for the current layer, the WU is executed on the SIMD
+engine using the accumulated partial weight gradients. Note that
+intermediate data generated during the FWD pass can be directly
+reused by the subsequent BWD pass. As a result, they are buffered
+in global SRAM without off-chip write-back, and are overwritten                      Figure 8: Data movement reduction via low-precision weight
+after reuse by the next layer’s intermediate data.                                   transfer during training (FWD, BWD, and WU).
+
+4.5      Off-chip Data Movement Reduction via                                        timestep, which are then written back to off-chip memory. Dur-
+         INT4 Weight Transfer                                                        ing WU, partial gradients from all timesteps are aggregated on the
+                                                                                     SIMD engine to update the weights. In the second round, the up-
+To further translate algorithmic advantages into hardware effi-                      dated weights are quantized into low-precision integers and written
+ciency, we propose a low-precision weight transfer scheme that                       back to off-chip memory. At the 2𝑛𝑑 iteration, different from the 1𝑠𝑡
+reduces off-chip data movement during training. Fig. 8 illustrates                   iteration, only low-precision integer weights are loaded during the
+the workflow in the Lonic accelerator during the 1𝑠𝑡 and 2𝑛𝑑 train-                  FWD pass instead of FP32 weights, while other operations remain
+ing iterations for a given layer. At the 1𝑠𝑡 iteration, the initialized              unchanged. Therefore, this scheme enables all subsequent iterations
+FP32 weights are loaded into global SRAM. During the FWD pass,                       to use low-precision weight transfer for loading and write-back
+they are quantized, compressed by DCOM, and processed by PE                          during FWD and WU, reducing off-chip memory access.
+array (type 0) for GEMM 1 , followed by dequantization and LIF
+computation on the SIMD engine. During the BWD pass, the 𝐵                           5 Experimental Results and Analysis
+matrix is first loaded on-chip. In the first round (solid line), quan-
+tized data are processed by PE array (type 1) to perform GEMM 2 ,                    5.1 Experimental Setup
+followed by cross-entropy computation on the SIMD engine. In the                     Algorithm setup. We evaluate the proposed Lonic algorithm on
+second round (dashed line), PE array (type 2) performs GEMM 3 ,                      CIFAR-10 [17], CIFAR-100 [17], CIFAR10-DVS [19], and DVS128-
+and the SIMD engine computes weight gradients for the current                        Gesture [1] to demonstrate its superior performance regarding
+Lonic: Algorithm-Hardware Co-Design for Energy-Efficient Fully Local Online SNN Training with INT4 Precision     ICCAD ’26, November 08–12, 2026, San Jose, CA, USA
+
+
+
+
+Figure 9: Test accuracy of baseline method and Lonic algo-
+rithm under different precision settings. (a) CIFAR-10. (b)
+CIFAR-100. (c) DVS-CIFAR10. (d) DVS128-Gesture.                                         Figure 11: Area and power breakdown of Lonic accelerator.
+
+                                                                                       + low precision training) still achieves competitive results compared
+                                                                                       to the SOTA baseline, as shown in Table 1. Since PE array (type
+                                                                                       0) supports reconfigurable weight precision, we report the results
+                                                                                       of Lonic with different configurations sWCTT+INT4/8/16 training.
+                                                                                       (1) Accuracy. We observe that Lonic exhibits only marginal accu-
+                                                                                       racy degradation compared to TESS across all cases. Specifically,
+                                                                                       Lonic (sWCTT+INT4) exhibits an average accuracy drop of 0.67%,
+                                                                                       while Lonic (sWCTT+INT8) and (sWCTT+INT16) show average
+                                                                                       drops of 0.76% and 0.36%, respectively. We can flexibly select differ-
+                                                                                       ent training settings based on accuracy requirements. (2) Latency.
+                                                                                       Lonic (sWCTT) achieves a 16.67% reduction on average in training
+                                                                                       latency compared to TESS due to the hardware-friendly weight
+                                                                                       centralization method from our algorithm. The latency and energy
+    Figure 10: The Layout of our 28nm Lonic accelerator.                               reduction of low-precision settings are not reported here, as GPU
+                                                                                       cannot translate algorithm-level benefits into real-device efficiency.
+training overhead and accuracy. We use the VGG11 network archi-                        (3) Energy. In terms of training energy, Lonic (sWCTT) achieves an
+tecture with a lightweight classifier for all experiments [30]. The                    average reduction of 22.99% over baseline across all cases.
+training epoch and batch size of online SNN learning are set to                            Training convergence of Lonic. As shown in Fig. 9, the Lonic
+100 and 1, respectively. Prior local learning algorithms,including                     algorithm demonstrates similar convergence behavior to the TESS
+OTTT [33], SLTT [24], and TESS [3], are used as baseline.                              baseline across all datasets. Moreover, different precision config-
+   Hardware setup. We implement the Lonic training accelerator                         urations (INT4/8/16) exhibit nearly identical convergence trends,
+at the RTL-level using Verilog. We synthesize the Lonic accelerator                    indicating that the proposed low-precision training method does
+using Synopsys Design Compiler [31] to estimate the area and                           not affect training stability and validates the robustness of Lonic.
+power at 1 GHz under the TSMC 28nm node. The global SRAM
+is created utilizing the TSMC memory compiler. We place and                             5.3     Lonic Accelerator Evaluation
+route using Cadence Innovus [5] to generate the final layout, as                        Area and power breakdown. Lonic training accelerator’s total
+shown in Fig. 10. The energy consumption of off-chip memory                             area and power are 15.47 mm2 and 4.05 W, respectively. Fig. 11
+HBM2 (5.7pJ/b) is adopted from [6]. Moreover, we develop a cycle-                       presents a detailed area and power breakdown of Lonic. The PE
+accurate simulator to evaluate the Lonic accelerator’s performance                      arrays (type 0/1/2) only account for 5.63% of area and 5.48% of power,
+under different tasks.                                                                  mainly due to the use of integer PEs instead of FP units. To support
+   Baselines. Due to the lack of SOTA hardware baselines on                             the proposed dual-optimization zero-gating strategy, the data com-
+fully local online SNN learning, we compare the Lonic acceler-                          pressor only incurs 2.07% in area and 3.24% in power. To enable
+ator with Nvidia V100 GPU, Apple M4 GPU (10 cores), and TPU-                            efficient on-chip (de)quantization within our low-precision training
+like (18.18𝑚𝑚 2 @28nm) and H2Learn [20] (110.46𝑚𝑚 2 @28nm) train-                       flow, the quantizer and dequantizer together introduce 15.68% cost
+ing accelerators. Note that we implement the TPU-like baseline                          in area and 22.78% cost in power. Among the remaining modules,
+with 1444 FP PEs, where a systolic array replaces the RCEs in Fig. 4,                   FPU is a dedicated on-chip unit with a parallelism of 64 to efficiently
+and evaluate it under our simulator framework.                                          perform MAC operations, alleviating the processing pressure on
+                                                                                        the SIMD engine. In addition, pre-trace and post-trace calculators
+5.2     Lonic Training Algorithm Performance                                            are necessary components to support gradient computation in fully
+Comparison with TESS baseline. The proposed Lonic algorithm                             local online SNN learning.
+is designed for energy-efficient fully local online SNN learning                           Comparison with GPUs. We benchmark the Lonic training
+rather than optimizing for the best accuracy. However, Lonic (sWCTT                     accelerator against edge M4 (10 cores) and server V100 GPUs,
+ICCAD ’26, November 08–12, 2026, San Jose, CA, USA                                                                           Peilin Chen and Xiaoxuan Yang
+
+
+
+
+Figure 12: Normalized training throughput (iteration/s) (a) and energy efficiency (iteration/J) (b) of Lonic accelerator compared
+to Apple M4 and Nvidia V100 GPUs on both static and neuromorphic datasets.
+
+Table 2: Normalized training throughput, energy efficiency,
+and area efficiency of Lonic co-design compared to TPU-like
+and H2Learn ASIC accelerators.
+                           Norm. Throughput Norm. Energy Eff. Norm. Area Eff.
+  Algorithm @ Hardware
+                              (iteration/s)   (iteration/J)   (iteration/s/mm2 )
+  Lonic(sWCTT)@TPU-like          1.00×              1.00×            1.00×
+  Lonic(sWCTT)@H2Learn          12.70×             10.48×            2.01×
+ Lonic(sWCTT+INT4)@Lonic        12.46×             15.95×            14.64×
+
+
+as shown in Fig. 12. Note that the Lonic accelerator adopts the
+proposed low-precision training setting (sWCTT+INT4), whereas                             Figure 13: Ablation study of Lonic accelerator.
+GPUs use the full-precision setting (sWCTT), since GPUs cannot
+effectively exploit our Lonic algorithm. We observe that Lonic                     we use the energy-delay product (EDP) as the evaluation metric.
+achieves 3.25x throughput and 17.44x energy efficiency on average                  As shown in Fig. 13, compared to the TPU-like accelerator base-
+across different tasks compared to the M4 GPU. Moreover, Lonic                     line, Lonic with integer PE arrays, specialized architecture, and
+delivers 1.02x and 66.28x improvement in throughput and energy                     low-precision training algorithm achieves a 39.28x EDP reduction.
+efficiency over the V100 GPU, respectively. The relatively limited                 By further introducing the TPA local learning dataflow, the EDP
+throughput gain over V100 GPU stems from the constrained paral-                    reduction is significantly improved to 170.54x. The proposed dual-
+lelism of the PE arrays within each RCE. This limitation becomes                   optimization zero-gating strategy provides additional gains, es-
+more obvious on the DVS128-Gesture dataset, where the large                        pecially for the large GEMM workloads in the DVS128-Gesture
+128×128 input feature map leads to substantial GEMM computa-                       dataset, increasing the EDP reduction to 181.48x. Finally, by reduc-
+tions. In this scenario, V100 GPU can better leverage its massive                  ing off-chip data movement through INT4 weight transfer, Lonic
+parallel processing capability, achieving up to 5.98x speedup, com-                achieves the highest EDP reduction of 198.62x.
+pared to 3.40x for Lonic.                                                             Scalability study of Lonic accelerator. Lonic accelerator can
+   Comparison with ASIC training accelerators. Similar to                          scale to support the training of large SNN models (e.g., VGGs and
+GPUs, TPU-like and H2Learn accelerators also adopt the full-precision              ResNets), as the SIMD engine enables efficient execution of various
+training setting (sWCTT), as their architectures are not designed to               element-wise and vector-wise operations. We benchmark TPU-like,
+support the proposed Lonic algorithm and instead rely on FP units                  H2Learn, and Lonic accelerators under the VGG16 SNN model with
+for GEMM computation. Throughput. As shown in Table 2, Lonic ex-                   a lightweight classifier across different datasets. We observe that
+hibits 12.46x speedup on average compared to the TPU-like design.                  Lonic achieves average speedups of 9.73x and 1.02x over the TPU-
+However, we observe that Lonic only achieves slight throughput                     like and H2Learn accelerators, respectively. Lonic also outperforms
+improvements over H2Learn on CIFAR-10, CIFAR-100, and DVS-                         TPU-like and H2Learn in energy efficiency, achieving 12.29x and
+CIFAR10 datasets. H2Learn also outperforms Lonic in throughput                     1.43x improvements, respectively. Moreover, Lonic delivers 11.44x
+on DVS128-Gesture. This is because H2Learn is designed with a                      and 7.58x improvement in area efficiency compared to TPU-like
+larger chip area (110.46𝑚𝑚 2 @28nm) and higher computation capa-                   and H2Learn, respectively.
+bility (27.85TFLOPS, 1.8x of V100 GPU), allowing it to efficiently
+process the large GEMM workloads. Nevertheless, Lonic, enabled                     6   Conclusion
+by the proposed optimization methods, still achieves comparable                    We present Lonic, an algorithm-hardware co-design framework
+throughput to H2Learn on average. Energy Efficiency. Compared                      for energy-efficient and scalable fully local online supervised SNN
+to TPU-like and H2Learn, Lonic achieves 15.95x and 1.52x energy                    learning. On the algorithm side, we propose an INT4 low-precision
+efficiency, respectively. Area Efficiency. In terms of area efficiency,            training flow for fully local online SNN learning while maintaining
+due to its smaller area footprint, Lonic achieves 14.64x and 7.28x                 the accuracy. On the hardware side, we leverage reconfigurable
+improvements over TPU-like and H2Learn, respectively.                              multiplier-free integer PEs, dual-optimization zero-gating scheme,
+   Ablation study on proposed techniques. We conduct an abla-                      TPA local learning dataflow, and low-precision weight movement to
+tion study to evaluate the effectiveness of the proposed optimization              significantly improve training efficiency. Lonic provides a promising
+methods. All results are reported as averages across different train-              solution for energy-efficient local online SNN training by bridging
+ing tasks. To jointly consider throughput and energy efficiency,                   algorithmic efficiency and hardware acceleration.
+Lonic: Algorithm-Hardware Co-Design for Energy-Efficient Fully Local Online SNN Training with INT4 Precision                 ICCAD ’26, November 08–12, 2026, San Jose, CA, USA
+
+
+References                                                                                    [23] Zaidao Mei and Qinru Qiu. 2026. S-OPTQ: Rapid Quantization for Spiking Vision
+ [1] Arnon Amir, Brian Taba, David Berg, Timothy Melano, Jeffrey McKinstry,                        Transformers. In 2026 27th International Symposium on Quality Electronic Design
+     Carmelo Di Nolfo, Tapan Nayak, Alexander Andreopoulos, Guillaume Garreau,                     (ISQED). IEEE, 1–7.
+     Marcela Mendoza, et al. 2017. A low power, fully event-based gesture recogni-            [24] Qingyan Meng, Mingqing Xiao, Shen Yan, Yisen Wang, Zhouchen Lin, and
+     tion system. In Proceedings of the IEEE conference on computer vision and pattern             Zhi-Quan Luo. 2023. Towards memory-and time-efficient backpropagation for
+     recognition. 7243–7252.                                                                       training spiking neural networks. In Proceedings of the IEEE/CVF international
+ [2] Marco PE Apolinario, Arani Roy, and Kaushik Roy. 2025. LLS: local learning rule               conference on computer vision. 6166–6176.
+     for deep neural networks inspired by neural activity synchronization. In 2025            [25] Asit Mishra, Jorge Albericio Latorre, Jeff Pool, Darko Stosic, Dusan Stosic, Ganesh
+     IEEE/CVF Winter Conference on Applications of Computer Vision (WACV). IEEE,                   Venkatesh, Chong Yu, and Paulius Micikevicius. 2021. Accelerating sparse deep
+     7807–7816.                                                                                    neural networks. arXiv preprint arXiv:2104.08378 (2021).
+ [3] Marco PE Apolinario, Kaushik Roy, and Charlotte Frenkel. 2025. Tess: A scalable          [26] Emre O Neftci, Hesham Mostafa, and Friedemann Zenke. 2019. Surrogate gradi-
+     temporally and spatially local learning rule for spiking neural networks. In 2025             ent learning in spiking neural networks: Bringing the power of gradient-based
+     International Joint Conference on Neural Networks (IJCNN). IEEE, 1–9.                         optimization to spiking neural networks. IEEE Signal Processing Magazine 36, 6
+ [4] Marco Paul E Apolinario and Kaushik Roy. 2023. S-TLLR: STDP-inspired temporal                 (2019), 51–63.
+     local learning rule for spiking neural networks. arXiv preprint arXiv:2306.15220         [27] Siyuan Qiao, Huiyu Wang, Chenxi Liu, Wei Shen, and Alan Yuille. 2019. Micro-
+     (2023).                                                                                       batch training with batch-channel normalization and weight standardization.
+ [5] Cadence. [n. d.].        Innovus implementation system - cadence.               https:        arXiv preprint arXiv:1903.10520 (2019).
+     //www.cadence.com/en_US/home/tools/digital-design-and-signoff/soc-                       [28] Haoxuan Shan, Chiyue Wei, Xiaoxuan Yang, Cong Guo, Hai Li, and Yiran Chen.
+     implementation-and-floorplanning/innovus-implementation-system.html.                          2025. Neuromorphic computing in the era of large models. Artificial Intelligence
+     Accessed: July 2025.                                                                          Science and Engineering 1, 1 (2025), 17–30.
+ [6] Niladrish Chatterjee, Mike O’Connor, Donghyuk Lee, Daniel R Johnson,                     [29] Ali Siddique, Mang I Vai, and Sio Hang Pun. 2023. A low cost neuromorphic
+     Stephen W Keckler, Minsoo Rhu, and William J Dally. 2017. Architecting an                     learning engine based on a high performance supervised SNN learning algorithm.
+     energy-efficient dram system for gpus. In 2017 IEEE International Symposium on                Scientific Reports 13, 1 (2023), 6280.
+     High Performance Computer Architecture (HPCA). IEEE, 73–84.                              [30] Karen Simonyan and Andrew Zisserman. 2014. Very deep convolutional networks
+ [7] Peilin Chen and Xiaoxuan Yang. 2025. Titanus: Enabling kv cache pruning and                   for large-scale image recognition. arXiv preprint arXiv:1409.1556 (2014).
+     quantization on-the-fly for llm acceleration. In Proceedings of the Great Lakes          [31] Synopsys. [n. d.]. Design compiler - synopsys. https://www.synopsys.com/
+     Symposium on VLSI 2025. 71–77.                                                                implementation-and-signoff/rtl-synthesis-test/dc-ultra.html. Accessed: October
+ [8] Peilin Chen and Xiaoxuan Yang. 2026. SpiKint: Native Full-Integer Spiking Neural              2025.
+     Networks Training with an Efficient CIM-based Accelerator. In Proceedings of             [32] Chiyue Wei, Cong Guo, Feng Cheng, Shiyu Li, Hao Frank Yang, Hai Helen Li, and
+     the Great Lakes Symposium on VLSI 2026. 479–486.                                              Yiran Chen. 2025. Prosperity: Accelerating spiking neural networks via product
+ [9] Peilin Chen and Xiaoxuan Yang. 2026. SpikON: A Dual-Parallel and Efficient                    sparsity. In 2025 IEEE International Symposium on High Performance Computer
+     Accelerator for Online Spiking Neural Networks Learning. arXiv preprint                       Architecture (HPCA). IEEE, 806–820.
+     arXiv:2606.30926 (2026).                                                                 [33] Mingqing Xiao, Qingyan Meng, Zongpeng Zhang, Di He, and Zhouchen Lin.
+[10] Yu-Hsin Chen, Tushar Krishna, Joel S Emer, and Vivienne Sze. 2016. Eyeriss:                   2022. Online training through time for spiking neural networks. Advances in
+     An energy-efficient reconfigurable accelerator for deep convolutional neural                  neural information processing systems 35 (2022), 20717–20730.
+     networks. IEEE journal of solid-state circuits 52, 1 (2016), 127–138.                    [34] Huanrui Yang, Xiaoxuan Yang, Neil Zhenqiang Gong, and Yiran Chen. 2022.
+[11] Jason K Eshraghian, Max Ward, Emre O Neftci, Xinxin Wang, Gregor Lenz, Girish                 Hero: Hessian-enhanced robust optimization for unifying and improving gen-
+     Dwivedi, Mohammed Bennamoun, Doo Seok Jeong, and Wei D Lu. 2023. Training                     eralization and quantization performance. In Proceedings of the 59th ACM/IEEE
+     spiking neural networks using lessons from deep learning. Proc. IEEE 111, 9                   design automation conference. 25–30.
+     (2023), 1016–1054.                                                                       [35] Ruokai Yin, Youngeun Kim, Di Wu, and Priyadarshini Panda. 2024. Loas: Fully
+[12] Wei Fang, Yanqi Chen, Jianhao Ding, Zhaofei Yu, Timothée Masquelier, Ding                     temporal-parallel dataflow for dual-sparse spiking neural networks. In 2024 57th
+     Chen, Liwei Huang, Huihui Zhou, Guoqi Li, and Yonghong Tian. 2023. Spiking-                   IEEE/ACM International Symposium on Microarchitecture (MICRO). IEEE, 1107–
+     jelly: An open-source machine learning infrastructure platform for spike-based                1121.
+     intelligence. Science Advances 9, 40 (2023), eadi1480.                                   [36] Jiaqi Zhang. 2025. Survey of Quantization-Aware Training (QAT) Applications in
+[13] Wulfram Gerstner, Marco Lehmann, Vasiliki Liakoni, Dane Corneil, and Johanni                  Deep Learning Quantization. In Proceedings of the 2025 International Symposium
+     Brea. 2018. Eligibility traces and plasticity on behavioral time scales: experimental         on Artificial Intelligence and Computational Social Sciences. 431–442.
+     support of neohebbian three-factor learning rules. Frontiers in neural circuits 12       [37] Xiandong Zhao, Ying Wang, Xuyi Cai, Cheng Liu, and Lei Zhang. 2020. Linear
+     (2018), 53.                                                                                   symmetric quantization of neural networks for low-precision integer hardware.
+[14] Song Han, Huizi Mao, and William J Dally. 2015. Deep compression: Compressing                 In International Conference on Learning Representations.
+     deep neural networks with pruning, trained quantization and huffman coding.              [38] Hanle Zheng, Yujie Wu, Lei Deng, Yifan Hu, and Guoqi Li. 2021. Going deeper
+     arXiv preprint arXiv:1510.00149 (2015).                                                       with directly-trained larger spiking neural networks. In Proceedings of the AAAI
+[15] Sergey Ioffe and Christian Szegedy. 2015. Batch normalization: Accelerating deep              conference on artificial intelligence, Vol. 35. 11062–11070.
+     network training by reducing internal covariate shift. In International conference
+     on machine learning. pmlr, 448–456.
+[16] Haiyan Jiang, Giulia De Masi, Huan Xiong, and Bin Gu. 2024. Ndot: Neuronal
+     dynamics-based online training for spiking neural networks. In Forty-first Inter-
+     national Conference on Machine Learning.
+[17] Alex Krizhevsky, Geoffrey Hinton, et al. 2009. Learning multiple layers of features
+     from tiny images. (2009).
+[18] Yann LeCun, Léon Bottou, Yoshua Bengio, and Patrick Haffner. 2002. Gradient-
+     based learning applied to document recognition. Proc. IEEE 86, 11 (2002), 2278–
+     2324.
+[19] Hongmin Li, Hanchao Liu, Xiangyang Ji, Guoqi Li, and Luping Shi. 2017. Cifar10-
+     dvs: an event-stream dataset for object classification. Frontiers in neuroscience 11
+     (2017), 244131.
+[20] Ling Liang, Zheng Qu, Zhaodong Chen, Fengbin Tu, Yujie Wu, Lei Deng, Guoqi
+     Li, Peng Li, and Yuan Xie. 2021. H2learn: High-efficiency learning accelerator
+     for high-accuracy spiking neural networks. IEEE transactions on computer-aided
+     design of integrated circuits and systems 41, 11 (2021), 4782–4796.
+[21] Jesus L Lobo, Javier Del Ser, Albert Bifet, and Nikola Kasabov. 2020. Spiking
+     neural networks and online learning: An overview and perspectives. Neural
+     Networks 121 (2020), 88–100.
+[22] Ruixin Mao, Lin Tang, Xingyu Yuan, Ye Liu, and Jun Zhou. 2024. Stellar: Energy-
+     efficient and low-latency snn algorithm and hardware co-design with spatiotem-
+     poral computation. In 2024 IEEE International Symposium on High-Performance
+     Computer Architecture (HPCA). IEEE, 172–185.
+

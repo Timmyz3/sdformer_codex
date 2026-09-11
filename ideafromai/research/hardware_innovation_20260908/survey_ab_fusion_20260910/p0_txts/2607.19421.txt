@@ -1,0 +1,753 @@
+                                          Opto-ViT-v2: Noise-Resilient On-Chip Fine-Tuning for Photonic
+                                                  Near-Sensor Vision Transformer Accelerators
+                                                        Xuming Chen                                      Deniz Najafi                            Mehrdad Morsali
+                                                   xuming.chen@case.edu                               dn339@njit.edu                            mm2772@njit.edu
+                                               Case Western Reserve University               New Jersey Institute of Technology          New Jersey Institute of Technology
+                                                            USA                                             USA                                         USA
+
+                                                       Chengwei Zhou                            Zahra Ghanaatianjobzari                            Mahdi Nikdast
+                                                  chengwei.zhou@case.edu                      Zahra.Ghanaatian@colostate.edu                mahdi.nikdast@colostate.edu
+                                               Case Western Reserve University                   Colorado State University                   Colorado State University
+                                                            USA                                            USA                                         USA
+
+                                                                               Shaahin Angizi                               Gourav Datta
+                                                                         shaahin.angizi@njit.edu                      gourav.datta@case.edu
+                                                                     New Jersey Institute of Technology           Case Western Reserve University
+                                                                                    USA                                        USA
+                                         ABSTRACT                                                                 1   INTRODUCTION
+arXiv:2607.19421v1 [cs.AR] 20 Jul 2026
+
+
+
+
+                                         Silicon-photonic (SiPh) accelerators have emerged as a promis-           Vision Transformers (ViTs) [1] have become the dominant back-
+                                         ing platform for Vision Transformer (ViT) inference, achieving           bone for tasks spanning image classification, object detection, and
+                                         high throughput and energy efficiency by performing matrix multi-        video understanding, owing to their scalable self-attention mech-
+                                         plications on microring-resonator (MRR) banks. Extending these           anism and strong transfer-learning capability. The standard de-
+                                         platforms to support on-chip fine-tuning, however, has remained          ployment paradigm pretrains a ViT on a large-scale dataset (e.g.,
+                                         an open problem: backpropagation demands large activation stor-          ImageNet-21K) and then fully fine-tunes it on each downstream
+                                         age that exceeds typical on-chip buffer capacity, weight write-back      task. This paradigm, however, poses two compounding challenges
+                                         to MRR banks after each gradient step is prohibitively slow, and         for resource-constrained edge systems. First, the dense matrix mul-
+                                         device-level noise corrupts both forward and backward computa-           tiplications in multi-head self-attention (MHSA) and feed-forward
+                                         tion. We present Opto-ViT-v2, the first framework that enables           network (FFN) blocks are computationally intensive, demanding
+                                         parameter-efficient fine-tuning (PEFT) on a near-sensor SiPh ViT         accelerator-class hardware even for inference. Second, adapting
+                                         accelerator. We propose a tensorized low-rank decomposition of the       the model to new domains requires updating tens of millions of
+                                         weight increments that separates pretrained weights (executed on         parameters, a process that is memory- and energy-prohibitive on
+                                         the optical cores) from a small set of trainable factors (as few as 8K   embedded platforms.
+                                         parameters for ViT-Base) that reside and are updated entirely in the        Silicon-photonic (SiPh) accelerators offer an attractive path to-
+                                         electronic domain. This decomposition dramatically reduces both          ward addressing the inference challenge. By encoding weights
+                                         the activation storage required during backpropagation and the           onto microring-resonator (MRR) banks and performing multiply-
+                                         number of weight write-back operations, making on-chip training          accumulate (MAC) operations via wavelength-division multiplexing
+                                         feasible within the memory and tuning constraints of the pho-            (WDM), architectures such as CrossLight [2], Lightator [3], and
+                                         tonic architecture. We further introduce a gradient-accumulated          Opto-ViT [4] have demonstrated inference throughput exceeding
+                                         sparse head that freezes low-importance classifier weights via one-      100 KFPS/W with significant energy savings over digital baselines.
+                                         shot top-𝑘 gradient masking, reducing the head training budget           These systems stream pretrained weight matrices onto MRR arrays
+                                         by ∼40%. To evaluate training under realistic hardware conditions,       layer by layer and execute the ViT inference pipeline through a
+                                         we develop the first system-level noise model for photonic on-chip       hybrid electronic-photonic dataflow.
+                                         training, characterizing how MRR crosstalk, thermal drift, and laser        The second challenge, on-chip fine-tuning, remains unsolved for
+                                         amplitude noise propagate through both forward and backward              photonic platforms. Three fundamental constraints make backpropa-
+                                         passes. Calibrated against >200 fabricated MRR devices, this model       gation-based training difficult on SiPh hardware. (i) Activation stor-
+                                         enables evaluation of PEFT methods under photonic noise and re-          age: Backpropagation requires intermediate activations from the
+                                         veals that low-rank factor updates exhibit greater robustness than       forward pass to compute parameter gradients during the backward
+                                         full fine-tuning or per-layer low-rank adaptation under identical        pass. Storing them on-chip alongside the weight parameters far
+                                         noise conditions. Evaluated on VTAB-1K (19 tasks) and FGVC few-          exceeds the buffer memory capacity of current photonic architec-
+                                         shot benchmarks using a full-stack device-to-application co-design       tures; recomputing them from scratch for each layer during the
+                                         framework, Opto-ViT-v2 recovers within 0.3-0.8% of clean-software        backward pass, while possible, multiplies the number of optical core
+                                         accuracy under measured photonic noise, achieving >100 KFPS/W            invocations and is prohibitively expensive. (ii) Weight write-back:
+                                         throughput and enabling, for the first time, on-chip domain adapta-      In standard fine-tuning, updated weights must be written back to
+                                         tion at the photonic sensor edge.
+ICCAD ’26, November 8–12, 2026, San Jose, CA, USA                                                                                    X. Chen et al.
+
+
+the MRR banks after each gradient step. Repeated over many mini-
+batches and epochs, this write-back process dominates latency and
+energy, fundamentally limiting training throughput. (iii) Device
+noise: Photonic MAC operations are subject to fabrication variabil-
+ity, thermal crosstalk between adjacent MRRs, and laser relative
+intensity noise, all of which corrupt both forward activations and
+backward gradient signals, degrading training convergence.
+   Parameter-efficient fine-tuning (PEFT) methods offer a path for-      Figure 1: Architecture overview of a standard ViT encoder that processes
+ward by dramatically reducing the number of trainable parameters.        patch embeddings through 𝐿 MHSA–FFN layers with layer normalization and
+                                                                         residuals.
+Methods such as LoRA [5], visual prompt tuning (VPT) [6], and
+adapters [7] have shown that updating fewer than 1% of a ViT’s pa-       (3) Full-stack evaluation with photonic training noise model.
+rameters can match or exceed full fine-tuning accuracy on diverse        The first system-level noise model for photonic on-chip training is
+downstream tasks [8–10]. Recent work on tensorized decomposi-            designed, capturing how MRR crosstalk, thermal drift, and laser am-
+tion of weight increments [8] has pushed this further, achieving         plitude noise propagate through both forward and backward passes.
+competitive accuracy with as few as 0.01% of trainable parameters        Calibrated against measurements from >200 fabricated MRR de-
+by exploiting both intra-layer and cross-layer redundancy. How-          vices, the model enables realistic evaluation of PEFT methods under
+ever, no prior work has investigated how to map PEFT training onto       photonic noise. Using a full-stack device-to-application framework,
+photonic hardware, or whether the reduced parameter footprint            we show that Opto-ViT-v2 recovers within 0.3–0.8% of noise-free
+translates into concrete architectural benefits under the activation     accuracy while achieving >100 KFPS/W, and that low-rank factor
+storage, write-back, and noise constraints of SiPh accelerators.         updates exhibit improved robustness compared to full fine-tuning
+   In this paper, we present Opto-ViT-v2, the first framework en-        and per-layer adaptation.
+abling on-chip PEFT on a near-sensor silicon-photonic ViT accelerator,
+targeting real-world vision tasks. We show that a tensorized low-        2   BACKGROUND & RELATED WORK
+rank decomposition of weight increments is not merely parameter-         Vision Transformer Architecture: As shown in Fig. 1, A Vi-
+efficient in the software sense, but directly addresses all three pho-   sion Transformer (ViT) [1] partitions an input image into non-
+tonic training bottlenecks: the small trainable factors require orders   overlapping patches, projects each patch into a 𝑑-dimensional
+of magnitude less activation caching during backpropagation, elim-       embedding, and processes the resulting sequence through 𝐿 en-
+inate MRR weight write-back entirely (since pretrained weights           coder blocks. Each block consists of a multi-head self-attention
+remain static on the optical cores), and confine all parameter up-       (MHSA) module followed by a feed-forward network (FFN), with
+dates to the electronic domain where they are immune to photonic         layer normalization and residual connections around each sub-
+noise. Our contributions are as follows.                                 layer. In MHSA, the input X ∈ R𝑁 ×𝑑 (where 𝑁 is the number of
+(1) First on-chip photonic PEFT via hardware–algorithm co-               patches) is projected into queries, keys, and values via weight matri-
+design. We develop a tensorized low-rank decomposition strategy          ces W𝑄 , W𝐾 , W𝑉 ∈ R𝑑 ×𝑑 , which are further divided into 𝑁ℎ heads
+co-designed with the Opto-ViT-v2 framework: pretrained weights           of dimension 𝑑𝑘 = 𝑑/𝑁ℎ . The self-attention output for head 𝑖 is
+W0 are streamed onto MRR banks during forward and backward                                                          ⊤
+                                                                                                           (𝑖 )  (𝑖 ) ⊤
+passes, while a compact set of trainable factors resides entirely in                                  © XW𝑄 W𝐾 X ª            (𝑖 ) (𝑖 ) ⊤
+the electronic processing unit. By keeping W0 fixed, we eliminate               Head𝑖 (X) = softmax­          √         ® XW𝑉 W𝑂            (1)
+                                                                                                                𝑑𝑘
+MRR retuning and costly weight write-backs. Factor gradients are                                      «                 ¬
+computed via small (𝑑×𝑟 , 𝑟 ×𝑟 ) operations without forming full 𝑑×𝑑     and the outputs of all heads are concatenated and linearly pro-
+gradients, significantly reducing compute and memory overhead.           jected. The FFN applies two fully connected layers with a GELU
+We further design the complete forward–backward dataflow, includ-        nonlinearity: FFN(X) = GELU(XWup )Wdown , where Wup ∈ R𝑑 ×4𝑑
+ing optical scheduling, activation compression leveraging low-rank       and Wdown ∈ R4𝑑 ×𝑑 . For ViT-Base/16, 𝐿=12, 𝑑=768, 𝑁ℎ =12, and
+structure, and gradient checkpointing aligned with the Opto-ViT-v2       𝑑𝑘 =64, yielding approximately 86M total parameters. Each encoder
+memory hierarchy.                                                        block contains four 𝑑×𝑑 matrices in the MHSA module (W𝑄 , W𝐾 ,
+(2) Gradient-accumulated sparse head. While tensorized decom-            W𝑉 , W𝑂 ) and two matrices in the FFN (Wup , Wdown ), with the
+position significantly reduces the backbone’s trainable parameters,      FFN matrices subdivided into 𝑑×𝑑 blocks as described in [8]. This
+the task-specific classification head comes to dominate the budget,      structural uniformity across layers is important for the tensorized
+accounting for over 90% of the total trainable parameters. Apply-        decomposition we employ in Section 3.
+ing low-rank factorization to the head degrades accuracy because         Silicon-Photonic ViT Acceleration: Silicon-photonic (SiPh) ac-
+the classifier must produce sharp, class-discriminative logits that      celerators perform MACs in the optical domain by encoding in-
+aggressive rank reduction blurs. We propose a complementary ap-          puts as light amplitudes and weights as microring resonator (MRR)
+proach that accumulates gradients over multiple mini-batches to          transmission coefficients. With wavelength-division multiplexing
+derive robust importance estimates, and then retains only the top-𝑘      (WDM), multiple multiplications occur in parallel across wave-
+parameters (by gradient magnitude) as trainable while freezing           lengths, and balanced photodetectors accumulate results. MRR
+the rest. This gradient-accumulated sparse head reduces the overall      weights are programmed via thermo- or electro-optic tuning, shift-
+training budget by ∼40% with negligible accuracy loss.                   ing resonance to modulate overlapping optical signals. Prior SiPh ac-
+                                                                         celerators target specific DNN settings: LightBulb [11] for binarized
+Opto-ViT-v2                                                                                                                                                                                           ICCAD ’26, November 8–12, 2026, San Jose, CA, USA
+
+
+                                                                                                                                                                             reconfigurable, and energy-aware optical vision sensor that seam-
+                                                                                                                                                                             lessly integrates sensing and processing. The design intrinsically
+                                                                                                                                                                             supports granularity-configurable, low-bit-width implementations of
+                                                                                                                                                                             MHSA, patch embedding and linear layers in ViTs. This enables flexi-
+                                                                                                                                                                             ble trade-offs between power consumption and accuracy. Opto-ViT-v2
+                                                                                                                                                                             consists of the following steps.
+                                                                                                                                                                                 In step 1 , the weights are received from the cloud via an RF
+                                                                                                                                                                             transceiver and written to on-chip memory 2 . In step 3 , the frozen
+                                                                                                                                                                             weights are streamed layer by layer onto the Tensor Processing Core
+                                                                                                                                                                             (TPC) via the memory controller. The TPC comprises 64 waveguide
+                                                                                                                                                                             arms, each supporting 32 wavelength channels (aligned with 𝑑𝑘 ),
+                                                                                                                                                                             with MRRs performing parallel multiplication and BPDs accumu-
+Figure 2: (a) Spectra at the MRR input and through ports after parameter                                                                                                     lating results. Input activations are captured by a power-aware
+imprinting via tuning. Adjusting the resonant wavelength causes part of the
+signal to couple into the ring while the rest passes to the through port, encoding                                                                                           CMOS image sensor and modulated directly onto VCSEL-generated
+the parameter in the output. (b) Multiple MRRs in one arm imprint weight                                                                                                     optical signals, avoiding the higher cost of MRR-based input en-
+values across different wavelengths of the input signal. (c) Fabricated SiPh IC                                                                                              coding. In step 4 , MAC operations execute in parallel on the TPC,
+with over 200 identical MRR cell layouts with SEM image. (d) Photonic weight
+noise.                                                                                                                                                                       with results fed to a programmable LUT-based nonlinear unit for
+                                                                                                                                                  Cloud                      activation functions and their derivatives. In step 5 , TPC outputs
+    Low-rank MatMul,
+     Norm, Activation
+                                                                                                                                          1 W                   6            are digitized via ADCs and written to the activation memory, with
+                                                                                                                      Power-                Transceiver
+                                                                                                                                                                             compressed intermediates cached for the backward pass. In step 6 ,
+                                                   Adaptive Sensor
+
+
+
+
+                 Electronic                                                                 CMOS Drivers
+                                                   Pre-Processing
+
+
+
+
+                                                                                                                    Aware Task Electronic
+                 Processing
+                                                                      sensory data
+
+
+
+
+                                                                                                                     Scheduler                                      2
+                                     Controller
+
+
+
+
+                                                                                                                                  data
+                                                                         Analog
+
+
+
+
+    Intermediate                                                                                                                                                             trained factors can be absorbed into the weights for zero-overhead
+                                      Sensor
+
+
+
+
+                                                                                                                                             CMOS
+       Results     Buffer                                                             VECSELs                  Laser                        Peripheral
+                 Memories                                                                                    source(s)
+                                                                                      Modulated
+                                                                                      optical data
+                                                                                                                                                                             inference, and results are transmitted to the cloud if required.
+    MatMul
+ backward pass                                                                       W/W^T
+                                                                                                           DAC                                                                   We present three contributions that together form a complete
+  (Frozen W0)                                                        3                                                        W/W^T                                          on-chip fine-tuning framework: Section 3.1 maps the tensorized low-
+                                                                                       λ1
+                                                                                                                                                              Memory Unit
+                                                                                                                                                Memory Ctrl
+
+
+                                                                                                                                                               Activation)
+
+
+
+
+            Optical Cores                                            A1                                                     A2 - An /G 3
+                                                                                                                                                                (Weight,
+
+
+
+
+            C    C           C
+                                                                                           λ2                       BPD                                                      rank decomposition onto the TPC and electronic unit, deriving the
+                                     Image Sensor                                                                     A*W/            5
+    (a)     1    2           n                                                             λ3
+                                                                                                                     G*W^T         f(A*W)                                    forward and backward dataflows that keep W0 frozen on the optical
+                                                                                                                    4
+                                                                                                                                 ADC
+                       Electronic
+                       component
+                                       Photonic
+                                      component
+                                                        Compute.
+                                                          Flow
+                                                                                       λ
+                                                                                Splitter 8                                    LUT-based     Storage (eDRAM)
+                                                                                                                                                                             cores while confining all trainable computation to the electronic
+                                                                                                Tensor Processing Core        Nonlinear
+                 (b)                   photonic            Power
+                                                                                     Arm
+                                                                                                        (TPC)                   Unit                                         domain. Section 3.2 introduces a gradient-accumulated sparse head
+                        electrical
+                                      connection
+                       connection                          profile
+                                                                                                                                                                             that reduces the training budget by ∼40%. Section 3.3 develops the
+Figure 3: (a) Opto-ViT-v2 operations, and (b) photonic archi-                                                                                                                first system-level noise model for photonic training, characterizing
+tecture and corresponding interface signals for Opto-ViT-v2.                                                                                                                 how MRR device noise in both optical passes propagates into the
+                                                                                                                                                                             factor gradients computed electronically in Section 3.1.
+CNNs (limited by ADC power), HolyLight [12] and CrossLight [2]
+for reduced-precision convolutions, ROBIN [13] for robustness,
+Lightator [3] for near-sensor processing, TRON [14] for transformer                                                                                                          3.1    Hardware Mapping of Tensorized Low-Rank
+blocks, and Opto-ViT [4] for hybrid photonic–electronic ViTs with                                                                                                                   Training
+WDM parallelism and pruning. However, none support on-chip                                                                                                                   Training neural networks on analog or mixed-signal hardware is
+training.                                                                                                                                                                    fundamentally challenging. Prior work on analog in-memory com-
+Parameter-Efficient Fine-Tuning for ViTs: Parameter-efficient                                                                                                                puting (AIMC) [16] and ReRAM-based transformer accelerators [17]
+transfer learning (PETL) adapts pretrained models by updating                                                                                                                has identified weight write-back overhead, limited update precision,
+only a small subset of parameters, reducing storage and compute.                                                                                                             and intermediate data buffering as primary obstacles. In SiPh accel-
+Adapter methods insert lightweight bottlenecks [7, 9, 15], while                                                                                                             erators, the analogous bottlenecks are MRR retuning latency, buffer
+prompt-based methods prepend learnable tokens [6, 10]. Low-rank                                                                                                              memory capacity, and photonic MAC noise. These constraints make
+methods like LoRA [5] decompose each weight update as ΔW =                                                                                                                   standard backpropagation with full weight updates infeasible on
+𝑠AB, but operate independently per layer. Tensorized methods ad-                                                                                                             the Opto-ViT-v2 platform.
+dress this by jointly decomposing all weights. FacT [8] stacks all ViT                                                                                                          As shown in Fig. 4, our approach is to decompose the fine-tuning
+weight matrices into a tensor W ∈ R12𝐿×𝑑 ×𝑑 , where 12𝐿 denotes                                                                                                              weight update into a heavy frozen component executed on the opti-
+the total number of 𝑑×𝑑 matrices across 𝐿 layers (4 from MHSA                                                                                                                cal cores and a light trainable component confined to the electronic
+and 8 from FFN per layer). The update ΔW is then factorized (e.g.,                                                                                                           domain. We adopt the tensorized Tensor-Train decomposition [8],
+Tensor-Train), sharing factors across layers. At rank 𝑟 =4, FacT-TT                                                                                                          in which the weight of the 𝑖-th sub-layer during fine-tuning is ex-
+uses only ∼8K parameters (∼0.01% of ViT-Base) while achieving                                                                                                                pressed as W𝑖 = W0,𝑖 + 𝑠 · U 𝚺𝑖 V⊤ , where W0,𝑖 ∈ R𝑑 ×𝑑 is the frozen
+competitive accuracy.                                                                                                                                                        pretrained weight, U ∈ R𝑑 ×𝑟 and V ∈ R𝑑 ×𝑟 are global factors shared
+                                                                                                                                                                             across all 12𝐿 sub-layers, 𝚺𝑖 ∈ R𝑟 ×𝑟 is specific to sub-layer 𝑖, 𝑠 is
+3         PROPOSED METHOD: OPTO-VIT-V2                                                                                                                                       a scaling hyperparameter, and 𝑟 ≪ 𝑑. Only U, V, and {𝚺𝑖 }𝑖=1  12𝐿 are
+
+Fig. 3 provides an overview of the proposed Opto-ViT-v2 node ar-                                                                                                             trainable. For ViT-Base (𝐿=12, 𝑑=768) at rank 𝑟 =4, the total train-
+chitecture, highlighting its electronic and photonic building blocks,                                                                                                        able parameter count is 2𝑑𝑟 + 12𝐿𝑟 2 = 2 · 768 · 4 + 144 · 16 = 8,448,
+which are co-designed and co-optimized to realize a standalone,                                                                                                              occupying fewer than 8.5 KB at 8-bit precision.
+ICCAD ’26, November 8–12, 2026, San Jose, CA, USA                                                                                    X. Chen et al.
+
+
+                                            +𝜖𝑓𝑤𝑑                       the forward pass. For 𝑟 =4, this compresses per-layer activation stor-
+                                                           +
+                                                                        age from 196 × 768 = 150,528 values to 196 × 4 = 784 values, a 192×
+              𝑁∗𝑑
+                                                                        reduction. Across all 144 sub-layers, the total cached footprint
+                                                                        drops to 144 × 784 × 2B ≈ 220 KB, which comfortably fits in the
+                                                                        electronic unit’s SRAM.
+                                       192x 𝑠𝑚𝑎𝑙𝑙𝑒𝑟
+                                                                        3.1.2 Backward Pass. The backward pass must accomplish two
+                                                  𝑁∗𝑟
+         Forward Pass                                                   tasks: propagate the gradient signal backward through the network,
+         Backward Pass                                                  and compute the gradients of the loss with respect to the trainable
+                            +𝜖𝑏𝑤𝑑
+                     +                                                  factors.
+                                                                        Gradient propagation. Let G𝑖 ≜ 𝜕L/𝜕Y𝑖 ∈ R𝑁 ×𝑑 denote the
+                                                                        upstream gradient at sub-layer 𝑖. The gradient with respect to the
+                                                                        sub-layer input is
+                                                                                            𝜕L
+                                                                                               = G𝑖 W⊤ +𝑠 · (G𝑖 V) 𝚺𝑖⊤ U⊤                      (3)
+                                                                                            𝜕X𝑖 | {z 0,𝑖
+                                                                                                      }     | {z }
+                                                                                                   optical           electronic
+
+
+Figure 4: Opto-ViT-v2 per-layer training dataflow. Optical              The first term is a dense 𝑁 ×𝑑 by 𝑑×𝑑 multiplication executed on the
+cores (blue) handle the heavy 𝑊0 multiplications in both                optical cores. Since W0,𝑖 is frozen, its transpose W⊤0,𝑖 is precomputed
+passes with photonic noise (amber); the electronic unit                 offline and streamed onto the MRR banks during the backward pass,
+(green) computes the lightweight factor chain and all fac-              incurring only the standard layer-by-layer streaming latency with
+tor gradients using the compressed cached intermediate 𝑋𝑖 𝑈             no additional tuning overhead. The second term is a chain of small
+(192× SRAM reduction). 𝑊0 is never retuned                              electronic multiplications: G𝑖 V (𝑁 ×𝑟 ), then × 𝚺𝑖⊤ (𝑁 ×𝑟 ), then × U⊤
+                                                                        (𝑁 ×𝑑), contributing negligible overhead relative to the optical term.
+                                                                        Factor gradient: per-layer core 𝚺𝑖 . The gradient with respect to
+   We now derive how this decomposition maps onto the Opto-             the per-layer factor is computed entirely in the electronic domain:
+ViT-v2 hardware for both the forward and backward passes, and
+                                                                                              𝜕L
+present the five-core scheduling strategy.                                                        = 𝑠 · (X𝑖 U) ⊤ (G𝑖 V)                        (4)
+                                                                                              𝜕𝚺𝑖       | {z } | {z }
+3.1.1 Forward Pass. The forward pass through sub-layer 𝑖 com-                                            𝑟 ×𝑁 , cached   𝑁 ×𝑟
+putes the output Y𝑖 from input X𝑖 ∈ R𝑁 ×𝑑 :
+                                                                        The left operand (X𝑖 U) ∈ R𝑁 ×𝑟 was cached during the forward pass.
+                     Y𝑖 = X𝑖 W0,𝑖 +𝑠 · (X𝑖 U) 𝚺𝑖 V⊤               (2)   The right operand G𝑖 V ∈ R𝑁 ×𝑟 is a small electronic multiplication.
+                          | {z }       | {z }
+                            optical           electronic                The result is an 𝑟 ×𝑟 matrix: for 𝑟 =4, a 4×4 output from two 196×4
+                                                                        operands. This is computed independently for each of the 144 sub-
+The first term is a 𝑁 ×𝑑 by 𝑑×𝑑 matrix multiplication requiring 𝑁𝑑 2    layers.
+MACs. This is the dominant computational cost and is executed           Factor gradient: shared factors U and V. The gradient accumu-
+on the optical cores, with W0,𝑖 streamed onto the MRR banks layer       lates contributions from all sub-layers:
+by layer in 32-element chunks following the partitioning strategy
+described in [4]. Since W0,𝑖 is never modified, the MRR banks serve                   12𝐿                                  12𝐿
+                                                                              𝜕L    ∑︁                           𝜕L    ∑︁
+as a static weight store throughout the entire fine-tuning process,              =𝑠     X𝑖⊤ G𝑖 V 𝚺𝑖⊤                =𝑠     G𝑖⊤ (X𝑖 U) 𝚺𝑖       (5)
+                                                                              𝜕U            | {z }               𝜕V            | {z }
+and no retuning or write-back is required. The second term decom-                   𝑖=1                                𝑖=1
+                                                                                                                                  ∈ R𝑁 ×𝑟
+                                                                                               ≜ Z𝑖 ∈ R𝑁 ×𝑟
+poses into a chain of three small matrix multiplications executed
+on the electronic processing unit: (a) X𝑖 U: 𝑁 ×𝑑 by 𝑑×𝑟 → 𝑁 ×𝑟         Each per-layer term Z𝑖 reuses the G𝑖 V already computed for Eq. (4).
+(𝑁𝑑𝑟 MACs); (b) (X𝑖 U) 𝚺𝑖 : 𝑁 ×𝑟 by 𝑟 ×𝑟 → 𝑁 ×𝑟 (𝑁𝑟 2 MACs); (c) re-    The product X𝑖⊤ Z𝑖 ∈ R𝑑 ×𝑟 requires the full X𝑖 ∈ R𝑁 ×𝑑 , which
+sult × V⊤ : 𝑁 ×𝑟 by 𝑟 ×𝑑 → 𝑁 ×𝑑 (𝑁𝑑𝑟 MACs). For 𝑁 =196, 𝑟 =4, and       was not cached (only X𝑖 U was stored). During the backward pass,
+𝑑=768, the electronic factor chain requires 2𝑁𝑑𝑟 + 𝑁𝑟 2 ≈ 1.2M          as layers are processed in reverse order, X𝑖 can be reconstructed
+MACs, compared to 𝑁𝑑 2 ≈ 115M MACs for the optical term (<1.1%          by a single forward evaluation of the preceding sub-layer on the
+overhead), and can run in parallel.                                     optical cores using the stored layer-boundary checkpoint. This adds
+Compressed activation caching. A key architectural benefit of           one extra optical core invocation per layer but avoids storing the
+the tensorized decomposition is the reduction in activation storage     full 𝑁 ×𝑑 activations for all layers simultaneously. Similarly, for
+during training. Standard backpropagation caches the full input         V, (X𝑖 U)𝚺𝑖 reuses the cached X𝑖 U and the small 𝚺𝑖 . The product
+X𝑖 ∈ R𝑁 ×𝑑 at each sub-layer for use in the gradient computation.       G𝑖⊤ (·) ∈ R𝑑 ×𝑟 is well within the electronic unit’s capacity.
+With 12𝐿=144 sub-layers in ViT-Base, the total activation footprint     Optimizer step. After accumulating the factor gradients across all
+is 144 × 196 × 768 × 2B ≈ 42 MB, far exceeding the buffer memory        layers, the AdamW optimizer is applied to U, V, and {𝚺𝑖 } entirely
+of Opto-ViT-v2. In our framework, the factor gradient for 𝚺𝑖 (Eq. (4)   in the electronic domain. The optimizer state (first and second
+below) depends only on the projected intermediate X𝑖 U ∈ R𝑁 ×𝑟 ,        moments) adds 2 × 8,448 = 16,896 values, and the total SRAM
+not the full X𝑖 . We therefore cache only this small product during     footprint for factors plus optimizer state is under 50 KB.
+Opto-ViT-v2                                                                                               ICCAD ’26, November 8–12, 2026, San Jose, CA, USA
+
+
+
+
+Figure 5: (a) Pipelined processing of backward stages of different layers. (b)
+Optical and Electronic Hardware allocation for backward stage in Cycle 4
+
+
+3.1.3 Five-Core Scheduling. The Opto-ViT-v2 architecture provides
+five optical processing cores (C1–C5), each with 32 WDM wave-
+length channels across 64 waveguide arms. We propose a forward-
+                                                                                         Figure 6: Gradient-Accumulated Sparse Head Training.
+backward pipelined scheduling strategy that reuses the same physi-
+cal cores for both passes.
+Forward phase (layers 𝑙 = 1 → 𝐿). Each encoder layer is pro-                     this is 768 × 100 = 76,800 parameters, which is 9× the backbone
+cessed following the Opto-ViT-v2 attention pipeline [4]. In stage√F1,            budget and dominates the total trainable count. Applying low-rank
+cores C1, C2, and C3 are simultaneously tuned with W𝑄 , W𝐾⊤ / 𝑑𝑘 ,               factorization to the head is ineffective: the classifier must map from
+and X⊤ , computing the decomposed attention score (QW𝐾⊤ )X⊤                      a shared 𝑑-dimensional representation to 𝐶 class-specific logits,
+without buffering the intermediate K (Eq. (2) in [4]). In stage F2,              and aggressive rank reduction blurs inter-class boundaries, causing
+the electronic unit computes softmax and C4–C5 process the value                 significant accuracy drops.
+projection and output via W𝑉 and the softmax result. The FFN sub-                   We propose an orthogonal approach: gradient-accumulated sparse
+layer is then handled by streaming Wup and Wdown onto C1–C2                      training of the head. The method determines a fixed sparsity mask
+(two cores suffice since the FFN has two sequential linear layers).              early in training and applies it for the remainder, proceeding in
+Throughout the forward phase, the electronic unit computes the                   three steps.
+factor contributions 𝑠 (X𝑖 U) 𝚺𝑖 V⊤ in parallel with the optical com-            Step 1: Warm-up. We train the full head (all 𝑑 · 𝐶 parameters
+putation and caches X𝑖 U for each sub-layer.                                     active) for 𝑇𝑤 epochs, allowing the logit space to reach a coarse
+Backward phase (layers 𝑙 = 𝐿 → 1). Processing reverses the layer                 alignment with the target task. During this phase, the head parame-
+order. For each layer, we define three stages that overlap optical               ters settle into a neighborhood where gradient magnitudes become
+and electronic operations to maximize core utilization as shown in               informative of long-term parameter importance.
+Fig. 5.                                                                          Step 2: Importance estimation. After warm-up, we accumulate
+Stage B1 (FFN backward): Cores C1–C2 are tuned with the pre-                     the absolute gradient magnitude |𝜕L/𝜕𝑤 𝑗𝑐 | for each head parameter
+computed transposes W⊤                  ⊤
+                            down and Wup to propagate the gradient               𝑤 𝑗𝑐 over 𝐵 acc =10 consecutive mini-batches, then average:
+through the FFN block via Eq. (3). Concurrently, the electronic
+                                                                                                                     10
+unit computes the GELU derivative and the FFN factor gradients                                                    1 ∑︁ 𝜕L𝑏
+                                                                                                         𝑔¯𝑗𝑐 =                                         (6)
+(Eqs. (4)-(6)) using the cached X𝑖 U intermediates and the upstream                                               10   𝜕𝑤 𝑗𝑐
+                                                                                                                    𝑏=1
+gradient G𝑖 .
+Stage B2 (MHSA backward): Cores C3–C5 are tuned with W𝑂         ⊤ , W⊤ ,         Accumulating over 10 batches provides sufficient statistical stability
+                                                                     𝑉
+                                          ⊤   ⊤
+and the attention backward weights (W𝑄 , W𝐾 ) to propagate the gra-              to distinguish consistently important parameters from those with
+dient through the MHSA block. The softmax Jacobian is computed                   transiently large gradients due to mini-batch noise, while adding
+electronically in parallel. Cores C1–C2, now free from stage B1, can             negligible overhead to the training loop.
+assist by handling additional MHSA weight transposes if needed                   Step 3: Top-𝑘 masking. We rank head parameters by 𝑔¯𝑗𝑐 and con-
+for the four attention sub-layers.                                               struct a binary mask M that retains the top-𝑘 fraction as trainable,
+Stage B3 (overlap with next layer): While the optical cores begin                while freezing the rest for the remainder of training. The update
+streaming weights for layer 𝑙−1’s backward pass, the electronic                  becomes 𝑤 𝑗𝑐 ← 𝑤 𝑗𝑐 − 𝜂 𝑀 𝑗𝑐 𝜕L/𝜕𝑤 𝑗𝑐 .
+unit finalizes factor gradient accumulation for layer 𝑙 and, if needed,             In practice, retaining 𝑘=60% yields negligible accuracy loss. The
+recomputes X𝑖 for Eq. (5) by executing a single forward sub-layer                total trainable parameters are reduced to ∼54K (backbone + head).
+evaluation on a temporarily available core (C4 or C5).                           On the photonic hardware, the fixed mask means that 40% of the
+    This staggered pipeline ensures that the optical cores and Elec-             head gradient computations and the corresponding optimizer state
+tronic units are rarely idle simultaneously. The key enabler is that             are eliminated for the entire training run after the brief warm-up
+all weight transposes W⊤  0,𝑖 are precomputed and stored in the same
+                                                                                 and estimation phase„ reducing both SRAM footprint and backward
+weight memory used for W0,𝑖 during the forward phase, so the                     compute cost.
+backward phase incurs no additional tuning latency beyond the
+standard layer-by-layer streaming.                                               3.3    Photonic Noise Model for Training
+                                                                                 Existing SiPh accelerator studies [2–4, 13] characterize MRR de-
+3.2     Gradient-Accumulated Sparse Head                                         vice noise exclusively for the inference setting. In this work, we
+The tensorized decomposition reduces backbone trainable parame-                  extend the noise model developed for the Opto-ViT-v2 inference
+ters to ∼8K for ViT-Base, but the task-specific classification head              pipeline [4] to cover the full training loop, incorporating the same
+Whead ∈ R𝑑 ×𝐶 (where 𝐶 is the number of classes) requires 𝑑 · 𝐶                  device-level noise sources into both the forward and backward
+parameters. For 𝐶=100 (as in CIFAR-100 or many VTAB-1K tasks),                   optical passes.
+ICCAD ’26, November 8–12, 2026, San Jose, CA, USA                                                                                                                             X. Chen et al.
+
+
+3.3.1 Noise Sources. Prior photonic noise modeling frameworks                                            #p   C100 Cal DTD Flw Pets SVHN Sun Cam Eur Res Ret Avg
+
+primarily treat device non-idealities, including fabrication variation,             Full              85.9M   68.9   87.7   64.3    97.2   86.9   87.4   38.8   79.7   95.7   84.2   73.9   78.6
+                                                                                    Adapter [7]       217K    69.2   90.1   68.0    98.8   89.9   82.8   54.3   84.0   94.9   81.9   75.5   80.9
+thermal drift, and laser noise, as additive or multiplicative stochastic            AdaptFormer [9]   217K    70.8   91.2   70.5    99.1   90.9   86.6   54.8   83.0   95.8   84.4   76.3   82.1
+perturbations with activation-dependent variance proxies derived                    LoRA [5]          355K    67.1   91.4   69.4    98.8   90.4   85.3   54.0   84.9   95.3   84.4   73.6   81.3
+                                                                                    NOAH [19]         421K    69.6   92.7   70.2    99.1   90.4   86.1   53.7   84.4   95.4   83.9   75.8   81.9
+at the MAC or logit level [18]. While such models capture aggregate                 FacT-TT4 [8]       68K    69.4   88.5   70.6    98.8   90.0   83.3   53.7   83.9   95.1   81.5   75.4   80.9
+                                                                                    FacT-TT16 [8]      96K    71.3   89.6   70.7    98.9   91.0   87.8   54.6   85.2   95.5   83.4   75.7   82.2
+noise statistics, they assume independent, zero-mean perturbations
+and do not explicitly model spatial thermal interactions or weight-                 ViT-B (CL)        60K     43.4 85.7 64.7 97.1 86.6            76.4   49.3 79.3 90.3 76.4 74.3 74.9
+                                                                                    ViT-B4 (FiT)      44K     67.0 88.1 68.1 98.6 89.2            86.5   51.5 83.8 95.2 82.8 75.4 80.6
+dependent effects. In contrast, we focus on thermo-optic crosstalk                  ViT-B16 (FiT)     72K     67.4 88.8 68.6 98.8 89.3            89.2   51.2 86.1 95.8 84.1 76.1 81.4
+as a dominant source of structured, correlated noise in dense MRR                   Table 1: Results on the VTAB-1K benchmark under hardware-aware noise.
+arrays. Our device-level characterization shows that heater-induced                 ‘#p’ denotes the average number of trainable parameters, including both the
+                                                                                    backbone and the classification head. CL refers to classification-layer-only
+temperature variations propagate laterally across waveguides, in-                   fine-tuning.
+troducing deterministic and spatially coupled resonance shifts that
+depend on both input optical power and inter-ring spacing.                                                                           Performance Parameters Delay, Energy, Area
+                                                                                                                                                 Inference Accuracy
+                                                                                           Application               Arch.
+Unlike prior stochastic models, this behavior cannot be captured by
+                                                                                                              weights Custom In-house Simulator with           CACTI
+independent Gaussian noise. To address this, we model the effective                         Pytorch Model for            Advanced Mapping for FiT-ViT            DC
+resonance of each MRR as:                                                                        FiT-ViT      MHA,
+                                                                                                               MLP     Design & Verification of FiT-ViT s OC Periph.
+                                                                                           Config.                                 (Cadence Spectre)
+                 𝜆𝑖act = 𝜆𝑖LUT + 𝛼𝑖 (𝑃) 𝜌 (𝑑𝑖 ) +𝜇𝑟,𝑖 + 𝜖𝑖 ,                 (7)
+                                 | {z }                                                      MR Noise Model                        Extracting Output Voltages/Currents
+                                   thermal crosstalk
+                                                                                           MR Resolution Analysis
+   where 𝛼𝑖 (𝑃) captures the input power-dependent thermal                                                                 Design & Verif. of FiT-ViT s Pixel Array &
+                                                                                                                               Peripherals (Cadence Spectre)
+shift, and 𝜌 (𝑑𝑖 ) models distance-dependent heat diffusion across                          MR-device Fabrication      Circuit
+neighboring rings. This formulation explicitly captures weight-
+                                                                                        Figure 7: Proposed bottom-up evaluation framework.
+dependent noise, since the effective perturbation depends on the
+programmed detuning and optical intensity at each MRR. Impor-                       3.3.4 Impact on Factor Gradients. While factor gradient compu-
+tantly, thermal drift also alters spectral spacing, leading to dynamic,             tations are performed electronically, their inputs are corrupted:
+                                                                       𝛿𝑖2
+input-dependent inter-channel crosstalk: 𝜙𝑖act
+                                            𝑗 =                (𝜆𝑖act −𝜆 act 2 2,
+                                                                                    (i) X𝑖 U carries accumulated forward noise, and (ii) G𝑖 V carries
+                                                                         𝑗 ) +𝛿𝑖    accumulated backward noise. Consequently, the electronic unit
+which couples neighboring channels through thermally shifted
+                                                                                    computes exact updates on noisy operands, which is the primary
+resonances.
+                                                                                    mechanism through which structured photonic noise influences
+3.3.2 Forward-Pass Noise. Under the proposed thermo-optic cross-                    learning. All noise parameters are calibrated from measured MRR
+talk model, the optical computation at sub-layer 𝑖 is perturbed by                  behavior and injected into both forward and backward optical com-
+structured, weight-dependent noise:                                                 putations during training, enabling realistic evaluation of noise
+                            opt                                                     impact on parameter-efficient fine-tuning.
+                          Ŷ𝑖     = X𝑖 W0,𝑖 + 𝝐𝑖fwd                          (8)
+
+   where 𝝐𝑖fwd arises from thermally induced, spatially correlated                  4 EXPERIMENTAL RESULTS
+perturbations in the MRR resonances and the resulting inter-channel                 4.1 Evaluation Framework
+crosstalk. Unlike conventional i.i.d. noise models, this perturba-                  We develop a comprehensive bottom-up framework spanning de-
+tion is input- and weight-dependent, since it is governed by the                    vice, circuit, architecture, and application levels (Fig. 7).
+local optical power and programmed de-tuning. The noisy optical                     At the device level, MRRs were fabricated and calibrated to achieve
+output is combined with the clean electronic factor contribution                    8-bit precision, with over 200 identical instances integrated on
+𝑠 (X𝑖 U) 𝚺𝑖 V⊤ and propagated through subsequent nonlinear and                      a 10 × 10 mm2 chip (Fig. 2(c)) to characterize process variations.
+residual operations, forming the input X𝑖+1 . As a result, cached in-               Thermo-optic behavior and thermal crosstalk were analyzed using
+termediates (e.g., X𝑖 U) implicitly accumulate forward noise across                 coupled Ansys Lumerical HEAT and FDE simulations. A silicon
+layers.                                                                             waveguide (500, nm × 220, nm) with a heater positioned 2, 𝜇m above
+3.3.3 Backward-Pass Noise. The backward propagation G𝑖 W⊤                           was modeled, with a secondary waveguide placed at separations
+                                                               0,𝑖
+is executed on the same optical cores and is subject to the same                    of 2–10, 𝜇m to study spatial thermal coupling. Sweeping heater
+structured noise:                                                                   power (0–6, mW), we extracted temperature distributions, effective
+                                                                                    index changes (using a thermo-optic coefficient of 1.8 × 10−4, K−1 ),
+                           𝜕L
+                           d
+                                                                                    and resulting phase and wavelength shifts. Thermal crosstalk was
+                                    = G𝑖 W⊤       bwd
+                                           0,𝑖 + 𝝐𝑖                     (9)
+                           𝜕X𝑖 opt                                                  quantified via the relative temperature rise in the secondary waveg-
+   where 𝝐𝑖bwd follows the same weight- and input-dependent struc-                  uide. These measurements were co-simulated with interface CMOS
+ture as 𝝐𝑖fwd , but is statistically independent due to different operands          circuits in Cadence Spectre.
+and operating conditions. Noise accumulates along the backward                      At the circuit level, pixel arrays and peripherals were imple-
+chain, such that gradients at earlier layers are affected by both                   mented using the 45nm NCSU PDK [20], enabling extraction of
+forward-pass corruption (in activations) and backward-pass pertur-                  input–output characteristics. Building on this, all Opto-ViT-v2 com-
+bations (in gradient propagation).                                                  ponents (excluding memory) were designed and validated using
+Opto-ViT-v2                                                                                                                 ICCAD ’26, November 8–12, 2026, San Jose, CA, USA
+
+
+      Model             #param        FGVCAircraft                  OxfordPets                  Food101                     StanfordCars                 Flowers102
+                                  2      4      8     16      2      4      8     16      2      4      8     16      2       4      8     16      2      4      8     16
+      Adapter [7]        239K    11.9   21.5   32.1   45.0   76.3   85.3   87.5   87.8   48.6   60.0   66.2   71.1   12.3    23.8   40.0   60.0   96.4   97.4   98.9   99.3
+      AdaptFormer [9]    239K    12.0   21.6   34.2   48.9   74.9   83.9   86.3   87.5   48.3   59.8   66.3   71.4   12.3    26.5   48.5   65.2   96.4   97.3   98.9   99.3
+      LoRA [5]           377K    12.1   21.8   34.5   48.7   76.2   85.6   86.4   87.4   48.6   59.5   66.1   71.4   12.3    26.4   48.2   67.8   96.5   97.3   98.7   99.4
+      NOAH [19]          417K    12.3   22.2   34.5   49.2   78.2   84.9   87.4   89.4   51.5   64.1   71.9   74.7   12.2    25.5   48.5   68.2   97.0   97.5   98.9   99.5
+      FacT-TT16 [8]      143K    15.7   24.5   36.8   50.8   82.2   87.5   89.8   90.0   53.8   64.5   71.5   75.0   16.2    29.8   52.5   74.3   90.0   97.0   98.9   99.3
+      ViT-B4 (FiT)       58K     17.2 27.1 37.6 51.1 80.8 86.3 90.1 91.0 47.8 61.4 68.8 74.1 13.9 23.6 40.7 57.8 97.1 98.1 98.8 98.9
+      ViT-B16 (FiT)      86K     17.2 28.3 40.4 56.1 82.4 86.8 89.4 90.0 47.8 59.8 66.8 72.6 14.1 26.7 50.0 69.5 97.6 97.8 98.7 98.9
+
+Table 2: Few-shot results from 2 to 16 shots on FGVC benchmarks under hardware-aware noise. ‘#param’ denotes the average
+number of trainable parameters, including both the backbone and the classification head. FacT-TT rank-16 results are obtained
+under noise-free conditions, while FiT method evaluates the same setting with a 40% sparse head under hardware-induced
+noise.
+Cadence Spectre and Synopsys Design Compiler [21], and inte-                             Accuracy analysis. Opto-ViT-v2 with rank-16 achieves compet-
+grated into our in-house simulator for holistic latency and energy                       itive performance across both VTAB-1K and FGVC tasks, with
+evaluation across configurations.                                                        accuracy comparable to state-of-the-art PEFT methods. This in-
+At the application level, we evaluate our method on the Vi-                              dicates that the proposed tensorized low-rank adaptation retains
+sual Task Adaptation Benchmark (VTAB-1K) [22] and several fine-                          most of the representational capacity of full fine-tuning, even un-
+grained visual classification (FGVC) datasets. VTAB-1K comprises                         der structured photonic noise. The rank-4 configuration shows a
+19 classification tasks with 1,000 training samples each, covering                       moderate drop in accuracy, but still consistently outperforms the
+natural, specialized, and structured domains, and is widely used for                     classification-layer-only baseline. Nevertheless, the results demon-
+evaluating parameter-efficient transfer learning under distribution                      strate that a small number of shared factors is sufficient to capture
+shifts. We further evaluate on five FGVC benchmarks: Food-101 [23],                      task-specific adaptation because it still have comparable result un-
+Stanford Cars [24], Oxford Flowers-102 [25], FGVC-Aircraft [26],                         der the tested VTAB-1K datasets
+and Oxford-IIIT Pets [27], following the standard few-shot protocol.                        On FGVC benchmarks, Opto-ViT-v2 performs particularly well
+In order to report the top-1 accuracy of them, all models are initial-                   in low-shot regimes, retaining the few-shot accuracy compared
+ized from an ImageNet-21K pretrained ViT-Base, with backbone                             to FacT-TT’s result. It suggests that the structured low-rank pa-
+weights quantized to 8-bit and kept frozen; only the proposed FacT                       rameterization together with sparse updates introduces an implicit
+parameters and classification head are updated.                                          regularization effect. This helps prevent overfitting when training
+   To evaluate hardware-aware robustness, we inject structured                           data is limited, while still enabling effective adaptation.
+photonic noise during both forward and backward propagation.                             Parameter efficiency and robustness. Opto-ViT-v2 achieves
+Following the thermo-optic crosstalk model in Section 3.3, weight                        these results with substantially fewer trainable parameters than
+perturbations are obtained via a lookup-table (LUT) that maps                            prior methods. While existing approaches require 200K–300K pa-
+programmed weights to their input- and weight-dependent reso-                            rameters, Opto-ViT-v2 operates with only 44K–72K parameters,
+nance shifts. This captures the deterministic component of thermal                       corresponding to a 3×–8× reduction.
+drift arising from optical power and spatial coupling. On top of                            Importantly, the total training cost is not dominated by the back-
+this, we model residual stochastic variations as zero-mean Gauss-                        bone alone, but also by the classification head. In many VTAB and
+ian noise with standard deviation 𝜎 = 0.12, consistent with our                          FGVC tasks, the head accounts for the majority of trainable parame-
+post-trimming device-level measurements. Input activations are                           ters. The sparse head of Opto-ViT-v2 helps remove low-importance
+similarly perturbed to reflect optical intensity fluctuations, using                     parameters and reduces the head size by approximately 40% with
+Gaussian noise with 𝜎 = 0.03. These perturbations are propagated                         minimal impact on accuracy. This significantly lowers both mem-
+through both forward and backward passes, ensuring that gradi-                           ory footprint and update cost, making the method more suitable for
+ents are computed under the same structured, hardware-consistent                         on-chip training. Meanwhile, Opto-ViT-v2 remains robust under
+noise conditions. For fine-tuning, we use AdamW with a learning                          hardware noise. By constraining updates to a low-dimensional fac-
+rate of 5 × 10−3 and weight decay of 10−4 . A cosine schedule is                         tor space and eliminating unnecessary head updates, the method
+applied with a 5-epoch warmup at 10−6 , followed by 95 epochs of                         reduces sensitivity to noisy gradients and activations. As a result,
+training.                                                                                Opto-ViT-v2 maintains accuracy close to noise-free baselines de-
+                                                                                         spite the presence of structured photonic perturbations.
+                                                                                         Sparse Head and Noise Ablation Study. The effect of sparse-head
+4.2    Opto-ViT-v2 Results Analysis                                                      design and hardware noise is further validated by Table 3. Increasing
+Table 1 and Table 2 present the performance of Opto-ViT-v2 on                            the retaining ratio from 0.4 to 0.6 improves accuracy, while further
+VTAB-1K and FGVC benchmarks under hardware-aware photonic                                increasing to 0.8 provides only marginal gains, indicating that most
+noise. The results show that Opto-ViT-v2 maintains strong adapta-                        useful parameters are concentrated in a subset of the head. This
+tion capability while operating under strict parameter and hardware                      confirms that the proposed 0.6 retaining ratio strategy effectively
+constraints.                                                                             reduces parameter count.
+ICCAD ’26, November 8–12, 2026, San Jose, CA, USA                                                                                                                                                       X. Chen et al.
+                                                                                                                                                              [O:E]         [O:E L]       [O:O]        [O:OL]         VCK190
+
+
+                          Effect of Head Retaining Ratio                                                 1015
+
+
+
+
+                                                                                   Energy (fJ)
+ Retaining ratio # Head Params CIFAR100 Pets RESISC45 Camelyon CLEVR-Count KITTI
+      0.4          10K         65.5    89.2    80.6      82.9    74.4      77.9                          1014
+      0.6          15K         67.0    89.2    82.8      83.8    73.5      78.2
+      0.8          20K         67.9    90.0    83.7      83.6    73.4      78.3
+                          Effect of Fabrication Noise 𝜎fab                                               1013
+                                                                                   (a)                                  01    00 TD 102 Pet HN 397 lyon SAT c45 athy ount nce Lab tion tion uth tion icle
+              # Head Params CIFAR100 Pets RESISC45 Camelyon CLEVR-Count KITTI                                         h1 AR1          D     s
+                                                                                                                                          er dIII
+                                                                                                                                                  T SV      N  e ro         sis  p     C   ta DM oca nta zim eva Veh
+      𝜎fab                                                                                                    lt  ec      F                            SU Cam Eu Re tino VR- -Dis                             rie B-A -El est
+                                                                                                           Ca          CI              low for                                 e                     s-L
+                                                                                                                                     dF Ox                 tch             cR CLE EV
+                                                                                                                                                                                         R        ite es-O OR RB los
+      0.1                      67.0    89.2    82.8      83.8    73.5      78.2                                                f o r
+                                                                                                                                                       P a            e t i          L         pr      it    llN llNO itti-C
+                                                                                                                            Ox                                     iab             C         dS Spr        a      a  K
+      0.2          15K         64.2    88.5    81.2      82.4    69.6      77.4                                                                                  D                              d        Sm Sm
+
+
+
+
+                                                                                      Normalized latency (ns)
+      0.3                      58.1    85.5    78.3      81.8    62.0      76.1
+
+Table 3: Ablation study on head retaining ratio and fabri-                                                      109
+
+cation noise in serveral Vtab1K datasets. For sparse head
+analysis, 𝜎fab is fixed at 0.1. For noise analysis, retaining ratio
+is fixed at 0.6. “# Head Params” denotes the average number
+                                                                                                                108
+of trainable classifier-head parameters.                                            (b)                                  01
+                                                                                                                       h1 AR1
+                                                                                                                               00 TD 102 Pet HN 397 lyon SAT c45 athy ount nce Lab tion tion uth tion icle
+                                                                                                                                     D                                                  ta DM oca nta zim eva Veh
+                                                                                                                   ec
+                                                                                                                                           s
+                                                                                                                                         er dIII
+                                                                                                                                                 T SV     N  e ro        sis  p     C
+                                                                                                               lt          F
+                                                                                                                                      low for         SU Cam Eu Re tino VR- -Dis                  s-L       rie B-A -El est
+                                                                                                            Ca          CI                                                  e
+                                                                                                                                    dF Ox                tch            cR CLE EV
+                                                                                                                                                                                      R        ite es-O OR RB los
+                                                                                                                                for                   Pa             eti          L         pr      it       N    O      -C
+                                                                                                                             Ox                                  ia b           C         dS Spr
+                                                                                                                                                                                                        m all allN Kitti
+                                                                                                                                                               D                             d        S      Sm
+   As fabrication noise increases, accuracy degrades across all tasks,
+with more pronounced drops on complex datasets. This reflects the                  Figure 8: Per-task (a) total epoch energy and (b) Normalized
+impact of noise on both forward activations and backward gradients.                total latency.
+Nevertheless, Opto-ViT-v2 degrades gracefully, demonstrating that
+the proposed low-rank and sparse-update design improves stability
+under realistic hardware conditions.                                               both propagation and full-rank weight updates are implemented
+                                                                                   in optical cores, requiring extensive microring tuning and write-
+4.3      Energy and Latency Analysis                                               back operations, leading to high update energy and latency. The
+We evaluate one full training epoch for a ViT-Base-style backbone                  [O:O𝐿 ] model combines optical execution with low-rank training,
+under the VTAB-1K setting using the proposed customized evalua-                    keeping pretrained weights fixed on optical cores while updating
+tion framework designed to capture forward propagation, backward                   only a small set of low-rank parameters. Finally, we include a Xilinx
+propagation, gradient/factor computation, activation caching or                    VCK190 FPGA baseline, using its reported energy efficiency (1.42
+recomputation, and parameter update/write-back overheads. We                       KFPS/W) for total energy comparison.
+assume a ViT-Base-like configuration with embedding dimension                      Results. As shown in Fig. 8, the fully optical model [O:O] incurs the
+𝑑 = 768, depth 𝐿 = 12, and 12𝐿 = 144 trainable backbone matrices                   highest cost due to updating the entire backbone in the optical do-
+after tensorization into the unified sub-layer representation used                 main. The number of tunable parameters scales as 12𝐿𝑑 2 ≈ 8.5×107 ,
+by FacT-style factorization. For VTAB-1K, we assume 1000 training                  resulting in ∼ 1.7 × 108 optical write operations per step (includ-
+samples per task and task-specific classifier dimensions 𝐶, while                  ing 𝑊 and 𝑊 ⊤ ), making update/tuning the dominant energy and
+keeping the same backbone and hardware configuration across                        latency bottleneck. In contrast, the low-rank design [O:O𝐿 ] re-
+tasks. The number of optimization steps per epoch is therefore                     duces trainable parameters to 2𝑑𝑟 + 12𝐿𝑟 2 = 8448 (𝑑=768, 𝑟 =4),
+⌈1000/𝐵⌉, where 𝐵 is the batch size.                                               i.e., ∼ 104 × fewer parameters, and correspondingly reduces pro-
+   For each model, we decompose epoch cost into the following                      gramming events to ∼ 1.7 × 104 , yielding orders-of-magnitude
+phases:                                                                            savings in update energy and latency. A similar trend holds for
+                                                                                   electronic-update variants. While [O:E] avoids optical write-back,
+𝐸 epoch = 𝐸 fwd +𝐸 bwd +𝐸 grad/update +𝐸 update/tune +𝐸 mem/recompute +𝐸 head,     it still incurs full-rank gradient computation and large activation
+                                                                         (10)      storage. The proposed [O:E𝐿 ] reduces gradient complexity from
+𝑇epoch = 𝑇fwd +𝑇bwd +𝑇grad/update +𝑇update/tune +𝑇mem/recompute +𝑇head .           O (𝑑 2 ) to O (𝑑𝑟 ) and shrinks cached activations by ∼ 192× (from
+                                                                         (11)      2.17 × 107 to 1.13 × 105 elements), leading to consistently lower
+These terms are accumulated over all optimization steps in one                     energy and latency. Across VTAB tasks, variation is small since
+epoch.                                                                             costs are dominated by the shared ViT backbone. Overall, these re-
+Comapred Architectures. We evaluate four photonic training                         sults show that weight updates—not forward/backward passes—are
+architectures along with an FPGA baseline, differing in how matrix                 the primary bottleneck in photonic training, and that low-rank
+multiplications and parameter updates are mapped across optical                    factorization is key to scalable efficiency.
+and electronic domains. In the [O:E] model, forward and back-                          The average epoch energy breakdown in Fig. 9(a) shows that
+ward matrix multiplications are executed optically, while full-rank                forward and backward propagation dominate due to shared opti-
+gradient computation and weight updates are performed electroni-                   cal execution. However, the Update/Tuning phase exhibits the
+cally, avoiding optical write-back but incurring large gradient and                largest variation. The fully optical [O:O] design incurs the high-
+memory costs. The proposed [O:E𝐿 ] model extends this design                       est update energy from ∼ 1.7 × 108 programming events per step,
+by adopting a low-rank factorization, where only compact factors                   while [O:O𝐿 ] reduces this to ∼ 1.7 × 104 , achieving an ∼ 104 ×
+are trained electronically, significantly reducing gradient dimen-                 reduction. Electronic-update models eliminate optical tuning, with
+sionality, activation storage, and update overhead. In contrast, the               [O:E𝐿 ] further lowering gradient energy via low-rank factorization.
+[O:O] model represents a fully optical training approach in which                  Memory/recomputation energy is also reduced due to a ∼ 192×
+Opto-ViT-v2                                                                                                                                                                                         ICCAD ’26, November 8–12, 2026, San Jose, CA, USA
+
+
+                    10 14                                                10 8                                                   10 8
+              2.5                                              15                                                    15                                                  Conference on Computer Vision (ECCV), 2022.
+                                                                                           Forward
+               2                                                                           BackwardProp
+                                                                                                                                                OpticalCompute       [7] Neil Houlsby, Andrei Giurgiu, Stanislaw Jastrzebski, Bruna Morrone, Quentin
+                                                                                                                                                ElectronicCompute
+                                                                                           GradOrFactor                                                                  de Laroussilhe, Andrea Gesmundo, Mona Attariyan, and Sylvain Gelly. Parameter-
+
+
+
+                                                    Latency (ns)
+Energy (fJ)
+
+
+
+
+                                                                                                                                                Memory
+
+
+
+
+                                                                                                             Latency (ns)
+                                                               10                          UpdateTune                10
+              1.5                                                                          MemoryRecompute                                      UpdateTune               efficient transfer learning for NLP. In Proc. International Conference on Machine
+                                                                                           Head                                                                          Learning (ICML), 2019.
+               1
+                                                                   5                                                        5                                        [8] Shibo Jie and Zhi-Hong Deng. FacT: Factor-tuning for lightweight adaptation
+              0.5                                                                                                                                                        on vision transformer. In Proc. AAAI Conference on Artificial Intelligence (AAAI),
+                                                                                                                                                                         pages 1060–1068, 2023.
+               0                                                   0                                                        0
+                       [O:E] [O:EL ] [O:O][O:OL ]                                                                                  [O:E] [O:EL ] [O:O] [O:OL ]
+                                                                                                                                                                     [9] Shoufa Chen, Chongjian Ge, Zhan Tong, Jiangliu Wang, Yibing Song, Jue Wang,
+              (a)                                                  (b)      [O:E] [O:EL ] [O:O] [O:OL ]                (c)
+                                                                                                                                                                         and Ping Luo. AdaptFormer: Adapting vision transformers for scalable visual
+                                                                                                                                                                         recognition. In Proc. Advances in Neural Information Processing Systems (NeurIPS),
+Figure 9: Average epoch (a) phase and (b) Latency by phase                                                                                                               2022.
+and (c) Latency by resource.                                                                                                                                        [10] Yuanhan Zhang, Kaiyang Zhou, and Ziwei Liu. Neural prompt search. arXiv
+                                                                                                                                                                         preprint arXiv:2206.04673, 2022.
+decrease in cached activations. Latency trends in Fig. 9(b) mir-                                                                                                    [11] Farzaneh Zokaee, Qian Lou, Nathan Youngblood, Weichen Liu, Yuan Xie, and Lei
+ror energy, with forward/backward passes dominating the base-                                                                                                            Jiang. LightBulb: A photonic-nonvolatile-memory-based accelerator for binarized
+line. However, Update/Tuning dominates latency in full optical                                                                                                           convolutional neural networks. In Proc. Design, Automation and Test in Europe
+                                                                                                                                                                         Conference (DATE), pages 1438–1443, 2020.
+training. [O:O] suffers from sequential programming scaling with                                                                                                    [12] Weichen Liu, Wenyang Liu, Yun Ye, Qian Lou, Yuan Xie, and Lei Jiang. HolyLight:
+O (𝑑 2 ), while [O:O𝐿 ] reduces this to only 8448 parameters, yield-                                                                                                     A nanophotonic accelerator for deep learning in data centers. In Proc. Design,
+ing orders-of-magnitude lower latency. Electronic-update models                                                                                                          Automation and Test in Europe Conference (DATE), pages 1483–1488, 2019.
+                                                                                                                                                                    [13] Febin P. Sunny, Asif Mirza, Mahdi Nikdast, and Sudeep Pasricha. ROBIN: A
+[O:E] and [O:E𝐿 ] avoid optical programming entirely, achieving                                                                                                          robust optical binary neural network accelerator. ACM Transactions on Embedded
+the lowest update latency, with [O:E𝐿 ] benefiting from reduced gra-                                                                                                     Computing Systems (TECS), pages 1–24, 2021.
+                                                                                                                                                                    [14] Salma Afifi, Sajjad Moazeni, and Sudeep Pasricha. TRON: Transformer neural
+dient complexity. From a resource perspective, optical computation                                                                                                       network acceleration with non-coherent silicon photonics. In Proc. Great Lakes
+dominates forward/backward latency across all models. However,                                                                                                           Symposium on VLSI (GLSVLSI), pages 15–21, 2023.
+Update/Tuning is the primary bottleneck in [O:O] due to ∼ 108                                                                                                       [15] Jonas Pfeiffer, Aishwarya Kamath, Andreas Rücklé, Kyunghyun Cho, and Iryna
+                                                                                                                                                                         Gurevych. AdapterFusion: Non-destructive task composition for transfer learning.
+writes, while [O:O𝐿 ] reduces this by ∼ 104 ×. Electronic compu-                                                                                                         In Proc. European Chapter of the Association for Computational Linguistics (EACL),
+tation remains modest but increases in [O:E] and [O:E𝐿 ] due to                                                                                                          2021.
+gradient updates. Memory latency is also reduced in low-rank mod-                                                                                                   [16] Malte J Rasch, Fabio Carta, Omobayode Fagbohungbe, and Tayfun Gokmen. Fast
+                                                                                                                                                                         and robust analog in-memory deep neural network training. Nature Communi-
+els, benefiting from the ∼ 192× reduction in activation storage.                                                                                                         cations, 15(1):7133, 2024.
+                                                                                                                                                                    [17] Xiaoxuan Yang, Bonan Yan, Hai Li, and Yiran Chen. ReTransformer: ReRAM-
+5                   CONCLUSION                                                                                                                                           based processing-in-memory architecture for transformer acceleration. In Proc.
+                                                                                                                                                                         International Conference on Computer-Aided Design (ICCAD), 2020.
+This work presents Opto-ViT-v2, a hardware–algorithm co-designed                                                                                                    [18] Xuming Chen, Deniz Najafi, Chengwei Zhou, Pietro Mercati, Arman Roohi,
+                                                                                                                                                                         Mohsen Imani, Mahdi Nikdast, Shaahin Angizi, and Gourav Datta. Light-bound
+framework for parameter-efficient on-chip fine-tuning on silicon-                                                                                                        transformers: Hardware-anchored robustness for silicon-photonic computer
+photonic ViT accelerators. By combining tensorized low-rank adap-                                                                                                        vision systems. arXiv preprint arXiv:2604.04330, 2026.
+tation with a gradient-accumulated sparse head, FiT- ViT signif-                                                                                                    [19] Yuanhan Zhang, Kaiyang Zhou, and Ziwei Liu. Neural prompt search. arXiv
+                                                                                                                                                                         preprint arXiv:2206.04673, 2022.
+icantly reduces training parameters while preserving adaptation                                                                                                     [20] North Carolina State University. Freepdk45: An open-source predictive process
+capability. Opto-ViT-v2 achieves competitive accuracy with fewer                                                                                                         design kit. https://eda.ncsu.edu/freepdk/freepdk45/, 2011. Accessed: 2026.
+                                                                                                                                                                    [21] Synopsys, Inc. Synopsys design compiler, product version 14.9.2014, 2014.
+parameters and remains robust under structured photonic noise,                                                                                                      [22] Xiaohua Zhai, Joan Puigcerver, Alexander Kolesnikov, Pierre Ruyssen, Carlos
+while reducing activation storage and eliminating costly weight                                                                                                          Riquelme, Mario Lucic, Josip Djolonga, Andre Susano Pinto, Maxim Neumann,
+write-back. This demonstrates that low-dimensional and selective                                                                                                         Alexey Dosovitskiy, Lucas Beyer, Olivier Bachem, Michael Tschannen, Marcin
+                                                                                                                                                                         Michalski, Olivier Bousquet, Sylvain Gelly, and Neil Houlsby. The visual task
+updates enable stable and efficient on-chip learning on photonic                                                                                                         adaptation benchmark. arXiv preprint arXiv:1910.04867, 2019.
+hardware.                                                                                                                                                           [23] Lukas Bossard, Matthieu Guillaumin, and Luc Van Gool. Food-101 – mining
+                                                                                                                                                                         discriminative components with random forests. In European Conference on
+REFERENCES                                                                                                                                                               Computer Vision (ECCV), 2014.
+                                                                                                                                                                    [24] Jonathan Krause, Michael Stark, Jia Deng, and Li Fei-Fei. 3D object representa-
+   [1] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weissenborn, Xi-                                                                                      tions for fine-grained categorization. In Proc. IEEE/CVF Conference on Computer
+       aohua Zhai, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer, Georg                                                                                        Vision and Pattern Recognition Workshops, 2013.
+       Heigold, Sylvain Gelly, Jakob Uszkoreit, and Neil Houlsby. An image is worth                                                                                 [25] Maria-Elena Nilsback and Andrew Zisserman. Automated flower classification
+       16x16 words: Transformers for image recognition at scale. In Proc. International                                                                                  over a large number of classes. In Indian Conference on Computer Vision, Graphics
+       Conference on Learning Representations (ICLR), 2021.                                                                                                              and Image Processing (ICVGIP), 2008.
+   [2] Febin Sunny, Asif Mirza, Mahdi Nikdast, and Sudeep Pasricha. CrossLight: A                                                                                   [26] Subhransu Maji, Juho Kannala, Esa Rahtu, Matthew Blaschko, and Andrea Vedaldi.
+       cross-layer optimized silicon photonic neural network accelerator. In Proc. Design                                                                                Fine-grained visual classification of aircraft. Technical report, arXiv preprint
+       Automation Conference (DAC), pages 1069–1074, 2021.                                                                                                               arXiv:1306.5151, 2013.
+   [3] Mehrdad Morsali, Brendan Reidy, Deniz Najafi, Sepehr Tabrizchi, Mohsen Imani,                                                                                [27] Omkar M. Parkhi, Andrea Vedaldi, Andrew Zisserman, and C. V. Jawahar. Cats
+       Mahdi Nikdast, Arman Roohi, Ramtin Zand, and Shaahin Angizi. Lightator:                                                                                           and dogs. In IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+       An optical near-sensor accelerator with compressive acquisition enabling versa-                                                                                   2012.
+       tile image processing. In Proceedings of the 61st ACM/IEEE Design Automation
+       Conference, pages 1–6, 2024.
+   [4] Mehrdad Morsali, Chengwei Zhou, Deniz Najafi, Sreetama Sarkar, Pietro Mercati,
+       Navid Khoshavi, Peter Beerel, Mahdi Nikdast, Gourav Datta, and Shaahin Angizi.
+       Opto-ViT: Architecting a near-sensor region of interest-aware vision transformer
+       accelerator with silicon photonics. In Proc. International Conference on Computer-
+       Aided Design (ICCAD), 2025.
+   [5] Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+       Wang, Lu Wang, and Weizhu Chen. LoRA: Low-rank adaptation of large language
+       models. In Proc. International Conference on Learning Representations (ICLR), 2022.
+   [6] Menglin Jia, Luming Tang, Bor-Chun Chen, Claire Cardie, Serge J. Belongie,
+       Bharath Hariharan, and Ser-Nam Lim. Visual prompt tuning. In Proc. European
+

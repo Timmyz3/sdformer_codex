@@ -1,0 +1,1054 @@
+                                             This document is the paper as accepted for publication in IEEE Trans. Circuits and Systems for AI (doi:10.1109/TCASAI.2024.3520905).
+                                             ©2025 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or future media,
+                                             including reprinting/republishing this material for advertising or promotional purposes, creating new collective works, for resale or redistribution to
+                                             servers or lists, or reuse of any copyrighted component of this work in other works.
+
+
+                                            EvGNN: An Event-driven Graph Neural Network
+                                                    Accelerator for Edge Vision
+                                                            Yufeng Yang† , Adrian Kneip† , Member, IEEE, and Charlotte Frenkel, Member, IEEE
+
+
+                                             Abstract—Edge vision systems combining sensing and embed-                   tens of watts [11], far exceeding the power budget of common
+                                         ded processing promise low-latency, decentralized, and energy-                  edge vision systems.
+                                         efficient solutions that forgo reliance on the cloud. As opposed                   Event-based cameras, also called silicon retinas [12] or
+                                         to conventional frame-based vision sensors, event-based cameras
+                                         deliver a microsecond-scale temporal resolution with sparse                     dynamic vision sensors (DVSes) [13], have attracted growing
+arXiv:2404.19489v2 [cs.CV] 28 Feb 2025
+
+
+
+
+                                         information encoding, thereby outlining new opportunities for                   interest in low-power high-speed edge vision applications. As
+                                         edge vision systems. However, mainstream algorithms for frame-                  opposed to their frame-based counterparts, which record abso-
+                                         based vision, which mostly rely on convolutional neural networks                lute light intensity for every pixel in the field of view at a fixed
+                                         (CNNs), can hardly exploit the advantages of event-based vision                 sampling rate, event-based cameras are locally sensitive: their
+                                         as they are typically optimized for dense matrix-vector multipli-
+                                         cations. While event-driven graph neural networks (GNNs) have                   pixels are individually activated only when the received light
+                                         recently emerged as a promising solution for sparse event-based                 intensity changes beyond a preset threshold [14]. When this
+                                         vision, their irregular structure is a challenge that currently hin-            threshold is exceeded, event packets containing the pixel ad-
+                                         ders the design of efficient hardware accelerators. In this paper,              dress are generated. This event-driven scheme operating at the
+                                         we propose EvGNN, the first event-driven GNN accelerator for                    pixel level leads to (i) a temporal resolution on the order of mi-
+                                         low-footprint, ultra-low-latency, and high-accuracy edge vision
+                                         with event-based cameras. It relies on three central ideas: (i) di-             croseconds, which helps alleviate motion blur, and (ii) a power
+                                         rected dynamic graphs exploiting single-hop nodes with edge-free                consumption on the order of milliwatts thanks to sparsity [14].
+                                         storage, (ii) event queues for the efficient identification of local            Indeed, as no event is generated in the absence of light
+                                         neighbors within a spatiotemporally decoupled search range, and                 intensity changes, static background information is filtered out:
+                                         (iii) a novel layer-parallel processing scheme allowing for a low-              only the moving objects are contained in the event stream.
+                                         latency execution of multi-layer GNNs. We deployed EvGNN on
+                                         a Xilinx KV260 Ultrascale+ MPSoC platform and benchmarked                          As the standard neural network model for computer vision
+                                         it on the N-CARS dataset for car recognition, demonstrating                     tasks, convolutional neural networks (CNNs) have demon-
+                                         a classification accuracy of 87.8% and an average latency per                   strated excellent performance for scenarios such as object
+                                         event of 16µs, thereby enabling real-time, microsecond-resolution               recognition or detection [15]–[20]. However, since they are
+                                         event-based vision at the edge.                                                 optimized for the mainstream frame-based vision paradigm,
+                                           Index Terms—Event-based cameras, edge computing, graph                        techniques for sparse event-based data are still at an early
+                                         neural networks (GNNs), neural network accelerators, field-                     development stage. Indeed, current event-based vision systems
+                                         programmable gate arrays (FPGAs).                                               usually rely on a straightforward conversion of event streams
+                                                                                                                         into images by accumulating events from each pixel within a
+                                                                                                                         given time window, which is also known as the dense-frame
+                                                                   I. I NTRODUCTION                                      approach [21]–[23]. While this conversion allows leveraging
+                                                                                                                         mature frame-based algorithms to process event-based data,
+
+                                         E    DGE vision systems combine digital cameras and embed-
+                                              ded computing to capture and process visual information
+                                         within a limited power budget, typically ranging from milli-
+                                                                                                                         accumulation windows on the order of milliseconds are nec-
+                                                                                                                         essary to obtain reasonable performance [22], thus discarding
+                                                                                                                         the original microsecond-level resolution of the event-based
+                                         watts to a few watts [1]–[4]. While successful in a wide range                  data.
+                                         of applications, from the Internet-of-Things to robotics [5]–[7],                  As solving this challenge requires departing from frame-
+                                         edge vision systems relying on conventional frame-based                         based vision, graph representations of event-based data have
+                                         cameras are ill-suited for latency-critical scenarios requiring                 recently started being explored [24]–[26]. By regarding in-
+                                         decisions within microseconds, such as autonomous driving or                    dividual events as nodes and their spatiotemporal relation-
+                                         drone navigation tasks [8]–[10]. Nonetheless, standard frame-                   ships as edges, a stream of events can be represented as a
+                                         based cameras fail to meet these latency requirements as they                   fully equivalent graph (i.e. event graph) without degrading
+                                         typically capture 30-60 frames per second (FPS), while the                      the temporal resolution nor losing the inherent sparsity of
+                                         power dissipation of 1000-FPS high-speed cameras can reach                      the data. While this sparse event graph is well suited for
+                                                                                                                         processing by graph neural networks (GNNs) [27], [28], the
+                                            Yufeng Yang was with the Microelectronics Department (EEMCS Faculty),        standard approach consisting of first constructing the full
+                                         Delft University of Technology, 2628 CD Delft, Netherlands. Adrian Kneip
+                                         is with the Microelectronics Department (EEMCS Faculty), Delft University       event graph, and then processing it with a GNN, fails to
+                                         of Technology, 2628 CD Delft, Netherlands, and with the Department of           exploit the event-driven nature of the data and is bound to
+                                         Electrical Engineering, KU Leuven, 3000 Leuven, Belgium. Charlotte Frenkel      millisecond-level latencies in dedicated hardware [29], [30].
+                                         is with with the Microelectronics Department (EEMCS Faculty), Delft Uni-
+                                         versity of Technology, 2628 CD Delft, Netherlands. (Corresponding author:       To solve this challenge, techniques to construct and process
+                                         c.frenkel@tudelft.nl). † Co-first authors, contributed equally to this work.    the event graph in a dynamic fashion (i.e. on a per-event
+                                                                                                                                                                    2
+
+
+
+
+                                                                                                                                                       Prediction
+
+
+
+
+Fig. 1. Illustration of a typical event GNN pipeline. The colors of nodes represent their features. After the graph convolution, the features are updated (color
+changed). The graph pooling layer, where certain nodes are selected and edges are re-arranged, simplifies the graph structure through node down-sampling.
+The graph readout layer divides the graph into several grids, whose cells are assigned with node features. Finally, after flattening, the cell features are processed
+by the FC layer to derive the graph-level prediction results.
+
+
+
+basis) have recently been proposed [25], [26], thereby enabling                     ing steps toward deployment on edge hardware. Section IV
+both sparsity-aware and event-driven processing. However,                           covers the proposed EvGNN accelerator, while benchmarking
+designing efficient hardware accelerators for these sparse,                         results are finally provided in Section V. Both the proposed
+irregular, and fully data-driven workloads, is currently an open                    algorithm and the hardware are available in open source at
+challenge.                                                                          https://github.com/cogsys-tudelft/evgnn.
+   In this work, we introduce EvGNN, the first event-driven
+GNN accelerator for edge vision at microsecond-level laten-                          II. BACKGROUND – E VENT G RAPH C ONSTRUCTION AND
+cies that supports the end-to-end hardware acceleration of an                                    P ROCESSING A LGORITHMS
+event graph, from event-based input acquisition to dynamic                             In this section, we first introduce background information
+event graph construction and real-time GNN inference. Our                           for event graphs (Section II-A), GNNs (Section II-B), and
+main contributions are as follows:                                                  finally the methods allowing for an event-based construction
+   • We exploit the causality of event graphs through directed                      and processing of event graphs (Section II-C).
+     edges to achieve ultra-low-latency decisions by only
+     processing the local subgraph of direct neighbors around                       A. Event Graphs
+     a new event. This preserves accuracy while forgoing
+     the need to store edges, thereby drastically reducing the                         A graph G = {V, E} is a data structure where objects are
+     memory footprint.                                                              abstracted as nodes (vertices) V and their relationships are
+   • We adopt a hardware-friendly spatiotemporally decou-
+                                                                                    captured as edges E. Each node in a graph can be assigned
+     pled prism neighbor search during the event-graph con-                         additional information, referred to as features. Each edge,
+     struction. A dedicated search engine based on cascaded                         which connects two nodes, can be either undirected or have a
+     event queues is implemented in hardware to quickly                             fixed direction pointing from one node to another, thus forming
+     identify valid neighbors in the spatial then temporal                          an undirected or a directed graph, respectively.
+     dimensions, ensuring the efficient construction of event-                         Event stream data is a series of events generated from the
+     wise local subgraphs.                                                          activated pixels of event-based cameras, in which an event
+   • We introduce the concept of layer parallelism to speed up
+                                                                                    ev = (x, y, t, p) is represented as a combination of the pixel’s
+     the processing of event-based GNNs with directed edges,                        spatial position (x, y), the timestamp t, and the binary polarity
+     reusing past information on a new event’s neighborhood                         p = {0, 1} to indicate a positive or negative change in light
+     to parallelize the computation of every layer’s new fea-                       intensity, respectively. An event stream can be viewed as
+     tures, reducing the end-to-end update latency per event.                       a graph, denoted as an event graph, where each event is
+   • We finally deploy EvGNN on a Xilinx KV260
+                                                                                    represented as a node with two key features: the spatiotemporal
+     Ultrascale+ MPSoC platform and evaluate our design                             position (x, y, t) and the polarity p [32], [33]. Nodes connected
+     with the real-world dataset N-CARS [31]. We achieve                            by an edge are referred to as neighbors for each other. For a
+     a prediction accuracy of 87.8% with 8b weights and                             given node i, a subgraph N (i) consisting of all neighbors
+     activations, with an average latency per event of 16µs and                     and connecting edges is denoted as the 1-hop neighborhood
+     a total on-chip memory footprint of 1.76MB. We thereby                         of the node. Similarly, the 2-hop neighborhood subgraph will
+     demonstrate that µs-level edge vision can be achieved                          include the neighbors’ neighbors and their connecting edges,
+     with low-cost hardware solutions, avoiding the need and                        while the n-hop neighborhood subgraph will expand to the
+     cost of fabricating a dedicated accelerator on silicon.                        nth -order neighbors of the node [34].
+   This paper is organized as follows. Section II introduces key
+concepts and algorithms of event-based data, event graphs,                          B. Graph Neural Networks (GNNs)
+and GNNs. Our hardware-algorithm co-design approach is                                For inference on graph data, GNNs gather information from
+described in Section III, which reduces the computational                           nodes and edges of a graph to generate a new representation
+and memory footprints of graph construction and process-                            of the graph. Similar to CNNs, convolutional GNNs (simply
+                                                                                                                                                                                         3
+
+
+
+referred to as GNNs hereafter) are composed of graph convolu-                                                                       msg A                            msg D
+                                                                          XA                       XD          Message
+tional layers, graph pooling layers, graph readout layers, and           4.0    A          D       1.0        Generation            4.0
+                                                                                                                                               A            D
+                                                                                                                                                                        1.0
+                                                                                                                                    4.0                                 1.0
+standard fully-connected (FC) layers for the final prediction
+head (Fig. 1):                                                            XB                       XC             Φ()               msg B                            msg C
+                                                                                                                    1               3.0                                 2.0
+   1) Graph convolution: The general description of various              3.0    B          C       2.0        eg:         *X                   B            C
+                                                                                                                    1               3.0                                 2.0
+graph convolution types, typically expressed as a message
+passing algorithm, consists of three major steps: message                                                                                     ⊕            Aggregation
+                                                                                                                                                             eg: max
+                                                                                                                                              j∈N(i)
+generation, aggregation, and feature update [35]. As illustrated                                                 10
+                                                                          X'A                      X'D
+in Fig. 2, within a graph convolutional layer l, these steps are         1.0                       3.0
+                                                                                                             eg: 0 1 * msg
+                                                                                                                 10
+                                                                                                                                    from D             ×            from B,C
+                                                                                                                                                       √
+carried out for each node i as per Eq. (1) [36], ignoring by                                                                        1.0                                 3.0
+                                                                         1.0    A          D       3.0              γ()                        A            D
+                                                                         1.0                                                        1.0                                 3.0
+                                                                                                   3.0
+simplicity any edge feature aside from binary connectivity:              X'B                       X'C
+                                                                                                                  Feature       from C,D                            from B,D
+                                                                         2.0                       3.0            Update            2.0                                 3.0
+                                                                                                                                               B            C
+                                                
+                                                                         2.0    B          C       3.0                              2.0                                 3.0
+                                                                         2.0                       3.0
+                              M
+                l+1
+              xi = γ xli ,         ϕ xli , xlj  ,
+                                               
+                                                             (1)
+                             j∈N (i)
+                                                                    Fig. 2. Illustration of graph convolution, consisting of three steps: message
+where  xli ,   xlj
+               ∈R    Cin
+                       are the input feature vectors respectively   generation, aggregation, and feature update. In the graph, each node i has
+associated with the current node i and each of its neighbors        a feature vector. First, every node generates its message (colored numbers)
+j ∈ N (i), with Cin the number of input feature channels, and       by the differentiable function ϕ() (message generation, here illustrated with a
+                                                                    simple replication operation). Next, messages are exchanged through the edges
+xl+1
+  i    ∈ RCout is the resulting output feature vector with Cout     and nodes aggregate the messages they receive (aggregation, illustrated with a
+feature channels.                                                   max-value operation). Note that the message from A cannot be aggregated by
+    The convolution steps are thus as follows [37]:                 D due to the directed edge. Finally, the aggregated features are transformed
+                                                                    by γ(), generating the new layer’s feature vectors (feature update, illustrated
+   i) Message generation: for each neighbor j, the features         with a replication operation).
+      of node i and those of neighbor j, (xli , xlj ), go through
+      a learnable differentiable function ϕ() (e.g., a linear
+      transformation [27] or a multi-layer perceptron (MLP)              Input event stream: a                b         c       d         e
+      [38]).
+                                                                                                                                                                          d
+  ii) Aggregation: as each neighbor j of node i generates
+                                                                        (a)                                             Waits for                               a                    b
+      one message, all messages areL    aggregated by a chosen                                                    the whole event stream
+                                                                       Static
+      permutation-invariant function       (e.g., summation, av-                                                                                                    c            d
+
+      erage, or maximum). In the case of directed edges, a
+                                                                                                                                                                        GNN
+      message can only be aggregated if it points from j to i.
+ iii) Feature update: the aggregated message is transformed by                                                                                                          "Star"
+      another learnable differentiable function γ() to generate                                                                                d                          d
+
+      the xl+1
+            i  output feature vector of node i for the next GNN        (b)          a          b         a                  b         a                b        a                    b
+
+      layer.                                                         Dynamic
+                                                                                                              c                           c                         c            e
+
+
+   2) Graph pooling: Graph pooling layers down-sample the
+                                                                                        GNN                       GNN                         GNN                       GNN
+nodes of the input graph to generate a coarser representa-
+tion [37]. One typical method, cluster-based graph pooling                          "Background"         "Background"                "Background"                       "Star"
+(e.g., DiffPool [39] and EigenPool [40]), maps a group of
+                                                                    Fig. 3. Static and dynamic event graphs generated from the same event
+original nodes into a new node (cluster) and gathers their          stream. (a) The whole event stream is first transformed into a static event
+features into the cluster node. The number of nodes decreases,      graph, then uses a GNN to provide a prediction result. (b) Whenever a new
+while the connections between original node groups are kept         event is generated (shown in blue), the dynamic event graph is updated and
+                                                                    then processed by a GNN, thereby generating an updated prediction result on
+and rebuilt as the edges between new cluster nodes.                 a low-latency, per-event basis.
+   3) Graph readout: While graphs have a data-dependent
+number of nodes, the final FC classification head requires
+inputs with fixed dimensions. To solve this mismatch, graph         C. Event Graph Construction and Processing Strategies
+readout layers transform event graphs into a frame-based rep-
+resentation by globally pooling features of all nodes according        An event graph first needs to be constructed before it can be
+to a permutation-invariant function [37], [41], [42]. Several       processed by a GNN. The graph construction (also referred to
+variants exist, such as the grid-based graph readout used in the    as graph building) step populates an event graph with nodes
+work of Schaefer et al. [25], which operates by first defining      and connects them with edges if their spatiotemporal distance
+a 2D grid based on the spatial position (x, y) of each node,        is within a certain threshold. This step can take place either
+and then by executing the pooling operation for nodes within        in a static or a dynamic fashion [25], [26]. In the former, the
+each cell of the grid.                                              entire event sequence is pre-processed and edges are generated
+   4) FC prediction head: With the regular feature data pro-        according to the spatiotemporal positions of all events. In
+vided by the graph readout layer, a set of one or multiple FC       the latter, the graph is constructed on-the-fly: each new event
+layer(s) allows generating the final prediction results.            adds a node and its associated edges to the current dynamic
+                                                                                                                                                          4
+
+
+
+                                   GNN:                                    1-hop
+                                                                                            AEGNN:                             1-hop
+                                                                                                                                                HUGNet:
+                                  Layer 1                                                   Layer 1                                             Layer 1
+                                                       2-hop
+                                                           1-hop                                                  1-hop
+                                   GNN:                                    2-hop
+                                                                                            AEGNN:                             1-hop
+                                                                                                                                                HUGNet:
+                                  Layer 2                                                   Layer 2                                             Layer 2
+
+
+
+
+                                  GNN:                                     K-hop
+                                                                                            AEGNN:                             1-hop
+                                                                                                                                                HUGNet:
+                                 Layer K                                                    Layer K                                             Layer K
+
+                 (a)                                                      (b)                                                  (c)
+
+Fig. 4. Event-driven K-layer GNN processing schemes. (a) Naive scheme – A dynamic event graph, with the blue dot representing the new event node,
+is processed entirely for each layer of a conventional GNN. The colored nodes represent the updated features along the GNN, while uncolored ones depict
+unchanged features. (b) AEGNN scheme [25] – The same event graph is processed within a k-hop subgraph by the kth layer of the event-driven GNN, only
+involving nodes whose features will be effectively updated. (c) HUGNet scheme [26] – A directed dynamic event graph implies a causal flow of information,
+hence only the 1-hop subgraph is needed as the input of each layer, because the features of neighboring nodes remain untouched.
+
+
+
+graph. In other words, static graph construction is carried out                 neighbors within the K-hop range, constituted of past nodes,
+once the full event stream is available, while dynamic graph                    are fixed as information cannot flow in an anti-causal direction.
+construction occurs in an event-driven manner.                                  This implies that the processing range of a K-layer event-
+   The graph processing step, based on the execution of a                       driven GNN can be decreased from 1-to-K-hop subgraphs to
+GNN, is strongly dependent on the selected graph construction                   only the 1-hop subgraph, as illustrated in Fig. 4(c). Finally,
+strategy. Static graph construction is the most common strategy                 as the range of message passing is restricted to the 1-hop
+as it allows for the use of vanilla GNNs [24], [32], [33].                      neighborhood of each new event, edges can be computed on-
+However, it comes at the expense of latency, as the full                        the-fly for the 1-hop range: they do not need to be stored, nor
+event stream needs to be available before a prediction can                      computed beyond this range.
+be generated (Fig. 3(a)). To solve this issue, dynamic graph
+construction has recently been investigated to allow for event-                    III. H ARDWARE - AWARE GRAPH CONSTRUCTION AND
+based GNN execution [25], [26]: each new event not only                                                    PROCESSING
+updates the graph, it is also immediately processed by the
+                                                                                   Previous event-driven GNN algorithms (e.g., AEGNN [25]
+GNN to update node features and generate a new prediction,
+                                                                                and HUGNet [26]) have been developed without a direct
+a system that we refer to as an event-driven GNN (Fig. 3(b)).
+                                                                                consideration for actual hardware limitations faced by a de-
+   Naive event-driven approaches, which combine dynamic                         ployment at the edge, thereby making existing algorithms
+event graphs directly with conventional GNNs, imply that each                   challenging to map on platforms with restricted memory
+layer of the GNN has to process the entire updated graph each                   and computational resources. We introduce the first dedicated
+time a new event is received (Fig. 4(a)), thereby leading to a                  hardware platform for event-driven GNNs. In this section,
+high computational overhead [25]. However, as each layer of a                   we revisit the key steps of graph construction and processing
+GNN only needs information from the 1-hop neighborhood of                       towards an efficient hardware deployment, while minimizing
+a node for message passing (Eq. (1)), the final output features                 the penalty on accuracy (see Fig. 5 for an illustration of the
+of a node in a K-layer GNN are governed exclusively by its                      overall processing pipeline). We select the real-world task of
+K-hop neighborhood (i.e. the receptive field of the GNN) [43],                  car recognition with event-based vision, benchmarked on the
+[44]. This implies that, for dynamic event graphs, event-driven                 N-CARS dataset [31]. This dataset contains several 100-ms
+GNNs only need to process 1-to-K-hop subgraphs for each                         samples of event-based camera recordings, representative of
+layer upon the reception of a new event, rather than the whole                  an edge-vision use case. As of today, AEGNN is currently the
+graph. This technique, introduced in [25] as the asynchronous                   state-of-the-art event-driven GNN approach on N-CARS [25].
+event-based graph neural network (AEGNN) method and                             It will thus be adopted as a baseline, while our co-design
+illustrated in Fig. 4(b), significantly reduces computation while               developments will be carried out on a validation set from
+maintaining mathematical equivalence.                                           the N-CARS dataset consisting of 15% of the training set,
+   In their hemi-spherical update graph neural network                          following a bootstrap strategy [45]. All experiments below
+(HUGNet) solution [26], Dalgaty et al. exploit directed dy-                     report the average accuracy obtained over five trials.
+namic event graphs, where the edges can only point from
+past nodes to newly added ones (Fig. 4(c)). This makes
+message passing in GNN layers a causal process, as opposed                      A. Graph Construction
+to AEGNN where undirected graphs can lead to information                           During the first step of graph construction (Section II-C),
+being shared from new nodes to past ones, thereby leading to                    readily executed upon the reception of each new event,
+three key advantages. First, HUGNet solves one of the main                      spatiotemporal neighbors have to be identified and selected
+issues of AEGNN for event graph construction, namely that a                     within a certain spatiotemporal distance. This process, known
+new event node needs to wait for future potential neighbors.                    as radius search, is however computationally expensive: it
+Second, once a new event is received, only the features of the                  usually relies on a k-d tree search with frequent insertion
+corresponding new node need to be updated: features of its                      and deletion of node data for space partitioning, or on a
+                                                                                                                                                              5
+
+
+
+
+          (a) Event stream                       (b) Event graph                       (c) Subgraph processing by                    (d) FC and graph-level
+          with a new event                           construction                           a multilayer GNN                             prediction output
+
+Fig. 5. Proposed event-driven GNN processing pipeline. (a) A new input event (blue) in an event stream, and its neighboring past events, are processed
+together in an event-driven fashion. (b) The new event searches potential neighbors in the blue causal prism region, and connects with them by directed edges,
+thus constructing the event graph (Section III-A). (c) The updated event graph is processed by a multilayer GNN (Section III-B), where only (i) the 1-hop
+subgraph containing the new event is processed, and (ii) the features of the new node are updated. (d) The GNN updates the graph-level prediction.
+
+
+
+                                                                                                            TABLE I
+                                                                                P REDICTION ACCURACY FOR AEGNN WITH DIRECTED EDGES COMPARED
+                                                                                                TO THE ORIGINAL AEGNN BASELINE
+
+                                                                                                Edge type            Accuracy ± Standard Deviation
+                                                                                         Baseline (Undirected)               95.4% ± 0.49%*
+                                                                                               Directed                      95.7% ± 0.26%
+                                                                                         *   Based on AEGNN open-source codes on the validation set.
+
+
+
+                                                                                raw L1 and L2 distances are
+
+                                                                                      L1 (pos1 , pos2 ) = |x1 − x2 | + |y1 − y2 | + |t1 − t2 |
+                                                                                                            = |dx| + |dy| + |dt|,
+
+                                                                                                                 p
+                                                                                      L2 (pos1 , pos2 ) =            dx2 + dy 2 + dt2 .
+                                                                                   While the L2 distance is prevalent across previous graph-
+                                                                                based event vision algorithms [24]–[26], [32], [33], it involves
+Fig. 6. Illustration of four spatiotemporal neighbor search ranges: (a) hemi-
+sphere of radius r, (b) semi-octahedron, (c) cylinder with base radius rs and
+                                                                                the computationally costly square root function to calculate the
+height rt , and (d) prism, obtained by combining two different search schemes   spatiotemporal neighborhood range of a node. On the contrary,
+with two different Lp distance metrics. Note that the range parameters of all   the L1 distance only involves addition and absolute value
+search ranges can be tuned according to the selected application scenario.
+                                                                                functions, both of which are hardware-friendly. As illustrated
+                                                                                in Figs. 6(a) and 6(b) for directed edges, switching from an
+structural modification of the downstream GNN [24]. To solve                    L2 to an L1 distance transforms the search range from a hemi-
+this challenge, we propose to leverage directed edges and                       sphere to a semi-octahedron.
+simplified neighborhood search ranges.                                             Complementary to the choice of the distance function,
+                                                                                selecting the radius r that bounds the maximum spatiotemporal
+   1) Directed graph adaptation: Inspired by HUGNet [26],                       distance often involves the definition of a proper scaling
+which was proposed for optical flow estimation tasks (Sec-                      factor between time and space dimensions, which can have
+tion II-C), we adopt the directed graph idea for our classi-                    widely different scales (e.g., a few pixels vs. thousands of
+fication task scenario. Doing so reduces the spatiotemporal                     microseconds). Hence, previous works [25], [26] adopted a
+neighborhood search space from a full sphere to a hemisphere                    modified position pos∗i with a preset time-scaling factor β in
+(Fig. 6(a)), as relationships are now causal and no information                 the L2 distance:
+flows from future nodes to past nodes. Beyond simplifying
+the search space, we show in Table I that, compared to the                                                        p
+AEGNN baseline, adopting directed graphs does not adversely                              L2 (pos∗1 , pos∗2 ) =         dx2 + dy 2 + (β dt)2 ≤ r.          (2)
+affect accuracy performance.                                                    However, given that β can compensate for a scale difference
+  2) Prism neighbor search range: The neighbor search                           of several orders of magnitude, this approach is only practical
+range defines within which spatiotemporal region a previous                     when high-precision arithmetic is available. Therefore, instead
+event can be regarded as a neighbor to a new one. The distance                  of following a rescaling approach with a single spatiotemporal
+defined by the Lp norm of a difference vector of two position                   distance metric of radius r, we propose to separate it into
+vectors is known as the Lp distance [46]. For nodes in the                      two independent parts: the spatial distance range rs and
+R3 spatiotemporal space with position posi = (xi , yi , ti ), the               the temporal distance range rt . In this way, the spatial and
+                                                                                                                                                          6
+
+
+
+                           TABLE II                                                                   TABLE III
+P REDICTION ACCURACY FOR DIRECTED - EDGE AEGNN WITH DIFFERENT               P ERFORMANCE METRICS OF DIFFERENT TYPES OF GRAPH CONVOLUTION
+                      NEIGHBOR SEARCH RANGES
+                                                                                    Convolution Types                Acc. ± S.D.       #Parameters
+  Search Ranges           Search Scheme            Lp    Acc. ± S.D.               Baseline (SplineConv)           95.4% ± 0.49%          30.4k
+   Hemi-sphere                                     L2   95.7%   ±   0.26%                GCN conv                  92.5% ± 1.09%           4.7k
+                          Spatiotemporal
+ Semi-octahedron                                   L1   95.9%   ±   0.39%                This work                 95.1% ± 0.43%           4.8k
+    Cylinder                                       L2   95.5%   ±   0.41%
+                    Spatiotemporally-decoupled
+      Prism                                        L1   95.1%   ±   0.45%
+
+                                                                                                      TABLE IV
+                                                                                P ERFORMANCE METRICS FOR DIFFERENT NETWORK STRUCTURE
+temporal metrics can be decoupled, and each of them can be                                                  SIMPLIFICATIONS
+processed in different scales and resolutions. The spatial and
+temporal conditions for L2 and L1 distance metrics are given                        Structure                     Acc. ± S.D.      Param. Mem. Footprint
+in Eqs. (3) and (4), and correspond to the cylinder and prism                Baseline (AEGNN, FP32)             95.4% ± 0.49%              121.6kB
+                                                                                This work (FP32)                95.5% ± 0.50%               26.4kB
+search ranges illustrated in Figs. 6(c) and 6(d), respectively.                 This work (INT8)                95.4% ± 0.35%                6.6kB
+               p
+                  dx2 + dy 2 ≤ rs and dt ≤ rt                (3)
+
+
+                   |dx| + |dy| ≤ rs and dt ≤ rt                       (4)   in Table III. Nonetheless, B-splines bring a significant com-
+                                                                            putational burden as well as a vast parameter overhead, being
+   Table II provides the prediction accuracies of all four search           hardly compatible with low-latency and low-footprint event-
+ranges summarized in Fig. 6. The proposed prism search range                based vision at the edge.
+offers a lower footprint for deployment on custom hardware
+with an accuracy drop limited to 0.6%.                                         Alternatively, Qi et al. introduced PointNetConv [38], a
+                                                                            variant of graph convolution supporting positional encoding.
+                                                                            In each of the GCN layers, PointNetConv convolutions con-
+B. GNN Architecture Search and Optimization                                 catenate the relative position of each neighbor together with its
+   Once the graph construction phase for a new event is                     corresponding features, before applying a learnable transform
+over, graph features can be extracted by executing the GNN                  and a max-value aggregation. The updated features of node i
+algorithm. Two key design choices influencing the tradeoff                  for layer l + 1 are thus obtained as
+between performance and resource usage in GNNs are (i) the
+type of graph convolution operation, and (ii) the overall
+network architecture, which we investigate hereafter.
+  1) Graph Convolution: A standard baseline for graph con-                                                                                       
+volutions is the one proposed for the graph convolution                         xl+1
+                                                                                 i     =    l
+                                                                                           γΘ 0
+                                                                                                      max           ϕlΘ1 (xlj , posj   − posi ) ,       (6)
+                                                                                                   j∈N (i)∪{i}
+network (GCN) [27]. Based on Eq. (1), its node feature
+update at layer l can be expressed for unitary edge and linear
+operators as
+                                                                                     l
+                                                                          where γΘ   0
+                                                                                         , ϕlΘ1 are multi-layer perceptrons (MLPs) with
+                            X                    xlj                        weights Θ0 and Θ1 , respectively. Such a graph convolution
+      xl+1
+       i   = ΘT
+              l ·
+                                     p                       ,      (5)   avoids the resource-intensive B-splines while properly behold-
+                        j∈N (i)∪{i}
+                                           (dj + 1)(di + 1)                 ing spatial information. Still, it requires to store large end-to-
+                                                                            end MLP models. Therefore, we introduce here a simplified
+where di , dj are the degrees (i.e. the numbers of neighbors) of
+                                                                            version of Eq. (6), in which ϕ is reduced to a single linear
+nodes i and j, respectively, serving to normalize the features
+                                                                            layer and γ performs the identity operation. Hence, the features
+of each neighbor j (i.e. message generation), before summing
+                                                                            update becomes
+them (i.e. aggregation) and applying a linear transformation
+with learnable parameters Θl ∈ RCin ×Cout (i.e. feature up-
+date). This operation is applied for each convolutional layer l
+of the GCN. While Eq. (5) only depends on the neighbors’                                                                                      
+features, and thus hardly exploits information related to the rel-                     xl+1
+                                                                                        i   = max               ΘT    l
+                                                                                                                 l · xj , |dxi,j |, |dyi,j |        .   (7)
+                                                                                                  j∈N (i)
+ative positions between two nodes, recent event-based GNNs
+such as AEGNN [25], [26] have aimed to explicitly exploit
+this information via SplineConv, a graph convolution method
+derived from [28] that encodes the positional information                      Table III shows that, while using 6.3× less parameters
+of neighboring nodes using B-spline kernels, on top of the                  than the SplineConv-based AEGNN baseline, our simplified
+nodes’ features. The wider representation ability unlocked by               PointNetConv in Eq. (7) still achieves a comparable accuracy.
+this encoding was shown to help improve the classificaton                   This further underlines the importance of preserving spatial
+accuracy of event-based GNNs on several tasks, as highlighted               information along the GCN layers.
+                                                                                                                                                                                   7
+
+
+
+              (x,y,t,p)                                                                        PL (GNN accelerator)
+                                              Graph Conv                                                                                         AXI Lite
+              1→8                             Block                                             Control and Configuration                                      PS (ARM)
+                                                                                               Time               FSM          HW
+                                              Graph Max                           (x,y)
+                                                                                              stamp
+                                                                                                       Polarity
+                                                                                                                  stage       status
+                                                                                                                                       Params
+              8 → 16                          Pooling
+
+                                              Graph Readout                                               Datapath
+             16 → 16
+                                                                                  Graph               Graph         Graph
+                                                                                                                                        FC                    DRAM
+                                              FC Head                            building             conv.        readout
+             16 → 16
+                                                                                                                                                 AXI MM
+                 +
+                                                (x,y,t,p)                                             AXI Communication
+             16 → 32
+                                              1+2 → 16
+                                                                             Fig. 8. Overall system architecture and partition on the target host FPGA.
+                                              16+2 → 32                      The EvGNN accelerator is located in the PL, while the PS host CPU is mainly
+             32 → 32                                                         responsible for benchmarking and monitoring.
+                                              32+2 → 32
+             32 → 32                                                                                           New events async. FIFO
+                                              32+2 → 32                        Stream-in               Event i+N              Event i+1         Event i     (x,y,t,p)
+                 +
+
+            Grids: 4 x 4                      Grids: 8 x 7                      (dx, dy)ij < rs        Trigger      (xi,yi)                  Store       Graph Building
+                                                                                                          Spatial Neighbor                      (W,H)
+           16 x 32 → 2                       56 x 32 → 2                                                                                                                Event 2
+                                                                                                             Selection                                                  (3us,0)
+                                                                                                                                                 (x,y)
+            Prediction                        Prediction
+                                                                                                                                              (0,2)                     Event 5
+                                                                                                              Candidate Buf.
+      (a) Baseline (AEGNN)              (b) Proposed structure                                                                          Seq. (0,1)                      (12us,1)
+                                                                                   dtij< rt                                      ti
+                                                                                                                                       search (0,0)                     Event 9
+                                                                                                                                                                        (15us,0)
+Fig. 7. GNN architecture of (a) the baseline (AEGNN), and (b) the proposed                               Temporal Neighbor
+                                                                                                                                            (120x100)x16x32b
+simplified network. A Graph Conv Block contains a graph convolution,                                         Selection
+                                                                                                                                          Event-queues Buffer             (t,p)i
+an activation function, and a batch normalization layer, where batchnorm           Valid
+folding [47] can be applied. Numbers labeled on graph convolution blocks        neighbor(s)                       to GNN
+indicate the corresponding input → output channel dimensions. The +2 part
+in (b) corresponds to the concatenated position differences in Eq. (7).      Fig. 9. Hardware diagram of the graph-building module, highlighting the
+                                                                             execution flow. For each new event i, a two-step neighbor-search process
+                                                                             is carried out among past events, stored in an on-chip buffer following an
+                                                                             event-queue format (W×H, i.e. 120×100 queues of 16 entries each in the
+   2) Network Architecture: Toward a low-cost hardware im-                   N-CARS case, to match the DVS camera’s dimensions). The search for
+plementation, we simplify the AEGNN architecture as pre-                     neighbors follows the spatiotemporally decoupled prism shape, using the
+sented in Fig. 7. We show that (i) using a shallower structure               event’s coordinates (xi , yi , ti ). The coordinates of the valid neighbors are
+                                                                             buffered and sent to the graph convolution unit for subsequent processing.
+based on PointNetConv graph convolution layers, (ii) remov-
+ing residual connections and graph pooling layers, and (iii) ap-
+plying batchnorm folding [47] together with post-training                    A. Overall System Architecture
+quantization [48] to INT8, allows reducing the required num-
+ber of parameters by 5× without adversely affecting the                         Xilinx MPSoC platforms contain Programmable Logic (PL)
+classification accuracy (Table IV). Note that, since quantizing              together with a Processing System (PS). A system overview is
+from 32-bit floating-point (FP32) to INT8 only induces a                     shown in Fig. 8: our EvGNN hardware accelerator is located in
+0.1-% accuracy drop, FP8 has not been considered an option                   the PL, while an ARM core in the PS acts as a host CPU that
+worth investigating. Indeed, FP8 MAC units require 23× more                  is responsible for (i) loading dataset samples from the external
+resources than their INT8 counterpart when targeting an FPGA                 DRAM, (ii) feeding data to and reading prediction results from
+implementation [49] and suffer from a 3× higher delay per                    EvGNN through AXI system buses, and (iii) calculating the
+MAC operation [50], which would adversely impact latency                     prediction accuracy and measuring the runtime.
+for negligible accuracy gains over INT8.                                        The EvGNN accelerator consists of three major blocks.
+                                                                             The Datapath block is the core implementation of our event-
+                                                                             driven GNN algorithm in hardware. It mainly consists of
+      IV. P ROPOSED H ARDWARE A RCHITECTURE FOR                              a graph building module, a graph convolution module, as
+                  E VENT- DRIVEN GNN S                                       well as graph-readout and FC modules for classification. The
+   In this section, we design a hardware architecture that                   Control and Configuration block receives event-based data and
+accelerates the graph construction (i.e. building) and process-              configurable parameters from the PS, broadcasts them to the
+ing algorithms introduced in Section III for a low-power,                    Datapath block, then sends the prediction results back to the
+low-latency deployment at the edge. The proposed hardware                    PS. Finally, the AXI Communication block implements AXI
+accelerator, EvGNN, targets modern Xilinx MPSoC platforms,                   protocols, including data buffers. In the following, we will
+serving here as demonstrators for µs-level latency in low-cost               elaborate on the modules of the Datapath block for graph
+edge vision.                                                                 building and GNN computation.
+                                                                                                                                                             8
+
+
+
+
+Fig. 10. Event graphs processed by an example GNN containing two graph convolutional layers, Conv 1 and Conv 2, both of which consist of a simple
+average-and-replicate operation for illustration purposes. (a) A directed static event graph is processed by the GNN. Each graph convolutional layer is applied
+sequentially, while computation of new features can be parallelized over nodes. (b) A directed dynamic event graph is processed by the GNN in an event-driven
+fashion, with new events colored in blue. The inputs of layers have colored backgrounds with white fonts, while the outputs of layers have white backgrounds
+with colored fonts. The outputs are identical to those computed with the static graph. Note that the output of a convolutional layer is only used as an input
+by the next layer for future events, as shown with dotted gray arrows. (c) The proposed layer-parallel execution of the same directed graph processed by an
+event-driven GNN, which is mathematically equivalent to (b).
+
+
+
+B. Graph-building Module                                                         spatial and temporal search steps of Eq. (4) independently.
+                                                                                 First, according to the (xi , yi ) location of the new event,
+   As introduced in Section III-A, the first step is to build                    spatial search (Fig. 9, orange) is performed to pick all event
+a local, directed dynamic event graph upon the reception                         queues within an L1 spatial distance rs from the new event.
+of each new event. A block diagram of the graph-building                         They are accessed from the event-queues buffer and transferred
+module is shown in Fig. 9, together with an illustration of                      to a candidate-events buffer, skipping out-of-bound locations
+its execution flow. This module is based on two core design                      around the target node. Then, the temporal search process
+decisions regarding (i) the storage of the event graph, and                      (Fig. 9, green), which can be pipelined with the spatial one,
+(ii) the selection of neighbors for each new event.                              subtracts the timestamps tj of each candidate event from the
+   1) Event queues for graph storage: As the use of directed                     current timestamp ti . The obtained time difference dtij is then
+graphs allows us to forgo the storage of edges (Section II-C),                   compared to the temporal radius rt to select valid neighbors
+only the nodes need to be stored and accessed, which can                         amongst candidates, which are sent to the graph-convolution
+be done in a straightforward manner with event queues [24],                      module and stored in the graph convolution unit’s neighbor
+[51], as depicted in Fig. 9. All queues are stored in a global                   buffer (Fig. 11, left). The buffer’s depth Dmax = 16 bounds
+event-queues buffer, where each queue is associated with a                       the maximum number of neighbors per new event, triggering
+pixel of the input DVS camera and stores events whose spatial                    an early stopping of the search process once full.
+position is the same as this pixel’s physical position (x, y).
+Event information other than the spatial coordinates is stored
+in the queue entries, including the timestamp t, the polarity                    C. Graph-convolution Module
+p, and the event index in the event stream n, numbered in                           In the graph-convolution module, we first introduce the
+chronological order. Pushing a new event pops the oldest one                     concept of layer-parallel execution in event-driven GNNs.
+if the queue is full, whereas every entry can be independently                   Then, we propose a hardware architecture and computation
+read-accessed.                                                                   flow for this module that exploits this layer-wise parallelism.
+   2) Spatiotemporally decoupled neighbor selection: In order                       1) Layer-parallel execution: When using GNNs with static
+to implement the spatiotemporally decoupled prism search                         directed graphs (Fig. 10(a)), the features of all nodes change
+range introduced in Section III-A, we leverage the fact that the                 after each convolutional layer. As updating the node features of
+event queue storage scheme intrinsically decouples space and                     the current layer depends on the new features of the previous
+time: spatial information is found in the event queue index,                     one, layers need to be executed sequentially. However, when
+while temporal information is found inside the entries of a                      using dynamic directed event graphs, the causal nature of
+queue. This allows the graph-building module to perform the                      the graph prevents any feature update of the previous nodes,
+                                                                                                                                                            9
+
+
+
+
+                            Graph Conv                                                      L3        Layer-Parallel Execution          (5) Send to graph
+                                                                                                                                                  readout
+                                                                    (3) Iterate over L0
+                                                                   input channels                Aggregation              BAQ
+                               Neighbor
+                                                                   (x,dx,dy)00
+                               Counter
+                                                                                 Output-
+                                                                                 Parallel         Message
+                                      (1) Fetch features
+     Neighbor Buffer                                                             MatVec
+                                      of neighbors from                                          Generation
+                                                                                  Unit
+        Neighbor 0                   DRAM sequentially
+                                                                                                                                           New event
+                                                                   (2) Iterate over                                                       out. features
+        Neighbor 1                                   Event Index         neighbors                                                           L0 - L3
+                                     Event Index n    to DRAM
+                                                     Address Map
+                                                                    Neighbors'
+       Neighbor 15                                                               Nb. 0       Nb. 1               Nb. 15                     DRAM
+                                                                     Features
+                                                         AXI MM
+                                                                               (x,dx,dy)00 (x,dx,dy)10         (x,dx,dy)150        L3     Address Map
+                                                                      Buffer
+                                                                                                                              L0
+                                                                                                                              (4) Save new
+                                                                                                                              event features
+
+
+                                                                                        PS DRAM
+
+
+Fig. 11. Hardware diagram of the graph convolution module, corresponding to the four-layer network architecture in Fig. 7. Node features are first loaded
+from off-chip DRAM to the graph convolution module through AXI MM buses (i), according to the nodes in the neighbor buffer. Afterwards, for every
+neighbor (ii), the graph convolution engine performs message passing, iterating over every input channel (iii) before performing the message aggregation.
+The execution of these steps is parallelized in the MatVec unit across the output channel dimension as well as every layer, according to our layer-parallel
+execution scheme. Then, bias-activation-quantization (BAQ) is applied to generate features of the new event, which are stored back into the DRAM (iv). The
+last layer’s updated feature is eventually sent to the readout unit (v).
+
+
+
+such that only the features of new incoming events have to                                 aggregation sub-units for every layer l in parallel (2).
+be processed, based on their local neighborhood (Fig. 10(b)).                              As detailed in Fig. 12, each message-generation unit per-
+Moreover, for convolution operations such as Eq. (7), the                                  forms a matrix-vector multiplication between a neighbor’s
+computation of output features related to a new event only                                 feature vector and the weight matrix Θl of that layer,
+depends on the node’s past neighboring node features, thereby                              stored in a local BRAM. This operation takes place in
+                                                                                             l                                              l
+removing any data dependency between GNN layers to com-                                    Cin  + 2 cycles and is parallelized across all Cout output
+pute a new node’s features. Hence, as shown in Fig. 10(c),                                 channels by means of a MatVec unit, which embeds
+each layer’s features associated with the new node’s neighbors                             one digital multiply-and-accumulate (MAC) engine per
+can be first retrieved, before executing all graph convolutional                           output channel (3). Then, the aggregation unit receives
+layers in parallel to get their new node’s features. This layer-                           the newly generated Cout messages and performs a max-
+parallel approach bounds the total execution time to that of                               valued comparison, so as to sequentially keep track of
+the largest GNN layer, and thus drastically shortens the overall                           the maximum element per output channel across all
+per-event latency in multi-layer GNNs while leaving the total                              neighbors (2). Finally, a bias term, ReLU activation
+number of operations unchanged.                                                            function, and quantization to INT8 is applied to each
+                                                                                           selected output, which are abbreviated as BAQ in Fig. 11.
+   2) Graph-convolution hardware architecture: The hard-
+                                                                                      iii) New event features storage – The outputs of the four BAQ
+ware diagram of our graph-convolution module with layer-
+                                                                                           units are the new event’s output feature vectors, one for
+parallel execution is shown in Fig. 11. It involves three main
+                                                                                           each layer. These features are eventually sent back to the
+stages, which can be pipelined.
+                                                                                           external DRAM over the AXI MM bus (4), while the
+  i) Neighbors features retrieval – Neighbors are sequentially                             last layer’s output is sent to the graph-readout module to
+     popped from the neighbors buffer, one at a time (1). The                              serve in the graph prediction update (5).
+     features of the selected neighbor, previously computed
+     for all graph convolutional layers, are fetched from the
+     external DRAM, which is accessed through an AXI MM                              D. Graph-readout and FC Modules
+     bus via the PS.                                                                   Once a new event has been received and processed by
+ ii) Layer-Parallel Execution – This step implements the                             the Graph-building and the Graph-convolution modules, the
+     graph convolution of Eq. (7), parallelized across all four                      prediction of the overall graph can be updated, which is
+     GNN layers as per the selected network architecture                             carried out by the Graph-readout and FC modules (Fig. 8).
+     (Fig. 7). The features vector (xj , |dxij |, |dyij |)l of each                  The former implements a grid-based graph-readout layer
+     neighbor, including its relative position information, are                      (Section II-B3), which divides the full 120×100-pixel input
+     sequentially broadcast to the message generation and                            range into an 8×7 grid and selects the maximal features
+                                                                                                                                                                  10
+
+
+
+                   Msg. gen. module                     Aggr. module                                              TABLE V
+ Input vector buffer                                                                     R ESOURCE USAGE OF E V GNN ON THE X ILINX KV260 PLATFORM .
+                   Cinl +2 iterations per nb           1 per neighbor (nb)
+  (x,dx,dy)jl
+
+
+                      xn               MatVec unit                                                Resources              Used      Available     Utilization
+                                                                                                           LUT          30,908      117,120        26.4%
+                     l                                       Aggr. 1
+                    Θ1,n               MAC1                                                  Logic          FF          24,083      234,240        10.3%
+                                                                                                           DSP           228         1,248         18.3%
+                                                                                                        LUTRAM          0.45 kB     0.44 MB         0.1%
+                     l                                                                      On-chip
+                    Θ2,n               MAC2                  Aggr. 2                        memory
+                                                                                                         BRAM           85.2 kB     0.63 MB        13.2%
+                                                                                                        UltraRAM        1.68 MB     2.25 MB        75.0%
+
+
+
+
+                                                                           to BAQ
+                                  Partial-sum reg.          Max-nb reg.
+          Layer                                                                                                  TABLE VI
+         Weights                                                                         S UMMARY AND PERFORMANCE COMPARISON OF STATE - OF - THE - ART
+         (BRAM)                   Cinl +2                                                    EVENT- DRIVEN APPROACHES ON THE N-CARS TEST SET.
+                     l
+                    Θm,n                                       Max.
+                                                                                      Networks                   Type     Local      MFLOPs/ev+        Accuracy
+                                                                                      H-First [52]             Spikes        ✗           N/C             56.1%
+                                                                                      HATS [31]                 TS           ✗           N/C             90.2%
+                    ΘCl out
+                        l
+                            ,n        MACCout
+                                          l                 Aggr.    l
+                                                                    Cout              YOLE [53]                 EH           ✓           328             92.7%
+                                                                                      AsyNet [54]               EH           ✓           21.5            94.4%
+                                                                                      NVS-S [24]               Graph         ✓            5.2            91.5%
+Fig. 12. Hardware diagram of the message generation (Msg. gen.) and                   EvS-S [24]               Graph         ✓            6.1            93.1%
+aggregation (Aggr.) sub-units, including a MatVec unit and BRAM weight                AEGNN [25]               Graph         ✓            0.6*           86.7%*
+storage. The input vector (xj , dxij , dyij ) of the selected neighbor j contains
+the Cin concatenated node features of the current layer l and the node’s              Ours (software)          Graph         ✓           0.07            88.0%
+position difference (see Eq. (7)). The MatVec unit performs Cin +2 sequential         Ours (hardware)          Graph         ✓       0.07 (INT8)         87.8%
+accumulations, parallelized across the output feature dimension using Cout           +   Algorithmic computational efficiency as the total number of floating-
+MAC units. The Cout output messages are then broadcast to aggregation                    point operations (MFLOPs) per event, at the exception of the
+units, which store for each output channel the max-valued message amongst                EvGNN hardware using INT8 OPs. 1 MAC = 2 OPs.
+the sequentially-addressed neighbors.                                                *   Based on the AEGNN open-source code on the N-CARS test set
+                                                                                         and on updated work [55].
+
+within 16×16-pixel patches. The latter then implements the
+                                                                                    platform, targeting edge vision applications. As outlined in
+FC prediction head that provides classification results. In order
+                                                                                    Section IV, EvGNN is implemented in the PL while an ARM
+to carry out the matrix-vector multiplication between the FC
+                                                                                    core in the PS takes care of feeding data to EvGNN and
+weight matrix and the output of the readout layer, we reuse
+                                                                                    collecting its performance metrics, such as the runtime per
+the MatVec unit presented in Fig. 12.
+                                                                                    sample and the overall classification accuracy.
+
+                                    V. R ESULTS
+                                                                                    B. Implementation and Benchmarking Results
+   We evaluate the performance of the designed EvGNN
+accelerator on the N-CARS dataset after implementing it                                The FPGA resource usage of our EvGNN accelerator is
+on a resource-constrained edge platform. Hereafter, we first                        reported in Table V. The logic usage amounts to 26.4% of
+introduce the experimental setup before assessing the achieved                      look-up tables (LUTs) as logic, 10.3% of flip-flops (FFs), and
+performance and comparing it to the state of the art.                               18.3% of digital signal processors (DSPs), which are mainly
+                                                                                    used for MAC units in the graph-convolution module. On-
+                                                                                    chip memory resource usage amounts to 0.1% of LUTRAM,
+A. Experimental Setup                                                               13.2% of BRAM, and 75.0% of UltraRAM, which are mainly
+   On the software side, experiments are carried out on                             consumed by the event queues in the graph-building module.
+NVIDIA RTX A6000 GPUs while implemented, trained, and                                  State-of-the-art event-driven algorithms are summarized in
+tested using the PyTorch Geometric (PyG) library [36]. Sim-                         Table VI and compared to EvGNN in terms of computational
+ilarly to AEGNN [25], we first train our event-driven GNN                           complexity (MFLOPs per event) and classification accuracy.
+using static event graphs pre-compiled from the N-CARS                              Methods described as local only process a neighboring re-
+event streams, where the total N-CARS training data (15,422                         gion around the new event. H-First [52] uses spiking neural
+event stream samples) is divided into 85% as a training set and                     networks (SNNs) to process event-based data, which support
+15% as a validation set, following the bootstrapping approach                       event-driven processing but are updated in a global fashion for
+(Section III). We use a batch size of 64 and an initial learning                    each new event. HATS [31] exploits time-surface (TS) repre-
+rate of 0.002 on the Adam optimizer with 100 epochs. After                          sentations of event streams, which are processed by global
+training, we benchmark our event-driven GNN for inference                           classifiers. YOLE [53] and AsyNet [54] use event histograms
+using the N-CARS test set (8,607 event stream samples),                             (EH) to achieve both event-driven and local computation, but
+where we represent data as dynamic event graphs.                                    require 20× more parameters than our graph-based approach,
+   On the hardware side, the EvGNN accelerator is deployed                          degrading the update latency and memory footprint. Finally,
+on a Xilinx KV260 development board, which contains a                               the graph-based NVS-S and EvS-S from [24], as well as
+Zynq UltraScale+ MPSoC in a Kria K26 System-On-Module                               AEGNN from [25] are both event-driven and local. On the
+                                                                                                                                          11
+
+
+
+                                                                            transfers and thereby improve the energy efficiency [56], [59]
+                                                                            at the expense of end-to-end latency, from graph loading to
+                                                   HW (meas.)               inference update. Besides, the synchronous processing in these
+                                                                            accelerators requires the storage of the entire graph structure,
+              HW model
+                                                                            including all edge-related information. This storage amounts
+              (simu.)
+                                                                            to a >50% memory overhead [56], which is not desirable
+                                                                            for a compact deployment at the edge. These fundamental
+                                                                            differences in constraints and use cases preclude a direct
+                                                                            performance comparison between both kinds of architectures.
+                                                                            Recent partial asynchronous acceleration in [60] resulted in a
+                                                                            latency per event of 4.5ms, which is still beyond the target
+                                                                            µs-level range.
+
+
+                                                                            D. Silicon Implementation and Scalability Perspectives
+                                                                               Our FPGA demonstrator paves the way to energy-efficient
+Fig. 13. Classification accuracy obtained with EvGNN as a function of the   on-silicon accelerators based on the EvGNN architecture. To
+number of events on samples of the N-CARS test set.
+                                                                            estimate the expected latency and energy of such a system,
+                                                                            we developed a cycle-accurate model of the accelerator using
+one hand, NVS-S and EvS-S adopt a slide graph convolution                   Python, as described in Fig. 14(a). We consider a 28nm
+method to achieve local computation. They first identify nodes              bulk CMOS process node, a unified core voltage of 0.8V, a
+and edges to be updated within the K-hop subgraph of the                    frequency of 200MHz, and an off-chip bandwidth for DRAM
+new event, using a sliding window, before applying graph                    transfers of 3.2Gb/s. For energy estimates, logic units (MACs)
+convolution on these elements. On the other hand, AEGNN                     rely on a scaled version of [61] to 28nm, while both on-
+identifies the increasing neighborhood reached along the GNN                chip SRAM buffers and DRAM rely on the CACTI estima-
+layers, processing neighbors from the 1-hop subgraph to                     tor [62], which is the de-facto tool for modeling memories.
+the K-hop one. In contrast to these methods, our approach                   The resulting EvGNN application-specific integrated circuit
+cuts the computational complexity of convolutional operations               (ASIC) accelerator would occupy a silicon area of 2.5mm2 ,
+by relying on local computation within 1-hop subgraphs, in                  while achieving a per-event latency and energy of 10.7µs and
+an event-driven fashion. Despite being optimized for low-                   305nJ on the N-CARS dataset, respectively. In particular, the
+footprint edge applications, we achieve classification accura-              proposed layer-parallel execution scheme reduces the latency
+cies of 88.0% (FP32, software) and 87.8% (INT8, hardware)                   footprint of the graph convolution from 6.9µs to 2.6µs, an
+on the N-CARS test set, which outperforms the classification                improvement by 2.5×. These numbers are orders of magnitude
+accuracy of AEGNN. The achieved accuracy thus remains                       below what is achievable by high-performance CPUs (AMD
+competitive with state-of-the-art works, while EvGNN enables                EPYC 7763 64-Core Processor 3.2GHz) or GPUs (NVIDIA
+an improvement in computational efficiency from two to three                RTX A6000) running the developed algorithm in Python (Fig.
+orders of magnitude. The dynamic, event-by-event classifica-                14(b)). They are also 100× better than the estimated metrics
+tion accuracy of EvGNN is reported in Fig. 13, which shows                  for an off-the-shelf deployment on a modeled micro-controller
+that, for low-latency applications, reliable classification can             unit (MCU) based on [63], where the event-driven algorithm is
+be obtained without having to process the full duration of                  executed in compiled C code. This gap in performance further
+N-CARS samples, with an average latency per event of 16µs.                  emphasizes the importance of building dedicated event-driven
+Hence, the event-driven GNN hardware acceleration enabled                   GNN accelerators to enable efficient irregular graph processing
+by EvGNN allows exploiting the µs-level resolution of event-                at the edge.
+based cameras at the edge.                                                     While our EvGNN accelerator can map event-driven GNNs
+                                                                            of any size and achieves excellent latency and energy results
+                                                                            on the N-CARS dataset, several challenges may appear when
+C. Synchronous vs. Asynchronous GNN Accelerators                            scaling up to larger, real-world scenarios (e.g., [55]). In
+   While hardware acceleration for GNNs has started gaining                 particular, three main challenges would pressure the latency,
+interest [29], [56], we would like to further emphasize that                energy and area breakdown of the accelerator in Fig. 14(c),
+prior designs all target the synchronous processing of large,               for which we identify possible solutions. First, scaling to
+static graphs. Their typical target workloads consist of large-             high-resolution DVS cameras (e.g., QVGA [64] or HD [65]
+scale databases [57] or molecular structures [58], for which the            resolutions) would induce a quadratic increase in the size of
+real-time constraint is typically on the order of milliseconds              the event-queue buffer, demanding significant silicon area for
+or more, orders of magnitude above the few-µs target of                     an irregular, event-dependent utilization of the storage space.
+the latency-critical event-driven systems considered in this                Moving the storage of event queues off-chip would alleviate
+work. Synchronous GNN accelerators can therefore afford                     this area bottleneck at the cost of ∼ 10% additional latency
+a priori analysis of the graph to harness partitioning and                  and energy, from our model estimates. Avoiding the storage
+execution-rescheduling techniques, which reduce irregular data              of one event queue per pixel would be another viable option,
+                                                                                                                                                                                                                                       12
+
+
+
+                                                                                                                                 Latency/ev [ms]
+              Cycle-accurate Python HW Model
+                                                                                                                                      0.1    1       10
+                                                                                                                                                                                   ACKNOWLEDGMENTS
+                   EvGNN Accelerator Chip                                                            3.2GHz AMD EPYC
+                                                                                                                                                             The authors would like to thank Prof. Marian Verhelst
+                                                                                                      CPU (Python shell)
+                             Graph Build                                                                                                                  (KU Leuven) and Dr. Christoph Posch (Prophesee) for fruitful
+  New Event
+
+
+
+
+                                                                     Prediction (Car, Pedestrian)
+                   1MB SRAM                Spatial    Temporal                                             Nvidia RTX6000
+                  Event-Queues             Search      Search                                             GPU (Python cell)                               discussions and feedback.
+                                                                                                                 Measured
+
+                         Graph Conv                                                                               Modeled
+                                                          Pool
+                                                            +                                        80MHz STM32L476                                                                     R EFERENCES
+                 MatVec     Aggr.      ReLU                FC                                         MCU (Compiled C)
+                                                                                                                                                           [1] Z. Wang et al., “Sparse-yolo: Hardware/software co-design of an fpga
+                                                                                                                                100     reduction
+                                                                                                            200MHz EvGNN
+                                                                                                                                                               accelerator for yolov2,” IEEE Access, vol. 8, pp. 116 569–116 585, 2020.
+                                                                                                                     ASIC                                  [2] P. Bonazzi et al., “Tinytracker: Ultra-fast and ultra-low-power edge
+              DRAM                   GNN Features
+                                                                                                                                  1         10      100        vision in-sensor for gaze estimation,” in IEEE SENSORS, 2023, pp. 1–4.
+                                                                                                                                  Energy/ev [μJ]               DOI : 10.1109/SENSORS56945.2023.10325167.
+(a)                                                                                                 (b)                                                    [3] F. Conti et al., “Pulp: A ultra-low power parallel accelerator for energy-
+                                                                                                                                                               efficient and flexible embedded vision,” Journal of Signal Processing
+                Latency/event                             Energy/event                                                        Silicon Area                     Systems, vol. 84, pp. 339–354, 2016.
+  10.7μs                                             305nJ                                                       2.47mm²                                   [4] J. Tang et al., “Lopecs: A low-power edge computing system for real-
+                 21.8%     24.7%                                                            26.0%                                                              time autonomous driving services,” IEEE Access, vol. 8, pp. 30 467–
+                                                                                                                          97.2%
+                                    1.9%                                                             0.5%
+                                                                                                                                             3.8%              30 479, 2020. DOI: 10.1109/ACCESS.2020.2970728.
+                                                             73.5%                                                                                         [5] S. Benninger et al., “Edgeeye: A long-range energy-efficient vision node
+                     51.5%
+                                                                                                                                                               for long-term edge computing,” in International Green and Sustainable
+                                                                                                                                                               Computing Conference (IGSC), 2019, pp. 1–8.
+              Graph Build        Graph Conv Ops                  Weight Transfer                                       Feat. Transfer (incl. DRAM)
+(c)                                                                                                                                                        [6] H. Genc et al., “Flying iot: Toward low-power vision in the sky,” IEEE
+                                                                                                                                                               Micro, vol. 37, no. 6, pp. 40–51, 2017. DOI: 10.1109/MM.2017.4241339.
+Fig. 14. (a) Block diagram of the EvGNN-based system considered for cycle-                                                                                 [7] L. Huang et al., “Obstacle distance measurement under varying illumi-
+accurate modeling in a 28nm bulk CMOS process using Python. (b) Per-                                                                                           nation conditions based on monocular vision using a cable inspection
+event latency and energy comparison between EvGNN’s algorithm execution                                                                                        robot,” IEEE Access, vol. 9, pp. 55 955–55 973, 2021. DOI: 10.1109/
+on different platforms: a high-performance CPU, a GPU (measured), a                                                                                            ACCESS.2021.3070877.
+commercial MCU, and the EvGNN accelerator (simulated model). (c) Latency,                                                                                  [8] A. Suleiman et al., “Navion: A fully integrated energy-efficient visual-
+energy and area breakdown of the modeled EvGNN ASIC accelerator. Feature                                                                                       inertial odometry accelerator for autonomous navigation of nano
+and weight transfers dominate the latency and energy fraction, whereas the                                                                                     drones,” in IEEE Symposium on VLSI Circuits, 2018, pp. 133–134. DOI:
+event-queue buffer occupies most of the silicon area.                                                                                                          10.1109/VLSIC.2018.8502279.
+                                                                                                                                                           [9] M. Arafat, M. Alam, and S. Moh, “Vision-Based Navigation Techniques
+                                                                                                                                                               for Unmanned Aerial Vehicles: Review and Challenges,” Drones, vol. 7,
+                                                                                                                                                               no. 89, pp. 1–41, 2023. DOI: 10.3390/drones7020089.
+at the expense of a more complex neighbor-search process.                                                                                                 [10] A. Gupta et al., “Deep learning for object detection and scene perception
+                                                                                                                                                               in self-driving cars: Survey, challenges, and open issues,” Array, vol. 10,
+Second, the continuous transfer of data features to/from the                                                                                                   pp. 1–20, 2021. DOI: 10.1016/j.array.2021.100057.
+DRAM translates into significant latency and energy overheads                                                                                             [11] M. Hillebrand et al., “High speed camera system using a cmos image
+(Fig. 14(c)), which would linearly scale with the layer size.                                                                                                  sensor,” in Proceedings of the IEEE Intelligent Vehicles Symposium (Cat.
+                                                                                                                                                               No.00TH8511), 2000, pp. 656–661. DOI: 10.1109/IVS.2000.898423.
+Adding smart caching strategies to efficiently reuse neighbor                                                                                             [12] M. A. Mahowald and C. Mead, “The silicon retina,” Scientific American,
+information between successive events would tackle this over-                                                                                                  vol. 264 5, pp. 76–82, 1991.
+head. Finally, relying on a 2D array of processing elements                                                                                               [13] P. Lichtsteiner, C. Posch, and T. Delbruck, “A 128× 128 120 db 15 µs
+                                                                                                                                                               latency asynchronous temporal contrast vision sensor,” IEEE Journal of
+with higher data stationarity (e.g., compute-in memory [66])                                                                                                   Solid-State Circuits, vol. 43, no. 2, pp. 566–576, 2008. DOI: 10.1109/
+would improve the latency of every GNN layer execution,                                                                                                        JSSC.2007.914337.
+which would prove particularly critical for larger layers, as                                                                                             [14] G. Gallego et al., “Event-based vision: A survey,” IEEE transactions on
+                                                                                                                                                               pattern analysis and machine intelligence, vol. 44, no. 1, pp. 154–180,
+the latency of weight transfers scales quadratically with the                                                                                                  2020.
+layer size. These considerations pave the way for improving                                                                                               [15] A. Krizhevsky, I. Sutskever, and G. E. Hinton, “Imagenet classification
+the efficiency of future on-silicon GNN accelerator designs.                                                                                                   with deep convolutional neural networks,” Communications of the ACM,
+                                                                                                                                                               vol. 60, no. 6, pp. 84–90, May 2017, ISSN: 0001-0782. DOI: 10.1145/
+                                                                                                                                                               3065386. [Online]. Available: https://doi.org/10.1145/3065386.
+                                                                                                                                                          [16] K. He et al., “Deep residual learning for image recognition,” in Proceed-
+                                                      VI. C ONCLUSION                                                                                          ings of the IEEE conference on computer vision and pattern recognition,
+                                                                                                                                                               2016, pp. 770–778.
+   We proposed EvGNN, the first event-driven GNN accelera-                                                                                                [17] P. Adarsh, P. Rathi, and M. Kumar, “Yolo v3-tiny: Object detection and
+tor, which enables low-latency, high-accuracy edge inference                                                                                                   recognition using one stage improved model,” in International Confer-
+                                                                                                                                                               ence on Advanced Computing and Communication Systems (ICACCS),
+applications for event-based vision systems. It relies on three                                                                                                2020, pp. 687–694. DOI: 10.1109/ICACCS48705.2020.9074315.
+key ideas: (i) exploiting causality in directed graphs to enable                                                                                          [18] A. Howard et al., “Searching for mobilenetv3,” in Proceedings of the
+local 1-hop subgraph processing, (ii) a lightweight spatiotem-                                                                                                 IEEE/CVF international conference on computer vision, 2019, pp. 1314–
+                                                                                                                                                               1324.
+porally decoupled prism neighbor search implemented with                                                                                                  [19] J. Zhong, J. Chen, and A. Mian, “Dualconv: Dual convolutional kernels
+flexible event queues, and (iii) a novel layer-parallel execution                                                                                              for lightweight deep neural networks,” IEEE Transactions on Neural
+scheme to reduce the overall processing latency in multi-layer                                                                                                 Networks and Learning Systems, vol. 34, no. 11, pp. 9528–9535, 2023.
+                                                                                                                                                               DOI : 10.1109/TNNLS.2022.3151138.
+event-driven GNNs. The proposed accelerator was deployed on                                                                                               [20] Z. Li et al., “A survey of convolutional neural networks: Analysis,
+a Xilinx KV260 MPSoC platform with onboard benchmarking                                                                                                        applications, and prospects,” IEEE Transactions on Neural Networks
+on the N-CARS dataset for car recognition. Our accelerator                                                                                                     and Learning Systems, vol. 33, no. 12, pp. 6999–7019, 2022. DOI:
+                                                                                                                                                               10.1109/TNNLS.2021.3084827.
+achieved a prediction accuracy of 87.8% and an average pre-                                                                                               [21] D. Gehrig et al., “End-to-end learning of representations for asyn-
+diction latency of 16µs per event, demonstrating the capability                                                                                                chronous event-based data,” in Proceedings of the IEEE/CVF Interna-
+to efficiently enable real-time and microsecond-latency event-                                                                                                 tional Conference on Computer Vision, 2019, pp. 5633–5643.
+based vision intelligence at the edge.
+                                                                                                                                                               13
+
+
+
+[22] M. Liu and T. Delbruck, “Adaptive time-slice block-matching optical          [46] J. Brimberg and R. F. Love, “General considerations on the use of the
+     flow algorithm for dynamic vision sensors,” in British Machine Vision             weighted lp norm as an empirical distance measure,” Transportation
+     Conference (BMVC), Sep. 2018. [Online]. Available: https://doi.org/10.            Science, vol. 27, no. 4, pp. 341–349, 1993.
+     5167/uzh-168589.                                                             [47] B. Jacob et al., “Quantization and training of neural networks for
+[23] A. Nguyen et al., “Real-time 6dof pose relocalization for event cameras           efficient integer-arithmetic-only inference,” in Proceedings of the IEEE
+     with stacked spatial lstm networks,” in Proceedings of the IEEE/CVF               conference on computer vision and pattern recognition, 2018, pp. 2704–
+     Conference on Computer Vision and Pattern Recognition (CVPR) Work-                2713.
+     shops, Jun. 2019.                                                            [48] R. Krishnamoorthi, “Quantizing deep convolutional networks for effi-
+[24] Y. Li et al., “Graph-based asynchronous event processing for rapid object         cient inference: A whitepaper,” arXiv preprint arXiv:1806.08342, 2018.
+     recognition,” in Proceedings of the IEEE/CVF International Conference        [49] Z. Carmichael et al., “Deep positron: A deep neural network using the
+     on Computer Vision, 2021, pp. 934–943.                                            posit number system,” in 2019 Design, Automation & Test in Europe
+[25] S. Schaefer, D. Gehrig, and D. Scaramuzza, “Aegnn: Asynchronous                   Conference & Exhibition (DATE), IEEE, 2019, pp. 1421–1426.
+     event-based graph neural networks,” in Proceedings of the IEEE/CVF           [50] Z. Carmichael et al., “Performance-efficiency trade-off of low-precision
+     Conference on Computer Vision and Pattern Recognition (CVPR), Jun.                numerical formats in deep neural networks,” in Proceedings of the
+     2022, pp. 12 371–12 381.                                                          conference for next generation arithmetic 2019, 2019, pp. 1–9.
+[26] T. Dalgaty et al., “Hugnet: Hemi-spherical update graph neural network       [51] S. Tulyakov et al., “Learning an event sequence embedding for dense
+     applied to low-latency event-based optical flow,” in Proceedings of the           event-based deep stereo,” in Proceedings of the IEEE/CVF International
+     IEEE/CVF Conference on Computer Vision and Pattern Recognition                    Conference on Computer Vision, 2019, pp. 1527–1537.
+     (CVPR) Workshops, Jun. 2023, pp. 3952–3961.                                  [52] G. Orchard et al., “Hfirst: A temporal approach to object recognition,”
+[27] T. N. Kipf and M. Welling, “Semi-supervised classification with graph             IEEE transactions on pattern analysis and machine intelligence, vol. 37,
+     convolutional networks,” arXiv preprint arXiv:1609.02907, 2016.                   no. 10, pp. 2028–2040, 2015.
+[28] M. Fey et al., “Splinecnn: Fast geometric deep learning with continuous      [53] M. Cannici et al., “Asynchronous convolutional networks for object
+     b-spline kernels,” in Proceedings of the IEEE conference on computer              detection in neuromorphic cameras,” in Proceedings of the IEEE/CVF
+     vision and pattern recognition, 2018, pp. 869–877.                                Conference on Computer Vision and Pattern Recognition (CVPR) Work-
+[29] R. Sarkar et al., “Flowgnn: A dataflow architecture for real-time                 shops, Jun. 2019.
+     workload-agnostic graph neural network inference,” in IEEE Interna-          [54] N. Messikommer et al., “Event-based asynchronous sparse convolutional
+     tional Symposium on High-Performance Computer Architecture (HPCA),                networks,” in Computer Vision – ECCV 2020, A. Vedaldi et al., Eds.,
+     2023, pp. 1099–1112.                                                              2020, pp. 415–431, ISBN: 978-3-030-58598-3.
+[30] Z. Zhou et al., “Blockgnn: Towards efficient gnn acceleration using          [55] D. Gehrig and D. Scaramuzza, “Low-latency automotive vision with
+     block-circulant weight matrices,” in ACM/IEEE Design Automation                   event cameras,” Nature, vol. 629, pp. 1034–1040, 2024. DOI: https :
+     Conference (DAC), 2021, pp. 1009–1014.                                            //doi.org/10.1038/s41586-024-07409-w.
+[31] A. Sironi et al., “Hats: Histograms of averaged time surfaces for robust     [56] Z. Zhu et al., “MEGA: A Memory-Efficient GNN Accelerator Exploiting
+     event-based object classification,” in Proceedings of the IEEE conference         Degree-Aware Mixed-Precision Quantization,” in 2024 IEEE Interna-
+     on computer vision and pattern recognition, 2018, pp. 1731–1740.                  tional Symposium on High-Performance Computer Architecture (HPCA),
+[32] A. Mitrokhin et al., “Learning visual motion segmentation using event             2024, pp. 124–138. DOI: 10.1109/HPCA57654.2024.00020. [Online].
+     surfaces,” in Proceedings of the IEEE/CVF Conference on Computer                  Available: https://ieeexplore.ieee.org/abstract/document/10476431.
+     Vision and Pattern Recognition (CVPR), Jun. 2020, pp. 14 414–14 423.         [57] Kaggle. “Journal Ranking Databases.” (2024), [Online]. Available: https:
+[33] Y. Bi et al., “Graph-based spatio-temporal feature learning for neuromor-         //www.kaggle.com/datasets/xabirhasan/journal-%20ranking-dataset.
+     phic vision sensing,” IEEE Transactions on Image Processing, vol. 29,        [58] P. Bongini, M. Bianchini, and F. Scarselli, “Molecular generative Graph
+     pp. 9084–9098, 2020. DOI: 10.1109/TIP.2020.3023597.                               Neural Networks for Drug Discovery,” Neurocomputing, vol. 450,
+[34] W. Liu and Z. Li, “An efficient parallel algorithm of n-hop neighbor-             pp. 242–252, 2021. DOI: https://doi.org/10.1016/j.neucom.2021.04.039.
+     hoods on graphs in distributed environment,” Frontiers of Computer                [Online]. Available: https://www.sciencedirect.com/science/article/pii/
+     Science, vol. 13, pp. 1309–1325, 2019.                                            S0925231221005737.
+[35] M. M. Bronstein et al., “Geometric deep learning: Grids, groups, graphs,     [59] W. L. Hamilton, R. Ying, and J. Leskovec, “Inductive Representation
+     geodesics, and gauges,” arXiv preprint arXiv:2104.13478, 2021.                    Learning on Large Graphs,” arXiv preprint arXiv:1706.02216v4, 2018.
+[36] M. Fey and J. E. Lenssen, “Fast graph representation learning with           [60] K. Jeziorek et al., “Embedded Graph Convolutional Networks for
+     pytorch geometric,” arXiv preprint arXiv:1903.02428, 2019.                        Real-Time Event Data Processing on SoC FPGAs,” arXiv preprint
+[37] Z. Wu et al., “A comprehensive survey on graph neural networks,” IEEE             arXiv:2406.07318, pp. 1–20, 2024.
+     Transactions on Neural Networks and Learning Systems, vol. 32, no. 1,        [61] M. Horowitz, “1.1 Computing’s energy problem (and what we can do
+     pp. 4–24, 2021. DOI: 10.1109/TNNLS.2020.2978386.                                  about it),” in 2014 IEEE International Solid-State Circuits Conference
+[38] C. R. Qi et al., “Pointnet: Deep learning on point sets for 3d classi-            Digest of Technical Papers (ISSCC), 2014, pp. 10–14. DOI: 10.1109/
+     fication and segmentation,” in Proceedings of the IEEE conference on              ISSCC.2014.6757323.
+     computer vision and pattern recognition, 2017, pp. 652–660.                  [62] R. Balasubramonian et al., “CACTI 7: New Tools for Interconnect
+[39] Z. Ying et al., “Hierarchical graph representation learning with differen-        Exploration in Innovative Off-Chip Memories,” ACM Trans. Archit.
+     tiable pooling,” in Advances in Neural Information Processing Systems,            Code Optim., vol. 14, no. 2, pp. 1–25, 2017. DOI: 10.1145/3085572.
+     vol. 31, 2018.                                                                    [Online]. Available: https://doi.org/10.1145/3085572.
+[40] Y. Ma et al., “Graph convolutional networks with eigenpooling,” in           [63] S. Microelectronics. “STM32L476xx: Ultra-low-power Arm ® Cortex ®
+     Proceedings of the 25th ACM SIGKDD international conference on                    -M4 32-bit MCU+FPU, 100DMIPS,up to 1MB Flash, 128 KB SRAM,
+     knowledge discovery & data mining, 2019, pp. 723–731.                             USB OTG FS, LCD, ext. SMPS.” (2019), [Online]. Available: https :
+[41] R. Li et al., “Adaptive graph convolutional neural networks,” in Proceed-         //docs.rs-online.com/d8ed/A700000008303040.pdf.
+     ings of the AAAI conference on artificial intelligence, vol. 32, 2018.       [64] M. Gehrig et al., “DSEC: A Stereo Event Camera Dataset for Driving
+[42] J. Atwood and D. Towsley, “Diffusion-convolutional neural networks,”              Scenarios,” IEEE Robotics and Automation Letters, vol. 6, no. 3,
+     in Advances in Neural Information Processing Systems, vol. 29, 2016.              pp. 4947–4954, 2021. DOI: 10.1109/LRA.2021.3068942.
+[43] P. Quan et al., “A brief review of receptive fields in graph convolu-        [65] E. Perot et al., “Learning to Detect Objects with a 1 Megapixel
+     tional networks,” in IEEE/WIC/ACM International Conference on Web                 Event Camera,” in Advances in Neural Information Processing Systems,
+     Intelligence-Companion Volume, 2019, pp. 106–110.                                 H. Larochelle et al., Eds., vol. 33, Curran Associates, Inc., 2020,
+[44] Z. Zhang et al., “Multireceptive field: An adaptive path aggregation              pp. 16 639–16 652. [Online]. Available: https : / / proceedings . neurips .
+     graph neural framework for hyperspectral image classification,” Expert            cc / paper files / paper / 2020 / file / c213877427b46fa96cff6c39e837ccee -
+     Systems with Applications, vol. 217, p. 119 508, 2023, ISSN: 0957-4174.           Paper.pdf.
+     DOI : https://doi.org/10.1016/j.eswa.2023.119508. [Online]. Available:       [66] A. Kneip et al., “IMPACT: A 1-to-4b 813-TOPS/W 22-nm FD-SOI
+     https://www.sciencedirect.com/science/article/pii/S095741742300009X.              Compute-in-Memory CNN Accelerator Featuring a 4.2-POPS/W 146-
+[45] A. Rinaldo, L. Wasserman, and M. G’Sell, “Bootstrapping and sample                TOPS/mm2 CIM-SRAM With Multi-Bit Analog Batch-Normalization,”
+     splitting for high-dimensional, assumption-lean inference,” The Annals            IEEE Journal of Solid-State Circuits, vol. 58, no. 7, pp. 1871–1884,
+     of Statistics, vol. 47, no. 6, pp. 3438–3469, 2019. DOI: 10.1214/18-              2023. DOI: 10.1109/JSSC.2023.3269098.
+     AOS1784. [Online]. Available: https://doi.org/10.1214/18-AOS1784.
+                                                                                                                                                             14
+
+
+
+                         Yufeng Yang received his bachelor’s degree in Elec-                                Charlotte Frenkel (Member, IEEE) received the
+                         tronic and Information Engineering from Beihang                                    M.Sc. degree (summa cum laude) in Electromechan-
+                         University in 2020, and the M.Sc. degree in Elec-                                  ical Engineering and the Ph.D. degree in Engineer-
+                         trical Engineering from Delft University of Tech-                                  ing Science from Université catholique de Louvain
+                         nology (TU Delft) in 2023 under the supervision                                    (UCLouvain), Louvain-la-Neuve, Belgium in 2015
+                         of Prof. Charlotte Frenkel. His research focuses on                                and 2020, respectively. In February 2020, she joined
+                         the hardware-algorithm co-design of modern neural                                  the Institute of Neuroinformatics, UZH and ETH
+                         networks and on the design of efficient AI accel-                                  Zurich, Switzerland, as a postdoctoral researcher.
+                         erators for resource-constrained embedded hardware                                 She is an Assistant Professor at Delft University of
+                         platforms.                                                                         Technology, Delft, The Netherlands, since July 2022,
+                                                                                                            and holds a Visiting Faculty Researcher position
+                                                                                  with Google since October 2024.
+                          Adrian Kneip (Member, IEEE) received the M.Sc.             Her research aims at bridging the bottom-up (bio-inspired) and top-down
+                          degree (summa cum laude) in Electrical Engineering      (engineering-driven) design approaches toward neuromorphic intelligence,
+                          from the Université catholique de Louvain (UCLou-      with a focus on hardware-algorithm co-design for (Neuro)AI, digital hardware
+                          vain), Louvain-la-Neuve, Belgium, in 2019. He then      accelerators, and brain-inspired on-device learning.
+                          joined UCLouvain’s Electronics Circuits and Sys-           Dr. Frenkel received a best paper award at the IEEE International Sym-
+                          tems (ECS) group, where he obtained the Ph.D.           posium on Circuits and Systems (ISCAS) 2020 conference in the Neural
+                          degree in 2024 under the supervision of Prof. D. Bol.   Networks track, and her Ph.D. thesis was awarded the FNRS-FWO / Nokia
+                          His research interests notably include the design of    Bell Scientific Award 2021 and the FNRS-FWO / IBM Innovation Award
+                          ultra-low-power digital ICs, as well as analog/mixed-   2021. In 2023, she was awarded prestigious Veni and AiNed Fellowship
+                          signal accelerators for edge-AI chips. He has a         grants from the Dutch Research Council (NWO). She presented several invited
+                          particular interest for SRAM-based in-memory com-       talks, including keynotes at the tinyML EMEA technical forum 2021 and at
+puting and hardware/software co-design aspects. Recently, he has also shown       the Neuro-Inspired Computational Elements (NICE) neuromorphic conference
+a rising interest event-based computing techniques, with a focus on event-        2021. She serves or has served as a program co-chair of NICE 2023-2024 and
+driven graph neural networks and their hardware acceleration. Dr. Kneip is        of the tinyML Research Symposium 2024, as a co-lead of the NeuroBench
+the author or co-author of several research papers in IEEE conferences and        initiative for benchmarks in neuromorphic computing since 2022, as a TPC
+journals, receiving the Best Student Paper Award for the 2022’s ESSCIRC-          member of IEEE ESSERC for 2022-2024, and as an associate editor for the
+ESSDERC conference. He also serves as reviewer for various IEEE SSCS              IEEE Transactions on Biomedical Circuits and Systems since 2022.
+and CAS journals, wherein IEEE ESSCERC, ISCAS, JSSC and TCAS-I/-II.
+He also was Student Representative to the IEEE Benelux Section from 2020
+to 2023.
+

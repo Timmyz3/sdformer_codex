@@ -1,0 +1,851 @@
+                                                                 GMFlow: Learning Optical Flow via Global Matching
+
+                                                        Haofei Xu1 * Jing Zhang2                  Jianfei Cai1    Hamid Rezatofighi1                Dacheng Tao3,2
+                                                                            1
+                                                                             Department of Data Science and AI, Monash University, Australia
+                                                                        2
+                                                                            The University of Sydney, Australia 3 JD Explore Academy, China
+                                          {xuhfgm,dacheng.tao}@gmail.com               jing.zhang1@sydney.edu.au        {jianfei.cai,hamid.rezatofighi}@monash.edu
+arXiv:2111.13680v4 [cs.CV] 17 Jul 2022
+
+
+
+
+                                                                     Abstract                                      feature1
+                                                                                                                                local correlation            convolution     flow
+                                                                                                                   feature2
+                                             Learning-based optical flow estimation has been domi-                                 (a) previous flow estimation approach
+                                         nated with the pipeline of cost volume with convolutions for
+                                         flow regression, which is inherently limited to local corre-              feature1                             global correlation
+                                                                                                                                  Transformer                                flow
+                                         lations and thus is hard to address the long-standing chal-               feature2                                 softmax
+                                         lenge of large displacements. To alleviate this, the state-
+                                                                                                                                                (b) GMFlow
+                                         of-the-art framework RAFT gradually improves its predic-
+                                                                                                                 Figure 1. Conceptual comparison of flow estimation ap-
+                                         tion quality by using a large number of iterative refinements,          proaches. Most previous methods regress optical flow from a
+                                         achieving remarkable performance but introducing linearly               local cost volume (i.e., correlation) with convolutions, while we
+                                         increasing inference time. To enable both high accuracy                 perform global matching with a Transformer and differentiable
+                                         and efficiency, we completely revamp the dominant flow re-              matching layer (i.e., correlation and softmax).
+                                         gression pipeline by reformulating optical flow as a global
+                                         matching problem, which identifies the correspondences by               volutions. This requirement restricts the search space to a
+                                         directly comparing feature similarities. Specifically, we               local range, making it hard to handle large displacements.
+                                         propose a GMFlow framework, which consists of three                         To alleviate the large displacements issue, RAFT [41]
+                                         main components: a customized Transformer for feature                   proposes an iterative framework with a large number of it-
+                                         enhancement, a correlation and softmax layer for global                 erative refinements where convolutions are applied to dif-
+                                         feature matching, and a self-attention layer for flow propa-            ferent local cost volumes at different iteration stages so as
+                                         gation. We further introduce a refinement step that reuses              to gradually reach near-global search space, achieving out-
+                                         GMFlow at higher feature resolution for residual flow pre-              standing performance on standard benchmarks. The cur-
+                                         diction. Our new framework outperforms 31-refinements                   rent state-of-the-art methods [19,41,48,53] are all based on
+                                         RAFT on the challenging Sintel benchmark, while using                   such an iterative architecture. Despite the excellent perfor-
+                                         only one refinement and running faster, suggesting a new                mance, such a large number of sequential refinements in-
+                                         paradigm for accurate and efficient optical flow estimation.            troduce linearly increasing inference time, which makes it
+                                         Code is available at https://github.com/haofeixu/gmflow.                hard for speed optimization and hinders its deployment in
+                                                                                                                 real-world applications. This raises a question: Is it pos-
+                                         1. Introduction                                                         sible to achieve both high accuracy and efficiency without
+                                                                                                                 requiring such a large number of iterative refinements?
+                                            Since the pioneering learning-based work, FlowNet [10],                  We notice that another visual correspondence problem,
+                                         optical flow has been regressed with convolutions for a long            i.e., sparse matching between an image pair [36, 40, 45],
+                                         time [16, 17, 19, 33, 38, 41, 48, 53]. To encode the match-             which usually features a large viewpoint change, moves into
+                                         ing information into the network, the cost volume (i.e.,                a different track. The top-performing sparse methods (e.g.,
+                                         correlation) [13] was shown to be an effective component                SuperGlue [36] and LoFTR [40]) adopt Transformers [43]
+                                         and thus has been extensively used in popular frameworks                to reason about the mutual relationship between feature de-
+                                         [17, 38, 41]. However, such regression-based approaches                 scriptors, and the correspondences are extracted with an ex-
+                                         have one major intrinsic limitation. That is, the cost volume           plicit matching layer (e.g., softmax layer [45]).
+                                         requires a predefined size, as the search space is viewed as
+                                                                                                                     Inspired by sparse matching, we propose to completely
+                                         the channel dimension for subsequent regression with con-
+                                                                                                                 remove the additional convolutional layers operating on a
+                                           * Work   done while Haofei was at JD Explore Academy                  predefined local cost volume, and reformulate optical flow
+
+
+                                                                                                             1
+as a global matching problem, which is distinct from all                 • GMFlow outperforms 31-refinements RAFT on the
+previous learning-based optical flow methods. Fig. 1 pro-                  challenging Sintel benchmark, while using only one
+vides a conceptual comparison of these two flow estimation                 refinement and running faster, suggesting a new
+approaches. Our flow prediction is obtained with a differ-                 paradigm for accurate and efficient flow estimation.
+entiable matching layer, i.e., correlation and softmax layer,
+by comparing feature similarities. Such a formulation calls           2. Related Work
+for more discriminative feature representations, for which
+the Transformer [43] becomes a natural choice.                            Flow estimation approach. The flow estimation ap-
+                                                                      proach is fundamental to existing popular optical flow
+    We would like to point out that although our pipeline
+                                                                      frameworks [16,17,19,38,41,48,53], notably the coarse-to-
+shares the conceptual major components (i.e., Transfromer
+                                                                      fine method PWC-Net [38] and iterative refinement method
+and the softmax matching layer) with sparse matching [36,
+                                                                      RAFT [41]. They both perform some sort of multi-stage
+40], our motivation is originated from the development of
+                                                                      refinements, either at multiple scales [38] or a single reso-
+optical flow methods and the challenges associated with
+                                                                      lution [41]. For flow prediction at each stage, their pipeline
+formulating optical flow as a global matching problem are
+                                                                      is conceptual similar, i.e., regressing optical flow from a lo-
+quite different. Optical flow focuses on dense correspon-
+                                                                      cal cost volume with convolutions. However, such an ap-
+dences for every pixel and modern learning-based architec-
+                                                                      proach is hard to handle large displacements. Thus multi-
+tures are mostly designed by regression from a local cost
+                                                                      stage refinements are required to estimate large motion in-
+volume. The scale and complexity of optical flow are much
+                                                                      crementally. The success of RAFT largely lies in the large
+higher. Moreover, optical flow needs to deal with occluded
+                                                                      number of iterative refinements it can perform. Two excep-
+and out-of-boundary pixels, for which the simple softmax-
+                                                                      tions to these local regression approaches are DICL [44] and
+based matching layer will not be effective.
+                                                                      GLU-Net [42]. DICL performs local matching with convo-
+    In this paper, we propose a GMFlow framework to real-
+                                                                      lutions, while GLU-Net regresses flow from global correla-
+ize the global matching formulation for optical flow. Specif-
+                                                                      tion with convolutions, which also makes itself restricted to
+ically, the dense features extracted from a convolutional
+                                                                      fixed image resolution and thus an additional sub-network
+backbone network are fed into a Transformer that consists
+                                                                      is required to handle this issue. Distinct from these ap-
+of self-, cross-attentions and feed-forward network to obtain
+                                                                      proaches, we perform global matching with a Transformer
+more discriminative features. We then compare the feature
+                                                                      and we show it is indeed possible to achieve highly accurate
+similarities by correlating all pair-wise features. After that,
+                                                                      results without relying on a large number of refinements.
+the flow prediction is obtained with a differentiable softmax
+                                                                          Large displacements. Large displacements have been
+matching layer. To address occluded and out-of-boundary
+                                                                      a long-standing challenge for optical flow [1–3, 7, 47].
+pixels, we incorporate an additional self-attention layer to
+                                                                      One popular strategy is to use the coarse-to-fine approach
+propagate the high-quality flow prediction from matched
+                                                                      [3, 14, 38] that estimates large motion incrementally. How-
+pixels to unmatched ones by exploiting the feature self-
+                                                                      ever, coarse-to-fine methods tend to miss fast-moving small
+similarity [15, 19]. We further introduce a refinement step
+                                                                      objects [34] if the resolution is too coarse. To alleviate
+that reuses GMFlow at higher feature resolution for resid-
+                                                                      this issue, RAFT [41] proposes to maintain a single high
+ual flow prediction. Our full framework achieves compet-
+                                                                      resolution and gradually improve the initial prediction with
+itive performance and higher efficiency compared with the
+                                                                      a large number of iterative refinements, achieving remark-
+state-of-the-art methods. Specifically, with only one refine-
+                                                                      able performance on standard benchmarks. However, such
+ment, GMFlow outperforms 31-refinements RAFT on the
+                                                                      a large number of sequential refinements introduce linearly
+challenging Sintel [4] dataset, while running faster.
+                                                                      increasing inference time, which makes it hard for speed
+    Our major contributions can be summarized as follows:
+                                                                      optimization and hinders its integration into real-world sys-
+    • We completely revamp the dominant flow regression               tems. In contrast, our new framework streamlines the op-
+      pipeline by reformulating optical flow as a global              tical flow pipeline and estimates large displacements with
+      matching problem, which effectively addresses the               both high accuracy and efficiency, achieved by a reformula-
+      long-standing challenge of large displacements.                 tion of the optical flow problem and a strong Transformer.
+    • We propose a GMFlow framework to realize the global                 Transformer for correspondences. SuperGlue [36] pi-
+      matching formulation, which consists of three main              oneered the use of Transformer for sparse feature match-
+      components: a Transformer for feature enhancement, a            ing. LoFTR [40] further improves its performance by re-
+      correlation and softmax layer for global feature match-         moving the feature detection step in the typical pipelines.
+      ing, and a self-attention layer for flow propagation.           COTR [20] formulates the correspondence problem as a
+    • We further propose a refinement step to exploit higher          functional mapping by querying the interest point and uses a
+      resolution feature, which allows us to reuse the same           Transformer as the function. These frameworks are mainly
+      GMFlow framework for residual flow estimation.                  designed for sparse matching problems, and it is non-trivial
+
+                                                                  2
+                                       Transformer                      correlation                      self-
+                                                                         softmax                       attention
+
+
+
+
+         feature extraction        feature enhancement             feature matching              flow propagation
+Figure 2. Overview of GMFlow framework. We first extract 8× downsampled dense features from two input video frames with a weight-
+sharing convolutional network. Then the features are fed into a Transformer for feature enhancement. Next we compare feature similarities
+by correlating all pair-wise features and the optical flow is obtained with a softmax matching layer. An additional self-attention layer is
+introduced to propagate the high-quality flow predictions in matched pixels to unmatched ones by considering the feature self-similarity.
+
+to directly adopt them to dense correspondence tasks. Al-                3.1. Formulation
+though COTR in principle can also predict dense corre-
+                                                                            Given two consecutive video frames I1 and I2 , we first
+spondences by querying every pixel location, the infer-
+                                                                         extract downsampled dense features F1 , F2 ∈ RH×W ×D
+ence speed will be significantly slower. For dense corre-
+                                                                         with a weight-sharing convolutional network, where H, W
+spondences, STTR [24] is a Transformer-based method for
+                                                                         and D denote height, width and feature dimension, respec-
+stereo matching, which can be viewed as a special case of
+                                                                         tively. Considering the correspondences in the two frames
+optical flow. Besides, STTR relies on a complex optimal
+                                                                         should share high similarity, we first compare the feature
+transport matching layer and doesn’t produce predictions
+                                                                         similarity for each pixel in F1 with respect to all pixels in
+for occluded pixels, while we use a much simpler softmax
+                                                                         F2 by computing their correlations [45]. This can be imple-
+operation and a simple flow propagation layer to handle oc-
+                                                                         mented efficiently with a simple matrix multiplication:
+clusion. Another related work Perceiver IO [18] targets gen-
+eral problems and uses optical flow as an application in ex-                                  F1 F T
+                                                                                        C = √ 2 ∈ RH×W ×H×W ,                       (1)
+periments. Although both method are based on Transform-                                           D
+ers, Perceiver IO directly regresses optical flow via self-              where each element in the correlation matrix C represents
+attention, while we aim at learning strong feature represen-             the correlation value between coordinates p1 = (i, j) in F1
+tations (in particular with cross-attention) for matching.               and p2 = (k, l) in F2 , and √1D is a normalization factor to
+                                                                         avoid large values after the dot-product operation [43].
+                                                                            To identify the correspondence, one naı̈ve approach is to
+3. Methodology                                                           directly take the location that gives the highest correlation.
+                                                                         However, this operation is unfortunately non-differentiable,
+    Optical flow is intuitively a matching problem that aims             which prevents end-to-end training. To tackle this issue, we
+at finding corresponding pixels. To achieve this, one can                use a differentiable matching layer [21,45,49]. Specifically,
+compare the similarity of the features for each pixel, and               we normalize the last two dimensions of C with the softmax
+identify the corresponding pixel that gives the highest simi-            operation, which gives us a matching distribution
+larity. Such a process requires the features to be discrimina-                        M = softmax(C) ∈ RH×W ×H×W                       (2)
+tive enough to stand out. Aggregating the spatial contexts
+within the image itself and information from another im-                 for each location in F1 with respect to all locations in F2 .
+age can intuitively alleviate ambiguities and improve their              Then, the correspondence Ĝ can be obtained by taking a
+distinctiveness. Such design philosophies have enabled                   weighted average of the 2D coordinates of pixel grid G ∈
+great achievement in sparse feature matching frameworks                  RH×W ×2 with the matching distribution M :
+[36, 40]. The success of sparse matching, which usually                                     Ĝ = M G ∈ RH×W ×2 .                       (3)
+features a large viewpoint change, motivates us to formu-
+late optical flow as an explicit global matching problem in              Finally, the optical flow V can be obtained by computing
+order to address the challenge of large displacements.                   the difference between the corresponding pixel coordinates
+                                                                                          V = Ĝ − G ∈ RH×W ×2 .                       (4)
+   In the following, we first provide a general description
+of our global matching formulation, and then present a                   Such a softmax-based approach can not only enable end-to-
+Transformer-based framework to realize it.                               end training but also provide sub-pixel accuracy.
+
+
+                                                                    3
+3.2. Feature Enhancement
+   Key to our formulation lies in obtaining high-quality dis-
+criminative features for matching. Recall that the features                   frame 1              forward flow                forward occlusion
+
+F1 and F2 in Sec. 3.1 are extracted independently from a
+weight-sharing convolutional network. To further consider
+their mutual dependencies, a natural choice is Transformer                    frame 2              backward flow               backward occlusion
+[43], which is particularly suitable for modeling the mutual
+relationship between two sets with the attention mechanism,           Figure 3. GMFlow also simplifies backward flow computation
+                                                                      by transposing the global correlation matrix without requiring to
+as demonstrated in sparse matching methods [36,40]. Since
+                                                                      forward the network twice. The bidirectional flow can be used for
+F1 and F2 are only two sets of features, they have no no-             occlusion detection with forward-backward consistency check.
+tion of the spatial position, we first add the fixed 2D sine
+and cosine positional encodings (following DETR [6]) to               the high-quality flow predictions in matched pixels to un-
+the features. Adding the position information also makes              matched ones by measuring the feature self-similarity. This
+the matching process consider not only the feature similar-           operation can be implemented efficiently with a simple self-
+ity but also their spatial distance, which can help resolve           attention layer (illustrated in Fig. 2):
+ambiguities and improve the performance (Table 2a).
+   After adding the position information, we perform six                                                    T   !
+                                                                                                  F̂1 Fˆ1
+stacked self-, cross-attentions and feed-forward network                      Ṽ = softmax          √               V̂ ∈ RH×W ×2 ,                  (6)
+(FFN) [43] to improve the quality of the initial features.                                             D
+Specifically, for self-attention, the query, key and value in
+the attention mechanism [43] are the same feature. For                where
+                                                                                                                    T   !
+cross-attention, the key and value are same but different                                               F̂1 Fˆ2
+                                                                                        V̂ = softmax      √                 G − G,                  (7)
+from the query to introduce their mutual dependencies. This                                                  D
+process is performed for both F1 and F2 symmetrically, i.e.,
+                                                                      is the optical flow prediction from the softmax layer, which
+ F̂1 = T (F1 +P , F2 +P ), F̂2 = T (F2 +P , F1 +P ), (5)              is obtained by substituting the stronger features in Eq. (5)
+                                                                      into the softmax matching layer in Sec. 3.1. Fig. 2 provides
+where T is a Transformer, P is the positional encoding, the           an overview of our GMFlow framework.
+first input of T is query and the second is key and value.
+    One issue in the standard Transformer architecture [43]           3.4. Refinement
+is the quadratic computational complexity due to the pair-                The framework presented so far (based on 1/8 features)
+wise attention operation. To improve the efficiency, we               can already achieve competitive performance (Table 3). It
+adopt the shifted local window attention strategy from Swin           can be further improved by introducing additional higher
+Transformer [26]. However, unlike Swin that uses fixed                resolution (1/4) feature for refinement. Specifically, we
+window size, we split the feature to fixed number of local            first upsample the previous 1/8 flow prediction to 1/4 res-
+windows to make the window size adaptive with the feature             olution, and warp the second feature with the current flow
+size. Specifically, we split the input feature of size H × W          prediction. Then the refinement task is reduced to the resid-
+                                        H
+to K × K windows (each with size K         ×W K ), and perform        ual flow learning, where the same GMFlow framework de-
+self- and cross-attentions within each local window inde-             picted in Fig. 2 can be used but in a local range. Specifically,
+pendently. For every two consecutive local windows, we                we split to 8×8 local windows (each with 1/32 of the origi-
+                                  H    W
+shift the window partition by ( 2K  , 2K  ) to introduce cross-       nal image resolution) in the Transformer and perform a 9×9
+window connections. In our framework, we split to 2 × 2               local window matching for each pixel. After obtaining the
+windows (each with size H        W
+                           2 × 2 ), which represents a good           flow prediction from the softmax layer, we perform a 3 × 3
+speed-accuracy trade-off (Table 2b).                                  local window self-attention operation for flow propagation.
+                                                                          Note that here we share the Transformer and self-
+3.3. Flow Propagation
+                                                                      attention weights in the refinement step with the global
+    Our softmax-based flow estimation method implicitly as-           matching stage, which not only reduces parameters but also
+sumes that the corresponding pixels are visible in both im-           improves the generalization (Table 2e). To generate the
+ages and thus they can be matched by comparing their sim-             1/4 and 1/8 features, we also share the backbone features.
+ilarities. However, this assumption will be invalid for oc-           Specifically, we take a similar approach to TridentNet [23]
+cluded and out-of-boundary pixels. To remedy this, by ob-             but use a weight-sharing convolution with strides 1 and 2,
+serving that the optical flow field and the image itself share        respectively. Such a weight-sharing design also leads to bet-
+high structure similarity [15, 19], we propose to propagate           ter performance than the feature pyramid network [25].
+
+
+                                                                  4
+                                          Things (val, clean)           Sintel (train, clean)         Sintel (train, final)     Param
+Method                      #blocks
+                                      EPE s0−10 s10−40 s40+ EPE s0−10 s10−40 s40+ EPE s0−10 s10−40 s40+                          (M)
+                                0     18.83   3.42   6.49   49.65   6.45   1.75    7.17   38.19   7.75    2.10    8.88   45.29 1.8
+                                4     10.99   1.70   3.41   29.78   3.32   0.73    3.84   20.58   4.93    0.99    5.71   31.16 4.6
+cost volume + conv              8      9.59   1.44   2.96   26.04   2.89   0.65    3.36   17.75   4.32    0.88    4.95   27.33 8.0
+                               12      9.04   1.37   2.84   24.46   2.78   0.65    3.32   16.69   4.07    0.84    4.76   25.44 11.5
+                               18      8.67   1.33   2.74   23.43   2.61   0.59    3.07   15.91   3.94    0.82    4.62   24.58 15.7
+                               0      22.93   8.57 11.13 52.07 8.44 2.71 11.60 42.10 10.28 3.11 13.83 53.34                       1.0
+                               1      11.45   2.98 4.68 28.35 4.12 1.27 5.08 22.25 6.11 1.70 7.89 33.52                           1.6
+Transformer + softmax          2       8.59   1.80 3.28 21.99 3.09 0.90 3.66 17.37 4.54 1.24 5.44 26.00                           2.1
+                               4       7.19   1.40 2.62 18.66 2.43 0.67 2.73 14.23 3.78 1.01 4.27 22.37                           3.1
+                               6       6.67   1.26 2.40 17.37 2.28 0.58 2.49 13.89 3.44 0.80 3.97 21.02                           4.2
+Table 1. Methodology comparison. We stack different number of convolutional residual blocks or Transformer blocks to see how the
+performance varies. All models are trained on Chairs and Things training sets. We report the performance on Things validation clean set
+and the cross-dataset generalization results on Sintel training clean and final sets.
+
+
+3.5. Training Loss                                                      blocks. To upsample the low-resolution flow prediction to
+                                                                        the original image resolution, we use RAFT’s convex up-
+   We supervise all flow predictions using `1 loss between
+                                                                        sampling [41] method. We use AdamW [27] as the opti-
+the ground truth:
+                                                                        mizer. We first train the model on Chairs dataset for 100K
+                      N
+                      X                                                 iterations, with a batch size of 16 and a learning rate of 4e-4.
+                L=          γ N −i kVi − Vgt k1 ,            (8)        We then fine-tune it on Things dataset for 200K iterations
+                      i=1                                               for ablation experiments, with a batch size of 8 and a learn-
+                                                                        ing rate of 2e-4. Our best model is fine-tuned on Things for
+where N is the number of flow predictions including the                 800K iterations. For the final fine-tuning process on Sintel
+intermediate and final ones, and γ (set to 0.9) is the weight           and KITTI datasets, we report the details in Sec. 4.4. Fur-
+that is exponentially increasing to give higher weights for             ther details are provided in the supplementary material.
+later predictions following RAFT [41].
+                                                                        4.1. Methodology Comparison
+4. Experiments
+                                                                           Flow estimation approach. We compare our Trans-
+   Datasets and evaluation setup. Following previous                    former and softmax-based flow estimation method with
+methods [17, 38, 41], we first train on the FlyingChairs                the cost volume and convolution-based approach. Specif-
+(Chairs) [10] and FlyingThings3D (Things) [29] datasets,                ically, we adopt the state-of-the-art cost volume construc-
+and then evaluate Sintel [4] and KITTI [31] training sets.              tion method in RAFT [41] that concatenates 4 local cost
+We also evaluate on the Things validation set to see how                volumes at 4 scales, where each cost volume has a dimen-
+the model performs on the same-domain data. Finally, we                 sion of H × W × (2R + 1)2 , where H and W are image
+perform additional fine-tuning on Sintel and KITTI training             height and width, respectively, and the search range R is
+sets and report the performance on the online benchmarks.               set to 4 following RAFT. To regress flow, we stack different
+   Metrics. We adopt the commonly used metric in optical                number of convolutional residual blocks [12] to see how
+flow, i.e., the end-point-error (EPE), which is the average             the performance varies. The final optical flow is obtained
+`2 distance between the prediction and ground truth. For                with a 3 × 3 convolution with 2 output channels. For our
+KITTI dataset, we also use F1-all, which reflects the per-              proposed framework, we stack different number of Trans-
+centage of outliers. To better understand the performance               former blocks for feature enhancement, where one Trans-
+gains, we also report the EPE in different motion magni-                former block consists of self-, cross-attentions and a feed-
+tudes. Specifically, we use s0−10 , s10−40 and s40+ , to de-            forward network (FFN). The final optical flow is obtained
+note the EPE over pixels with ground truth flow motion                  with a global correlation and softmax layer. Both methods
+magnitude falling to 0−10, 10−40 and more than 40 pixels.               use bilinear upsampling in this comparison. Table 1 shows
+   Implementation details. We implement our framework                   that the performance improvement of our method is more
+in PyTorch. Our convolutional backbone network is iden-                 significant compared to the cost volume and convolution-
+tical to RAFT’s model, except that our final feature dimen-             based approach. For instance, our method with 2 Trans-
+sion is 128, while RAFT’s is 256. We stack 6 Transformer                former blocks can already outperform 8 convolution blocks,
+
+
+                                                                    5
+                    Things (val)         Sintel (train)      Param                                     Things (val, clean)               Time
+     setup                                                                          #splits
+                        clean            clean     final      (M)                              EPE      s0−10      s10−40       s40+     (ms)
+     full                6.67            2.28      3.44       4.2                   1×1        6.34      1.26       2.37        16.36     105
+     w/o cross          10.84            4.48      6.32       3.8                   2×2        6.67      1.26       2.40        17.37      53
+     w/o pos            8.38             2.85      4.28       4.2                   4×4        7.32      1.29       2.58        19.26      35
+     w/o FFN            8.71             3.10      4.43       1.8
+     w/o self           7.04             2.49      3.69       3.8
+    (a) Transformer components. Cross-attention contributes most.              (b) Numbers of window splits in shifted local attention. 2 × 2 repre-
+                                                                               sents a good speed-accuracy trade-off.
+
+         matching            Things (val, clean)              Time                            Sintel (clean)                  Sintel (final)
+                                                                                prop.
+          space         EPE s0−10 s10−40 s40+                 (ms)                      all matched unmatched all matched unmatched
+          global         6.67     1.26     2.40      17.37        52.6          w/o 2.28       1.06        15.54       3.44   1.95       19.50
+        local 3 × 3     31.78     1.19     12.40     85.39        51.2          w/ 1.89        1.10        10.39       3.13   1.98       15.52
+        local 5 × 5     26.51     0.89     6.67      76.76        51.5
+        local 9 × 9     19.88     1.01     2.44      61.06        52.9
+  (c) Global vs. local matching. Global matching is significantly better            (d) Flow propagation greatly improves unmatched pixels.
+  for large motion and is fast to compute.
+
+                 share share Things Sintel (train) Param                           training Things (val) Sintel (train) KITTI (train)
+   setup
+                 Trans? feature? clean clean final (M)                            iterations   clean     clean final EPE F1-all
+   w/o refine       -         -       3.98 1.65 2.94                4.7             200K            3.24        1.20     2.59    9.32    26.95
+                                      3.41       1.28      2.75     8.0             400K            3.01        1.16     2.51    8.96    26.18
+                   X                  3.21       1.27      2.60     4.9             600K            2.93        1.13     2.42    8.34    24.77
+   w/ refine                                                                        800K            2.80        1.08     2.48    7.77    23.40
+                             X        3.26       1.21      2.70     7.9
+                   X         X        3.24       1.20      2.59     4.7
+  (e) Sharing Transformer and multi-scale features leads to better per-        (f) Training length. GMFlow benefits from more training iterations.
+  formance and less parameters.
+                           Table 2. GMFlow ablations. All models are trained on Chairs and Things training sets.
+
+especially for large motion (s40+ ). The performance can                       tween two features, which is missing in the features ex-
+be further improved by stacking more layers, surpassing                        tracted from the convolutional backbone network. Also, the
+the cost volume and convolution-based approach by a large                      position information makes the matching process position-
+margin. We present more comparisons with all the possible                      dependent, and can be conducive to alleviate the ambigu-
+combinations of different flow estimation approaches in the                    ities in pure feature similarity-based matching. Removing
+supplementary material, where our method is consistently                       the feed-forward network (FFN) reduces a large number of
+better and has less parameters than other variants.                            parameters, while also leading to a moderate performance
+    Bidirectional flow prediction. Our framework also sim-                     drop. The self-attention aggregates contextual cues within
+plifies backward optical flow computation by directly trans-                   the same feature, bringing additional performance gains.
+posing the global correlation matrix in Eq. (1). Note that                        Local window attention. We compare the speed-
+during training we only predict unidirectional flow while at                   accuracy trade-off of splitting to different numbers of local
+inference we can obtain bidirectional flow for free, with-                     windows for attention computation in Table 2b. Recall that
+out requiring to forward the network twice, unlike previous                    the extracted features from backbone is 1/8 resolution, fur-
+regression-based methods [16, 30]. The bidirectional flow                      ther splitting to H/2 × W/2 local windows (i.e., 1/16 of
+can be used for occlusion detection with forward-backward                      the original resolution) represents a good trade-off between
+consistency check (following [30]), as shown in Fig. 3.                        accuracy and speed, and thus is used in our framework.
+
+4.2. Ablations                                                                    Matching Space. We replace our global matching with
+                                                                               local matching in Table 2c and observe a significant per-
+    Transformer components. We ablate different Trans-                         formance drop, especially for large motion (s40+ ). Besides,
+former components in Table 2a. The cross-attention con-                        the global matching can be computed efficiently with a sim-
+tributes most, since it models the mutual relationship be-                     ple matrix multiplication, while larger size for local match-
+
+
+                                                                           6
+                                                                                        Things (val, clean)                                       Sintel (train, clean)             Sintel (train, final)      Param          Time
+Method                                                         #refine.
+                                                                              EPE s0−10 s10−40 s40+ EPE s0−10 s10−40 s40+ EPE s0−10 s10−40 s40+                                                                 (M)           (ms)
+                                                                     0        14.28            1.47               3.62     40.48           4.04     0.77     4.30    26.66   5.45     0.99     6.30    35.19             25 (14)
+                                                                     3         6.27            0.69               1.67     17.63           1.92     0.47     2.32    11.37   3.25     0.65     4.00    20.04             39 (21)
+                                                                     7         4.66            0.55               1.38     12.87           1.61     0.39     1.90     9.61   2.80     0.53     3.30    17.76             58 (31)
+RAFT [41]                                                           11        4.31             0.53               1.33     11.79           1.55     0.41     1.73    9.19    2.72     0.52     3.12    17.43    5.3      78 (41)
+                                                                    23        4.22             0.53               1.32     11.52           1.47     0.36     1.63    9.00    2.69     0.52     3.05    17.28            133 (71)
+                                                                    31        4.25             0.53               1.31     11.63           1.41     0.32     1.55     8.83   2.69     0.52     3.00    17.45            170 (91)
+                                                                    0         3.48             0.67               1.31     8.97 1.50 0.46                    1.77    8.26 2.96 0.72            3.45    17.70    4.7      57 (26)
+GMFlow                                                              1         2.80             0.53               1.01     7.31 1.08 0.30                    1.25    6.26 2.48 0.51            2.81    15.67    4.7     151 (66)
+Table 3. RAFT’s iterative refinement framework vs. our GMFlow framework. The models are trained on Chairs and Things training
+sets. We use RAFT’s officially released model for evaluation. The inference time is measured on a single V100 and A100 (in parentheses)
+GPU at Sintel resolution (436 × 1024). Our framework gains more speedup than RAFT (2.29× vs. 1.87×, i.e., ours: 151 → 66, RAFT:
+170 → 91) on the high-end A100 GPU since our method doesn’t require a large number of sequential computation.
+
+
+                                                                                                                                 5 $ ) 7                 Training data Method EPE F1-all s0−10 s10−40 s40+
+                                                                                                                                    * 0 ) O R Z
+                                                                                                                                                                             RAFT 5.32 17.46 0.67              1.58 13.68
+                                                                                                                                                         C+T              GMFlow 7.77 23.40 0.74            2.19 20.34
+    H Q G  S R L Q W  H U U R U   S [ 
+
+
+
+
+                                                                                                                                                                    RAFT 2.45 7.90 0.43                     1.18    5.70
+                                                                                                                                                            C + T + VK GMFlow 2.85 10.77 0.49                  1.16    6.87
+                                                 
+                                                                                                                                                           Table 4. Generalization on KITTI after training on synthetic
+                                                                                                                                                        Chairs (C), Things (T) and Virtual KITTI 2 (VK) datasets.
+                                                                                                                                                           Transformer works [9, 26]. We use 800K-iterations model
+                                                 
+                                                                                                                                                           as our final model in subsequent comparisons.
+                                                 
+                                                                                                                                                              We analyze the computational complexities of core com-
+                                                                                                                                           ponents in our framework in the supplementary material.
+                                                                                         U H I L Q H P H Q W
+Figure 4. Optical flow end-point-error vs. number of refine-                                                                                               4.3. Comparison with RAFT
+ments at inference time. This figure shows the generalization
+results on Sintel (clean) training set after training on Chairs and                                                                                            Sintel. Table 3 shows the results on Things valida-
+Things datasets. Our method outperforms 31-refinements RAFT’s                                                                                              tion set and Sintel clean and final training sets after train-
+performance while using only one refinement and running faster.                                                                                            ing on Chairs and Things training sets. Without using
+                                                                                                                                                           any refinement, our method achieves better performance
+ing will be slower due to the excessive sampling operation.                                                                                                on Things and Sintel (clean) than RAFT with 11 refine-
+   Flow propagation. Our flow propagation strategy re-                                                                                                     ments. By using an additional refinement, our method out-
+sults in significant performance gains in unmatched regions                                                                                                performs RAFT with 31 refinements, especially on large
+(including occluded and out-of-boundary pixels), as shown                                                                                                  motion (s40+ ). Fig. 4 visualizes the results. Furthermore,
+in Table 2d. The structural correlation between the feature                                                                                                our framework enjoys faster inference speed compared to
+and flow provides a valuable clue to improve the perfor-                                                                                                   RAFT and also does not require a large number of sequen-
+mance of pixels that are challenging to match. Visual com-                                                                                                 tial processing. On the high-end A100 GPU, our frame-
+parisons are provided in the supplementary material.                                                                                                       work gains more speedup compared with RAFT’s sequen-
+   Refinement. We compare whether to share the backbone                                                                                                    tial framework (2.29× vs. 1.87×, i.e., ours: 151 → 66,
+when extracting 1/8 and 1/4 features, and whether to share                                                                                                 RAFT: 170 → 91), reflecting that our framework can bene-
+the Transformer for matching at 1/8 and 1/4 resolutions.                                                                                                   fit more from advanced hardware acceleration and showing
+The results are shown in Table 2e. Sharing Transformer and                                                                                                 its potential for further speed optimization.
+multi-scale features better regularizes the learning process,                                                                                                  KITTI. Table 4 shows the generalization results on
+leading to better performance and less parameters.                                                                                                         KITTI training set after training on Chairs and Things train-
+   Training length. Our ablations thus far are based on                                                                                                    ing sets. In this evaluation setting, our framework doesn’t
+200K-iterations fine-tuning on Things dataset. In Table 2f,                                                                                                outperform RAFT, which is mainly caused by the gap be-
+we show our framework benefits from more training iter-                                                                                                    tween the synthetic training sets and the real-world testing
+ations, consistent with the observations in previous vision                                                                                                dataset. One key reason behind our inferior performance
+
+
+                                                                                                                                                       7
+                                                  EPE: 24.08                     EPE: 16.11                   EPE: 14.21
+                                                  s40+: 38.73                    s40+: 25.01                  s40+: 22.03
+
+
+
+
+                                                  EPE: 3.46                       EPE: 3.08                   EPE: 2.58
+                                                  s40+: 9.84                      s40+: 8.97                  s40+: 7.01
+
+
+
+
+                                                  EPE: 1.47                       EPE: 1.45                   EPE: 1.22
+                                                  s40+: 2.63                      s40+: 3.05                  s40+: 2.09
+
+
+
+
+           image                        DICL                            RAFT                       GMFlow                            GT
+
+                                               Figure 5. Visual comparisons on Sintel test set.
+
+                       Sintel (clean)         Sintel (final)                      Method FlowNet2 [17] PWC-Net+ [39] RAFT [41] GMFlow
+ Method            all matched unmatched all matched unmatched
+                                                                                  All          11.48            7.72          5.10        9.32
+ FlowNet2 [17]   4.16   1.56    25.40    5.74     2.75          30.11             Noc          6.94             4.91          3.07        3.80
+ PWC-Net+ [39]   3.45   1.41    20.12    4.60     2.25          23.70
+ HD3 [52]        4.79   1.62    30.63    4.67     2.17          24.99          Table 6. Comparisons on KITTI test set. The metric is F1-all.
+ VCN [51]        2.81   1.11    16.68    4.40     2.22          22.24          “All” denotes the evaluation results on all pixels with ground truth,
+ DICL [44]       2.63   0.97    16.24    3.60     1.66          19.44          and “Noc” denotes non-occluded pixels only.
+ RAFT [41]       1.94     -       -      3.18       -             -
+ GMFlow          1.74   0.65    10.56    2.90     1.32          15.80          2015 training set from the model trained on Sintel. We
+                                                                               train GMFlow for 100K iterations with a batch size of 8
+ RAFT† [41]      1.61   0.62     9.65    2.86     1.41          14.68
+ GMA† [19]       1.39   0.58     7.96    2.47     1.24          12.50          and a learning rate of 2e-4. Table 6 shows the evaluation
+                                                                               results. For non-occluded (Noc) pixels, our performance is
+Table 5. Comparisons on Sintel test test. † represents the method
+                                                                               slightly inferior to RAFT. For all pixels that contain both
+uses last frame’s flow prediction as initialization for subsequent
+refinement, while other methods all use two frames only.                       non-occluded and occluded pixels, the performance gap be-
+                                                                               comes larger, which indicates that our inferior performance
+is that RAFT, relying on fully convolutional neural net-                       largely lies in occluded regions.
+works, benefits from the inductive biases in convolution lay-
+ers, which requires a relatively smaller size training data to                 4.5. Limitation and Discussion
+generalize to a new dataset in comparison with Transform-
+                                                                                  Our framework still has room for future improvement in
+ers [8, 9, 50, 54]. To substantiate this claim, we fine-tune
+                                                                               occluded regions, as can be seen from the KITTI results in
+both RAFT and our method on the additional Virtual KITTI
+                                                                               Table 6. Besides, our framework may not generalize very
+2 [5] dataset. We can see from Table 4 that the performance
+                                                                               well when the training data has significantly large gap with
+gap becomes smaller when more data is available.
+                                                                               the test data (e.g., synthetic Things to real-world KITTI).
+4.4. Comparison on Benchmarks                                                  Fortunately, there are many large-scale datasets available
+                                                                               currently, e.g., Virtual KITTI [5, 11], VIPER [35], RE-
+    Sintel. Following previous works [41, 48], we further                      FRESH [28], AutoFlow [37] and TartanAir [46], they can
+fine-tune our Things model on several mixed datasets that                      be used to enhance Transformer’s generalization ability.
+consist of KITTI [31], HD1K [22], FlyingThings3D [29]
+and Sintel [4] training sets. We perform fine-tuning for                       5. Conclusion
+200K iterations with a batch size of 8 and a learning rate of
+2e-4. The results on Sintel test set are shown in Table 5. We                     We have presented a new global matching formulation
+achieve best performance among all the competitive state-                      for optical flow and demonstrated its strong performance.
+of-the-art methods that only use two frames at inference.                      We hope our new perspective will pave a way towards a new
+Although RAFT can also use last frame’s prediction as ini-                     paradigm for accurate and efficient optical flow estimation.
+tialization for subsequent refinement, we still achieve com-                      Broader impact. Our proposed method might produce
+parable performance in matched regions even without using                      unreliable results in occluded regions, thus care should be
+multi-frame information. Qualitative comparisons between                       taken when using the prediction results from our model, es-
+GMFlow and other state-of-the-art approaches on Sintel test                    pecially for safety-critical scenarios like self-driving cars.
+set are shown in Fig. 5. More visual results on DAVIS [32]                        Acknowledgement. This research is supported in part
+dataset are given in the supplementary material.                               by Monash FIT Start-up Grant. Dr. Jing Zhang is supported
+    KITTI. We perform additional fine-tuning on the KITTI                      by ARC FL-170100117.
+
+
+                                                                         8
+References                                                               [16] Junhwa Hur and Stefan Roth. Iterative residual refinement
+                                                                              for joint optical flow and occlusion estimation. In CVPR,
+ [1] Christian Bailer, Bertram Taetz, and Didier Stricker. Flow               pages 5754–5763, 2019. 1, 2, 6
+     fields: Dense correspondence fields for highly accurate large
+                                                                         [17] Eddy Ilg, Nikolaus Mayer, Tonmoy Saikia, Margret Keuper,
+     displacement optical flow estimation. In ICCV, pages 4015–
+                                                                              Alexey Dosovitskiy, and Thomas Brox. Flownet 2.0: Evolu-
+     4023, 2015. 2
+                                                                              tion of optical flow estimation with deep networks. In CVPR,
+ [2] Thomas Brox, Christoph Bregler, and Jitendra Malik. Large                pages 2462–2470, 2017. 1, 2, 5, 8
+     displacement optical flow. In ICCV, pages 41–48. IEEE,
+                                                                         [18] Andrew Jaegle, Sebastian Borgeaud, Jean-Baptiste Alayrac,
+     2009. 2
+                                                                              Carl Doersch, Catalin Ionescu, David Ding, Skanda Kop-
+ [3] Thomas Brox, Andrés Bruhn, Nils Papenberg, and Joachim
+                                                                              pula, Daniel Zoran, Andrew Brock, Evan Shelhamer, et al.
+     Weickert. High accuracy optical flow estimation based on a
+                                                                              Perceiver io: A general architecture for structured inputs &
+     theory for warping. In ECCV, pages 25–36. Springer, 2004.
+                                                                              outputs. In ICLR, 2022. 3
+     2
+                                                                         [19] Shihao Jiang, Dylan Campbell, Yao Lu, Hongdong Li, and
+ [4] Daniel J Butler, Jonas Wulff, Garrett B Stanley, and
+                                                                              Richard Hartley. Learning to estimate hidden motions with
+     Michael J Black. A naturalistic open source movie for op-
+                                                                              global motion aggregation. In ICCV, pages 9772–9781, Oc-
+     tical flow evaluation. In ECCV, pages 611–625. Springer,
+                                                                              tober 2021. 1, 2, 4, 8
+     2012. 2, 5, 8
+                                                                         [20] Wei Jiang, Eduard Trulls, Jan Hosang, Andrea Tagliasacchi,
+ [5] Yohann Cabon, Naila Murray, and Martin Humenberger. Vir-
+                                                                              and Kwang Moo Yi. Cotr: Correspondence transformer for
+     tual kitti 2. arXiv preprint arXiv:2001.10773, 2020. 8
+                                                                              matching across images. ICCV, 2021. 2
+ [6] Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas
+     Usunier, Alexander Kirillov, and Sergey Zagoruyko. End-             [21] Alex Kendall, Hayk Martirosyan, Saumitro Dasgupta, Peter
+     to-end object detection with transformers. In ECCV, pages                Henry, Ryan Kennedy, Abraham Bachrach, and Adam Bry.
+     213–229. Springer, 2020. 4                                               End-to-end learning of geometry and context for deep stereo
+                                                                              regression. In ICCV, pages 66–75, 2017. 3
+ [7] Zhuoyuan Chen, Hailin Jin, Zhe Lin, Scott Cohen, and Ying
+     Wu. Large displacement optical flow from nearest neighbor           [22] Daniel Kondermann, Rahul Nair, Katrin Honauer, Karsten
+     fields. In CVPR, pages 2443–2450, 2013. 2                                Krispin, Jonas Andrulis, Alexander Brock, Burkhard Gusse-
+                                                                              feld, Mohsen Rahimimoghaddam, Sabine Hofmann, Claus
+ [8] Stéphane d’Ascoli, Hugo Touvron, Matthew Leavitt, Ari
+                                                                              Brenner, et al. The hci benchmark suite: Stereo and flow
+     Morcos, Giulio Biroli, and Levent Sagun. Convit: Improving
+                                                                              ground truth with uncertainties for urban autonomous driv-
+     vision transformers with soft convolutional inductive biases.
+                                                                              ing. In CVPR Workshops, pages 19–28, 2016. 8
+     ICML, 2021. 8
+ [9] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,              [23] Yanghao Li, Yuntao Chen, Naiyan Wang, and Zhaoxiang
+     Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner,                      Zhang. Scale-aware trident networks for object detection.
+     Mostafa Dehghani, Matthias Minderer, Georg Heigold, Syl-                 In ICCV, pages 6054–6063, 2019. 4
+     vain Gelly, Jakob Uszkoreit, and Neil Houlsby. An image is          [24] Zhaoshuo Li, Xingtong Liu, Nathan Drenkow, Andy Ding,
+     worth 16x16 words: Transformers for image recognition at                 Francis X Creighton, Russell H Taylor, and Mathias Un-
+     scale. ICLR, 2021. 7, 8                                                  berath. Revisiting stereo depth estimation from a sequence-
+[10] Alexey Dosovitskiy, Philipp Fischer, Eddy Ilg, Philip                    to-sequence perspective with transformers. In ICCV, pages
+     Hausser, Caner Hazirbas, Vladimir Golkov, Patrick Van                    6197–6206, 2021. 3
+     Der Smagt, Daniel Cremers, and Thomas Brox. Flownet:                [25] Tsung-Yi Lin, Piotr Dollár, Ross Girshick, Kaiming He,
+     Learning optical flow with convolutional networks. In ICCV,              Bharath Hariharan, and Serge Belongie. Feature pyramid
+     pages 2758–2766, 2015. 1, 5                                              networks for object detection. In CVPR, pages 2117–2125,
+[11] Adrien Gaidon, Qiao Wang, Yohann Cabon, and Eleonora                     2017. 4
+     Vig. Virtual worlds as proxy for multi-object tracking anal-        [26] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei,
+     ysis. In CVPR, pages 4340–4349, 2016. 8                                  Zheng Zhang, Stephen Lin, and Baining Guo. Swin trans-
+[12] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun.                   former: Hierarchical vision transformer using shifted win-
+     Deep residual learning for image recognition. In CVPR,                   dows. ICCV, 2021. 4, 7, 11
+     pages 770–778, 2016. 5                                              [27] Ilya Loshchilov and Frank Hutter. Decoupled weight decay
+[13] Asmaa Hosni, Christoph Rhemann, Michael Bleyer, Carsten                  regularization. arXiv preprint arXiv:1711.05101, 2017. 5
+     Rother, and Margrit Gelautz. Fast cost-volume filtering for         [28] Zhaoyang Lv, Kihwan Kim, Alejandro Troccoli, Deqing
+     visual correspondence and beyond. TPAMI, 35(2):504–511,                  Sun, James M Rehg, and Jan Kautz. Learning rigidity in
+     2012. 1                                                                  dynamic scenes with a moving camera for 3d motion field
+[14] Yinlin Hu, Rui Song, and Yunsong Li. Efficient coarse-                   estimation. In ECCV, pages 468–484, 2018. 8
+     to-fine patchmatch for large displacement optical flow. In          [29] Nikolaus Mayer, Eddy Ilg, Philip Hausser, Philipp Fischer,
+     CVPR, pages 5704–5712, 2016. 2                                           Daniel Cremers, Alexey Dosovitskiy, and Thomas Brox. A
+[15] Tak-Wai Hui and Chen Change Loy. Liteflownet3: Resolv-                   large dataset to train convolutional networks for disparity,
+     ing correspondence ambiguity for more accurate optical flow              optical flow, and scene flow estimation. In CVPR, pages
+     estimation. In ECCV, pages 169–184. Springer, 2020. 2, 4                 4040–4048, 2016. 5, 8
+
+
+                                                                     9
+[30] Simon Meister, Junhwa Hur, and Stefan Roth. Unflow: Un-              [46] Wenshan Wang, Delong Zhu, Xiangwei Wang, Yaoyu Hu,
+     supervised learning of optical flow with a bidirectional cen-             Yuheng Qiu, Chen Wang, Yafei Hu, Ashish Kapoor, and Se-
+     sus loss. In AAAI, 2018. 6                                                bastian Scherer. Tartanair: A dataset to push the limits of
+[31] Moritz Menze and Andreas Geiger. Object scene flow for                    visual slam. 2020. 8
+     autonomous vehicles. In CVPR, pages 3061–3070, 2015. 5,              [47] Philippe Weinzaepfel, Jerome Revaud, Zaid Harchaoui, and
+     8                                                                         Cordelia Schmid. Deepflow: Large displacement optical
+[32] Federico Perazzi, Jordi Pont-Tuset, Brian McWilliams, Luc                 flow with deep matching. In ICCV, pages 1385–1392, 2013.
+     Van Gool, Markus Gross, and Alexander Sorkine-Hornung.                    2
+     A benchmark dataset and evaluation methodology for video             [48] Haofei Xu, Jiaolong Yang, Jianfei Cai, Juyong Zhang, and
+     object segmentation. In CVPR, pages 724–732, 2016. 8, 11                  Xin Tong. High-resolution optical flow from 1d attention
+[33] Anurag Ranjan and Michael J Black. Optical flow estima-                   and correlation. In ICCV, pages 10498–10507, 2021. 1, 2, 8
+     tion using a spatial pyramid network. In CVPR, pages 4161–           [49] Haofei Xu and Juyong Zhang. Aanet: Adaptive aggregation
+     4170, 2017. 1                                                             network for efficient stereo matching. In CVPR, pages 1959–
+[34] Jerome Revaud, Philippe Weinzaepfel, Zaid Harchaoui, and                  1968, 2020. 3
+     Cordelia Schmid. Epicflow: Edge-preserving interpolation             [50] Yufei Xu, Qiming Zhang, Jing Zhang, and Dacheng Tao. Vi-
+     of correspondences for optical flow. In CVPR, pages 1164–                 tae: Vision transformer advanced by exploring intrinsic in-
+     1172, 2015. 2                                                             ductive bias. NeurIPS, 2021. 8
+[35] Stephan R Richter, Zeeshan Hayder, and Vladlen Koltun.               [51] Gengshan Yang and Deva Ramanan. Volumetric correspon-
+     Playing for benchmarks. In ICCV, pages 2213–2222, 2017.                   dence networks for optical flow. NeurIPS, 32:794–805,
+     8                                                                         2019. 8
+[36] Paul-Edouard Sarlin, Daniel DeTone, Tomasz Malisiewicz,              [52] Zhichao Yin, Trevor Darrell, and Fisher Yu. Hierarchical
+     and Andrew Rabinovich. Superglue: Learning feature                        discrete distribution decomposition for match density esti-
+     matching with graph neural networks. In CVPR, pages 4938–                 mation. In CVPR, pages 6044–6053, 2019. 8
+     4947, 2020. 1, 2, 3, 4
+                                                                          [53] Feihu Zhang, Oliver J. Woodford, Victor Adrian Prisacariu,
+[37] Deqing Sun, Daniel Vlasic, Charles Herrmann, Varun
+                                                                               and Philip H.S. Torr. Separable flow: Learning motion cost
+     Jampani, Michael Krainin, Huiwen Chang, Ramin Zabih,
+                                                                               volumes for optical flow estimation. In ICCV, pages 10807–
+     William T Freeman, and Ce Liu. Autoflow: Learning a better
+                                                                               10817, October 2021. 1, 2
+     training set for optical flow. In CVPR, pages 10093–10102,
+                                                                          [54] Qiming Zhang, Yufei Xu, Jing Zhang, and Dacheng Tao.
+     2021. 8
+                                                                               Vitaev2: Vision transformer advanced by exploring induc-
+[38] Deqing Sun, Xiaodong Yang, Ming-Yu Liu, and Jan Kautz.
+                                                                               tive bias for image recognition and beyond. arXiv preprint
+     Pwc-net: Cnns for optical flow using pyramid, warping, and
+                                                                               arXiv:2202.10108, 2022. 8
+     cost volume. In CVPR, pages 8934–8943, 2018. 1, 2, 5
+[39] Deqing Sun, Xiaodong Yang, Ming-Yu Liu, and Jan Kautz.
+     Models matter, so does training: An empirical study of cnns
+     for optical flow estimation. TPAMI, 42(6):1408–1423, 2019.
+     8
+[40] Jiaming Sun, Zehong Shen, Yuang Wang, Hujun Bao, and
+     Xiaowei Zhou. Loftr: Detector-free local feature matching
+     with transformers. In CVPR, pages 8922–8931, 2021. 1, 2,
+     3, 4
+[41] Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field
+     transforms for optical flow. In ECCV, pages 402–419.
+     Springer, 2020. 1, 2, 5, 7, 8, 11
+[42] Prune Truong, Martin Danelljan, and Radu Timofte. Glu-
+     net: Global-local universal network for dense flow and cor-
+     respondences. In CVPR, pages 6258–6268, 2020. 2
+[43] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-
+     reit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia
+     Polosukhin. Attention is all you need. In NeurIPS, pages
+     5998–6008, 2017. 1, 2, 3, 4
+[44] Jianyuan Wang, Yiran Zhong, Yuchao Dai, Kaihao Zhang,
+     Pan Ji, and Hongdong Li. Displacement-invariant matching
+     cost learning for accurate optical flow estimation. NeurIPS,
+     33, 2020. 2, 8
+[45] Qianqian Wang, Xiaowei Zhou, Bharath Hariharan, and
+     Noah Snavely. Learning feature descriptors using camera
+     pose supervision. In ECCV, pages 757–774. Springer, 2020.
+     1, 3
+
+
+                                                                     10
+Appendix                                                                                        Sintel (train, final)
+                                                                               self-attn.
+                                                                                            EPE s0−10 s10−40 s40+
+A. More Comparisons
+                                                                                global    3.13 0.80        3.87    18.04
+    We present more comprehensive comparisons (as a sup-                      local 3 × 3 3.31 0.79        3.75    20.22
+plement of Table 1 in the main paper) with all the possible                   local 5 × 5 3.21 0.75        3.66    19.69
+combinations of flow estimation approaches in Table A. Our
+Transformer and softmax-based method is consistently bet-             Table C. Global vs. local self-attention for flow propagation.
+ter and has less parameters than other variants.                        Refinement. Although the feature resolution of our re-
+                                                                     finement architecture is higher (1/4), it is not a significant
+                                                                     bottleneck since smaller local window (1/32 of the original
+B. Computational Complexity                                          image resolution) attention is used in the Transformer and
+   We analyze the computational complexities of core com-            matching is performed within a local window.
+ponents in our framework below.                                         Overall, our GMFlow framework is general and flexible,
+                                                                     and many concrete implementations are possible to meet
+   Global Matching. In our global matching formulation,              specific needs.
+we build a 4D correlation matrix H × W × H × W to
+model all pair-wise similarities between two features (with          C. More Visual Results
+size H × W , 1/8 of the original image resolution). There
+exists an equivalent implementation should it become a bot-             Flow Propagation. Our flow propagation scheme with
+tleneck for high-resolution images. Note that the pixels in          self-attention is quite effective for handling occluded and
+the first feature are independent and thus their flow predic-        out-of-boundary pixels, as can be seen from Fig. A.
+tions can be computed sequentially. Specifically, we can se-            Prediction on DAVIS dataset. We test our pre-trained
+quentially compute K × K correlation matrices (each with             Sintel model on the DAVIS [32] dataset, the results on di-
+size H/K × W/K × H × W ), and finally merge the re-                  verse scenes are shown in Fig. B.
+sults for all pixels. Such a sequential implementation can
+save the memory consumption while having little influence            D. More Implementation Details
+on the overall inference time (see Table B), since the global
+                                                                         Network Architectures. The Transformer feature di-
+matching operation only needs to compute once, and it’s not
+                                                                     mension is 128, and the intermediate feed-forward network
+a significant speed bottleneck in the full framework.
+                                                                     expands the dimension by 4×. We only use a single head in
+                                                                     all the attention computations, since we observe that multi-
+            #splits   1×1 2×2 4×4 8×8                                head attention slows down the speed without bringing ob-
+                                                                     vious performance gains. Our refinement architecture uses
+          Time (ms) 52.57 52.64 52.90 59.45                          exactly the same Transformer for feature enhancement, ex-
+Table B. Inference time vs. number of splits for sequential          cept that the attentions are performed within smaller local
+global matching implementation. The input image resolution           windows. The self-attention layer in the flow propagation
+is 448 × 1024, and the features are downsampled by 8×.               step is also shared for 1/8 and 1/4 resolutions, where we
+                                                                     perform global attention at 1/8 resolution and local 3 × 3
+   Transformer. We use shifted local window attention                window attention at 1/4 resolution.
+[26] in the Transformer implementation, where each local                 Training Details. Our data augmentation strategy
+window size is 1/16 of the original image resolution by              mostly follows RAFT [41] except that we didn’t use oc-
+default. The computational cost is usually acceptable for            clusion augmentation, since no obvious improvement is ob-
+regular image resolutions (e.g., 448 × 1024). Note that we           served in our experiments. During training, we perform ran-
+can always switch to smaller windows size (e.g., 1/32, see           dom cropping following previous works. The crop size for
+Table 2b of the main paper) should it become a bottleneck.           FlyingChairs is 384 × 512, FlyingThings3D is 384 × 768,
+                                                                     Sintel is 320×896 and KITTI is 320×1152. Our framework
+   Flow Propagation. Our default flow propagation
+                                                                     without refinement is trained on 4 V100 (16GB) GPUs.
+scheme computes a global self-attention. The sequential
+                                                                     The full framework with refinement is trained on 4 A100
+implementation in global matching can also be adopted
+                                                                     (40GB) GPUs. We are also able to reproduce the results on
+here. It’s also possible to compute a local window self-
+                                                                     4 V100 (16GB) GPUs by halving the batch size and dou-
+attention only for less memory consumption by trading
+                                                                     bling the training iterations.
+some accuracy in large motion (Table C). Such a local at-
+tention operation can be implemented efficiently with Py-
+Torch’s unfold function.
+
+
+                                                                11
+                             feature     flow              Sintel (train, clean) Sintel (train, final) Param
+ Method                                          #convs
+                          enhancement prediction        all matched unmatched all matched unmatched (M)
+                               -      cost + conv         14     3.32     1.56       22.34      4.93     2.82       27.73       4.64
+                          Transformer cost + conv          2     3.41     2.40       14.32      4.57     3.27       18.67       4.95
+ variants                 Transformer cost + conv         14     2.04     1.09       12.34      3.37     2.03       17.80       7.79
+                             conv      softmax            14     6.36     3.22       40.30      8.00     4.80       42.58       5.12
+ GMFlow (w/o prop.) Transformer            softmax         0     2.28     1.06       15.54      3.44     1.95       19.50       4.20
+ GMFlow (w/ prop.) Transformer             softmax         0     1.89     1.10       10.39      3.13     1.98       15.52       4.23
+
+Table A. Comparisons on different variants of flow estimation approaches. Although the Transformer can also be used for feature
+enhancement in the cost volume and convolution-based approach (cost + conv), its performance heavily relies on a deep convolutional
+regressor (e.g., 14 layers to catch up). In contrast, our softmax-based method is parameter-free (4.20M vs. 7.79M). The flow propagation
+(prop.) layer further improves ours performance in unmatched regions, while only introducing additional 0.03M parameters. Replacing
+the Transformer with convolutions for feature enhancement leads to significantly large performance drop, since convolutions are not able
+to model the mutual relationship between two features.
+
+
+
+
+            img1
+
+
+
+
+            img2
+
+
+
+
+              GT
+
+
+
+
+ flow (w/o prop.)
+
+
+
+
+  flow (w/ prop.)
+
+
+
+
+ error (w/o prop.)
+
+
+
+
+  error (w/ prop.)
+
+
+
+    Figure A. Our flow propagation (prop.) scheme significantly improves the performance of occluded and out-of-boundary pixels.
+
+
+
+
+                                                                  12
+img1
+
+
+
+
+img2
+
+
+
+
+flow
+
+
+
+
+img1
+
+
+
+
+img2
+
+
+
+
+flow
+
+
+
+
+       Figure B. Visual results on DAVIS dataset.
+
+
+
+
+                          13
+

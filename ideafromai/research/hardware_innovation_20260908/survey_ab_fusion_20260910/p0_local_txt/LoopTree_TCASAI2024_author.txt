@@ -1,0 +1,1278 @@
+                                                                                                                                                                                                          1
+
+
+
+
+                                                 LoopTree: Exploring the Fused-layer Dataflow
+                                                          Accelerator Design Space
+                                             Michael Gilbert, Yannan Nellie Wu, Joel S. Emer, Fellow, IEEE, and Vivienne Sze, Senior Member, IEEE,
+
+
+
+                                                                                                                           buffer to be reused for the processing of the operations. Thus,
+                                            Abstract—Latency and energy consumption are key metrics                        we trade off-chip transfers with the chip area allocated for
+                                         in the performance of deep neural network (DNN) accelerators.                     on-chip buffers.
+                                         A significant factor contributing to latency and energy is data
+                                         transfers. One method to reduce transfers or data is reusing                         We can categorize data reuse based on the DNN structure.
+arXiv:2409.13625v4 [cs.AR] 14 Oct 2024
+
+
+
+
+                                         data when multiple operations use the same data. Fused-layer                      Structurally, DNNs are made of layers that take input feature
+                                         accelerators reuse data across operations in different layers by                  maps (fmaps) and filters to produce output fmaps. When the
+                                         retaining intermediate data in on-chip buffers, which has been                    operations that reuse data belong to the same layer, the reuse
+                                         shown to reduce energy consumption and latency. Moreover,
+                                         the intermediate data is often tiled (i.e., broken into chunks)                   is an intra-layer reuse. When the operations that reuse data
+                                         to reduce the on-chip buffer capacity required to reuse the                       belong to the different layers—specifically, the output fmap
+                                         data. Because on-chip buffer capacity is frequently more limited                  of the previous layer becomes the input fmap of the next
+                                         than computation units, fused-layer dataflow accelerators may                     layer (i.e, these fmaps are intermediate fmaps)—the reuse is
+                                         also recompute certain parts of the intermediate data instead of                  an inter-layer reuse.
+                                         retaining them in a buffer. Achieving efficient trade-offs between
+                                         on-chip buffer capacity, off-chip transfers, and recomputation                       Many accelerators process DNNs in a layer-by-layer fash-
+                                         requires systematic exploration of the fused-layer dataflow design                ion [11]–[15], where all operations for a layer are performed
+                                         space. However, prior work only explored a subset of the design                   before the operations for the next layer (see Fig. 1(a) and
+                                         space, and more efficient designs are left unexplored.                            (b)). Because operations from a layer are scheduled close
+                                            In this work, we propose (1) a more extensive design space that
+                                         has more choices in terms of tiling, data retention, recomputation                together, layer-by-layer processing is efficient at exploiting
+                                         and, importantly, allows us to explore them in combination, (2)                   intra-layer reuse opportunities. On the other hand, reusing the
+                                         a taxonomy to systematically specify designs, and (3) a model,                    intermediate fmap between layers requires retaining the entire
+                                         LoopTree, to evaluate the latency, energy consumption, buffer                     intermediate fmap in a buffer because the entire intermediate
+                                         capacity requirements, and off-chip transfers of designs in this                  fmap is produced before it is used in the next layer (see
+                                         design space. We validate our model against a representative set
+                                         of prior architectures, achieving a worst-case 4% error. Finally,                 Fig. 1(b)). DNN fmaps are often large, and retaining them
+                                         we present case studies that show how exploring this larger space                 requires large buffers that often do not fit on-chip. More
+                                         results in more efficient designs (e.g., up to a 10× buffer capacity              typically, layer-by-layer accelerators do not exploit inter-layer
+                                         reduction to achieve the same off-chip transfers).                                fmap reuse on-chip. Rather, intermediate fmaps are streamed
+                                                                                                                           to and from off-chip buffers between the processing of differ-
+                                                                   I. I NTRODUCTION                                        ent layers. But this may be undesirable for two reasons. First,
+                                                                                                                           off-chip bandwidth is more limited than on-chip bandwidth
+
+                                         D     EEP neural networks (DNNs) are a dominant approach
+                                               in various applications, such as computer vision [1]–[4],
+                                         natural language processing [5]–[8], speech recognition [9],
+                                                                                                                           and large volumes of off-chip transfers may cause bandwidth
+                                                                                                                           bottlenecks, which impacts latency. Second, off-chip transfers
+                                                                                                                           cost more energy than on-chip transfers.
+                                         self-driving cars [10], and others. The ubiquity of DNNs,
+                                                                                                                              The amount of intermediate fmap that needs to be retained
+                                         combined with the large amount of computation and data
+                                                                                                                           to exploit inter-layer reuse can be reduced by tiling the
+                                         required in DNN processing, motivates the need for low-
+                                                                                                                           layers and scheduling the processing of the tiles such that
+                                         latency and energy-efficient DNN processing.
+                                                                                                                           an intermediate fmap tile (i.e., a chunk of the intermediate
+                                            Data transfers are a significant component of energy con-
+                                                                                                                           fmap) can be computed and immediately used between layers
+                                         sumption and latency in DNN processing. An effective method
+                                                                                                                           (see Fig 1(c) and (d)). When the intermediate fmap tile is
+                                         to reduce data transfers is by reusing data. For example, if
+                                                                                                                           not needed anymore, it is released from the buffer. Thus,
+                                         multiple operations use the same data, data transfers from off-
+                                                                                                                           only a tile of the intermediate fmap needs to be retained at
+                                         chip buffers can be avoided by retaining the data in an on-chip
+                                                                                                                           a time. Since this tiling is applied across layers, we refer to
+                                            Michael Gilbert and Vivienne Sze are with the Department of Electrical         the tiling as inter-layer tiling. Moreover, we refer to the layers
+                                         Engineering and Computer Science, School of Engineering, Massachusetts            as being fused and the accelerators employing them as fused-
+                                         Institute of Technology, Cambridge, MA 02139, United States (e-mail:
+                                         gilbertm@mit.edu, sze@mit.edu).                                                   layer dataflow accelerators [16]–[19]1 .2
+                                            Joel S. Emer is with the Department of Electrical Engineering and Com-
+                                         puter Science, School of Engineering, Massachusetts Institute of Technology,
+                                                                                                                              1 When the precision is required, we will refer to retaining entire intermedi-
+                                         Cambridge, MA 02139, United States and NVIDIA, Santa Clara, CA 95051,
+                                         United States (e-mail: emer@csail.mit.edu).                                       ate fmaps on-chip as untiled fusion, and fusing with inter-layer tiling as tiled
+                                            Yannan Nellie Wu is with Google, Mountain View, CA 94043, United               fusion.
+                                         States (e-mail: nellieywu@gmail.com). She completed this work while at               2 The LoopTree tutorial is available at https://github.com/Accelergy-
+                                         Massachusetts Institute of Technology.                                            Project/looptree-tutorial.
+                                         © 2024 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or future media, including
+                                         reprinting/republishing this material for advertising or promotional purposes, creating new collective works, for resale or redistribution to servers or lists, or
+                                         reuse of any copyrighted component of this work in other works. DOI: 10.1109/TCASAI.2024.3461716).
+                                                                                                                                                                                                                           2
+
+
+
+(a) Untiled workload                                                        (b) Layer-by-layer dataflow schedule                                            Specifically, if a rank is partitioned in the retained tile of a
+   (Input)                    (Intermediate)        (Output)
+   Fmap1               Layer1 Fmap2 Layer2 Fmap3
+                      operations          oerations                            Buffered
+                                                                                                                                                            tensor (i.e., a filter or fmap), retained tiles of other tensors
+                                                                               Fmap2               Write                      Read                          also have to partition that rank in the same way. However,
+                                                                              Processed
+                                                                                                                                                            being able to make this partitioning choice per tensor has
+                                                                                              Layer1                         Layer2
+                                                                              operations                                                                    been shown to significantly increase efficiency [21], [27].
+                                                                                                                   Time
+
+(c) Inter-layer tiled workload                                              (d) Fused-layer dataflow schedule                                            Finally, this paper presents the following contributions:
+     (Input)         (Intermediate)        (Output)
+                                                                               Buffered                                                                  (1) We identify a design space that supports a more ex-
+
+
+
+
+                                                                                                                                  Tile 2
+                                                                                                   Tile 1
+     Fmap1 Layer1 Fmap2 Layer2 Fmap3                                                                        Read
+                                                                               Fmap2
+             operations          oerations                                                                                                 Read      tensive set of tiling, recomputation, and retention choices,
+      Tile 2 Tile 1
+
+
+
+
+                                   Tile 2 Tile 1
+
+
+
+
+                                                            Tile 2 Tile 1
+                                                                                           Write                          Write
+               Tile 1               Tile 1
+
+                        Tile 2                     Tile 2
+                                                                              Processed Layer1              Layer2    Layer1               Layer2    and their combinations. Our results show that exploring these
+                                                                              operations Tile 1              Tile 1    Tile 2               Tile 2
+                                                                                                                   Time                              choices in combination leads to more efficient designs.
+Fig. 1: Comparison of layer-by-layer and fused-layer dataflows. (a)                                                                                      (2) We propose a taxonomy to systematically specify
+Two layers (white boxes represent operations within the layers) and                                                                                  designs in our design space in Section III. To describe
+three fmaps3 . (b) Layer-by-layer processing produces all of Fmap2                                                                                   tiling in our taxonomy, we build on concepts from the Ein-
+before it is used. (c) Tiling layer operations and fmaps. (d) A fused-                                                                               sum notation [23], [32] (reviewed in Section II-B). We also
+layer processing of Layer1 and Layer2, where only a tile of Fmap2                                                                                    discuss a fundamental relationship between data retention,
+needs to be retained in a buffer at a time.
+                                                                                                                                                     reuse, refetch, and recomputation that allows us to simplify
+                                                                                                                                                     the design space while expanding the space of recomputation
+   In DNN accelerators, on-chip buffers often occupy a large                                                                                         choices.
+share of the chip’s area [11], [12], [20]. In contrast, compute                                                                                          (3) We present a model, LoopTree, that supports our
+units are abundant and use less energy compared to reading                                                                                           design space and validate it. LoopTree (discussed in Sec-
+from buffers [11], [12], [20]. Fused-layer dataflows can take                                                                                        tion IV), evaluates the latency, energy, amount of off-chip
+advantage of this fact by recomputing instead of retaining                                                                                           transfers, and required buffer capacity of a given design from
+intermediate data [16], [21], [22].                                                                                                                  our design space. In Section V, we validate this model against
+   The choices of tiling, recomputation, and retention are im-                                                                                       a representative set of prior architectures and show a worst-
+portant design aspects that need to be explored in combination                                                                                       case 4% error.
+for an efficient fused-layer dataflow. However, only a subset                                                                                            (4) Using LoopTree, we present case studies that il-
+of this design space has been explored in prior fused-layer                                                                                          lustrate insights into the design of efficient fused-layer
+dataflows and design space exploration (DSE) frameworks,                                                                                             dataflows in Section VI. We show that LoopTree can be
+leaving more efficient designs unexplored.                                                                                                           used to explore the trade-off between off-chip transfers, buffer
+   In order to precisely discuss the fused-layer dataflow design                                                                                     capacity, and recomputation. We will also discuss the impact
+space, we briefly introduce some nomenclature (more details                                                                                          of each design choice, how they interact, and how the shape
+in Section II-B). Most DNN layers can be viewed as tensor                                                                                            of DNN layers impacts which design is more efficient.
+algebra operations [23]–[26]. Viewed this way, the multi-                                                                                                (5) The case studies provide insights on the impact of
+dimensional fmaps and weights are represented by tensors,                                                                                            design choices and how to perform systematic exploration
+which have multiple ranks corresponding to the dimensions,                                                                                           of the design space. E.g., based on the results and their
+e.g., channels and width.                                                                                                                            interpretation in Section VI-B, we highlight how to choose
+   Now, we highlight four characteristics of the fused-layer                                                                                         tiling and scheduling choices in order to reduce the required
+design space, and show the space of choices in prior work in                                                                                         on-chip buffer capacity to achieve the most data reuse.
+Tab. I.
+   • Partitioned ranks. Tiling is done by partitioning ranks
+                                                                                                                                                                  II. BACKGROUND AND M OTIVATION
+      (e.g., channels and width) in the layer. The more ranks                                                                                          In this section, we briefly review relevant concepts in deep
+      that can be partitioned, the more choices we have to create                                                                                    neural network (DNN) layers, the Einsum notation, layer
+      tiles. However, most prior work only supports a limited                                                                                        fusion, and limitations in prior dataflows and DSE frameworks.
+      set of ranks to partition.
+   • Recomputation. In a given intermediate fmap, there are                                                                                          A. DNN Layers
+      many ways to choose which activations (i.e., values in an                                                                                         DNNs are composed of layers that implement certain func-
+      fmap) are recomputed. Most prior works do not support                                                                                          tions. For example, Fig. 2 shows the computation performed
+      or support only a limited set of recomputation choices.                                                                                        by a 1-dimensional convolution (1D conv) layer. In a 1D conv
+   • Per-intermediate-fmap recomputation. A recomputation
+                                                                                                                                                     layer, a window of size R in the input with C channels is
+      choice can be made for each intermediate fmap. However,                                                                                        multiplied elementwise with a filter of learned weights. The
+      prior work that supports extensive recomputation choices                                                                                       results are accumulated to create a single activation in one
+      is limited to applying the same recomputation choice for                                                                                       channel in the output fmap. The other activations in the output
+      all intermediate fmaps.                                                                                                                        channel are computed by sliding the window and repeating the
+   • Per-tensor retention. Some prior works are limited in
+                                                                                                                                                     process. To generate M output channels, M filters are used,
+      choosing the shape of tensor tiles that are retained.                                                                                          one for each output channel. We refer to the values of H, R,
+   3 In figures, we will show input fmaps in blue, filters in green, output fmaps                                                                    C, and M (P can be computed from H and R) collectively as
+in red, intermediate fmaps in purple, and operations in grayscale.                                                                                   the layer’s shape. H, R, C, and M themselves are referred to
+                                                                                                                                                            3
+
+
+
+TABLE I: Comparison of design space in prior works and this work. This work is the first to support extensive tiling, recomputation, and
+per-tensor retain choices.
+
+                Framework                   Partitioned ranks         Recomputation   Per-intermediate-fmap recomputation   Per-tensor retention
+                TANGRAM [19]                    Channel                   No                         No                             Yes
+                DeFiNES [21]                  Row, column                 All                        No                             Yes
+                ConvFusion [22]           Row, column, channel          Limited4                     No                             Yes
+                Optimus [28]                  Row, column                 No                         No                             Yes
+                SET [29]                          Batch                   No                         No                             Yes
+                FLAT [30]                  Batch, Head, Token             No                         No                             Yes
+                TileFlow [31]                     Any                   Limited4                     No                             No
+                This work                         Any                     All                        Yes                            Yes
+
+
+
+as ranks. The computation performed by DNN layers can be
+described precisely using the extended Einsum notation, which
+we discuss next.
+                                                                                         OutputM =4,P =6
+                                                                                               m,p       = InputC=3,H=8
+                                                                                                                c,p+r   FilterM =4,C=3,R=3
+                                                                                                                              m,c,r                       (2)
+               Step 1                                      Step 2
+  Input fmap   Filters      Output fmap       Input fmap    Filters     Output fmap
+                                                                                          Note that we have explicitly named the input height rank H
+                                                                                      in Eq. 2 for completeness, whereas Eq. 1 does not. Frequently,
+                                                                                      the superscripts are easily inferred and omitted for brevity.
+                                                                                          Now, we discuss how the Einsum notation helps us describe
+                                                                                      tiling systematically. The tiling of a tensor can be described
+Fig. 2: A 1D conv layer. All input channels (C) are used to generate
+                                                                                      as the partitioning of ranks (e.g., splitting the M = 4 output
+an output fmap. Values (i.e., activations) in the output fmap column                  channels into M1 = 2 tiles with M0 = 2 channels each).
+(P ) are generated by sliding the convolution window. Different output                Most prior works assume a preset selection of ranks that can
+channels (M ) are generated with different filters.                                   be partitioned (see Tab. I). As we discuss later, in our design
+                                                                                      space the user specifies layers as Einsums, and any of the
+                                                                                      ranks can be partitioned.
+                                                                                          Partitioning different ranks results in tiles of operations that
+B. The Extended Einsum Notation                                                       reuse tiles of Input, Output, and Filter (i.e., tiles of the data)
+  The extended Einsum notation (hereafter referred to as                              differently (see Tab. III). We can arrive at the data reuse pattern
+“Einsum”) precisely describes the computation in a layer. First,                      by inspecting the Einsum. For example, say we partition rank
+we discuss the Einsum notation. Then, we discuss how the                              P in the Einsum in Eq. 2 (see first row in Tab. III). Then,
+Einsum notation helps systematize our design space.                                   we define tiles in Input, Output, and Filter to be the subsets
+  To illustrate the Einsum notation, we look again at the                             of the tensors accessed by the operation tiles. When data tiles
+1D convolution in Fig. 2. We can express this layer with a                            overlap, the data in the overlapping regions are reused. The
+mathematical expression.                                                              rank P appears as part of an affine expression p + r in Input,
+                                                                                      thus partitioning P results in Input tiles that form sliding
+                         c=C−1,r=R−1
+                             X                                                        windows. The activations in the partially overlapping regions
+ Output[m, p] =                            Input[c, p + r] × Filter[m, c, r]          are reused in a pattern we refer to as convolutional reuse.
+                           c=0,r=0
+                                                              (1)                     Because P appears on its own in Output, the Output tiles
+where m ∈ [0, M ), p ∈ [0, P ).                                                       do not overlap (i.e., no reuse). Finally, because P does not
+                                                                                      appear in Filter, partitioning P results in Filter tiles that are
+   The Einsum notation captures the same computation as
+                                                                                      the entirety of Filter (i.e., full reuse).
+Eq. 1 succinctly by allowing implicit inference of the attributes
+of the summation. In the Einsum notation, Output, Input, and
+Filter are tensors (i.e., multi-dimensional arrays). Each tensor
+                                                                                      TABLE II: Commonly used ranks in convolutional and transformer
+has named ranks (written in uppercase letters) and indices                            layers and their definitions.
+that iterate along ranks (written in lowercase). The shape of
+each tensor is specified by writing the shape of each rank                                Ranks in convolutional layers     Ranks in transformer layers
+                                                                                         Rank  Definition                   Rank   Definition
+(i.e., the range of legal index values) after an equal sign in
+the superscript5 (Tab. II lists commonly used ranks). Eq. 2                               B      Batches                     B      Batches
+                                                                                          P      Output height (rows)        H      Heads
+shows the Einsum equivalent to Eq. 1 if we also provide the                               Q      Output width (columns)      M      Tokens
+numerical shape of each rank.                                                             M      Output channels             E      Output embedding
+                                                                                          C      Input channels              D      Input embedding
+  4 Only                                                                                  H      Input height (rows)
+          a subset of recomputation choices are supported.
+  5 This                                                                                  W      Input width (columns)
+          notation is extended from the original Einsum [32] by Hedge et                  R      Kernel height
+al. [23] to allow affine expressions in the index. Writing the shape of tensors           S      Kernel width
+in the superscript is our further extension.
+                                                                                                                                                                                    4
+
+
+
+    (a) Output row tiling
+            Iteration 0             Iteration 1
+                                                          (b) Intermediate-channel tiling
+                                                                    Iteration 0               Iteration 1
+                                                                                                                       Limitation 1: tiling choices. As shown in prior work, tiling
+                                                                                                                    is needed to efficiently exploit reuse [11], [29]–[31], [33].
+ Rows
+                                                                                                                    Tiling is done by partitioning ranks and, as shown in Tab. III,
+                                                                                                                    the choice of partitioned rank impacts the reuse of all tensors.
+                       Fmap3                      Fmap3                      Fmap3                          Fmap3
+               Fmap2                    Fmap2                        Fmap2                      Fmap2               Furthermore, the shape of the layer, which is diverse in DNNs
+Channels
+        Fmap1 Data dependency   Fmap1                        Fmap1                    Fmap1
+                                                                                                                    (see Fig. 4), determines the amount of reuse. Combined, this
+Fig. 3: Examples of different tiling choices. (a) Tiles (darker shade)                                              might make a “Full” reuse of a smaller fmap less than a
+of Fmap1, Fmap2, and Fmap3 in iterations 0 and 1 in an output row                                                   partial “Conv.” reuse of a larger fmap. In Section VI, we show
+(P 2 rank) tiling. Note that Fmap2 tiles overlap using this tiling. (b)                                             that different tiling choices may lead to 10× larger required
+Tiles (darker shade) of Fmap1, Fmap2, and Fmap3 in iterations 0
+                                                                                                                    buffer capacity and that no single tiling choice is universally
+and 1 in an intermediate-channel (C2 rank) tiling. Note that Fmap2
+tiles do not overlap using this tiling.                                                                             optimal for every layer shape. However, among prior work,
+                                                                                                                    only TileFlow [31] supports an extensive set of partitioned
+                                                                                                                    rank choices.
+C. Tiling and Retention-recomputation Choices in Fused-layer
+Dataflows
+   In this section, we provide a brief background on tiling,
+recomputation, and their interaction in fused-layer dataflows.
+   Fused-layer dataflows tile layers in order to retain only tiles
+of intermediate fmaps, thus reducing required on-chip buffer
+capacity, while still reusing the intermediate fmaps. Fig. 3(a)
+shows an example of tiling by partitioning the output row of
+the second layer (i.e., rank P 2, as in rank P of layer 2).
+   Fused-layer dataflows can also reduce required on-chip
+buffer capacity through recomputation. For example, note that
+                                                                                                                    Fig. 4: The width (height is the same as width) and channels of
+tiles in iterations 0 and 1 in Fig. 3(a) overlap. The overlap                                                       layers in ResNet-18 [34] (layers 1-5) and MobileNetv2 [1] (layers
+contains activations in Fmap2 that are computed and used in                                                         6-11) vary by orders of magnitude.
+iterations 0 and 1. At iteration 0, we have two choices: (1)
+retain the common activations in a buffer to reuse in iteration 1,                                                      Limitation 2: support for recomputation. As we dis-
+or (2) do not retain them to save buffer capacity but recompute                                                     cussed in Section II-C, fused-layer dataflows can trade off
+them later. This retention-recomputation choice trades off the                                                      buffer capacity with recomputation. We also discussed that the
+buffer capacity required for the intermediate fmap tile with                                                        tiling choice impacts recomputation choices and these choices
+extra computation.                                                                                                  need to be explored in combination. In Section VI, we show
+   Note that the tiling choice determines the space of retention-                                                   that recomputation may reduce buffer capacity by 2× while
+recomputation choices. For example, in Fig. 3(b), tiles of                                                          adding only 10% more computation. However, prior models
+Fmap2 are created by partitioning channels of Fmap2. Because                                                        either support a limited choice of partitioned ranks or do not
+the tiles of Fmap2 in different iterations do not overlap,                                                          support recomputation (see Tab. I).
+this tiling choice results in no retention-recomputation choice.                                                        Limitation 3: support for per-intermediate-fmap re-
+This relationship between tiling and retention-recomputation                                                        computation choices. Conceptually, retention-recomputation
+choices can only be analyzed by exploring them in combina-                                                          choices can be made per-intermediate-fmap. As we will dis-
+tion.                                                                                                               cuss in Section VI-E, being able to make the choice per-
+                                                                                                                    intermediate-fmap matters. However, no prior work supports
+D. Limitations in Prior Fused-layer Dataflows                                                                       per-intermediate-fmap recomputation choices, and all interme-
+   Prior fused-layer dataflows and design space exploration                                                         diate fmaps must use the same choice.
+(DSE) frameworks have explored only a limited subset of                                                                 Limitation 4: support for per-tensor retention choices.
+the fused-layer dataflow design space, leaving more efficient                                                       As discussed before, given a particular tiling, the tensors in
+designs unexplored (see Tab. I). We list these limitations and                                                      our layers may be reused differently (see Tab. III). It has
+discuss why addressing them leads to more efficient designs.                                                        been shown that making retain choices per tensor, adapting
+                                                                                                                    to the particular reuse of each tensor, can lead to more
+TABLE III: Comparison of data reuse patterns in input fmap, output                                                  efficient dataflows [27]. In Section VI, we show that per-tensor
+fmap, and filter tensors when partitioning different ranks in a CNN.                                                retention may reduce buffer capacity by 10×. However, none
+“Conv.” refers to convolutional reuse where tiles partially overlap, as                                             of the prior work that addresses limitations 1 and 2 supports
+opposed to a “Full” reuse where tiles overlap fully.
+                                                                                                                    per-tensor retain choices.
+                  Partitioned ranks                            Data reuse in
+                                                     Input           Output       Filter                            III. A M ORE E XTENSIVE AND S YSTEMATIC F USED - LAYER
+                  Row, column (P , Q)                Conv.           None         Full
+                                                                                                                                    DATAFLOW D ESIGN S PACE
+                  Input channel (C)                   Full           Full         None                                 In this section, we discuss a design space that addresses the
+                  Tokens (M )                        None            None         Full
+                                                                                                                    limitations in Section II-D. Formally, we express the design
+                                                                                                                                                                                             5
+
+
+
+space by describing mappings, which is the way operations and                (a)                                                   (b)
+
+data are tiled and scheduled to buffers and compute units [11],
+                                                                                   Tile                  Tile               Tile
+                                                                                             Tile0              Tile0
+[33]. In describing the mappings below, we assume that the                          0                     0                  0
+                                                                                                                                         Tile                  Tile                   Tile
+                                                                                                                                                   Tile1                Tile1
+                                                                                                                                          1                     1                      1
+user has defined a set of layers to fuse, referred to as a fusion                                            Operations Fmap3                                         Operations Fmap3
+                                                                                                              in Conv2                                                 in Conv2
+set, and an architecture expressed as a set of buffers and                                Operations    Fmap2                                   Operations    Fmap2
+                                                                                           in Conv1                                              in Conv1
+                                                                               Fmap1                                                 Fmap1
+compute units. Methods for finding the optimal fusion sets
+have been explored extensively in prior work (see Section VII).             Fig. 5: Partitioning rank P 2 in Conv2 to create two Conv2 tiles, Tile0
+   To create a mapping, the user makes several mapping                      and Tile1. (a) Given the the operation Conv2 Tile0, other data and
+choices (or, “choices” for short). We list these choices in                 operation tiles can be inferred. (b) The same is true for Tile1.
+Tab. IV. In this paper, we focus on the subset of choices
+specific to the design of fused-layer dataflows, which we refer              (a) Partitioning                                        (b) Partitioning        and
+                                                                                   Fmap1                                                    Fmap1
+to as inter-layer choices (see Table IV). Most of the following                                        Fmap2                                                  Fmap2
+                                                                                                                  Fmap3                                                     Fmap3
+subsections explain these inter-layer choices. However, we                                                          Tile0                                                   Tile0 Tile1
+
+also need to describe how the tile of each layer is processed                                                       Tile1
+
+by specifying the intra-layer mapping choices. Intra-layer
+mapping choices are not the focus of this paper, but poor intra-            Fig. 6: Examples of partitioning ranks in a 2D conv. (a) Partitioning
+layer mapping choices will negatively impact the latency and                just P 2. (b) Partitioning P 2 and Q2.
+energy of the accelerator [27], [33], [35], [36]. Thus, LoopTree
+supports them. We discuss intra-layer mapping choices in
+Section III-E.                                                              along unpartitioned ranks, such as R2). The shape of the tile
+                                                                            is commonly chosen such that the tile fits in a buffer.
+                TABLE IV: Mapping choices in LoopTree.
+
+  Mapping choices                         Space of choices                  B. Tile Processing Schedule
+  Partitioned ranks          A subset of ranks from the last layer             After defining the operation tiles, we can specify the
+  Tile shape                 An integer for each partitioned rank           scheduling of the operation tiles, which is important because
+  Tile processing schedule   A permutation of the partitioned ranks         it determines the order in which data is accessed and thus how
+  Retain-recompute           One of the partitioned ranks for each inter-   long we must retain data to achieve a certain amount of reuse.
+                             mediate fmap                                   Generally, retaining data for longer requires larger buffers.
+  Retain-refetch             One of the partitioned ranks for each non-        Our scheduling follows the constraint that the output from
+                             intermediate-fmap tensor
+                                                                            one layer is immediately consumed by the next layer. E.g.,
+  Parallelism                “Sequential” or “Pipeline”
+                                                                            in Fig. 5, if we schedule Conv1 Tile0 before Conv1 Tile1,
+                                                                            then we produce Fmap2 Tile0 before Fmap2 Tile1 (as in
+                                                                            Fig. 5(a)). Thus, we schedule the operations in Conv2 Tile0,
+A. Tiling by Partitioning Ranks                                             which consumes Fmap2 Tile0, before Conv2 Tile1, which
+                                                                            consumes Fmap2 Tile1.
+   Fused-layer dataflows employ inter-layer tiling to reduce
+                                                                               In LoopTree, we schedule tile processing by specifying the
+the buffer capacity required to exploit inter-layer reuse. In
+                                                                            ranks we want to iterate over, similar to writing loops in a
+LoopTree, we define tiles of the operation space (i.e., the set of
+                                                                            loop nest from the outermost to the innermost. For example,
+operations) of the last layer in the fusion set by partitioning its
+                                                                            if we follow the P 2, Q2 schedule to process the tiles in Fig. 6,
+ranks. Tiles of the data can be determined from the operation
+                                                                            we will process Tile0, Tile1, then the row underneath. In other
+tiles via data dependencies (see Fig. 5). Furthermore, we only
+                                                                            words, we iterate across Q2 (within a row) first before iterating
+need to specify the tiling of the last layer because the tiling
+                                                                            across P 2 (across rows). (This schedule is also known as the
+of all the data and operations of earlier layers can be inferred
+                                                                            raster scan pattern.) We can also specify Q2, P 2 where we
+through data dependencies (see Section IV-A for more detail).
+                                                                            iterate across P 2 (within a column) first before going across
+In general, we can partition any number of ranks to define our
+                                                                            Q2 (across columns).
+tiles (Fig. 6 shows an example). We can also partition the same
+rank multiple times, which may be useful in architectures with
+multiple buffer levels. For example, we can partition P 2 to                C. Parallelism
+create tiles such that it fits in a buffer, then partition P 2 again           Within each layer, we process tiles in the order we have
+to get smaller tiles to fit in a lower-level buffer. Note that we           specified in Section III-B. The scheduling of operation tiles in
+have only discussed how to define tiles, while Section III-D                different layers also needs to follow data dependencies (e.g.,
+discusses how to specify which tiles are retained in buffers.               in Fig. 5, Conv2 Tile0 has to be processed after Conv1 Tile0).
+   To finish defining our tiles, we specify the shape of the tile,          However, we have the freedom to choose the relative timing of
+which is the length of the tile along every rank. The user only             subsequent tiles of different layers (e.g., in Fig. 5, Conv1 Tile1
+needs to specify the length of the tile along partitioned ranks             and Conv2 Tile0). We can arrange these tiles to be processed
+because the tile is assumed to extend to the full length of                 sequentially or in a pipeline (see Fig. 7).
+unpartitioned ranks (e.g., in Fig. 5, only the shape of the tile               The parallelism choice does not address the limitations of
+along P 2 needs to be specified because the tile extends fully              prior work mentioned in Section II-D. However, we support it
+                                                                                                                                                                                                             6
+
+
+
+(a) Processing layer tiles in a pipeline      (b) Processing layer tiles sequentially                    because those iterations happen within a single P 2 iteration
+                  Conv2 Tile0   Conv2 Tile1      Conv1 Tile0   Conv2 Tile0   Conv1 Tile1   Conv2 Tile1   and all the data needed will be retained in the buffer. If we
+                                                                         Time
+    Conv1 Tile0   Conv1 Tile1                                                                            retain Fmap2 tiles formed by partitioning P 2 and Q2, we
+                     Time                                                                                will only have data reuse between iterations of Q2. Between
+Fig. 7: Parallelism choices: (a) Scheduling tiles across layers in a                                     iterations of P 2, the data in the overlapping region in Fig. 8(c)
+pipeline (i.e., in parallel); and, (b) Scheduling tiles across layers                                    is not guaranteed to still be in the buffer.
+sequentially.                                                                                               Finally, we note that the retained intermediate fmap tile
+                                                                                                         needs to be larger or equal to the intermediate fmap tile
+                                                                                                         produced between layers. Formally, this means that retention
+to be comprehensive such that we can model prior accelerators                                            choices for intermediate fmaps can only be among the ranks
+(see Section V).                                                                                         partitioned for the inter-layer tiling. On the other hand, reten-
+                                                                                                         tion choices for non-intermediate-fmap tensors can be made
+D. Data Retention                                                                                        from any of the partitioned ranks, including ranks partitioned
+   To achieve on-chip reuse of data, we need to specify which                                            in the intra-layer mapping, which we discuss next.
+tiles to retain in on-chip buffers and for how long. This choice
+will determine the required on-chip buffer capacity and the                                              E. Intra-layer Mapping
+amount of reuse. Here, we will discuss how retention choices
+are specified in LoopTree, assuming a two-level memory                                                      At this point, we have a set of operation and data tiles for
+hierarchy of on-chip and off-chip buffers to simplify our                                                each layer. All that is left is to specify the order in which we
+discussion.                                                                                              process the elements inside each tile (i.e., specify the intra-
+   However, we first observe that although prior work has                                                layer mapping). We do not go into the details of the intra-layer
+proposed recomputation as a separate design choice [16],                                                 mapping choices because they are not the focus of this paper
+[21], recomputation can be seen as a consequence of our                                                  and have been explored extensively in prior work [27], [33],
+processing schedule and retention choice. Specifically, if we                                            [35]–[37]. Here, we simply mention that LoopTree supports
+specify a processing schedule and a retention choice such that                                           an extensive set of features from prior work:
+an operation needs to access an intermediate fmap activation                                                • intra-layer tiling for each layer independently,
+that is not retained in on-chip nor off-chip buffers, then we                                               • mapping to multiple levels of memory hierarchy [27],
+have to recompute that activation. Note the resemblance with                                                  [33], [35]–[37],
+non-intermediate fmap tensors where data that is not retained                                               • whether to process the tiles sequentially or in paral-
+in on-chip buffers need to be refetched from off-chip buffers                                                 lel [27], [33], [35]–[37],
+(note that non-intermediate fmap tensors need to be backed                                                  • tiles that are imperfectly factorized [37],
+in off-chip buffers). This observation allows us to simplify                                                • per-tensor retention (also referred to as uneven mapping)
+the design space without restricting the design space: we can                                                 mapping [27].
+specify retention-recomputation choices of intermediate fmaps
+and retention-refetch choices of non-intermediate fmap tensors                                                IV. L OOP T REE : A F LEXIBLE M ODEL FOR A M ORE
+using the same representation, which we discuss next.                                                       E XTENSIVE F USED - LAYER DATAFLOW D ESIGN S PACE
+   Section III-A discussed how ranks are partitioned to create
+                                                                                                            To explore our mapspace (i.e., space of mappings), we need
+operation tiles and data tiles are calculated from operation tiles
+                                                                                                         a hardware model for evaluation. Furthermore, we would like
+using data dependencies. In LoopTree, we make a retention
+                                                                                                         this model to be fast and accurate. In this section, we describe
+choice for each tensor by choosing the last rank partitioned
+                                                                                                         a model for our fused-layer dataflow design space. This model
+to form the retained tile, which can be one or none of the
+                                                                                                         leverages patterns in tile shapes and regularity in the hardware
+partitioned ranks, and a buffer in the architecture that retains
+                                                                                                         behavior when processing identical tile shapes to be able
+the data. To illustrate, consider again the tiles formed by
+partitioning P 2 and Q2 in Fig. 6. We can retain the entirety of
+Fmap2, a tile of Fmap2 formed by partitioning the P 2 rank, or                                           (a) Fmap2 reuse with                  schedule           (b) Reused between iterations of
+a tile of Fmap2 formed by partitioning the P 2 and Q2 ranks.                                                Reused between iterations across     (within a row)
+
+   Generally, larger tiles result in more reuse, and we illustrate                                       Reused between
+                                                                                                                                           Reused between
+                                                                                                         iterations across
+this fact in terms of our retention choice. Fig. 8(a) visualizes                                                                           iterations across
+                                                                                                                                           and later between
+the data reuse that results from applying P 2, Q2 schedule to                                                                                                          Windows within a row in Fmap2
+                                                                                                                                         Fmap2
+the tiles in Fig. 6. There are two levels of iterations: across                                                                                                   (c) Reused between iterations of
+the P 2 rank (rows) and the Q2 rank (columns). Note that the
+iterations are hierarchical: within a single iteration of the P 2
+                                                                                                                                      Fmap3                                              Different rows in
+rank, we iterate over the entire Q2 rank. Fig. 8(b)-(c) shows the                                                                                                                        Fmap2
+
+data reuse categorized by iterations. If we retain Fmap2 tiles
+formed by partitioning P 2, we will have data reuse between                                              Fig. 8: Categorizing data reuse across iterations. (a) Data reuse in
+iterations of P 2 and Q2. We have reuse between iterations of                                            Fmap2 tiles with P 2, Q2 tiling. The reuse can be categorized into
+P 2 because the overlap in data tiles in Fig. 8(c) can be reused                                         two: (b) reuse across iterations of Q2 and (c) reuse across iterations
+between iterations. We have reuse between iterations of Q2                                               of P 2.
+                                                                                                                                                                     7
+
+
+
+to compute hardware metrics (e.g., latency, energy, buffer                                    Step 2: Calculate tile of     Step 5-...: Process repeats until
+                                                                                               input fmap to Conv3.         tiles of all layers are calculated.
+occupancy) using mathematical expressions (i.e., the model                  Step 1: Operation tiles
+is analytical). Compared to simulators, analytical models tend                of Conv3 is given.
+to be faster at the cost of some fidelity [36].
+   We briefly overview the analysis steps of the LoopTree                                   Tile0                         Tile0
+model before discussing each step in detail (points match                                   Tile1
+analysis steps in Fig. 9).                                                   Fmap4          Conv3                         Tile1
+  1) Given the mapping, which only specifies the tile shape                                                Fmap3          Conv2
+
+     of the last layer, this step determines the operation and            Step 3: Deduct amount of tile that                        Fmap2
+                                                                          is reused from previous iteration.
+     data tile shapes of all other layers in the fusion set.                                             Step 4: Calculate operation tile of Conv2 (producer
+  2) Given the tile shapes, architecture, and intra-layer map-                                               of Fmap3) required to compute Fmap3 tile.
+
+     ping, this step counts the number of occurrences of               Fig. 10: Analyzing tile shape given inter-layer tiling specification.
+     hardware actions (e.g., buffer reads) during the processing       Layers are shown from last to first (in contrast with other figures) to
+     of each tile.                                                     better illustrate the analysis steps.
+  3) Given action counts for each processed tile, this step
+     determines the final metrics (latency, energy, buffer oc-
+     cupancy, and off-chip transfers).                                 operation accesses), we represent them as a set constrained
+                                                                       by equalities and inequalities containing affine expressions
+                                                                       (see Fig. 11). In other words, we construct polyhedral sets
+A. Tile Shape Analysis                                                 and relations [38]. There are fast methods for performing
+   The user-defined mapping only specifies the tile shapes             these set and relation operations [39]. While storing sets
+of the last layer in the fusion set. The tile shape analysis           and relations explicitly requires storage proportional to the
+calculates the tile shapes of all the other layers given the fusion    size of the DNN we are modeling, which can be enormous,
+set and the mapping. We describe the analysis steps below (see         our analytical approach requires storage proportional to the
+Fig. 10).                                                              number of tiling steps and the number of ranks in the fusion
+Step 1) The mapping specifies the operation tiles of the last          set. The same is true for the number of operations required
+         layer in the fusion set (Conv3 in Fig. 10).                   in our subroutines. This allows the LoopTree model to be fast
+Step 2) From the operation tile, we can compute the data tile          (prior work has shown analytical models to be up to 1000×
+         of the input fmap of the last layer (Fmap3 in Fig. 10).       faster than simulators [36]).
+Step 3) From the data tile of the fmap, we subtract the amount
+         that is retained from previous iterations (in Fig. 10,
+         only a subset of the Fmap3 tile needs to be computed).        B. Per-tile Hardware Action Counts Analysis
+Step 4) The part of the fmap tile that is not retained from               Given the inter-layer tiles of each layer, architecture, and
+         previous iterations has to be produced (in Fig. 10, we        intra-layer mappings, we now have to analyze the hardware
+         calculate the operations of Conv2 required to produce         actions (e.g., reads, writes, computes) required when process-
+         it). This may include the recomputation of certain            ing each tile. Because this analysis is performed for each
+         operations.                                                   layer independently, we can use a similar analysis to layer-
+Step 5) At this point, we are in the same setup as in step 1,          by-layer frameworks [27], [33], [35]–[37] (the analysis in
+         but for an earlier layer (in Fig. 10, Conv2 instead           LoopTree is based on Timeloop [33]). However, we implement
+         of Conv3). We repeat the analysis until we have               this analysis using set and relation operations so that it is
+         calculated the tiles for all the layers in the fusion set.    compatible with the results of the tile shape analysis6 . While
+   In the steps we just described, we needed to calculate              this implementation is not trivial, it is not the main focus
+data tiles from operation tiles and data dependencies (e.g.,           of this paper. Thus, we refer the readers to the open-source
+in step 1) and vice versa (e.g., in step 3). We also needed            documentation and mention here several notable features of
+to perform set operations on operation tiles (e.g., in step 2).        the analysis.
+We briefly discuss a fast implementation of these calculations.
+                                                                         6 An alternative is to provide an adapter. However, we hope that the
+As mentioned at the start of this section, our approach to
+                                                                       polyhedral implementation will make future extensions easier.
+evaluation is analytical. Rather than explicitly constructing
+operation tiles and the data accesses (i.e., which data each
+                                                                                                      Einsum:        =
+
+      Fusion Set     (1) Tile Shape Analysis    Metrics:
+                           Tile shapes          - Latency               AccessRelation
+                                                - Energy
+        Mapping        (2) Per-tile Analysis    - Buffer occupancy
+                                                - Off-chip transfers       Operation in Conv1 reads data in Fmap1 within bounds calculated from Einsum description
+                       Per-tile action counts
+
+     Architecture     (3) Aggregate Analysis                           Fig. 11: Calculating the data access relation as a polyhedron from
+                                                                       the Einsum description. Polyhedrons have efficient implementations
+               Fig. 9: Overview of the LoopTree model.                 for set operations (e.g., intersection, union, etc.).
+                                                                                                                                                                             8
+
+
+
+  •  LoopTree analyzes the impact of temporal data reuse              the reordering does not increase latency. There are existing
+     on the number of transfers between buffer levels in the          state-of-the-art works demonstrating the feasibility of such
+     memory hierarchy. For example, if the same data is               processing, e.g., the reorder in reduction technique introduced
+     required within a buffer between two iterations, LoopTree        by Tong et al. [40]. Moreover, LoopTree assumes explicit data
+     detects this reuse opportunity and the data is not refetched     orchestration using Buffets [41] such that pipeline stalls can
+     from the parent buffer.                                          be assumed to be negligible.
+  • We analyze the impact of spatial data reuse (i.e., when the          2) Calculating Total Energy: Given the action counts (i.e.,
+     same data is needed by multiple compute units) on buffer         read/write counts, the number of computations, network hops,
+     reads and data transfers. For example, if two child buffers      and peer-to-peer transfers) of intra-layer processing (see Sec-
+     need to receive the same data at the same time, LoopTree         tion IV-B) and inter-layer processing (see Section IV-A),
+     detects the multicast opportunity and counts only a single       we can calculate the energy consumption of the system by
+     read to the parent buffer. Furthermore, LoopTree will            multiplying the counts of each action with the energy per
+     calculate the number of hops required to send the data           action. The energy per action is generated from the architecture
+     from the parent to the child buffers on the network-on-          specification using Accelergy [42].
+     chip (NoC).                                                         3) Calculating Buffer Occupancy: Given a design, we have
+  The result of this analysis is a set of hardware action counts      to make sure that the buffer occupancy does not exceed the
+accumulated during the processing of the tiles. Specifically, we      buffer capacity. From the tile shape inference, we know the
+have:                                                                 data that has to occupy each buffer. We can then compute the
+  • Reads and writes to each buffer in the hardware.
+                                                                      buffer occupancy from the shape of the tiles. The sequential
+  • The number of network hops to distribute data in each
+                                                                      processing of each layer tile may require different amounts
+     network in the hardware.                                         of buffer occupancy. LoopTree reports the maximum buffer
+  • The latency required to process all the operations at the
+                                                                      occupancy.
+     compute units.                                                      4) Calculating Off-chip Transfers: As mentioned in Sub-
+                                                                      section IV-B, off-chip transfers (which is a special case of
+  Finally, we note that the processing of tiles with the same
+                                                                      buffer-to-buffer data transfers) are computed per-tile in the last
+shape will have the same behavior and therefore the same
+                                                                      step. The total off-chip transfers are the sum of the per-tile off-
+hardware counts. Our model detects unique tile shapes and
+                                                                      chip transfers. LoopTree can also report other buffer-to-buffer
+performs the analysis only once for each unique tile shape.
+                                                                      transfers.
+
+C. Analyzing Final Metrics                                                                                   V. VALIDATION
+   In the final analysis, we use the action counts from the             We implement and validate the accuracy of the LoopTree
+processing of each tile to compute the final metrics.                 analytical model across prior architectures that cover a wide
+   1) Calculating Total Latency: The latency calculation is di-       range of the design choices described in Section III and DNNs
+vided into two cases: (1) if the tiles are processed sequentially     with varying reuse patterns.
+and (2) if the tiles are processed in a pipeline. In the sequential
+case, latency can be calculated as the sum of the latencies of
+                                                                      A. Methodology
+the processing of each tile.
+   The pipeline case is more complicated. In Fig. 10, the                We implement LoopTree in C++ as an extension of
+number of operations in Tile0 and Tile1 Conv2 is different            Timeloop [33]. We implement the analysis described in Sec-
+because the reused part of Fmap3 does not have to be                  tion IV, using the ISL library [39] to handle set and relation
+recomputed. This makes the number of operations in a tile             operations. LoopTree uses Accelergy [42] as the energy esti-
+depend on which iteration the tile belongs to. LoopTree’s             mation back end.
+algorithm for calculating total latency takes this into account.
+   LoopTree’s algorithm for evaluating pipeline latency first         B. Validation Setup
+arranges the pipeline stages sequentially (i.e., with no pipeline        For validation, we choose designs that exercise a wide
+parallelism) (see Fig. 12(a) and (b)). Overlapping the stages         range of LoopTree’s capabilities. Tab. V summarizes these
+hides some latency. In Fig. 12(b), they are HiddenLatency1,           designs. We choose five fused-layer dataflow accelerators for
+HiddenLatency2, and HiddenLatency3. The actual hidden la-             convolutional neural networks (CNNs) and transformers. They
+tency is the minimum of the three. Then, the total pipeline           are chosen because they span different fused-layer dataflow
+latency is the sequential latency minus the hidden latency.
+   Similarly to other analyses in LoopTree, the analysis avoids
+                                                                                                Layer3   Layer3                         Layer3                      Layer3
+duplicate work by using a polyhedral representation of tiles.          (a)
+                                                                                                 Tile0    Tile1
+                                                                                                                  (b)
+                                                                                                                                         Tile0
+                                                                                                                                                 HiddenLatency3
+                                                                                                                                                                     Tile1
+
+   Finally, the latency we computed so far is only the compu-                          Layer2
+                                                                                        Tile0
+                                                                                                Layer2
+                                                                                                 Tile1
+                                                                                                                             Layer2
+                                                                                                                              Tile0
+                                                                                                                                         HiddenLatency2    Layer2
+                                                                                                                                                            Tile1
+
+tation latency. We aggregate read/write counts to each buffer                Layer1
+                                                                              Tile0
+                                                                                      Layer1
+                                                                                       Tile1
+                                                                                                                    Layer1
+                                                                                                                     Tile0
+                                                                                                                             HiddenLatency1       Layer1
+                                                                                                                                                   Tile1
+                                                                                       TotalLatency                                   SequentialLatency
+and divide by the bandwidth to get memory latency. We take
+the larger one of the compute and memory latencies to be              Fig. 12: Pipeline latency analysis. (a) Total latency of the processing
+the final latency. We note that this analysis assumes that data       of three layers in a pipeline. (b) Latency of sequential processing of
+layout reordering is performed during processing such that            the layer tiles and the latencies that could be hidden in a pipeline.
+                                                                                                                                                                                                9
+
+
+
+design choices across a range of DNNs. For each design, we           by at most 3.4%. The most divergent results are latency. The
+model each design executing the same DNNs as the ones they           small difference stems from aspects in the FLAT simulator that
+were evaluated on in the publication. Then, based on available       LoopTree does not model (e.g., latency from loading weights
+information, we compare latency, energy consumption, buffer          and systolic array startup).
+capacity, and off-chip transfers.
+                                                                                                           VI. C ASE S TUDIES
+C. Validation Results                                                   We discuss a series of case studies that illustrate the trade-
+   Overall, LoopTree shows less than 4% error. Here, we              off between on-chip buffer capacity, recomputation, and off-
+discuss each validation result in Tab. V in detail.                  chip transfers in fused-layer dataflow design. Specifically, we
+                                                                     evaluate the impact of design aspects in Tab. I (formalized in
+   1) DepFin: DepFin [43] is a CNN accelerator that parti-
+                                                                     Section III) and how they interact.
+tions P and Q (because the number of layers in the fusion
+                                                                        Tab. IX summarizes the setup for each case study. Each case
+set differs in each validation, we omit the number in the rank
+                                                                     study investigates the impact of design space choices by setting
+name that represents the layer in this section) and processes
+                                                                     those choices as independent variables and searching for other
+tiles sequentially with a P, Q schedule. The DNN models are
+                                                                     choices that lead to the optimal in a certain metric. Specifically,
+FSRCNN [45], MC-CNN [44], and the two in-house CNN
+                                                                     in Section VI-B, we evaluate the impact of (inter-layer)
+models in the publication [43]. These DNNs contain vanilla
+                                                                     partitioned ranks and tile processing schedule (or, “schedule”
+convolutions as well as pointwise and depthwise convolutions,
+                                                                     for short) without recomputation. In Section VI-C, we allow
+which have different reuse patterns. LoopTree results exactly
+                                                                     recomputation and evaluate the impact of partitioned ranks
+match the energy and off-chip transfer counts as reported in
+                                                                     and schedule choices on the trade-off between recomputation
+the paper. LoopTree also validates the result that DepFin has
+                                                                     and on-chip buffer capacity. In Section VI-E, we look at the
+enough buffer capacity to retain data given its fusion set,
+                                                                     impact of being able to make recomputation choices per-
+mapping, and architecture.
+                                                                     intermediate-fmap. Then, in Section VI-D, we show how per-
+   2) Fused-layer CNN: Fused-layer CNN [16] is a CNN
+                                                                     tensor retention leads to a smaller required on-chip buffer
+accelerator that partitions P and Q and processes tiles in a
+                                                                     capacity. Finally, in Section VI-C, we show how LoopTree
+pipeline with a P, Q schedule. Because the paper only reports
+                                                                     can be used to evaluate the overall impact of tiled fusion.
+the number of BRAMs used, we create a simulation based on
+the architecture description for the buffer capacities. Table VI
+shows LoopTree’s results, the simulator result, and the result       A. Introducing the Fusion Sets
+after synthesis on an FPGA reported in the paper. All errors            Before discussing the case studies, we discuss the three
+are within 1.2%. Energy was not reported in [16].                    fusion sets we will use. Tab. X shows the Einsums of the fusion
+   The slight error in latency is possibly due to implementation     sets, which tells us the distinctive features of each fusion set:
+details in the synthesized design. The error in off-chip transfers     1) Two 2D convolutions (conv) layers. These are the 2D
+could be caused by LoopTree’s assumption of ideal data layout              convolutional layers we have discussed so far.
+in memory. In practice, off-chip memory block sizes might not          2) Three layers consisting of pointwise (pwise), depthwise
+match the tile shapes exactly.                                             (dwise), and pointwise (pwise) convolutions. A notable
+   3) ISAAC: ISAAC [17] is a CNN accelerator that partitions               difference from conv layers is that pwise layers do not
+Q and processes tiles in a pipeline. We model their dataflow in            have convolutional reuse (e.g., Fmap3 in Tab. X have
+LoopTree using the same assumption of balanced throughput.                 p3 instead of p3 + r3 index) and dwise layers do not
+Table VII shows the buffer capacities calculated by LoopTree               have channel reuse (in Tab. X, the M 2 rank is shared by
+and the reported values. Furthermore, we model their energy                Fmap2, Fmap3, and Filter2).
+consumption in LoopTree. LoopTree recreates their reported             3) Two fully connected layers (fc) modeled after those in
+energy efficiency with at most 4% error. The difference could              transformers [6]–[8]. This fusion set only has full reuse
+be attributed to a slight mismatch between LoopTree’s action-              and no reuse; there is no convolutional reuse.
+based modeling and ISAAC’s power-throughput model.
+                                                                        In the Einsums, we constrain the fusion set shapes to match
+   4) PipeLayer: PipeLayer [18] is a CNN accelerator that            common shapes in recent DNNs. Tab. X shows the shape of
+partitions B and processes tiles sequentially or in a pipeline.      the layers in the fusion sets. (For conciseness, we will refer
+PipeLayer shows speedup when processing tiles in a pipeline.
+We model both their sequential and pipelined dataflow in
+LoopTree. LoopTree replicates the latency results in [18] with                 1.00                                                              1.00
+                                                                                                                            Off-chip Transfers
+
+
+
+
+3.3% error (see Tab. VIII). The difference could be due to                     0.75                                                              0.75
+                                                                     Latency
+
+
+
+
+unmodeled aspects of the ReRAM arrays (e.g., latency from                      0.50                                                              0.50
+loading weights).                                                              0.25                                                              0.25
+                                                                                            FLAT            LoopTree                                            FLAT            LoopTree
+   5) FLAT: FLAT [30] is an accelerator for transformers [8]                   0.00
+                                                                                      1   2      4        8       16   32
+                                                                                                                                                 0.00
+                                                                                                                                                        1   2        4        8       16   32
+that partitions B, H, and M and processes tiles sequentially                                Seq. length tile size                                               Seq. length tile size
+
+with a B, H, M schedule. We modeled the FLAT dataflow                Fig. 13: Normalized (a) latency and (b) off-chip transfers generated
+with different tile shapes using LoopTree. Fig. 13 shows the         by the FLAT [30] simulator and LoopTree (this work). Results differ
+normalized results. In all experiments, LoopTree results differ      by at most 3.4%.
+                                                                                                                                                   10
+
+
+
+TABLE V: High-level summary of validations. DNN layers: convolution (conv), pointwise convolution (pwise), depthwise convolution
+(dwise), self-attention (sa). Parallelism: sequential (s), parallel (p). Outputs: latency (L), energy (E), capacity (C), off-chip transfers (T).
+
+                                                                                                                                                Max.
+Design                     DNN type            DNN layers           Partitioned ranks     Retain-recompute    Parallelism          Output       error
+                                                                                                                                                 %
+                                                                                                                            L      E   C    T
+DepFin [43]             CNN [44], [45]      conv, dwise, pwise        Row, column           Fully   retain        s                ✓   ✓    ✓    0
+Fused-layer CNN [16]     CNN [3], [4]              conv               Row, column           Fully   retain        p         ✓          ✓    ✓   1.2
+ISAAC [17]                  CNN [3]                conv                 Column              Fully   retain        p                ✓   ✓         4
+PipeLayer [18]           CNN [3], [4]              conv                   Batch             Fully   retain        p         ✓                   3.3
+FLAT [30]               Transformers [6]            sa             Heads, tokens, batch     Fully   retain        s         ✓          ✓    ✓   3.4
+
+
+TABLE VI: Fused-layer CNN results. Table shows LoopTree, refer-              TABLE VIII: PipeLayer speedup due to pipelining. Reference
+ence, and synthesized result. Reference result is simulated based on         from [18]. LoopTree results are within 3.3% of reference.
+pseudocode of the architecture in [16]. LoopTree results are within
+1.2%.                                                                                               DNN        LoopTree     Ref.
+                                                                                                    AlexNet        4.8      4.8
+         Metric                    LoopTree     Ref.      Synth.                                    VGG-A          7.9      8.0
+         Latency (kcycles)            422                  427                                      MNIST-A        2.0      2.0
+         WBuf capacity (KB)           167       167                                                 MNIST-B        2.9      3.0
+         IOBuf capacity (KB)           44        44
+         TBuf capacity (KB)            6         6
+         Off-chip transfers (KB)      611       611        688
+                                                                             buffers, we must keep those tensors on-chip. Then, in fusion
+                                                                             sets where Filter1 and Filter2 are large (e.g., when there are
+to the “shapes of layers in a fusion set” collectively as the                many channels), Filter1 and Filter2 significantly increase the
+fusion set shape.) The bolded rank names are variables we                    required on-chip buffer capacity.
+will change to vary the fusion set shapes.                                      As a corollary of the above, the optimal choice tends to
+                                                                             correspond with the largest rank. For example, when there
+                                                                             are many rows (i.e., P 2 is large), the P 2 schedule results in
+B. Impact of Partitioned Ranks and Schedule Choices                          a smaller required on-chip buffer capacity. This is because,
+   In this case study, we evaluate the impact of partitioned                 in fusion sets where the P 2 rank is large compared to other
+ranks and schedule choices on the required on-chip buffer                    ranks, tensors with the P 2 rank tend to be larger than other
+capacity to achieve algorithmic minimum off-chip transfers                   tensors (e.g., the size of Fmap1 is proportional to P 2, but
+(i.e., the minimum achievable off-chip transfers assuming                    Filter1 is not). Thus, partitioning P 2 means we are tiling the
+infinite on-chip buffer capacity) without recomputation. To                  larger tensors and fully reusing the smaller ones. Because we
+simplify the following discussion, we refer to only the sched-               have to store the entirety of the fully reused tensors, this leads
+ule choice and imply the partitioned ranks. For example, a                   to a smaller on-chip buffer capacity.
+P 2, C2 schedule implies that we create tiles by partitioning P 2               The pwise+dwise+pwise fusion set in Fig. 14 shows a
+and C2, and the tiles are processed with a P 2, C2 schedule.                 similar trend in buffer capacities and breakdowns as the
+Fig. 14, shows the on-chip buffer capacity required by the                   conv+conv fusion set. However, the total filter size is generally
+optimal partitioned ranks and schedule choices (which change                 smaller, which is a feature of the MobileNet design [1]. As a
+with fusion set shape) and two other choices for comparison.                 result, the P 3 schedule, which is better when filters are smaller
+   Fig. 14 shows that partitioned ranks and schedule choices                 than fmaps, is the optimal choice for more fusion set shapes.
+have a significant impact on the required on-chip buffer                        The reasoning can also be applied to fully-connected layers.
+capacity (e.g., the capacity required by a P 2 and C2 schedule               For example, using the M 2 schedule results in fully reusing
+may differ by up to 10×). The reason is that the partitioned                 (and thus retaining the entirety of) the filters. On the other
+ranks and schedule determine which tensor needs to be stored                 hand, using the D2 schedule results in retaining the entirety
+on-chip. For example, with the P 2 schedule in conv+conv,                    of Fmap1 and Fmap3. Thus, we see the pattern in Fig. 14.
+we fully reuse Filter1 and Filter2 because they are required                    Takeaway 1: the partitioned ranks and schedule that
+to process every operation tile. Thus, if we do not want                     results in the smallest required on-chip buffer capacity is
+to refetch Filter1 and Filter2 multiple times from off-chip                  often the one that reuses the smallest tensors.
+
+
+TABLE VII: ISAAC buffer capacity requirement. Reference is the               C. Impact of Partitioned Ranks and Schedule Choices with
+results in [17]. LoopTree matches reference results.                         Recomputation
+             DNN              LoopTree (KB)     Ref. (KB)                      In this case study, we evaluate the impact of partitioned
+             VGG-1-conv1           1.96            1.96                      ranks and schedule choices on the required on-chip buffer
+             VGG-1-conv2            21              21                       capacity to achieve algorithmic minimum off-chip transfers
+             VGG-1-conv3            21              21                       with recomputation. We compare the Pareto front of required
+             VGG-1-conv5            21              21
+                                                                             on-chip buffer capacity and recomputation (i.e., the set of
+                                                                                                                                                                                11
+
+
+
+           TABLE IX: Overview of case study setup. The “Case study” column refers to the subsection that discusses the case study.
+
+                                                                                                   Retention                          Retention-recomputation
+                Case study      Partitioned Rank       Tile Shape      Schedule
+                                                                                         (for non-intermediate tensors)               (for intermediate fmaps)
+                    B             Independent           Searched     Independent                     Searched                   Searched s.t. no recomputation
+                    C             Independent           Searched     Independent                     Searched                              Searched
+                    D               Searched            Searched       Searched                    Independent                             Searched
+                    E               Searched            Searched       Searched                      Searched                            Independent
+                    F               Searched            Searched       Searched                      Searched                   Searched s.t. no recomputation
+
+TABLE X: Layers comprising the fusion sets we will use to evaluate fused-layer dataflows. The rank shapes column shows which ranks
+have equal values. Bolded text denotes rank values which we will vary throughout the experiment to get fusion sets of different shapes.
+
+   Fusion set                                                   Einsums                                                       Fusion set shapes              Modeled after
+                                  M 1,P 1,Q1                M 1,P 1,Q1
+                             Fmap2m1,p1,q1         =   Fmap1c1,p1+r1,q1+s1 Filter1C1,M 1,R1=3,S1=3
+                                                                                  c1,m1,r1,s1                     Rows: P 1 = Q1 = P 2 = Q2                        ResNet
+   conv+conv                      M 2,P 2,Q2
+                             Fmap3m2,p2,q2         =        C2,P 2,Q2             C2,M 2,R2,S2
+                                                       Fmap2c2,p2+r2,q2+s2 Filter2c2,m2,r2,s2                    Channel: C1 = M 1 = C2 = M 2                    blocks [34]
+
+                                     M 1,P 1,Q1
+                                Fmap2m1,p1,q1   = Fmap1C1,P 1,Q1       C1,M 1
+                                                       c1,p1,q1 Filter1c1,m1                                        Rows: P 1 = Q1 = P 2 = Q2
+                                     M 2,P 2,Q2                                                                                                                  MobileNetv2
+   pwise+dwise+pwise            Fmap3m2,p2,q2   = Fmap2M 2,P 2,Q2            M 2,R2=3,S2=3
+                                                       m2,p2+r2,q2+s2 Filter2m2,r2,s2
+                                                                                                                       Channel: C1 = M 3
+                                                                                                                                                                  blocks [1]
+                                     M 3,P 3,Q3                                                                       C1 = M61 = M62 = C3
+                                Fmap4m3,p3,q3   = Fmap3C3,P 3,Q3       C3,M 3
+                                                       c3,p3,q3 Filter2c3,m3
+                                                                                                                                          6
+
+                                               M 1,E1
+                                          Fmap2m1,e1  = Fmap1M 1,D1       D1,E1
+                                                             m1,d1 Filter1d1,e1
+                                                                                                                         Tokens: M 1 = M 2                       Transformer
+   fc+fc                                       M 2,E2
+                                                                                                                        Emb. dims.: E1 = D2                      feed-forward
+                                          Fmap3m2,e2        =   Fmap2M 2,D2       M 2,E2
+                                                                     m2,d2 Filter2m2,e2                                   D1 = E2 = 1024                          blocks [8]
+
+
+                                                                                   Filters              Fmaps
+
+
+
+
+                         Opt.                                                                                                  Opt.
+                                                                            Opt.
+
+
+
+
+                 Rows                                               Rows                                            Tokens
+              Channels                                           Channels                                        Emb. dims.
+
+
+
+Fig. 14: Buffer capacity required for alg. min. off-chip transfers using different partitioned rank and schedule choices. Subplots: different
+fusion sets. Groups of bars: different fusion set shapes (see Tab. X col. 3) Bars: different partitioned ranks and schedules. We show three
+bars: the optimal (opt.) choice and two other choices for comparison. Partitioned ranks and schedule choices have a significant impact on
+buffer capacity across different types of fusion sets and fusion set shapes
+
+
+mappings that achieve the fewest recomputations and small-                                   shapes.
+est required on-chip buffers) for different partitioned ranks                                    The reason behind the second observation is similar to the
+and schedule choices. Fig. 15 shows the Pareto front for                                     one discussed in the last subsection. The partitioned ranks and
+pwise+dwise+pwise. We make three observations.                                               schedule choice determine which tensors are fully reused and
+  First, recomputation changes which partitioned ranks and                                   thus fully retained. In Fig. 15(a), there are many channels,
+schedule result in a smaller required on-chip buffer capacity.                               but the width is small, thus the filters are larger than fmaps.
+For example, Fig. 15(b) and (c) show that the partitioned                                    Any of the partitioned ranks and schedule that starts with P 3
+ranks and schedule that results in the smallest required on-chip                             needs to fully retain the filters, which significantly increases
+buffer capacity without recomputation is P 3, which is different                             the required on-chip buffer capacity. Comparing Fig. 15(a),
+with recomputation (P 3, C3, Q3 in Fig. 15(b) and P 3, Q3 in                                 (b), and (c), the trend reverses as fmaps become larger than
+Fig. 15(c)). Thus, retention-recomputation, partitioned ranks,                               filters.
+and schedule choices need to be explored together.                                              Third, note that the slope of the Pareto frontier differs for
+   Second, the partitioned ranks and schedule that results in the                            different partitioned ranks and schedules. When the slope is
+most efficient recomputation and capacity trade-off differs for                              steep (e.g., C3, P 3, Q3 in Fig. 15(a)), more recomputation
+different fusion set shapes (e.g., it is P 3, C3, Q3 in Fig. 15(b)                           does not lead to significant required on-chip buffer capacity re-
+and P 3, Q3 in Fig. 15(c)). Thus, it is important to search                                  duction. The breakdown of the capacity usage (see Fig. 15(d))
+from an extensive set of partitioned rank choices because no                                 explains the steep slope: with the C3, P 3, Q3 schedule, Fmap1
+particular choice results in the smallest required on-chip buffer                            and Fmap4 need to be fully retained. We can reduce buffer
+capacity at a given recomputation amount for all fusion set                                  capacity by retaining smaller tiles of Fmap2 and Fmap3 at the
+                                                                                                                                                                                                                                                                                 12
+
+
+
+                                      (a) pwise+dwise+pwise                                                  (d) pwise+dwise+pwise (C3, P3, Q3)                                                  (a) conv+conv                  (b) Capacity breakdown of design
+                                       Width: 14, Channel: 96                                                       Width: 14, Channel: 96                                                   Width: 14, Channel: 256                with min. off-chip transfers
+                      0.8                                                                           0.9                                                                            2.2                                                            1.0
+Norm. recomputation
+
+
+
+
+                                                                              Norm. recomputation
+                                                                                                                                                                                   2.0
+
+
+
+
+                                                                                                                                                        Norm. off-chip transfers
+                      0.6                                                                           0.4                                                                                                                                           0.8
+
+
+
+
+                                                                                                                                                                                                                                 Norm. capacity
+                                                                                                                                                                                   1.8
+                      0.4                                                                                                                                                                                                                         0.6
+                                                                                                    0.1                                                                            1.6
+                      0.2
+                                                                                                    0.0                                                                            1.4                                                            0.4
+                      0.0
+                         0.0    0.2     0.4      0.6     0.8   1.0      1.2                           0.0        0.2         0.4    0.6    0.8    1.0                              1.2                                                            0.2
+                                      (b) pwise+dwise+pwise                                                  (e) pwise+dwise+pwise (P3, C3, Q3)                                    1.0                                                            0.0
+                                       Width: 28, Channel: 64                                                       Width: 28, Channel: 64                                            0.0   0.2   0.4      0.6     0.8    1.0
+                                                                                                                                                                                                  Norm. capacity                                        Uniform Per-tensor
+                      0.8                                                                           0.9
+Norm. recomputation
+
+
+
+
+                                                                              Norm. recomputation
+                                                                                                                                                                                                   Uniform retention                 Fmap1                      Fmap3        Filter2
+                      0.6                                                                           0.4                                                                                            Per-tensor retention              Fmap2                      Filter1
+                      0.4
+                                                                                                    0.1
+                      0.2                                                                                                                                Fig. 16: (a) Normalized off-chip transfers against normalized buffer
+                                                                                                    0.0                                                  capacity with uniform and per-tensor retention. Using per-tensor
+                      0.0
+                         0.0    0.2     0.4      0.6     0.8   1.0      1.2                           0.0        0.2         0.4   0.6    0.8    1.0     retention can reduce buffer capacity by up to 40%. (b) Capacity
+                                      (c) pwise+dwise+pwise                                                   (f) pwise+dwise+pwise (P3, Q3)             breakdown of the design with min. off-chip transfers for uniform
+                                      Width: 112, Channel: 24                                                      Width: 112, Channel: 24               and per-tensor retention.
+                      0.8                                                                           0.8
+Norm. recomputation
+
+
+
+
+                                                                              Norm. recomputation
+
+
+
+
+                      0.6                                                                           0.4
+                      0.4                                                                           0.1
+                                                                                                                                                         we constrain the mapspace such that the same retention choice
+                      0.2                                                                           0.1
+                                                                                                                                                         is made for all tensors. Fig. 16(a) shows normalized off-chip
+                      0.0                                                                           0.0
+                                                                                                                                                         transfers against normalized on-chip buffer capacity for the
+                         0.0    0.2     0.4      0.6 0.8       1.0      1.2                            0.0     0.2     0.40.6 0.8 1.0 1.2
+                                              Norm. capacity                                                           Norm. capacity                    conv+conv fusion set with per-tensor retain and uniform retain.
+                               P3                P3, C3, Q3          C3, P3                                      Fmap1       Fmap4    Filter2               Fig. 16(a) shows that per-tensor retention can reduce re-
+                               P3, Q3            C3                  C3, P3, Q3                                  Fmap2       Filter1  Filter3
+                               P3, C3                                                                            Fmap3                                   quired on-chip buffer capacity significantly (up to 9×). To
+                                                                                                                                                         illustrate why, we pick the per-tensor and uniform retention
+Fig. 15: (a)-(c) Normalized recomputation against the normalized                                                                                         mappings with the fewest off-chip transfers (the lowest point
+capacity for different partitioned ranks and schedule (colors) and
+fusion set shapes (subgraphs). The optimal partitioned ranks and                                                                                         of each curve) and show the capacity usage breakdown in
+schedule choice vary by fusion set shape. (d)-(f) Breakdown of buffer                                                                                    Fig. 16(b). Filter1 and Filter2 require much smaller on-
+capacity usage by tensors for the partitioned ranks and schedule                                                                                         chip buffer capacity with per-tensor rather than with uni-
+choice in parentheses.                                                                                                                                   form retention. For a given schedule, different tensors have
+                                                                                                                                                         different minimum tile shapes that need to be retained to
+                                                                                                                                                         avoid refetches. Making per-tensor retention choices allows
+cost of more recomputation. However, because the Fmap2 and                                                                                               us to match these minimum tile shapes. Here, the uniform
+Fmap3 tiles are only small portions of the required capacity,                                                                                            retention choice retains larger filter tiles than necessary to
+the reduction in required capacity is insignificant. Compare                                                                                             avoid refetches due to its constraints.
+this with P 3, Q3 in Fig. 15(c) and (f). With P 3, Q3, the filters                                                                                          Takeaway 3: Per-tensor retention choices result in a
+need to be fully retained. However, the fmaps still take up the                                                                                          smaller required on-chip buffer capacity because we can
+majority of the on-chip buffer capacity. Thus, retaining smaller                                                                                         adapt the retention choice to the reuse pattern of each
+tiles of the fmaps results in significant capacity reduction.                                                                                            tensor.
+   Finally, we note that the fc+fc fusion set does not have
+retention-recomputation choices because all partitioned ranks
+and schedule choices for fc+fc result in intermediate fmap tiles                                                                                         E. Impact of Per-tensor Retention-recomputation Choices
+that do not overlap.                                                                                                                                        When there are multiple intermediate fmaps, LoopTree
+   Takeaway 2: retention-recomputation, partitioned                                                                                                      allows us to make retention-recomputation choices per ten-
+ranks, and schedule choices need to be explored together,                                                                                                sor. Here, we evaluate the impact of per-tensor retention-
+and it is important to search from an extensive set of                                                                                                   recomputation choices on a fusion set of three convolutional
+partitioned rank choices because no particular choice                                                                                                    layers (conv+conv+conv)7 for the P 3, Q3 schedule. There are
+results in the smallest buffer capacity for all fusion set                                                                                               two intermediate fmaps in the fusion set (Fmap2 and Fmap3)
+shapes.                                                                                                                                                  and for each intermediate fmap, we can either choose to retain
+                                                                                                                                                         across P 3 or Q3. Without support for per-tensor choices,
+                                                                                                                                                         we can only make the same choice for all the tensors (i.e.,
+D. Impact of Per-tensor Retention Choices                                                                                                                uniform choices). By being able to make per-tensor retention-
+   We evaluate the impact of having per-tensor retention                                                                                                 recomputation choices, we can also make different choices
+choices compared to uniform retention choices for the                                                                                                    in addition to uniform choices. Fig. 17 shows that per-tensor
+conv+conv fusion set (other fusion sets show similar results).                                                                                           choices result in a smaller required on-chip buffer capacity
+In this evaluation, we do not consider recomputation. Because
+                                                                                                                                                            7 This fusion set is omitted in Tab. X because it is used only in this case
+the LoopTree mapspace allows per-tensor retention, we ex-
+                                                                                                                                                         study. We use three conv layers such that we have two intermediate fmaps
+plore the default mapspace to evaluate mappings with per-                                                                                                that have retention-recomputation choices. We do not use pwise+dwise+pwise
+tensor retention. To evaluate mappings with uniform retention,                                                                                           because Fmap3 does not have retention-recomputation choices.
+                                                                                                                                                                                              13
+
+
+
+                                                  conv+conv+conv                   In Fig. 18, we can see that the number of off-chip transfers
+                                               Width: 112, Channel: 32          rises faster for the tiled fused-layer dataflow as available on-
+                           1.0
+                                                    Per-tensor retention-recom. chip buffer capacity is reduced. As a result, the baseline
+Norm. recomputation
+
+
+                           0.8                             Q3 retain, P3 retain
+                                                           P3 retain, Q3 retain dataflow is more efficient when on-chip buffers are small.
+                           0.6
+                                                                                   To see why, we make two observations:
+                           0.4
+                                                   Uniform retention-recom.        • Intermediate fmap activations are reused between layers
+                           0.2                            Q3 retain, Q3 retain
+                                                          P3 retain, P3 retain        twice: one read and write saved for every activation.
+                           0.0
+                              0.0
+           0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6                                         •  Intra-layer reuse is often more abundant. For example,
+                       Norm. capacity                                                 in the conv+conv fusion set with 64 channels, each
+ Fig. 17: Normalized buffer capacity and normalized recomputation                     activation in the fmap is read by 3 × 3 × 64 = 576
+ Pareto curves for P 2, Q2 for different retain-recompute choices.                    operations (activations near the borders are reused fewer
+ The legend lists retain-recompute choices for Fmap2 and Fmap3                        times, but these are few).
+ respectively. Mixing retain-recompute choices for different fmaps Thus, given limited capacity, it is more efficient to exploit the
+ leads to better tradeoffs than a uniform retain-recompute choice.
+                                                                                more abundant intra-layer reuse.
+                                                                                   On the other hand, achieving algorithmically minimum
+ for the same recomputation amount. Furthermore, recomputing                    accesses    using tiled fused-layer dataflow requires a signifi-
+ Fmap2 and retaining Fmap3 leads to a smaller required on-                      cantly   smaller    capacity, compared to the baseline which has
+ chip buffer capacity than recomputing Fmap3 and retaining                      to  retain  the   entire  intermediate fmap to achieve minimum
+ Fmap2.                                                                         accesses.   This   result  shows the advantage of inter-layer tiling
+    To understand the result, note that recomputing Fmap3                       in achieving    inter-layer   reuse efficiently.
+ requires more activations in Fmap2 to be retained as inputs.                      Of   course,   there  exist  factors that may cause fused-layer
+ If we are retaining Fmap2, then a larger on-chip buffer is                     dataflows    to   be   more   efficient  than layer-by-layer even if
+ required to retain Fmap2. If we are recomputing Fmap2, then                    the  available   on-chip    capacity  is low: certain workloads may
+ the amount of Fmap2 recomputation increases compared to if                     have   few  intra-layer   reuse   opportunities  (e.g., in elementwise
+ we retained Fmap3 (i.e., whether we choose to retain or recom-                 operations)    or  if compute   units  are especially   efficient, which
+ pute Fmap3 impacts the number of recomputations of Fmap2).                     may   make    recomputation     cheaper.   As  we  have   demonstrated,
+ Thus, recomputing later layers increases the required on-chip                  LoopTree     can    be  used   to  explore   these  trade-offs    to find
+ buffer capacity or recomputations in earlier layers. Prior work                efficient  designs.
+ referred to this as a compounding effect in recomputation [16].                   Takeaway 5: at buffer capacities much lower than re-
+                                                                                quired for algorithmic minimum off-chip transfers, fused-
+    Takeaway 4: per-tensor retention-recomputation choices
+                                                                                layer dataflows are often less efficient than layer-by-layer
+ can reduce the amount of recomputation by limiting the
+                                                                                dataflows.
+ compounding of recomputations.
+                                                                                                                                                   VII. R ELATED W ORKS
+ F. Overall Impact of Tiled Fusion                                                                                              A. Fused-layer Dataflow Accelerators
+    In this case study, we compare tiled fused-layer designs                                                                       Prior work has proposed fused-layer dataflow accelerators
+ against a baseline that picks the best of either processes                                                                     (under various names) [16]–[19], [30], [43], [46]. These works
+ layer-by-layer or retains entire intermediate fmaps (i.e., untiled                                                             have shown that fused-layer dataflow accelerators can have
+ fusion). We take the conv+conv fusion set with shapes where                                                                    lower latency, lower energy consumption, or higher scalability
+ P 2, Q2 is the optimal choice. Then, we evaluate the required                                                                  compared to layer-by-layer dataflow accelerators. This makes
+ on-chip buffer capacity required for different amounts of                                                                      the fused-layer dataflow accelerator design space interesting
+ off-chip transfers without recomputation. Fig. 18 shows the                                                                    to explore. However, although these works often describe
+ results.                                                                                                                       a hardware performance model and an algorithm to search
+                                                                                                                                for an optimal mapping, each model and mapping search
+                                         (a) conv+conv                                      (b) conv+conv                       approach are specific to the proposed accelerator and the
+                                     Width: 56, Channel: 64                             Width: 112, Channel: 32                 target workload. Thus, a more general model that supports a
+Norm. off-chip transfers
+
+
+
+
+                           8                                                  3
+                                                                                                                                wide fused-layer dataflow accelerator design space and various
+                           6                                                                                                    workloads is needed.
+                           4                                                  2
+                           2                                                                                                    B. Fused-layer Dataflow Accelerator Exploration Framework
+                                                                              1
+                               0.2        0.4       0.6     0.8       1.0              0.2      0.4      0.6      0.8     1.0     Fused-layer dataflow exploration frameworks (e.g., [21],
+                                             Norm. capacity                                     Norm. capacity                  [22], [28], [29], [31] often support a range of fused-layer
+                                     Tiled fused-layer         Baseline (best of layer-by-layer or untiled fused-layer)
+                                                                                                                                dataflow accelerators (instead of a specific one) and workloads.
+ Fig. 18: Buffer capacity and off-chip transfers tradeoff Pareto curves                                                         However, as discussed in Sections I and II, prior frameworks
+ for tiled fused-layer and baseline without recomputation. At capacity                                                          have limitations in certain features of their design spaces.
+ lower than required for minimum algorithmic off-chip transfers, the                                                            This work addresses the aforementioned limitations. Further-
+ baseline is often better than fused-layer.                                                                                     more, although each framework may have only a subset of
+                                                                                                                                                          14
+
+
+
+the limitations, our case studies in Section VI have shown                     [7] G. Lample and A. Conneau, “Cross-lingual Language Model Pretrain-
+that exploring these features in combination results in more                       ing,” arXiv e-prints, p. arXiv:1901.07291, Jan. 2019.
+                                                                               [8] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N.
+efficient accelerator designs.                                                     Gomez, L. u. Kaiser, and I. Polosukhin, “Attention is all you
+   Prior work has also proposed methods for determining                            need,” in Advances in Neural Information Processing Systems,
+optimal fusion sets [22], [28], [29], [46]. For example, Op-                       I. Guyon, U. V. Luxburg, S. Bengio, H. Wallach, R. Fergus,
+                                                                                   S. Vishwanathan, and R. Garnett, Eds., vol. 30. Curran Associates,
+timus [28] is a method based on dynamic programming,                               Inc., 2017. [Online]. Available: https://proceedings.neurips.cc/paper
+SET [29] is based on simulated annealing, ConvFusion [22] is                       files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf
+based on Pareto-filtering. Orthogonally, LoopTree is a model                   [9] A. Hannun, C. Case, J. Casper, B. Catanzaro, G. Diamos, E. Elsen,
+                                                                                   R. Prenger, S. Satheesh, S. Sengupta, A. Coates, and A. Y. Ng, “Deep
+to find the optimal design choices for a fusion set. Thus,                         speech: Scaling up end-to-end speech recognition,” 2014.
+LoopTree can be used in conjunction with any of these                         [10] M. Bansal, A. Krizhevsky, and A. Ogale, “ChauffeurNet: Learning to
+methods.                                                                           Drive by Imitating the Best and Synthesizing the Worst,” arXiv e-prints,
+                                                                                   p. arXiv:1812.03079, Dec. 2018.
+                                                                              [11] Y.-H. Chen, J. Emer, and V. Sze, “Eyeriss: A spatial architecture
+                                                                                   for energy-efficient dataflow for convolutional neural networks,” in
+C. Search Algorithms for Design Space Exploration                                  2016 ACM/IEEE 43rd Annual International Symposium on Computer
+   Prior work has explored using various search algorithms                         Architecture (ISCA), 2016, pp. 367–379.
+                                                                              [12] Chen, Yu-Hsin and Krishna, Tushar and Emer, Joel and Sze, Vivienne,
+to explore the mapspace [22], [28], [29], [46]–[49]. Although                      “Eyeriss: An Energy-Efficient Reconfigurable Accelerator for Deep Con-
+not necessarily exploring the mapspace of fused-layer accel-                       volutional Neural Networks,” in IEEE International Solid-State Circuits
+erators, many of these search algorithms can be adapted to                         Conference, ISSCC 2016, Digest of Technical Papers, 2016, pp. 262–
+                                                                                   263.
+search the LoopTree mapspace using LoopTree as the model,                     [13] H. Kwon, A. Samajdar, and T. Krishna, “Maeri: Enabling
+e.g., dynamic programming [28], genetic algorithms [49], or                        flexible dataflow mapping over dnn accelerators via reconfigurable
+differentiable surrogate in [48].                                                  interconnects,” SIGPLAN Not., vol. 53, no. 2, p. 461–475, mar 2018.
+                                                                                   [Online]. Available: https://doi.org/10.1145/3296957.3173176
+                                                                              [14] T. Chen, Z. Du, N. Sun, J. Wang, C. Wu, Y. Chen, and
+                        VIII. C ONCLUSION                                          O. Temam, “Diannao: A small-footprint high-throughput accelerator
+                                                                                   for ubiquitous machine-learning,” SIGARCH Comput. Archit. News,
+   In this paper, we described a fused-layer mapspace with                         vol. 42, no. 1, p. 269–284, feb 2014. [Online]. Available: https:
+more extensive tiling, recomputation, and retention choices                        //doi.org/10.1145/2654822.2541967
+                                                                              [15] Nvidia deep learning accelerator. [Online]. Available: http://nvdla.org/
+than prior work. We also described and validated an analytical                     primer.html
+hardware model that can evaluate latency, energy, and required                [16] M. Alwani, H. Chen, M. Ferdman, and P. Milder, “Fused-layer cnn
+buffer capacity given a mapping and fusion set. Using this                         accelerators,” in 2016 49th Annual IEEE/ACM International Symposium
+                                                                                   on Microarchitecture (MICRO), 2016, pp. 1–12.
+model, we explore the fused-layer mapspace for fusion sets                    [17] A. Shafiee, A. Nag, N. Muralimanohar, R. Balasubramonian, J. P. Stra-
+in CNNs and transformers, revealing insights into fused-layer                      chan, M. Hu, R. S. Williams, and V. Srikumar, “Isaac: A convolutional
+dataflow accelerator design that can only be explored with a                       neural network accelerator with in-situ analog arithmetic in crossbars,”
+                                                                                   in 2016 ACM/IEEE 43rd Annual International Symposium on Computer
+model supporting a more extensive fused-layer dataflow design                      Architecture (ISCA), 2016, pp. 14–26.
+space.                                                                        [18] L. Song, X. Qian, H. Li, and Y. Chen, “Pipelayer: A pipelined reram-
+                                                                                   based accelerator for deep learning,” in 2017 IEEE International Sym-
+                                                                                   posium on High Performance Computer Architecture (HPCA), 2017, pp.
+                      ACKNOWLEDGEMENTS                                             541–552.
+                                                                              [19] M. Gao, X. Yang, J. Pu, M. Horowitz, and C. Kozyrakis, “Tangram:
+  This work was funded in part by the MIT AI Hardware                              Optimized coarse-grained dataflow for scalable nn accelerators,”
+Program.                                                                           in Proceedings of the Twenty-Fourth International Conference on
+                                                                                   Architectural Support for Programming Languages and Operating
+                                                                                   Systems, ser. ASPLOS ’19. New York, NY, USA: Association
+                            R EFERENCES                                            for Computing Machinery, 2019, p. 807–820. [Online]. Available:
+                                                                                   https://doi.org/10.1145/3297858.3304014
+[1] M. Sandler, A. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen, “Mo-         [20] N. P. Jouppi, D. Hyun Yoon, M. Ashcraft, M. Gottscho, T. B. Jablin,
+    bilenetv2: Inverted residuals and linear bottlenecks,” in 2018 IEEE/CVF        G. Kurian, J. Laudon, S. Li, P. Ma, X. Ma, T. Norrie, N. Patil, S. Prasad,
+    Conference on Computer Vision and Pattern Recognition, 2018, pp.               C. Young, Z. Zhou, and D. Patterson, “Ten lessons from three genera-
+    4510–4520.                                                                     tions shaped google’s tpuv4i : Industrial product,” in 2021 ACM/IEEE
+[2] A. Howard, M. Sandler, B. Chen, W. Wang, L.-C. Chen, M. Tan, G. Chu,           48th Annual International Symposium on Computer Architecture (ISCA),
+    V. Vasudevan, Y. Zhu, R. Pang, H. Adam, and Q. Le, “Searching for              2021, pp. 1–14.
+    mobilenetv3,” in 2019 IEEE/CVF International Conference on Computer       [21] L. Mei, K. Goetschalckx, A. Symons, and M. Verhelst, “Defines:
+    Vision (ICCV), 2019, pp. 1314–1324.                                            Enabling fast exploration of the depth-first scheduling space for dnn
+[3] K. Simonyan and A. Zisserman, “Very deep convolutional networks for            accelerators through analytical modeling,” in 2023 IEEE International
+    large-scale image recognition,” in International Conference on Learning        Symposium on High-Performance Computer Architecture (HPCA).
+    Representations, 2015.                                                         Los Alamitos, CA, USA: IEEE Computer Society, mar 2023, pp.
+[4] A. Krizhevsky, I. Sutskever, and G. E. Hinton, “Imagenet classification        570–583. [Online]. Available: https://doi.ieeecomputersociety.org/10.
+    with deep convolutional neural networks,” in Advances in Neural                1109/HPCA56546.2023.10071098
+    Information Processing Systems, F. Pereira, C. J. C. Burges, L. Bottou,   [22] L. Waeijen, S. Sioutas, M. Peemen, M. Lindwer, and H. Corporaal,
+    and K. Q. Weinberger, Eds., vol. 25. Curran Associates, Inc.,                  “Convfusion: A model for layer fusion in convolutional neural net-
+    2012. [Online]. Available: https://proceedings.neurips.cc/paper/2012/          works,” IEEE Access, vol. 9, pp. 168 245–168 267, 2021.
+    file/c399862d3b9d6b76c8436e924a68c45b-Paper.pdf                           [23] K. Hegde, H. Asghari-Moghaddam, M. Pellauer, N. Crago, A. Jaleel,
+[5] R. Collobert, J. Weston, L. Bottou, M. Karlen, K. Kavukcuoglu, and             E. Solomonik, J. Emer, and C. W. Fletcher, “Extensor: An accelerator
+    P. Kuksa, “Natural language processing (almost) from scratch,” J. Mach.        for sparse tensor algebra,” in Proceedings of the 52nd Annual
+    Learn. Res., vol. 12, no. null, p. 2493–2537, nov 2011.                        IEEE/ACM International Symposium on Microarchitecture, ser. MICRO
+[6] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, “BERT: Pre-training          ’52. New York, NY, USA: Association for Computing Machinery,
+    of Deep Bidirectional Transformers for Language Understanding,” arXiv          2019, p. 319–333. [Online]. Available: https://doi-org.libproxy.mit.edu/
+    e-prints, p. arXiv:1810.04805, Oct. 2018.                                      10.1145/3352460.3358275
+                                                                                                                                                             15
+
+
+
+[24] T. O. Odemuyiwa, J. S. Emer, and J. D. Owens, “The EDGE Language:             [42] Y. N. Wu, J. S. Emer, and V. Sze, “Accelergy: An architecture-
+     Extended General Einsums for Graph Algorithms,” arXiv e-prints, p.                 level energy estimation methodology for accelerator designs,” in 2019
+     arXiv:2404.11591, Apr. 2024.                                                       IEEE/ACM International Conference on Computer-Aided Design (IC-
+[25] N. Nayak, X. Wu, T. O. Odemuyiwa, M. Pellauer, J. S. Emer, and C. W.               CAD), 2019, pp. 1–8.
+     Fletcher, “Fusemax: Leveraging extended einsums to optimize attention         [43] K. Goetschalckx, F. Wu, and M. Verhelst, “Depfin: A 12-nm depth-first,
+     accelerator design,” in Proceedings of the 57th Annual IEEE/ACM                    high-resolution cnn processor for io-efficient inference,” IEEE Journal
+     International Symposium on Microarchitecture, ser. MICRO ’24. New                  of Solid-State Circuits, vol. 58, no. 5, pp. 1425–1435, 2023.
+     York, NY, USA: Association for Computing Machinery, 2024.                     [44] J. Žbontar and Y. LeCun, “Stereo Matching by Training a Convolu-
+[26] N. Nayak, T. O. Odemuyiwa, S. Ugare, C. W. Fletcher, M. Pellauer, and              tional Neural Network to Compare Image Patches,” arXiv e-prints, p.
+     J. S. Emer, “TeAAL: A Declarative Framework for Modeling Sparse                    arXiv:1510.05970, Oct. 2015.
+     Tensor Accelerators,” arXiv e-prints, p. arXiv:2304.07931, Apr. 2023.         [45] ——, “Stereo Matching by Training a Convolutional Neural Network
+[27] L. Mei, P. Houshmand, V. Jain, S. Giraldo, and M. Verhelst, “Zigzag:               to Compare Image Patches,” arXiv e-prints, p. arXiv:1510.05970, Oct.
+     Enlarging joint architecture-mapping design space exploration for dnn              2015.
+     accelerators,” IEEE Transactions on Computers, vol. 70, no. 8, pp. 1160–      [46] S. Zheng, X. Zhang, L. Liu, S. Wei, and S. Yin, “Atomic dataflow
+     1174, 2021.                                                                        based graph-level workload orchestration for scalable dnn accelerators,”
+[28] X. Cai, Y. Wang, and L. Zhang, “Optimus: An operator fusion                        in 2022 IEEE International Symposium on High-Performance Computer
+     framework for deep neural networks,” ACM Trans. Embed. Comput.                     Architecture (HPCA), 2022, pp. 475–489.
+     Syst., vol. 22, no. 1, oct 2022. [Online]. Available: https://doi.org/10.     [47] Q. Huang, M. Kang, G. Dinh, T. Norell, A. Kalaiah, J. Demmel,
+     1145/3520142                                                                       J. Wawrzynek, and Y. S. Shao, “Cosa: Scheduling by constrained
+[29] J. Cai, Y. Wei, Z. Wu, S. Peng, and K. Ma, “Inter-layer scheduling space           optimization for spatial accelerators,” in 2021 ACM/IEEE 48th Annual
+     definition and exploration for tiled accelerators,” in Proceedings of the          International Symposium on Computer Architecture (ISCA), 2021, pp.
+     50th Annual International Symposium on Computer Architecture, ser.                 554–566.
+     ISCA ’23. New York, NY, USA: Association for Computing Machinery,             [48] S. H. V. C. A. P. Kartik Hegde, Po-An Tsai and C. W. Fletcher,
+     2023. [Online]. Available: https://doi.org/10.1145/3579371.3589048                 “Mind mappings: Enabling efficient algorithm-accelerator mapping
+[30] S.-C. Kao, S. Subramanian, G. Agrawal, A. Yazdanbakhsh, and                        space search,” in In Proceedings of the 26th ACM International Con-
+     T. Krishna, “Flat: An optimized dataflow for mitigating attention                  ference on Architectural Support for Programming Languages and
+     bottlenecks,” 2021. [Online]. Available: https://arxiv.org/abs/2107.06419          Operating Systems (ASPLOS ’21). IEEE, 2021.
+[31] S. Zheng, S. Chen, S. Gao, L. Jia, G. Sun, R. Wang, and Y. Liang,             [49] S.-C. Kao and T. Krishna, “Gamma: Automating the hw mapping of
+     “Tileflow: A framework for modeling fusion dataflow via tree-based                 dnn models on accelerators via genetic algorithm,” in 2020 IEEE/ACM
+     analysis,” in Proceedings of the 56th Annual IEEE/ACM International                International Conference On Computer Aided Design (ICCAD), 2020,
+     Symposium on Microarchitecture, ser. MICRO ’23. New York, NY,                      pp. 1–9.
+     USA: Association for Computing Machinery, 2023, p. 1271–1288.
+     [Online]. Available: https://doi.org/10.1145/3613424.3623792
+[32] A. Einstein, “The foundation of the general theory of relativity,” Annalen
+     der Physik, vol. 354, no. 7, pp. 769–822, 1916.
+[33] A. Parashar, P. Raina, Y. S. Shao, Y.-H. Chen, V. A. Ying, A. Mukkara,
+     R. Venkatesan, B. Khailany, S. W. Keckler, and J. Emer, “Timeloop:
+     A systematic approach to dnn accelerator evaluation,” in 2019 IEEE
+     International Symposium on Performance Analysis of Systems and
+     Software (ISPASS), 2019, pp. 304–315.
+[34] K. He, X. Zhang, S. Ren, and J. Sun, “Deep Residual Learning for
+     Image Recognition,” arXiv e-prints, p. arXiv:1512.03385, Dec. 2015.
+[35] H. Kwon, P. Chatarasi, V. Sarkar, T. Krishna, M. Pellauer, and
+     A. Parashar, “Maestro: A data-centric approach to understand reuse,
+     performance, and hardware cost of dnn mappings,” IEEE Micro, vol. 40,
+     no. 3, pp. 20–29, 2020.
+[36] Y. N. Wu, P.-A. Tsai, A. Parashar, V. Sze, and J. S. Emer, “Sparseloop:
+     An analytical, energy-focused design space exploration methodology for
+     sparse tensor accelerators,” in 2021 IEEE International Symposium on
+     Performance Analysis of Systems and Software (ISPASS), 2021, pp. 232–
+     234.
+[37] M. Horeni, P. Taheri, P.-A. Tsai, A. Parashar, J. Emer, and S. Joshi,
+     “Ruby: Improving hardware efficiency for tensor algebra accelerators
+     through imperfect factorization,” in 2022 IEEE International Symposium
+     on Performance Analysis of Systems and Software (ISPASS), 2022, pp.
+     254–266.
+[38] W. Pugh, “Uniform techniques for loop optimization,” in Proceedings
+     of the 5th International Conference on Supercomputing, ser. ICS ’91.
+     New York, NY, USA: Association for Computing Machinery, 1991, p.
+     341–352. [Online]. Available: https://doi.org/10.1145/109025.109108
+[39] S. Verdoolaege, “isl: An integer set library for the polyhedral model,”
+     in Mathematical Software - ICMS 2010, ser. Lecture Notes in Computer
+     Science, K. Fukuda, J. Hoeven, M. Joswig, and N. Takayama, Eds.
+     Springer, 2010, vol. 6327, pp. 299–302.
+[40] J. Tong, A. Itagi, P. Chatarasi, and T. Krishna, “Feather: A reconfigurable
+     accelerator with data reordering support for low-cost on-chip dataflow
+     switching,” in Proceedings of the 51th Annual International Symposium
+     on Computer Architecture, ser. ISCA ’24. Argentina: Association for
+     Computing Machinery, 2024.
+[41] M. Pellauer, Y. S. Shao, J. Clemons, N. Crago, K. Hegde, R. Venkatesan,
+     S. W. Keckler, C. W. Fletcher, and J. Emer, “Buffets: An efficient and
+     composable storage idiom for explicit decoupled data orchestration,”
+     in Proceedings of the Twenty-Fourth International Conference on
+     Architectural Support for Programming Languages and Operating
+     Systems, ser. ASPLOS ’19. New York, NY, USA: Association
+     for Computing Machinery, 2019, p. 137–151. [Online]. Available:
+     https://doi.org/10.1145/3297858.3304025
+

@@ -1,0 +1,1653 @@
+                                        Embedded Graph Convolutional Networks for Real-Time Event Data Processing
+                                                                    on SoC FPGAs
+
+                                                            Kamil Jezioreka , Piotr Wzoreka , Krzysztof Blachuta , Andrea Pinnab , Tomasz Kryjaka
+                                          a   Embedded Perception and Autonomous Systems Group, Department of Automatic Control and Robotics, AGH University of Krakow, Poland
+                                                                                    b Sorbonne Universite, CNRS, LIP6, F-75005, Paris
+
+
+
+
+                                        Abstract
+arXiv:2406.07318v3 [cs.CV] 8 Jun 2026
+
+
+
+
+                                            The utilisation of event cameras represents an important and swiftly evolving trend aimed at addressing the con-
+                                        straints of traditional video systems. Particularly within the automotive domain, these cameras find significant rel-
+                                        evance for their integration into embedded real-time systems due to lower latency and power consumption. One
+                                        effective approach to ensure the necessary throughput and latency for event processing is through the utilisation of
+                                        graph convolutional networks (GCNs). In this study, we introduce a custom EFGCN (Event-based FPGA-accelerated
+                                        Graph Convolutional Network) designed with a series of hardware-aware optimisations tailored for PointNetConv,
+                                        a graph convolution designed for point cloud processing. The proposed techniques result in up to 100-fold reduction
+                                        in model size compared to Asynchronous Event-based GNN (AEGNN), one of the most recent works in the field, with
+                                        a relatively small decrease in accuracy (2.9% for the N-Caltech101 classification task, 2.2% for the N-Cars classifi-
+                                        cation task), thus following the TinyML trend. We implemented EFGCN on a ZCU104 SoC FPGA platform without
+                                        any off-chip external memory resources, achieving a throughput of 13.3 million events per second (MEPS) and real-
+                                        time partially asynchronous processing with low latency. Across multiple event-based classification benchmarks,
+                                        our approach achieves competitive accuracy while providing state-of-the-art computational efficiency per event, small
+                                        model size, and high scalability, customisability and resource efficiency. We publish both software and hardware
+                                        source code in an open repository: https://github.com/vision-agh/gcnn-dvs-fpga.
+                                        Keywords: Dynamic Vision Sensor, Graph Convolutional Neural Networks, Recognition, SoC FPGA
+
+
+                                        1. Introduction
+
+                                             Embedded vision systems have become an integral part of many modern technologies, especially in advanced
+                                        mobile robotics applications (e.g. autonomous vehicles) [1]. Vision sensors facilitate object detection and localisation,
+                                        which are crucial for navigation, obstacle avoidance, path planning, and performing specific tasks like manipulating
+                                        objects or interacting with the environment [2, 3].
+                                             Typical frame-based cameras capture video sequences in greyscale or colour with specific spatial (e.g. 1280 × 720
+                                        pixels) and temporal (e.g. 60 frames per second) resolution. However, they can be challenging to apply in some
+                                        circumstances because of issues such as motion blur during fast movements, high latency due to low frame rates, and
+                                        difficulties in operating in uneven lighting conditions. These issues could be partially addressed by existing high-
+                                        speed cameras, but these sensors are expensive and typically require good lighting conditions. Moreover, frame-based
+                                        cameras generate large amounts of redundant data, which can be inefficient to process in real-time embedded systems.
+                                             In contrast, neuromorphic sensors, also known as event cameras or dynamic vision sensors (DVS), offer several
+                                        advantages that address these limitations [4]. In a DVS, each pixel operates independently and asynchronously1 ,
+                                        detecting only changes in brightness rather than its absolute value and generating so-called events. Each event encodes
+                                        the location (pixel coordinates), the timestamp (with microsecond precision), and the polarity (indicating increase or
+                                        decrease in intensity). This approach results in lower average power consumption, high temporal resolution, and
+
+
+                                           1 In the context of DVS, asynchronicity is defined as the ability to generate or process events directly at the moment of an intensity change
+
+                                        registered by a given pixel, without maintaining fixed time intervals.
+reduced data redundancy, as the changes are only captured in place and time of their occurrence. Furthermore, since
+event generation is based on the logarithm of the brightness change, DVS has a high dynamic range which enables
+reliable operation in environments with uneven illumination.
+    As highlighted above, event cameras have many advantages, especially for applications in dynamic environments
+for mobile robotics. However, efficient processing of the resulting asynchronous event stream remains challenging.
+Computer vision methods developed over the last 70 years for frame cameras are not suitable for sparse spatio-
+temporal point clouds. Therefore, several approaches to this problem have been proposed. The simplest method
+is to project the event data onto a two-dimensional plane in order to create a pseudo-frame (often called an event-
+frame), similar to the one obtained from a traditional camera [5]. This allows the almost direct application of classical
+methods and convolutional neural networks (CNNs) [6, 7]. However, this approach requires the aggregation of events
+over a fixed time window, which introduces information loss (especially high temporal resolution), generation of
+redundant pixels, and higher latency. Therefore, recent research has focused on processing events in their original
+sparse form.
+    One recent approach is to use graph neural networks (GNNs) through a generation of a graph representation. In
+such a structure, individual events are represented as vertices, while the edges connecting these vertices correspond to
+their local relationships. As a consequence, the data represented as a sparse cloud of vertices in spatio-temporal space
+can be processed efficiently with a graph neural network. In addition, recent research [8, 9, 10] indicates that such
+graphs can be generated and updated asynchronously, thus not only reducing the number of operations for a single
+event, but also limiting the latency of data processing.
+    However, a key challenge remains the efficient processing of event data in a way that enables real-time2 realisation
+of computer vision tasks with low latency, low power consumption, and high throughput. It is important to emphasise
+that meeting these requirements is crucial for applications in mobile robotics, especially in case of e.g. autonomous
+drone racing. In this field the manoeuvres during the flight have to be performed as fast as possible, which requires
+extremely low latency thanks to the algorithm and the computing platform.
+    The literature includes research on hardware implementations of event-based vision algorithms, most commonly
+for embedded GPU platforms [9, 10]. Recently, Field-Programmable Gate Array (FPGA) platforms, including system-
+on-chip (SoC) FPGA devices, have also gained increasing attention [11, 12], due to their low power consumption,
+high parallel processing capabilities, and flexibility enabled by hardware description languages. There is a growing
+collaboration between FPGA manufacturers and the DVS industry, driving advancements in event-based vision3 .
+    Therefore, in this work we propose an Event-based FPGA-accelerated Graph Convolutional Network – our strat-
+egy for efficient event data processing aimed at real-time and low-power mobile robotics applications. In contrast to
+prior FPGA GCN accelerators that assume a fixed graph structure [13, 14, 15], EFGCN operates on a graph that is
+generated and updated asynchronously from the incoming event stream. We can summarise our main contribution as
+follows:
+
+    • We introduce a set of hardware-aware optimisations for graph convolutional networks processing event data.
+      These optimisations are guided by FPGA resource constraints and informed by extensive ablation studies on
+      multiple event-based classification datasets.
+    • We present the first hardware implementation of a 3D MaxPool layer designed for event-data processing, which,
+      by leveraging the temporal sparsity of event-based data, enables the deployment of larger network architectures
+      and facilitates higher classification accuracy.
+    • We present a custom hardware implementation of PointNetConv layers that exploits deterministic latency and
+      throughput, achieved by using only constant-latency components without utilisation of any off-chip external
+      memory. This design effectively leverages the temporal sparsity of event data for efficient and scalable event-
+      driven processing.
+
+
+    2 The precise definition of ’real-time’ depends heavily on the application and sensor used. In ’traditional’ computer vision this usually means at
+
+least 20-25 frames per second (40-50 ms). In this work, our aim is to process the event stream generated by the sensor without any major delays,
+i.e. in the order of single microseconds.
+    3 https://www.prophesee.ai/event-based-metavision-amd-kria-starter-kit/
+
+
+
+
+                                                                          2
+                0.96
+                                                                                                  EV-VGCNN
+
+                                                        AEGNN                                                   AsyNet
+                0.94
+
+                                                                                     EvS-S
+                                                                                                         YOLE
+ Accuracy [%]
+
+
+
+
+                                                   EFGCN-L
+                0.92
+                                              EFGCN-B
+                                                                                     NvS-S                         RG-CNNs
+                                     EFGCN-S
+
+                 0.9                                                                                              G-CNNs
+
+
+
+                                                                                                                               Software models
+                0.88                EvGNN                                                                                      Hardware models
+
+                   103                  104                     105                              106                     107                     108
+                                                                      Number of parameters [#]
+
+
+Figure 1: Classification accuracy versus number of parameters for the proposed EFGCN variants (red) on the N-Cars dataset, compared with prior
+event-based models implemented in software (blue circles) and in hardware (blue filled markers). The x-axis is logarithmic.
+
+
+
+                • Using these methods, we present one of the first end-to-end hardware implementations of a GCN for real-time,
+                  continuous, sparse, and asynchronous event data processing. The design is evaluated on a SoC FPGA through
+                  both simulation and hardware testing. To the best of our knowledge, this is the first implementation that supports
+                  all characteristic GCN layers, including pooling layers.
+                • Among hardware-implemented methods considered in this work, EFGCN provides the most memory-efficient
+                  FPGA approach, requiring up to 70% less on-chip memory than the closest graph-based hardware baseline
+                  while achieving higher accuracy on the N-Cars dataset, demonstrating a competitive design for mobile robotics
+                  applications.
+
+    Our approach allowed us to significantly reduce the size of the model by up to 100 times, while limiting the
+accuracy loss to 2.2% and 2.9% for the N-Cars and N-Caltech101 datasets, compared to non-hardware state-of-the-
+art GCN methods. The proposed custom EFGCN hardware module implemented for heterogenous ZCU104 SoC
+FPGA board achieves a processing throughput of up to 13.3 million events per second with a low latency of 4.39-9.31
+ms. The prepared solution supports multiple configurations (cf. Figure 1). Our approach offers strong scalability
+across various model sizes, input resolutions, and scene dynamics by leveraging highly parameterisable hardware
+modules. This design enables flexible adaptation of the system architecture to meet the specific requirements of
+a given application. These results present the potential of our approach for efficient real-time processing of DVS data
+in embedded systems. Both the software model and the hardware modules have been published as an open source
+repository (https://github.com/vision-agh/gcnn-dvs-fpga).
+    The remainder of this paper is organised as follows. In Section 2 we present existing work on event data processing
+with an emphasis on FPGA-implemented approaches. Section 3 details our proposed method for hardware-aware
+design of graph convolutional network architectures for event data processing. A comprehensive description of the
+
+                                                                             3
+  Table 1: Comparison of graph network/convolution types and hardware platforms used for event data processing by graph neural networks.
+
+
+     Work                Year     Network/Convolution type         Task                                            Platform
+     Sekikawa [16]       2019     PointNet                         Semantic segmentation and ego-motion            CPU/GPU
+     Wang [17]           2019     PointNet/PointNet++              Gesture recognition                             GPU
+     Bi [18]             2019     SplineConv                       Classification                                  Not mentioned
+     Mitrokhin [19]      2020     GraphConv                        3D classification                               GPU
+     Li [8]              2021     GraphConv                        Classification                                  CPU
+     Schaefer [9]        2022     SplineConv                       Classification and detection                    GPU
+     Gehrig [10]         2022     SplineConv                       Detection                                       GPU
+     Jeziorek [20]       2023     PointNetConv                     Classification and detection                    GPU
+     Jeziorek [21]       2024     PointNetConv                     Graph generation and detection                  GPU/FPGA
+     Yang [22]           2024     PointNetConv                     Classification                                  GPU/FPGA
+     This work           2025     PointNetConv                     Classification                                  GPU/FPGA
+
+
+SoC FPGA implementation is provided in Section 4. In Section 5 we present the experiments conducted and ablation
+studies. The paper concludes with Sections 6 and 7, where we present limitations, summarise our results and outline
+further work.
+
+
+2. Related work
+
+   Computer vision methods for traditional frame-based cameras are being developed for over 70 years. However,
+with new vision sensors emerging, such as event cameras, these methods need to be altered to new types of data or
+completely new methods of data processing need to be established. In this Section we focus on two different aspects:
+possible ways of processing data from an event camera and existing FPGA-based implementations.
+
+2.1. Event data processing
+    Currently, three main approaches are employed for event data processing. The first and most widely used approach
+involves dense neural networks, including convolutional neural networks [6, 23, 7, 24, 25, 26] and vision transform-
+ers (ViTs) [27, 28, 29]. These methods deliver high accuracy results and benefit from well-established techniques used
+for conventional image processing. However, they are not inherently designed for sparse and asynchronous events.
+To handle event data, these models first create dense representations like event-frames or time-surfaces [5], which
+introduces additional latency. In this approach ‘empty’ pixels are also processed, i.e. pixels without any events, which
+is inefficient in the case of sparse data. A compromise is achieved through asynchronous methods [25, 26], which
+update only local pixels, where events occur. Nevertheless, these models tend to have large memory footprints and
+high computational complexity, while dense representations sacrifice high temporal resolution present in events.
+    The second approach utilises spiking neural networks (SNNs). They mimic the operation of brain neurons
+by accumulating membrane potential at each neuron and generating a spike once a certain threshold is exceeded.
+Since they are aligned with the event-based paradigm, SNNs can be directly applied to event cameras. However, the
+spiking mechanism inherent in SNNs is non-differentiable, making it difficult to apply the backpropagation approach
+for training [30]. Additionally, the results often fall short in accuracy, and the learning mechanisms require further
+research to enhance their performance [31, 32, 33, 34, 35].
+    The third and currently popular approach is to employ graph convolutional networks for the processing of event
+data. In this method, the data is represented as a spatio-temporal graph, with each event corresponding to a vertex
+connected to neighbouring vertices by edges. Table 1 compares various models and applications of GCNs for event
+data processing. Early work in this area demonstrated that GCNs significantly reduce the number of floating-point
+operations per event, due to their ability to maintain sparse data structures [18, 19, 36]. Moreover, later research
+demonstrated that they can be dynamically expanded by adding new events to the existing structure, with only local
+vertices requiring an update [8, 9, 10, 37].
+    A notable contribution within this domain is the AEGNN framework [9], which introduced the concept of k-hop
+graph updates, achieving high accuracy results with significantly reduced computational overhead compared to dense
+
+                                                                    4
+models. This approach has inspired further research [20, 21, 12], including our work. Moreover, since GCNs leverage
+standard backpropagation, this enables the training of larger models for tasks such as object detection [9, 10, 37].
+Recent work [37] presents a hybrid system that integrates graph neural networks for event data with CNNs for frame
+data, highlighting the potential of GCNs for various computer vision applications. Overall, GCNs offer a balanced
+solution, combining high accuracy output of dense models with the efficiency of SNNs.
+    However, AEGNN’s reliance on SplineConv (with learnable B-spline basis functions over continuous edge at-
+tributes) and k-hop bidirectional graph updates introduces high per-edge complexity, irregular memory access patterns,
+and unpredictable latency – all challenging for an on-chip FPGA deployment. This motivated our use of PointNet-
+Conv with directed graphs, which avoids edge attributes and limits updates to the incoming vertex only (Sections 3.1
+and 3.2).
+
+2.2. FPGA implementations
+    To fully exploit the advantages of event cameras, a suitable computing hardware must be used. FPGA platforms
+proved to be very efficient in traditional frame-based data processing with low latency [38]. Therefore, there has been
+a growing interest in combining event-based data processing with FPGAs to develop energy-efficient vision systems.
+The most comprehensive review in this area was conducted in 2024 [11], which surveyed various event-based FPGA
+solutions.
+    Classical approaches of event-based data processing on FPGA platform include HOTS [39] and PCA-RECT [40]
+algorithms, which employ machine learning techniques like support vector machines (SVMs) combined with prin-
+cipal component analysis (PCA) for feature extraction. These methods require relatively small amount of hardware
+resources, but their application to complex computer vision tasks or larger datasets is limited.
+    In case of AI-based methods, FPGA-based event processing can be divided into two subcategories: SNNs and
+CNNs. SNN-based solutions are characterised by their low latency [41, 42], but the main drawback lies in the model
+sizes, as most SNN implementations use small input resolutions, typically around 32×32 or 64×64 pixels. As a result,
+their quality rarely approaches state-of-the-art performance. On the other hand, CNN-based solutions [43, 44] can
+achieve high accuracy but require significant amount of hardware resources, exceeding the capacity of medium-sized
+FPGAs. This limits their applicability for edge devices and mobile robotics applications.
+    Besides the methods described, hardware implementations of GCN-based solutions have recently appeared. Our
+previous work [20] emphasised the limitations of existing graph convolution methods. This study revealed that most
+graph convolution layers require a large number of parameters and often depend on edge attributes, which increase
+the graph’s size. The most promising layer was found to be PointNetConv, which significantly reduces the number of
+parameters. It does not require edge attributes and improves the quality of the results.
+    Another limiting factor, which was not analysed in several GCN-based solutions, was graph generation procedure.
+An example is the work [14], in which the authors focused on accelerating a GCN network in hardware, using graph
+data generated earlier. Therefore, they did not face the challenges of handling raw input data in real time, which is
+usually crucial in practical situations.
+    In the study [21] we explored the hardware implementation of an efficient graph generation method for event
+data on the ZCU104 FPGA platform. This work introduced a matrix-based approach for neighbour searches and
+demonstrated the advantages of using directed graphs, allowing asynchronous graph generation without the necessity
+of updating older vertices.
+    Recent paper [12] presents a complete system for event-based graph processing on an FPGA. The authors adopted
+the same graph convolution method as in [20] and utilised directed graphs, similar to the approach in [21, 45]. They
+also evaluated different neighbourhood search patterns. However, this solution differs from EFGCN in several
+important aspects. Without pooling, the graph size and edge count remain constant throughout the network, causing
+a 50× increase in FLOPs in deeper layers (Section 5.2.1) and capping feature dimensionality at 32 elements per vertex.
+Moreover, the design relies on an off-chip DDR memory, introducing non-deterministic latency and higher energy cost
+(see Section 5.4.4). In contrast, EFGCN introduces hardware 3D MaxPool layers that progressively reduce the graph
+between convolutions, enabling deeper architectures with up to 128-element feature maps, while operating entirely
+on-chip with deterministic latency.
+    More broadly, existing FPGA-based GCN solutions either omit pooling layers entirely [12], rely on fixed pre-
+generated non-event graphs [13, 14, 15], or depend on an external off-chip memory [12]. To the best of our knowledge,
+
+                                                          5
+no prior hardware implementation supports all characteristic GCN layers – including pooling – within a single on-chip
+pipeline, nor has 3D MaxPool for event data been previously realised in hardware. EFGCN directly addresses both
+gaps.
+
+3. The proposed method
+
+    Our research was motivated by the need to bridge the gap between the hardware implementation of GCNs and
+their application in event data processing. For this purpose, we emphasise the sparse nature of the input data, par-
+ticularly its temporal aspect, and incorporate it directly into the network design. The goal was to develop a solution
+that maximises the use of information captured by event cameras, enabling accurate and instant event-by-event data
+processing (as soon as the data is registered by a neuromorphic sensor) with minimal latency, low computational load
+and low resource utilisation. In this way, we aim to design a system suitable for real-time mobile robotics applications
+operating in highly dynamic environments. In this Section, we outline the solutions and necessary modifications used
+for implementing a GCN on a SoC FPGA.
+
+3.1. Event-graph construction
+    Event cameras are characterised by the ability to capture changes in brightness at the individual pixel level,
+which distinguishes them from traditional frame-based cameras. The operation of an event generation is governed
+by a threshold mechanism, which determines whether the change in light intensity for a specific pixel exceeds
+a predefined value. The outcome of this process is an event stream that can be described as a sequence of tuples
+evi = (ui , ti , pi ), where ui = (xi , yi ) indicates the pixel location at which the event was generated, ti is the timestamp,
+and pi ∈ {−1, 1} denotes whether the change was negative or positive, respectively.
+    In the literature [18, 9], a standard method for generating a graph from events is to construct a spatio-temporal
+graph G = (V, E), where each event evi is represented as a vertex vi ∈ V with a position Pi = (ui , ti ) and attribute
+Xi = (pi ). Subsequently, for each pair of vertices i and j, an edge ei j ∈ E is generated, if their Euclidean distance di j
+represented as:
+                                                       q
+                                                di, j = (xi − x j )2 + (yi − y j )2 + (ti − t j )2                           (1)
+is smaller than a predefined parameter R. To normalise the time dimension for better comparability with spatial
+coordinates, the timestamps ti are scaled by a factor α, usually equal to the time window, resulting in ti∗ = ti · α.
+Additionally, the number of edges is limited to Dmax per vertex to avoid excessive edge generation. In practice,
+Dmax defines a trade-off between capturing more complete local spatio-temporal relations and maintaining bounded
+memory usage and computational cost, which is particularly important for efficient hardware implementation.
+    However, directly searching for neighbouring vertices across the entire graph presents computational and mem-
+ory challenges, especially in the context of hardware implementations, which would require using external memory,
+resulting in increased latency and power consumption. Traversing all vertices in a graph of millions of events results
+in O(n) complexity. Our objective is to minimise the number of searches per event to maintain real-time performance.
+Moreover, generating directed edges that support the continuous addition of new events without requiring updates to
+the existing graph is crucial for efficient hardware processing, as discussed further in Subsection 3.2.
+    To address these challenges, we adopt the method proposed in [21], which optimises graph generation for hard-
+ware. For a comprehensive explanation of the method, refer to the original work. Below, we summarise the key steps
+of the approach.
+    Building on prior works [8, 9] and classical CNN-based models, the method begins by normalising both the
+spatial ui = (xi , yi ) and temporal ti coordinates to a common range β. The normalised coordinates are then discretised
+to integer values:                             x            y            t 
+                                                    i              i              i
+                                         xi∗ = β ·    , y∗i = β ·    , ti∗ = β ·    .                                (2)
+                                                   X              Y              T
+ Here, X and Y denote the sensor’s spatial resolution (width and height) and T is the time window. This process maps
+the vertices into the set V ⊂ N3 , where each component ranges from 0 to β.
+    Neighbour searches are performed using a neighbourhood matrix (shortly N M), a two-dimensional matrix that
+corresponds to the normalised spatial resolution of the events. Each cell in the N M stores the timestamp and the
+                                                               6
+polarity of the most recent event at given spatial coordinates. For each new event evi , potential neighbours are searched
+among the pixels within a radius R of its position u∗i . If the timestamp t∗j of a neighbouring pixel u∗j satisfies Eq. (1),
+a direct edge ei j ∈ E is created and the timestamp in the matrix is consequently updated to t∗j .
+    This approach allows for the initialisation of a fixed-size data structure (β × β), that stores information about
+previous events, limits the number of neighbour searches based on the parameter R, and enables the continuous
+processing of events while maintaining directed edges. In our implementation, Dmax is not defined as a separate
+hyperparameter; instead, it is implicitly bounded by the neighbourhood search radius R (set to 3 in our experiments)
+and the spatial discretisation, which together limit the maximum number of edges per vertex to 29. The applied
+β parameter with spatial resolution (X, Y) and time window T for different datasets used for the evaluation of our
+method are shown in Section 5.
+
+3.2. Graph convolution
+     The core operation in graph convolutional networks is a convolution, which facilitates the efficient propaga-
+tion of information between locally connected vertices. This enables updating vertex representations and extracting
+relevant features. Graph convolution generally involves three stages:
+     1. Message Function (ϕ): in the first stage, the message function ϕ operates on a vertex vi and its neighbours
+v j ∈ N(i), determining the information exchange between these vertices. The message function can utilise the vertex
+attributes Xi , X j , their positionsL
+                                     Pi , P j , and edges E.                        L
+     2. Aggregation Function ( ): next, the aggregation function                          combines the message values collected from
+all neighbouring vertices, producing a representative value that includes the information from the local neighbourhood
+of vertex vi .
+     3. Update Function (γ): finally, the update function γ adjusts the vertex attribute Xi using the aggregated infor-
+mation.
+     The overall message passing process can be mathematically represented as Eq. (3).
+                                                                                              
+                                                             M                              
+                                                  X̂i = γ     ϕ(Xi , X j , Pi , P j , E)                                  (3)
+                                                             j∈N(i)
+
+Here, both ϕ andL  γ are differentiable functions, typically implemented as multi-layer perceptrons (MLPs). The aggre-
+gation function      can be a simple operator like sum or maximum.
+    As shown in Table 1, several different convolutional layers are available and widely used, such as SplineConv
+[9, 10, 18], GraphConv [19, 8], or network architectures like PointNet and PointNet++ [16, 17]. However, these
+solutions often have high memory demands [20], which is not a major issue when using GPUs, but becomes critical in
+embedded implementations. The extensive memory utilisation by the convolutions has a potential to adversely impact
+the reduction in dimensionality or depth of the network, which leads to a loss in quality. Therefore, in our work, we
+focused on using the PointNetConv4 layer.
+    This choice was guided by the results of our prior research [20], where we achieved a major reduction in model
+size and its inherent suitability for a point cloud data. The PointNetConv layer is designed to efficiently process vertex
+features in 3D point clouds, implementing the transformation defined by Eq. (4):
+                                                                              !
+                                                X̂i = γ max ϕ(X j , P j − Pi ) ,                                       (4)
+                                                               j∈N(i)
+
+where ϕ is a function that processes the neighbour vertex attribute X j with the relative spatial coordinate P j − Pi , and
+the max operator selects a representative attribute based on information received from the neighbours N(i). In our
+implementation, the message function ϕ is a simple linear transformation, mapping input features from dimension
+in + 3 to out, where the additional +3 accounts for the spatio-temporal dimensions of the events. To minimise
+complexity, we omit the update function γ, and in order to apply the BatchNorm merging [48], we used normalisation
+after ϕ function.
+
+
+   4 The implementation of the PointNetConv layer presented here is based on its implementation in the PyTorch Geometric library [46], which is
+
+based on the work [47].
+
+                                                                        7
+    The selection of PointNetConv as the convolution method for the hardware-implemented system was therefore
+motivated by its limited computational complexity, wherein the features of vertices connected by an edge are combined
+using a simple max() function. The efficiency of PointNetConv enables a reduction in model size, which in turn
+decreases the demand for internal FPGA memory, which is highly constrained and energy-intensive resource. We
+investigated the effect of the convolution used on the model size and the results in Section 5.2.2.
+
+Edge directionality
+    In the case of graphs that are bidirectional or directed against time, each new event added to the graph can be
+connected to the neighbourhood N(i) of an existing vertex. This necessitates recalculating not only the attribute of
+the new event, but also the attributes of all vertices it is connected to. Such an update propagates further into the
+graph since each subsequent layer utilises information from more distant neighbours. This process, described in
+detail in [9] as a k-hop neighbourhood, presents challenges for hardware implementations. Specifically, it requires
+storing information about previous vertices for each convolution and updating them continuously. In contrast, for
+graphs directed with time new events are connected only to the nearest vertices, and only the new vertex needs an
+update. This significantly reduces the number of operations per event while enabling asynchronous graph updates.
+This mechanism is crucial for efficient hardware implementation, as it can exploit the spatio-temporal sparsity of
+event-based data.
+
+3.3. Graph MaxPool
+    Graph MaxPool is a technique used to reduce the number of vertices in a graph. It is particularly useful in deeper
+layers of neural networks, where the size of attributes can increase significantly. The technique involves partitioning
+the data space into uniform Ck clusters of size g x × gy × gt . For each of these non-empty clusters, a new vertex
+is selected whose attribute value corresponds to the maximum attribute value among all vertices in the cluster, as
+represented by Eq. (5).
+
+                                                      Xk = max Xi                                                      (5)
+                                                             i∈Ck
+
+    Meanwhile, the position of the new vertex is determined as the average of the positions of all vertices in the cluster,
+as in Eq. (6).
+                                                          1 X
+                                                   Pk =            Pi                                                  (6)
+                                                         |Ck | i∈C
+                                                                    k
+
+    In this process, connections that link vertices from different clusters are merged into a single edge between new
+points, eliminating redundant connections and those internal to the groupings.
+    In the works [9, 10], the MaxPool operation is performed two-dimensionally with respect to space, meaning each
+cluster has a gt parameter set to the maximum value. As a result, for a given spatial range g x ×gy , there can be only one
+output vertex. This was motivated by computational reduction due to a significant decrease in the number of vertices.
+However, there are two key issues with this approach. The first is the continuous change in the spatial structure of the
+graph after pooling, as with each new event evi , the position Pk is modified according to Eq. (6). The second issue,
+highlighted by the authors in [10], is that this operation can cause bidirectional edges between output nodes. Both
+effects impact the continuous updating of the graph itself as well as the recalculation of vertex attributes, which in
+case of an FPGA results in a constant need to read, recompute, and write data.
+    To address this, we propose two modifications to this method to enable its hardware implementation. The first
+modification is to apply 3D pooling, where the cluster size is set to the same value for each dimension, so g x = gy =
+gt = g. The result is a larger number of vertices compared to the 2D method, but the pooling operation is divided
+into time intervals, which negates the need to update vertices in the temporally older parts of the graph. The second
+modification is to scale down the vertex positions according to the cluster size, so that each position value Pk is divided
+by the parameter g. This ensures that the edges in the output graph remain directed with time and reduces resource
+consumption on an FPGA.
+    Our analysis in Section 5.2.1 shows that using 3D pooling positively affects the qualitative performance. Also,
+scaling the graph down causes a significant reduction in both memory and logic resources (see Sections 4.3 and 4.4).
+
+
+                                                            8
+4. Hardware implementation
+
+    After extensive ablation studies in software (Section 5.2), we developed a set of hardware modules for processing
+an event stream using graph convolutional neural networks. Our custom architecture implemented in SystemVerilog
+was simulated for consistency with the software model and evaluated across multiple configurations on the Zynq
+UltraScale+ MPSoC ZCU104 Evaluation Kit (featuring the XCZU7EV-2FFVC1156 chip).
+    The hardware architecture was designed as a pipeline of modules implementing successive layers of a graph
+convolutional network that process data in a completely parallel manner – each layer can process data simultaneously,
+as long as its input data is available (Fig. 2). The hardware-aware optimizations proposed in Section 3 were aimed,
+among other objectives, at reducing memory requirements, thereby enabling the exclusive use of internal memory
+resources during inference (no off-chip memory). Satisfying this constraint not only reduces energy consumption
+(as the use of BRAM/URAM is more energy-efficient), but also ensures constant and deterministic memory access
+latencies. Consequently, the computational architecture could be designed to fully exploit the spatio-temporal sparsity
+of event-based data by appropriately tailoring the degree of computational parallelism. The system consists of two
+parts – asynchronous (operating in an event-by-event manner) and synchronous, where operations are performed on
+sub-graphs. The toolchain can process sequence of events of any length continuously, generating a prediction at the
+output for data recorded during the last TIME_WINDOW (duration of a single sample of event data sufficient to perform
+the classification – in described configurations we support windows of 50 and 100 ms), but 4 times as often (features
+available at system’s output every TIME_WINDOW/4).
+    The system assumes the use of a heterogenous SoC FPGA platform, where feature extraction is implemented in the
+programmable logic (PL) and the network head is performed in the processing system (PS). The operating frequency
+of 200 MHz was selected based on experimental evaluation to balance latency and timing requirements. Lower clock
+frequencies could be used to reduce power consumption at the cost of increased latency. In the following sections, we
+present the functional description of each hardware module, preserving their order in the system pipeline.
+
+4.1. Graph generation (u_generate_graph)
+    For testing purposes, in the designed system consecutive events are read by the processor from an SD card and then
+transmitted to the programmable logic in such a way as to maintain the intervals between the events, corresponding
+to their timestamps (emulating the actual output of a DVS). We also successfully evaluated the continuous processing
+of data read directly from a DVS integrated with the PL [49].
+    The events are then normalised in the FPGA (Eq. (2)) – the coordinate values x, y and the timestamp t are scaled
+to 0-β (graph size) range. Currently, we support graphs sizes of 128 × 128 × 128 and 256 × 256 × 256. The polarisation
+value is encoded as a single bit. The normalised events are written into a FIFO queue implemented with BlockRAM
+to be then read by the following modules. This buffering mechanism ensures correct processing when the dynamics
+of the observed scene exceed the system’s bandwidth (13.3 million events per second that can be processed by our
+architecture).
+    The subsequent events read from the FIFO are used to update the graph representation. For this purpose, it is
+necessary to determine the list of neighbours for the currently processed vertex.
+    The hardware-aware optimisation techniques described in Section 3.1 enable the implementation of a graph gen-
+erator with reduced memory resource utilisation. The use of a directed graph allows candidate edge connections to be
+searched exclusively among previously processed vertices. Furthermore, limiting the maximum number of connected
+vertices sharing the same x and y coordinates ensures that edge construction requires storing only information related
+to the most recent events within each memory cell. The neighbourhood matrix (Section 3.1) is implemented as
+a two-port BlockRAM memory of β × β depth and width of β+2 (storing the timestamp of the last recorded event
+for a particular pixel, its polarity and is_empty flag). For each event read from the FIFO, the edge candidates are
+read from the N M – 29 surrounding values (for R = 3). For each read, the semi-sphere condition is checked (Eq.
+(1)). Next, the currently processed event is written to the N M. This operation, due to the use of dual-port memories,
+requires 15 READ operations on one of the ports, and 14 READ operations and one WRITE operation on the other.
+    The latency of 15 clock cycles for a single event is a computational bottleneck of the proposed system. It can
+be determined that, with a 200 MHz clock, the throughput of the proposed system is 13.3 MEPS, which exceeds
+the values observed for real event stream data in the utilised datasets (1.35 MEPS for N-Caltech101, 0.59 MEPS for
+N-Cars, 0.34 MEPS for CIFAR10-DVS, and 0.063 MEPS for MNIST-DVS).
+                                                          9
+Figure 2: Schematic of the EFGCN network hardware modules with the asynchronous part marked in blue and the synchronous in green. The
+orange modules represent integrated memory, while the characteristics of data transferred between the selected modules are highlighted in yellow
+blocks. The number of features for a particular graph convolution layer dim1 -dim5 depends on the model (Small, Base or Large). We support
+configurations with normalisation size β = 128 and β = 256.
+
+
+
+    Once the N M analysis is complete, the module outputs pairs of events (x, y, t, and polarity), and a vector describing
+their edges (including polarity of connected events).
+
+4.2. Asynchronous convolution (u_async_conv)
+    Successive pairs of events and their edges appear at the first convolution module’s (Section 3.2) input asyn-
+chronously with preserved order – no more frequently than once every 15 clock cycles, but with an unknown time
+span (depending on the dynamics of the observed scene).
+
+
+                                                                      10
+        Figure 3: Operation of the 3D MaxPool layer. The green area refers to the pooling region before and after the max operation.
+
+
+
+     For each processed vertex, the graph convolution (implementation of Eq. (4)) requires performing maximum of
+30 multiplications – one for its own feature map (self-loop) and one for the feature map of each neighbouring vertex
+connected by an edge (a maximum of 29). The input feature map consists of four components: polarisation and the
+positional difference between connected vertices (for the self-loop, this is (0, 0, 0)). No extra memory is required,
+since the described initial convolution process only the values that are already present at the module’s input.
+     The implementation of the linear function ϕ (Eq. (4)) utilises two parallel modules for matrix multiplication,
+which are realised in LUT logic resources. For the first convolutional layer, all elements of the output vector are
+computed in parallel – therefore, the processing time for a vertex-edge pair equals 15 clock cycles. For each resulting
+value (after adding the bias), a requantisation process is required. It consists of scaling (using DSP and bit-shifting)
+followed by the addition of a constant ZERO_POINT. The resulting vectors for each edge (and self-loop) are compared
+with an element-wise maximum operation (taking into account layer-specific minimum values – ReLU activation).
+This generates the final feature map vector, which is propagated to subsequent model layers. The output of the module
+is the currently processed event, a list of its edges and a vector of its features.
+     It should be noted that for this convolution (unlike the subsequent ones, see Section 4.4), the entire matrix-vector
+multiplication is performed in parallel in order to avoid introducing an additional bottleneck – the module must provide
+throughput not lower than that of the graph generation module. Consequently, the number of output features of the
+first convolution in each of the evaluated models (see Section 5.1.2) is limited – increasing it would result in higher
+utilisation of both DSP and logic resources.
+
+4.3. 3D MaxPool (u_maxpool)
+    Immediately following the first convolution, a 3D MaxPool operation (Section 3.3) with a 4 × 4 × 4 kernel is
+applied. Its purpose is to scale the graph in each of the three dimensions – x, y, and time – by replacing the input
+events within 4 × 4 × 4 regions with a single output vertex. Consequently, the graph of SIZE (for the input graph
+SIZE = β) is replaced for subsequent layers with a graph of SIZE/4. The output feature vectors are the results of
+an element-wise maximum operation (Eq. (5); visualised on Fig. 3) applied to all inputs within a given region. This
+operation leads to the following:
+   • The number of processed vertices for subsequent layers in the network model is reduced 16 times, leading to
+     a significant decrease in the required memory resources.
+   • The number of edges is also reduced. After 4 × 4 clustering, the maximum positional difference between
+     connected vertices is reduced to R = 1, and their number is reduced to 17. As a consequence, the maximum
+     number of matrix-vector multiplications required for graph convolution in subsequent layers is reduced as well
+     (from 30 to 18). As multiplication accounts for a significant portion of the utilised logic resources, this effect
+     is crucial for the scalability of the hardware architecture.
+
+                                                                    11
+Figure 4: The graph convolution module in the synchronous part of the system. The input vector, composed of features retrieved from memory
+(green) and position differences (blue), is processed by the multiplier matrix (yellow). The resulting vector (red) is generated through an append
+operation in k steps, with m elements each.
+
+
+
+    • The processing order of events is disrupted. Scaling the graph not only among the x and y coordinates, but also
+      in the time plane, forces data accumulation within specific intervals. Subsequent layers can only process data
+      once the accumulation is complete.
+   The hardware module of a 3D MaxPool operates on the BlockRAM feature memory with a depth of (SIZE/4)2 ,
+which is addressed using x and y coordinates. Subsequent events are assigned to one of its cells, where the feature
+map is stored along with an updated list of its edges. A single read and write operation of a given cell allows the
+execution of the element-wise max(), when more than one event is assigned to it. Event accumulation is performed
+within a time unit:
+                                                   T I ME_WINDOW
+                                            ∆T =                      .                                         (7)
+                                                        (S IZE/4)
+    As a result, the feature memory contains the complete feature map after a ∆T period defined by Eq. (7), and only
+then can it be processed by subsequent layers. The disruption of event order forces a change in the data processing
+method in the next part of the model (referred to as ‘synchronous’) – instead of event-by-event processing, two-
+dimensional feature maps called temporal channels are processed, representing all events that occurred within a given
+∆T .
+    An advantage of using the 3D MaxPool module (along with constant-latency memory resources) is the ability to
+precisely determine the required throughput for each subsequent layer in the synchronous part of the system. Based
+on this value, an appropriate computation strategy is chosen to ensure that as many operations as possible can be
+executed sequentially.
+
+4.4. Synchronous graph convolution (u_sync_conv)
+    To process the entire temporal channel, it is necessary to compute the output of the linear function ϕ (Eq. (4)).
+For each element, the system must read the feature maps of the currently processed vertex as well as all vertices
+connected to it by an edge, resulting in a maximum of 18 memory accesses. Notably, eight of these potential edges
+connect vertices within the same ∆T , while the remaining nine connect to neighbouring vertices from the previous ∆T
+(R = 1 along the temporal axis as well). Executing this convolution requires access to the last two temporal channels,
+a constraint that was taken into account when designing the ‘feature memory’ mechanism (Fig. 5).
+                                                                       12
+   The computation of the linear function ϕ for a single vector xi consists of the following (Fig. 4):
+
+   • The vector xi is constructed by aggregating an n-element feature vector (retrieved from ‘feature memory’) and
+     three position difference values (Eq. (4) – P). The position differences are obtained from a look-up table (LUT)
+     based on the coordinate differences between vertices connected by an edge.
+   • Each element of the output vector ϕ(xi ) is computed by multiplying xi by a weight vector. Depending on the
+     required module throughput (determined by ∆T ), the number of parallel vector multipliers (m) can be adjusted.
+     The more multipliers are used, the higher the resource consumption. Therefore, the smallest possible value of
+     m to ensure that the required throughput is maintained without exceeding resource constraints is selected.
+   • For each iteration (i.e. in each clock cycle), m elements of the output feature vector are determined. This process
+     is repeated k times for a single input vector to obtain the ϕ(xi ) of dimensions dim = m × k.
+
+    With the required access to two preceding temporal channels, which are stored in independent ‘feature memory’
+units, the system processes two vectors simultaneously by default. The convolution result for a given vertex is de-
+termined as the outcome of the bitwise max operation applied to all ϕ(xi ) vectors. The number of clock cycles (CC)
+required for this computation can be expressed as:
+                                                                  dim
+                                                 CCvertex = 9 ×       ,                                             (8)
+                                                                   m
+where dim represents the size of the output feature map, and m denotes the number of parallel multipliers used. In
+summary, the processing of an entire temporal channel takes:
+
+                                           CCt = CCvertex × S IZE × S IZE                                           (9)
+
+where S IZE represents the current size of the processed graph, which decreases after each successive MaxPool.
+   The strategy for reducing LUT resource utilisation involves selecting the maximum number of parallel multipliers
+m so that ∆T cc (in clock cycles) satisfies Eq. (10).
+                                                        dim
+                                          ∆T cc ≥ 9 ×       × S IZE × S IZE                                        (10)
+                                                         m
+   In the synchronous part of the system, each graph convolutional layer can employ a different multiplication strat-
+egy (for decreasing S IZE with each MaxPool).
+
+4.5. Memory management
+    For GCN inference, it is necessary to store intermediate feature maps (in the synchronous part) as well as weights.
+In the proposed hardware module, only internal memory resources that offer constant and limited latency (BlockRAM
+and UltraRAM) are utilised – access to any off-chip memory is not required. To minimise memory resource usage,
+a memory-sharing mechanism has been implemented between successive layers (Fig. 5).
+    Each module implementing the feature memory consists of three independent memory blocks (implemented with
+BlockRAM or UltraRAM, depending on the feature vector size). While the preceding layer (e.g. MaxPool) writes
+data to one of these memory blocks generating a temporal channel for ∆T n , the other two (storing data for ∆T n−1
+and ∆T n−2 , respectively) are used by the next layer. Once convolution processing for an entire temporal channel is
+completed, the oldest memory block (corresponding to ∆T n−2 ) is reset. An appropriate multiplication strategy ensures
+that the graph convolutional layer completes processing before the next temporal channel is ready. At that point,
+memory switching occurs so that new data is stored in the recently cleared memory block.
+    Weight matrices are stored in distributed RAM for the first (asynchronous) convolutional layer due to the re-
+quirement of a simultaneous access and the relatively small size. In the synchronous part of the network, the weight
+matrices are stored in BlockRAM. However, the memory utilised for this purpose represents only a small portion of
+the overall usage.
+
+
+                                                           13
+Figure 5: The memory switching method – memory blocks are represented as yellow squares, while arrows indicate memory writes and reads. The
+red colour denotes memory reset.
+
+Table 2: Details of statistics and parameters in the graph generation stage for the event datasets used, including N-Cars (N-C), N-Caltech101
+(N-Cal), CIFAR10-DVS (C-DVS) and MNIST-DVS (M-DVS).
+
+
+                         Datasets              N-C [50]        N-Cal [51]         C-DVS [52]          M-DVS [53]
+                         Samples                24029             8246               10000                30000
+                         Classes                  2                100                10                    10
+                         Duration              100 ms            300 ms             1280 ms                2-3 s
+                        Resolution            120 × 100         240 × 180          128 × 128            128 × 128
+                    Normalisation β              128                256               128                  128
+                     Time window                100 ms             50 ms             100 ms               100 ms
+
+
+4.6. Hardware module’s output
+    Regardless of the chosen configuration of the GCN architecture, the processed graph at the output of the reconfig-
+urable part of the system (after the sequence of MaxPool layers and graph convolution) has a size of SIZE = 4.
+    As a result, successive temporal channels are transmitted to the software part of the heterogeneous system every
+TIME_WINDOW/4 ms.
+    The final feature map is used as input to the linear layer implemented in the PS to determine the classification
+results. We implemented the head of the network in the PS to increase the versatility of the proposed architecture –
+the same hardware module for feature extraction can be used for different computer vision tasks (while it could be
+implemented in reconfigurable logic, with relaxed throughput requirements, this is not necessary).
+    The effective inference rate remains independent of the network architecture or event rates and depends ex-
+clusively on the TIME_WINDOW: considering continuous event data processing, predictions can be generated every
+TIME_WINDOW/4 ms, with each prediction taking into account the most recent TIME_WINDOW ms of data. The predic-
+tion latency of the system is influenced by the chosen architecture (the number of features in each convolution layer
+and the adopted parallel multiplication strategy); its evaluation is presented in Section 5.4.
+
+
+5. Experiments
+
+5.1. Setup
+5.1.1. Datasets
+    In our experiments, we focused on the object classification from events. We selected four commonly used datasets
+including N-Cars [50], N-Caltech101 [51], CIFAR10-DVS [52], and MNIST-DVS [53]. The details about the dataset
+statistics and the parameters used during graph generation are summarised in Table 2. For the N-Caltech101 dataset,
+due to the larger resolution and dynamics, the normalisation parameter β is set to 256 and TIME_WINDOW to 50 ms.
+
+                                                                    14
+Table 3: The number of parallel vector multipliers m required to meet the throughput requirements for each model (with β = 256 and TIME_WINDOW
+of 50 ms).
+
+
+                                       Output dim                                        Parallel multipliers m
+   Model              Conv2          Conv3 Conv4                     Conv5          Conv2 Conv3 Conv4 Conv5
+EFGCN-S                  32              32             32             32               8               8               1              1
+EFGCN-B                  32              32             64              64              8               8               2              2
+EFGCN-L                  32              64             64             128              8              16               2              4
+
+5.1.2. Model details
+    For the software implementation of the models, the Torch framework [54] was used along with the PyTorch
+Geometric library [46]. All experiments were performed on our three EFGCN models: Small, Base, and Large. Each
+model consists of 5 convolutional layers and two MaxPool layers. A PoolOut layer was used at the end of each model,
+which is a simple 2D MaxPool and a single MLP layer for classification. Layer dimensions and exact configuration
+for all three variants are provided in the supplementary material.
+    Each model was implemented on the heterogeneous ZCU104 platform in two configurations: β = 128 with
+TIME_WINDOW = 100 ms and β = 256 with TIME_WINDOW = 50 ms.
+    For a 200 MHz clock, each configuration meets the timing requirements. Simulation results confirmed the con-
+sistency of the hardware module with the software model and the previously estimated throughput of 13.3 MEPS.
+For the β = 128 configuration, computing all output feature map elements independently for each convolution (i.e.
+with m = 1) satisfies the required throughput. However, for larger graphs and smaller time windows, parallelisation
+of certain multiplications is necessary. The number of parallel vector multipliers required for each configuration is
+presented in Table 3 (details are available in the supplementary material).
+
+5.1.3. Training details
+    In all experiments, the Adam optimiser [55] was used along with the ExponentialLR scheduler. Each model was
+trained for 100 epochs, and for model quantisation the quantisation aware training (QAT) technique was applied for
+additional 50 epochs. During training, we used data augmentation in the form of event flipping along the X-axis
+(disabled for the MNIST-DVS dataset due to digit asymmetry) and spatial rotation of events in the (x, y) plane by
+a uniformly sampled random angle around the event cloud centroid, with timestamps unchanged.
+
+5.2. Ablation studies
+    Our ablation studies focus on three key aspects of the design: (i) model size, measured as the number of parameters
+(which directly affects on-chip memory usage), (ii) computational cost, measured in FLOPs (which is a proxy for re-
+quired throughput, latency, and energy per inference), and (iii) task performance, measured as classification accuracy.
+Unless stated otherwise, all ablations are performed on the Base model using the N-Cars dataset. For comparison,
+we include two recent event-based GCN approaches: EvGNN [12], which provides a hardware implementation of
+GCNs for event cameras without any pooling layers, and AEGNN [9], which inspired both EvGNN and this work and
+incorporates 2D pooling.
+
+5.2.1. Impact of MaxPool modifications
+    We start our analysis with the impact on the quality results of the modifications we applied to the pooling layers,
+which are shown in Table 4. In AEGNN, a 2D pooling method with an average position was introduced, while in
+EvGNN the pooling layer was entirely omitted. Our results show that excluding the MaxPool significantly degrades
+performance, primarily due to its role in data generalisation in subsequent stages of the model, leading to improved
+results. Additionally, we observed that adopting a 3D pooling operation enhances accuracy by approximately 0.3-
+0.4% compared to the 2D pooling method. In contrast, the use of divide position has a slight negative impact, reducing
+accuracy by around 0.1-0.2%.
+
+                                                                     15
+Table 4: Ablation studies on MaxPool modifications on accuracy on the N-Cars dataset show that the incorporation of a 3D MaxPool enhances
+overall performance. However, dividing the position component has been observed to slightly degrade the results. Bold indicates the configuration
+used in the hardware implementation.
+
+
+                               2D MaxPool             3D MaxPool                    Average P                 Divide P                           Accuracy
+                                                                                                                                                    0.887
+                                    ✓                                                     ✓                                                         0.918
+                                    ✓                                                                                          ✓                    0.917
+                                                                 ✓                        ✓                                                         0.922
+                                                                 ✓                                                             ✓                    0.920
+
+                                                 w. pooling        w/o pooling                                                                       vertices   edges
+
+
+                                                                                                     111.63                                                              48.67
+
+
+
+
+                                                                                                               Reduction to input
+                100
+ Total MFLOPs
+
+
+
+
+                                                                                                                                    40
+                                                                                          x50!
+                                                                                  61.39
+
+                 50                                                                                                                                              19.43
+                                                                                                                                    20
+                                                               30.69                                                                             13.38
+                                             18.13
+                                                                                                                                          6.15
+                        3.18 3.18     1.23              2.16               1.18               2.21
+                  0                                                                                                                  0
+
+
+                                                                                                                                            1
+
+
+
+
+                                                                                                                                                                    2
+                           1
+
+
+
+
+                                        2
+
+
+
+
+                                                           3
+
+
+
+
+                                                                             4
+
+
+
+
+                                                                                               5
+
+
+
+
+                                                                                                                                          ol
+
+
+
+
+                                                                                                                                                                 ol
+                        nv
+
+
+
+
+                                      nv
+
+
+
+
+                                                        nv
+
+
+
+
+                                                                          nv
+
+
+
+
+                                                                                            nv
+
+
+
+
+                                                                                                                                         po
+
+
+
+
+                                                                                                                                                                po
+                      co
+
+
+
+
+                                    co
+
+
+
+
+                                                      co
+
+
+
+
+                                                                        co
+
+
+
+
+                                                                                          co
+
+
+
+
+Figure 6: Comparison of the number of operations per second (left) and the number of vertices and edges (right) with and without the use of
+MaxPool layers. The use of pooling significantly reduces both the number of operations and graph complexity.
+
+
+
+    Next, we compared the impact of using MaxPool layers and their absence in terms of the graph size and required
+operations. Figure 6 illustrates a comparison of the total number of FLOPs performed by individual convolutions and
+the reduction in the number of vertices and edges in the graph. It can be observed that the number of FLOPs is closely
+correlated with the number of edges, primarily due to the operation of the PointNetConv layer, which applies a linear
+transformation to each connection. Without the pooling operation, neither the number of edges nor vertices decreases,
+leading to 50 times more operations in subsequent convolutions, showing a major drawback of the EvGNN solution.
+    These findings underscore the critical role of MaxPool layers, not only for improving qualitative results, but also
+for enhancing computational efficiency.
+
+5.2.2. Impact of all modifications
+    To evaluate the impact of our convolution and graph generation modules along with the previously described
+MaxPool layers, we compared them with two state-of-the-art models in terms of size and performance. The AEGNN
+model consists of 7 SplineConv layers [56] with one 2D MaxPool layer and two skip-connections, while the EvGNN
+model consists of 4 convolutional layers without any MaxPool layer.
+    To gain more comprehensive understanding of how our methods influence model size and performance, we intro-
+duced modified versions of both architectures: O-AEGNN and O-EvGNN. In these models, we replaced the original
+graph generation, convolutional, and MaxPool layers with our custom modules. Additionally, in the O-EvGNN model,
+we incorporated two MaxPool layers placed after the first and third convolutional layers.
+    The results presented in Table 5 demonstrate the impact of the proposed modifications. For the AEGNN, replacing
+SplineConv with our PointNetConv aggregation and adding our pooling strategy reduces the number of parameters
+from 30.4k to 5.0k, while slightly improving accuracy. This reduction is mainly due to the relatively high parameter
+cost of SplineConv layers [20]. For the EvGNN, adding our pooling and graph modules yields accuracy gains, while
+also slightly reducing the number of parameters. In both cases, the modified versions (O-AEGNN and O-EvGNN)
+are more compact and more accurate than their original counterparts, demonstrating that our design improves both
+
+                                                                                          16
+Table 5: Comparison of our methods with other architectures in terms of the number of parameters and accuracy for the N-Cars dataset. The results
+demonstrate that our solution has a positive impact in both aspects.
+
+
+                                        Model                        Accuracy                            Num. of parameters
+                                     AEGNN                                  0.893                                    30.4k
+                                     EvGNN                                  0.880                                     4.8k
+                                     O-AEGNN                                0.898                                    5.0k
+                                     O-EvGNN                                0.891                                    4.2k
+
+                                                                             Small    Base               Large
+
+
+                         92                                                                              20
+          Accuracy [%]
+
+
+
+
+                         90                                                                              15
+
+                                                                                             Size [kB]
+                         88                                                                              10
+
+
+                         86                                                                              5
+                                it
+
+
+
+                                           t
+
+
+
+                                                       t
+
+
+
+                                                                it
+
+
+
+                                                                            it
+
+
+
+
+                                                                                                                 t
+
+
+
+                                                                                                                       t
+
+
+
+                                                                                                                                 it
+
+
+
+                                                                                                                                        t
+
+
+
+                                                                                                                                                 it
+                                        bi
+
+
+
+                                                     bi
+
+
+
+
+                                                                                                              bi
+
+
+
+                                                                                                                     bi
+
+
+
+
+                                                                                                                                      bi
+                                 b
+
+
+
+
+                                                                 b
+
+
+
+                                                                       -b
+
+
+
+
+                                                                                                                                 b
+
+
+
+
+                                                                                                                                                b
+                              8-
+
+
+
+                                     7-
+
+
+
+                                                    8-
+
+
+
+                                                              6-
+
+
+
+
+                                                                                                              8-
+
+
+
+                                                                                                                     7-
+
+
+
+                                                                                                                              8-
+
+
+
+                                                                                                                                      6-
+
+
+
+                                                                                                                                             8-
+                                                                        8
+                                                  6+
+
+
+
+
+                                                                     4+
+
+
+
+
+                                                                                                                            6+
+
+
+
+
+                                                                                                                                            4+
+                                               (a) Accuracy                                                                (b) Size
+
+Figure 7: Comparison of models accuracy and size for different precisions on the N-Cars dataset. The results indicate that quantisation to 6 bits
+still enables high accuracy for each model.
+
+
+
+hardware efficiency and task performance.
+
+5.2.3. Quantisation precision
+    Although our hardware implementation was designed for 8-bit precision, it is crucial to explore the potential
+for quantising to lower bit precisions with QAT. In Figure 7, we compared the qualitative results and model sizes
+for different bit-widths. We analysed standard 8-bit, 7-bit, and 6-bit quantisations, and experimented with mixed
+precision quantisation, where part of the feature extraction was quantised to lower bit-widths (6/4 bits) while keeping
+the classifier at 8 bits.
+    The results show that 6-bit quantisation, which reduces the model size by approximately 23%, has a small impact
+on model quality, while in the case of 4-bit quantisation there is a considerable degradation in performance. It is
+worth noting that using 6-bit feature extractor with 8-bit classifier gives better results and size reduction of about 8%
+compared to full 7-bit quantisation. In our models, where feature extraction part is implemented in the PL and the
+classifier in the PS, this modification could be crucial for deploying complex models.
+
+5.3. Comparison with other works
+    In this Section, we compare our three models (Small, Base and Large) with the state-of-the-art based on the N-
+Cars, N-Caltech101, CIFAR10-DVS, and MNIST-DVS datasets. The results in terms of accuracy, FLOPs per event,
+and network size are presented in Table 6. We primarily selected methods that use graph-based event representations
+[18, 8, 9, 12], but also included other asynchronous methods, such as SNNs [31] and dense neural networks [26, 23].
+Although FLOPs per event is a widely used normalised proxy for computational complexity in software-oriented
+comparisons, and provides a useful indication of the overall complexity trend of a given model, it does not fully
+characterise implementation cost on FPGA platforms, where factors such as numerical precision, memory access
+
+                                                                                     17
+Table 6: Comparison with other methods of object classification for Float32 models. The results show that our models are among the smallest in
+terms of the number of parameters and exhibit the lowest computational complexity per event, while achieving results comparable to the state-of-
+the-art. The values obtained from the open source code are in parentheses.
+
+                                                            N-Cars                         N-Caltech101                   CIFAR10-DVS                 MNIST-DVS
+    Model                Repr.        Async.      Acc. ↑           MFLOPs/ev ↓        Acc. ↑        MFLOPs/ev ↓    Acc. ↑     MFLOPs/ev ↓       Acc. ↑       MFLOPs/ev ↓       # Param. ↓
+ H-First [31]         Spike               ✓        0.561                -             0.054              -           -              -               -              -                -
+ HATS [50]         Time-Surface           ✓        0.902              0.03            0.642             4.3        0.524          0.18            0.984          0.18               -
+ YOLE [26]          Voxel-Grid            ✓        0.927             328.16           0.702            3659          -              -             0.961            -             2.03 M
+ AsyNet [23]        Voxel-Grid            ✓        0.944              21.5            0.745            202         0.663          103             0.994          112             3.69 M
+ G-CNNs [18]          Graph               ✗        0.902                 -             0.630             -         0.515           -              0.974           -              4.93 M
+RG-CNNs [18]          Graph               ✗        0.914                 -             0.657             -         0.540           -              0.986           -              5.10 M
+  NvS-S [8]           Graph               ✓        0.915                5.2            0.670            7.8        0.602          22.8            0.986          10.1         0.36 - 1.16 M
+  EvS-S [8]           Graph               ✓        0.931                6.1            0.761           11.5        0.680          33.2            0.991          15.2         0.36 - 1.16 M
+ AEGNN [9]            Graph               ✓    0.945 (0.893)           0.47        0.668 (0.643)       7.31          -             -                -             -           0.03 - 20.4 M
+ EvGNN [12]           Graph               ✓        0.880              0.063              -               -           -             -                -             -               4.8 k
+  EFGCN-S             Graph               ✓        0.907              0.032           0.623            0.004       0.571          0.011           0.964          0.006         5.2 - 55.5 k
+  EFGCN-B             Graph               ✓        0.920              0.060           0.631            0.008       0.588          0.022           0.978          0.012        10.6 - 111.0 k
+  EFGCN-L             Graph               ✓        0.923              0.111           0.639            0.015       0.613          0.040           0.983          0.022        20.2 - 220.9 k
+
+
+                Table 7: Comparison of the EFGCN with the SOTA in terms of resource utilisation, accuracy and latency on SoC FPGAs.
+
+                                                                     Utilisation                                   Accuracy [%]                                     Latency
+   Model        Graph size       Time window    LUT         FF      BlockRAM       UltraRAM    DSP    N-Cars   N-Caltech101    CIFAR      MNIST      PL [ms]     PL+PS [ms]     per ev. [µ s]
+ EFGCN-S           128             100 ms      43553       15292       121.5          0        90      91.0         -           57.4       98.7           3.78       4.39           6.56
+ EFGCN-B           128             100 ms      53517       18798        162           0        90      91.9         -           59.1       97.9           4.62       5.77           9.44
+ EFGCN-L           128             100 ms      65901       24622       211.5          0        90      92.5         -           61.5       98.5           7.03       9.31          13.76
+ EFGCN-S           256              50 ms      112670      24087        149           12       172        -        62.8           -         -             4.42       5.12           4.02
+ EFGCN-B           256              50 ms      139382      29401       187.5          12       184        -        63.2           -         -             4.43       5.77           4.04
+ EFGCN-L           256              50 ms      142773      38882        240           12       1364       -        64.1           -         -             4.43       7.11           4.04
+EvGNN [12]      120 × 100             -        30908    24083           15            48       228     87.8         -             -         -               -            -           16
+ ESDA [44]      180 × 240             -        154000   115000         1278           0        1792     -          72.4           -         -             3.09           -           -
+
+
+
+
+patterns, and data movement also play a major role. For this reason, the comparison in Table 6 should be interpreted
+together with the hardware-level resource utilisation and latency analysis reported in Table 7.
+    A few conclusions can be drawn from the results. First, our models achieve the lowest FLOPs per event among the
+compared methods on all datasets for which this metric is available. The difference is particularly large with respect
+to dense asynchronous approaches such as YOLE and AsyNet, reaching more than three orders of magnitude in some
+cases. Compared with prior graph-based methods, our EFGCN also maintains a favourable complexity profile; for
+example, EvGNN, despite using fewer parameters than our Base model, still requires a higher number of FLOPs
+per event. This indicates that the proposed 3D MaxPool-based design provides a substantial computational advantage.
+Second, our models are among the smallest in terms of the number of parameters, with only EvGNN being smaller. At
+the same time, the substantially larger models, such as AEGNN, do not translate into a proportionally better efficiency-
+accuracy trade-off; for the N-Caltech101, the gap in parameter count reaches up to two orders of magnitude.
+    In terms of accuracy, our Small model outperforms G-CNNs, HATS, EvGNN, and YOLE on individual datasets.
+Our Large model performs better than NvS-S, while remaining close to YOLE on the N-Cars, AEGNN and HATS
+on the N-Caltech101, and EvS-S on the MNIST-DVS. It should also be noted that some graph-based methods use
+relatively large edge-generation radius (e.g. 5 in AEGNN for the N-Caltech101 and 5 in NvS-S/EvS-S for all datasets),
+which has a strong impact on accuracy, as analysed in detail in the supplementary material.
+
+5.4. Evaluation of hardware implementation
+    In Table 7, we present a comparison with the solutions proposed in the literature on event-based object classifica-
+tion systems implemented in FPGAs in terms of resource utilisation, model accuracy after quantisation and latency.
+
+   We implemented each of the EFGCN network models (Small, Base, Large) for hardware testing and evaluation.
+Our design was presented in the form of a demonstration during 2025 CVPR conference [49].
+
+
+
+
+                                                                                              18
+Table 8: Experimental results demonstrating the scalability of EFGCN illustrated using the Small model (graph size 128), for varying numbers of
+vector multipliers (m) and quantisation to 8 and 6 bits.
+
+
+                                      Utilisation                                  Accuracy [%]                          Latency
+    Model            LUT           FF        BlockRAM          DSP         N-Cars     CIFAR       MNIST         PL [ms]       per ev. [µ s]
+8-bit, m = 1         41350       12960          121.5            88         91.0       57.4          98.7         3.78             6.56
+6-bit, m = 1         31332       10886           95              88         90.7       57.2          98.5         3.78             6.56
+8-bit, m = 2         66001       16011          121.5           112         91.0       57.4          98.7         1.93             3.66
+8-bit, m = 4        114513       21608          121.5           160         91.0       57.4          98.7         1.02             2.21
+
+
+5.4.1. Resource utilisation
+    As presented in Table 7, our design demonstrates high scalability and adaptability across different model sizes and
+input resolutions. As the graph size and feature dimensionality increase, both logic and memory utilisation naturally
+grow. However, this can be controlled by adjusting the number of parallel multiplications according to the available
+hardware resources and throughput requirements. In this work, we assume the worst-case scenario regarding data
+sparsity – that is, the throughput is designed to handle all possible nodes with all possible connections. The prominent
+increase in logic utilisation observed for models implemented with the β = 256 results from the larger number of
+parallel multipliers. A detailed analysis of the impact of individual system components and successive hardware
+modules on the overall system utilisation is presented in the supplementary material.
+    DSP utilisation also depends on the number of parallel multipliers, as they are required for requantisation. For
+Large model with the β = 256 configuration, part of the multiplication operations was implemented using DSPs
+instead of LUTs to reduce LUT usage, which explains the variable DSP utilisation.
+    The direct impact of the number of multipliers on resource utilisation is presented in Table 8, using the Small
+model with β = 128 as an example. Increasing the number of parallel multipliers directly translates into higher
+usage of logic resources (used for multiplication) and DSP blocks (used for requantisation). The number of parallel
+multipliers does not affect memory consumption in the system, since both the number of weights and the stored feature
+maps remain unchanged.
+    While increasing graph sizes pose a challenge for our method, as they lead to higher resource utilisation, future
+work will focus on processing dynamically updated voxel graphs, where each vertex represents events generated
+by multiple pixels. This approach should enable efficient processing of data captured by higher-resolution sensors
+without the need to increase the graph size.
+    Table 8 also presents system utilisation with quantisation applied to both weights and feature maps reduced to 6
+bits instead of 8 bits. Reducing numerical precision leads to lower memory consumption as well as reduced usage of
+LUTs/FFs (for feature vector buffering and vector multiplication). DSP utilisation remains unchanged, as DSP blocks
+are used exclusively for requantisation performed on 32-bit values.
+
+5.4.2. Latency
+    The latency of the PL (graph generation, feature extraction) is defined as the time between the registration of
+the last event in a given sequence and the reception of the final feature map in the PS. The total latency, including
+additional processing of the network’s head, is defined as PL+PS latency. Processing times in the PL part were
+measured using the ILA (Integrated Logic Analyser) tool, while the total latency (with the PS) was measured with
+timing functions available in the Vitis software.
+    The proposed EFGCN model enables predictions to be generated every 25 ms with latency of 4.39-9.31 ms (for the
+configuration with TIME_WINDOW = 100 ms), or every 12.5 ms with a latency of 5.12-7.11 ms (for the configuration
+with TIME_WINDOW = 50 ms). Moreover, the use of elements with fixed latency only (no access to external memory
+for convolutional layers) allowed for the determination of a constant system throughput of 13.3 MEPS, the value not
+achievable for alternative solutions.
+    The analysis of the achieved latency leads to some interesting conclusions. Firstly, for models with TIME_WINDOW
+= 100 ms configuration, increasing the model size leads to higher latency, because for each convolution we set
+
+
+                                                                      19
+a number of parallel multipliers m = 1. As the feature map sizes increase, the number of necessary multiplications
+grows, and consequently, the time required to perform them.
+    This issue does not occur in TIME_WINDOW = 50 ms configuration. Regardless of the feature map sizes, the
+measured latency remains similar – close to 4.43 ms. With more stringent throughput requirements, different multipli-
+cation strategies were adopted for each layer. The larger the number of elements in the feature map, the more parallel
+multipliers were used. As a result, the amount of utilised resources increases, but the latency remains constant.
+    Based on these observations, it can be concluded that in the proposed system latency and resource usage are
+correlated. This assumption was confirmed by the experiment documented in Table 8. As the number of parallel
+multipliers increases, the system latency decreases. By relying exclusively on internal memory resources and pro-
+viding direct low-latency access to the corresponding features, the system latency for a given configuration of graph
+convolution modules becomes predictable. Appropriate architectural configuration should be thus motivated by the
+specific requirements set for the given application.
+
+5.4.3. Power consumption
+    Using the Vivado Power Analysis tool, we estimated that the total power consumption of the programmable logic
+for each configuration ranges from 1.83 W (Small model, β = 128) to 5.48 W (Large model, β = 256). It should
+be noted, however, that the actual power usage strongly depends on input toggle rates, while event data is inherently
+sparse across all dimensions. Based on this observation, we can assume that the real power consumption associated
+with processing actual event data on hardware would be lower.
+    To validate this assumption, we performed a detailed power analysis in Vivado for the Base model, using input
+toggle rates estimated from post-implementation simulations on a representative sample from the DVS-MNIST/N-
+Caltech101 datasets (achieving 99.9% of annotated nets). Under these conditions, the estimated power consumption
+of the PL decreased from 2.6 W (baseline estimation for β = 128) to 1.23 W, and from 5.34 W (baseline estimation
+for β = 256) to 1.86 W.
+    For future work, we plan to conduct a comprehensive study of the actual power consumption of the EFGCN
+implemented on the ZCU104 platform, as well as its dependence on scene dynamics (i.e. the number of events per
+second).
+    The estimated power used by the PS part (ARM processor) is 2.64 W, regardless of the selected configuration
+and model. Nevertheless, the network’s head could easily be integrated into the programmable logic, which would
+considerably reduce latency and power consumption with only a minor impact on resource utilisation. The final linear
+layers could be computed with limited parallelism, as this operation is performed infrequently – once every 25 ms (for
+larger graphs) or 12.5 ms.
+
+5.4.4. Comparison with other hardware implementations
+    With the limited number of experiments conducted by alternative solutions, direct comparison is possible using
+only the N-Cars and the N-Caltech101 datasets.
+    For the N-Cars dataset, our method achieves the highest accuracy scores among all those proposed in the liter-
+ature for each GCN model (Small, Base, and Large). Moreover, our Small model achieves a 3.2% higher accuracy
+than EvGNN [12], with 41% higher LUT utilisation, while simultaneously reducing FF resources by 36%, DSPs by
+60%, and internal memory resources by 70% (estimation based on a 32 kb capacity for BlockRAM and 288 kb for
+UltraRAM). Therefore, our Small model achieves higher accuracy and lower value of MFLOPs/ev than the EvGNN
+model. In the EvGNN paper [12], the system latency for entire sequences was not measured, and instead, latency per
+event was used as the metric. To enable a direct comparison of these methods, Table 7 also presents the per-event
+latency calculated as the sum of the delays of the individual hardware modules. However, it should be noted that this
+metric is not perfect for our method, as it does not reflect its operational nature (primarily due to the synchronisation
+of computations and feature map buffering induced by the MaxPool layers – Section 4).
+    While some of the hardware-aware optimisations proposed in our previous work (the use of a directed graph [21]
+and PointNetConv [20]) are applied both in the proposed system EFGCN and in EvGNN, the key difference between
+those methods is the three-dimensional MaxPool mechanism employed in our approach, which enables exploitation
+of the temporal sparsity of the data and improved scalability achieved through sequential multiplications in the Point-
+NetConv layers. The system described in the former achieves low latency by processing events asynchronously for
+the entire network. However, it should be emphasised that in doing so, the authors opted out of data scaling between
+                                                           20
+convolutional layers, which leads to a significant increase in computational complexity (Section 4). To maintain low
+latency in the system, feature maps of small sizes (maximum of 32 elements) were used, and a matrix multiplication
+strategy based on a high level of parallelism (MAC engine per output channel) was adopted.
+    By using 3D MaxPool, EFGCN offers better scalability through efficient computations, achieving higher classifi-
+cation accuracy with the use of fewer resources. With the aggregation of vertices over time and the use of an on-chip
+memory with constant latency, it is possible to derive strict throughput requirements for subsequent graph convolu-
+tions and accordingly adapt the computational architecture. This also enables the use of higher feature dimensionality.
+The ability to configure the level of parallelism in matrix multiplication allows for adjusting the achieved latency to
+the specific computer vision problem. In the case of EvGNN, on the other hand, increasing the size of individual
+feature maps or the number of layers impacts both latency and resource usage.
+    At the same time, with 3D MaxPool the number of features that must be stored in memory for each graph convolu-
+tion module has also been reduced, as well as the number of required computations, through an effective reduction of
+the search radius from 3 to 1. This minimises the maximum number of matrix multiplications and memory accesses
+from 29 to 18.
+    In summary, the EFGCN is more scalable for deeper models, data with higher resolutions and greater dynamics.
+    It should also be emphasised that the EvGNN system utilises external DDR memory resources, which leads to
+variable latency and significantly increases power consumption. In the literature, it is commonly assumed that access
+to external DRAM memory is 10–1000 × more energy-expensive than access to on-chip memory [57]. In [12], it was
+shown that over 50% of system latency and 73% of energy consumption are attributable to DRAM communication.
+This type of overhead has been eliminated in EFGCN through the exclusive use of an on-chip memory. It should be
+noted, however, that for the EvGNN model, power consumption is reported only for the ASIC implementation, which
+makes a direct comparison with our model infeasible.
+    In the case of the N-Caltech101 dataset, our module allows for classification with accuracy ranging from 62.8%
+to 64.1%. The ESDA system proposed in [44], which utilises sparse convolutional neural networks, achieves higher
+accuracy. However, the resource utilisation of this method is higher across all considered elements. The main issue
+is the very high usage of internal memory resources (between 5.3 and 8.5 times higher compared to the individual
+EFGCN models). Implementing ESDA for the ZCU104 platform considered in this paper would not be feasible
+due to the usage of FF, DSP, and BlockRAM resources exceeding the available number of elements (in the case of
+BlockRAMs – 4 times). At the same time, given the motivation related to the use of event-based cameras for mobile
+robotics, limiting resource utilisation is one of our priorities.
+    While the latency of 3.09 ms achieved in the ESDA model is nominally lower than the one achieved by EFGCN, it
+is important to consider the differences in operation. Due to the use of two-dimensional event-frame representations,
+systems utilising convolutional neural networks require prior data buffering and frame generation. In contrast, our
+system processes events directly as soon as they are registered. EFGCN allows for predictions 4 times more frequently
+than the TIME_WINDOW value, thus providing greater throughput than a solution requiring prior data accumulation.
+    The achieved power consumption values are higher than those obtained in the ESDA model (1.81 W measured
+during runtime for FPGA fabric using the built-in power monitor controlled by the PMB). However, it is impor-
+tant to emphasise the differences in methodology (estimation vs measurement) as well as the fact that in the ESDA
+model the representation generation in the processor part of the system is necessary (introducing additional power
+requirements).
+
+5.5. Comparison with embedded GPU
+    To evaluate the time and energy efficiency of our method compared to alternative embedded platforms, a reference
+implementation was created on the Jetson Orin NX eGPU platform. This system features an ARM Cortex-A78
+processor and an NVIDIA Ampere GPU. Testing conditions similar to the FPGA configuration were reproduced
+by implementing a graph generator in C++, operating on a single CPU core. This generator reads events from the
+memory according to their timestamps, simulating the operation of a real event camera.
+    The resulting graph was then processed in parallel by the model on both CUDA and CPU platforms at two power
+levels: 10 W and 25 W. Figure 8 presents the average total power consumption and latency for all datasets. Due to the
+small size of the tested models, differences in processing times between EFGCN variants were minimal; therefore,
+a detailed analysis is provided only for the Base model.
+
+                                                          21
+                                                             CUDA 25 W             CPU 25 W                 CUDA 10 W            CPU 10 W              FPGA
+
+                  10
+                               8.56                                      8.29                                            8.35                                        8.52
+                   8                          6.82                                      6.64                                            6.72                  6.76                    6.85
+                        6.48                                                                                                                                                6.43
+      Power [W]
+
+
+
+
+                                       6.09                      6.14                                             6.18           5.89
+                                                                                 5.76
+                   6
+                                                                                                                                                                                             4.5
+                                                      3.87                                      3.87                                            3.87
+                   4
+                   2
+                   0
+                                 CIFAR                                     MNIST                                           N-Cars                                N-Caltech101
+                                                                                                                                                                     1,201.9          1,432.5
+                               898.2          983.6
+                  103
+   Latency [ms]
+
+
+
+
+                                                                                                                         265.8          308.9
+                                                                         133.2          143.2
+                  102
+                        22.8           27.1                                                                                       22                          25.9             28.2
+                                                                  18.3           21.3                             19.8
+
+                    1                                 5.77                                      5.77                                            5.77                                            5.77
+                  10
+
+                                  CIFAR                                     MNIST                                           N-Cars                                   N-Caltech101
+
+Figure 8: Power consumption and inference latency of the Base model on the Jetson Orin NX in two power modes (10 W and 25 W), using either
+the CPU or CUDA cores, compared with the proposed implementation for the ZCU104 SoC FPGA.
+
+
+
+    Propagation times for models running on the CUDA platform ranged from 18.3 to 22.8 ms at 25 W and from 22.0
+to 27.1 ms at 10 W for the CIFAR10-DVS, MNIST-DVS, and N-Cars datasets. Compared to the slowest hardware
+configuration (EFGCN-L with PL+PS mode), a speed-up of 2.6–3.2 and 3.0–3.9 times for FPGA was achieved, re-
+spectively. Additionally, the average graph generation time was 0.57–0.63 ms for the CPU on the Jetson platform,
+while FPGA implementation required only 75 µs (15 clock cycles at a 200 MHz frequency). Considering this differ-
+ence, the FPGA platform offers an overall speed-up of 7.6–8.4× with comparable power consumption. Moreover, the
+average data transfer time from CPU to CUDA was 3.5 ms, introducing additional latency to the system.
+    Similar tests conducted exclusively on CPU-based models indicated even greater advantage of the FPGA imple-
+mentation, achieving speed-ups of 18.9–
+127.8 times (25 W) and 20.4–139.9 times (10 W), with comparable graph generation times and without the need of
+data transfer to CUDA.
+    The presented results confirm the significant advantage of the proposed hardware implementation of graph convo-
+lutional networks over solutions utilising embedded GPU systems.
+
+
+6. Limitations
+
+    In this section we define the current limitations of our system and outline the methods planned to address them
+with the further research on applying the accelerator to more complex computer vision tasks (e.g. object detection).
+    To increase data resolution and allow smaller temporal windows, a higher number of parallel multipliers is re-
+quired. Consequently, the consumption of logic resources would increase. We plan to investigate techniques aimed
+at optimisation of multiplications (e.g. further utilisation of DSP resources with DSP packing). Additionally, we
+plan to explore the application of pruning techniques for the considered GCN model. Removing certain weights in
+the model would reduce both memory (sparse features) and logic resource usage (fewer multiplications required for
+a given graph convolutional layer).
+    In the current implementation, we support only a fixed graph edge search radius of R = 3. We plan to evaluate
+the system with other values and conduct studies on their accuracy and efficiency. For more complex computer
+vision tasks, skip-connections are a widely used technique. We plan to integrate this mechanism by utilising external
+memory in a way that preserves the system’s fixed latency. Furthermore, we are considering the implementation of
+a voxel-graph approach, where representing multiple events with a single node could significantly reduce the required
+memory and logic resources.
+
+
+                                                                                                       22
+   Finally, we plan to limit the use of the processing system in order to further reduce both power consumption
+and system latency. We aim to achieve this, by implementing the network’s classification head with the AI Engines
+specific to the AMD Versal platform, instead of relying on the PS.
+
+
+7. Summary
+
+     In this work, we presented a hardware implementation of a graph convolutional neural network for event data
+processing on a SoC FPGA platform. The developed system enables continuous event data processing, generating
+predictions for the last 50/100 ms (depending on the configuration) while maintaining a fourfold increase in output
+frequency. Extensive evaluations across multiple models, configurations, and datasets demonstrate that the proposed
+approach outperforms existing methods in classification accuracy, computational efficiency, and hardware resource
+utilisation. Notably, our implementation operates without any off-chip external memory, leading to reduced power
+consumption. Moreover, we demonstrated the superior performance of the proposed hardware system compared to
+other platforms, namely the CPU and GPU.
+     Our solution surpasses state-of-the-art methods while offering high scalability. By leveraging the inherent tempo-
+ral sparsity of event data and 3D MaxPool layers, we reduce FPGA logic utilisation through sequential computation
+of selected operations. Furthermore, the system establishes a direct trade-off between latency and resource utilisa-
+tion – allowing for configuration adjustments that optimise one metric at the expense of the other, depending on the
+application’s requirements.
+     As part of future work, we plan to introduce additional hardware optimisations, such as initial voxelisation of the
+graph, to reduce both representation size and computational complexity. Additionally, we aim to integrate techniques
+that enhance the training process, including pruning and skip-connections. The ultimate goal is to develop a fully
+hardware-accelerated GCNN capable of real-time event-based object detection. This work addresses the application
+of our method for event-based vision, but it can also be used for other types of spatio-temporal point cloud data.
+
+
+8. Acknowledgements
+
+    This work was supported by the “Excellence initiative – research university” programme for AGH University of
+Kraków, the Polish National Science Centre projects 2024/53/N/ST6/04254 and 2024/53/N/ST6/04331, Polish high-
+performance computing infrastructure PLGrid (HPC Center: ACK Cyfronet AGH – grant no. PLG/2023/016897) and
+16.16.120.773 for the AGH University of Krakow.
+
+
+References
+
+ [1] F. K. Konstantinidis, S. G. Mouroutsos, A. Gasteratos, The role of machine vision in industry 4.0: an automotive
+     manufacturing perspective, in: 2021 IEEE International Conference on Imaging Systems and Techniques (IST),
+     2021, pp. 1–6. doi:10.1109/IST50367.2021.9651453.
+ [2] L. Bodenhagen, A. R. Fugl, A. Jordt, M. Willatzen, K. A. Andersen, M. M. Olsen, R. Koch, H. G. Petersen,
+     N. Krüger, An adaptable robot vision system performing manipulation actions with flexible objects, IEEE trans-
+     actions on automation science and engineering 11 (3) (2014) 749–765.
+ [3] T.-H. Pham, A. Kheddar, A. Qammaz, A. A. Argyros, Towards force sensing from vision: Observing hand-
+     object interactions to infer manipulation forces, in: Proceedings of the IEEE conference on computer vision and
+     pattern recognition, 2015, pp. 2810–2819.
+
+ [4] P. Lichtsteiner, C. Posch, T. Delbruck, A 128× 128 120 db 15 µs latency asynchronous temporal contrast vision
+     sensor, IEEE Journal of Solid-State Circuits 43 (2) (2008) 566–576. doi:10.1109/JSSC.2007.914337.
+ [5] S. Afshar, N. Ralph, Y. Xu, J. Tapson, A. v. Schaik, G. Cohen, Event-based feature extraction using adaptive
+     selection thresholds, Sensors 20 (6) (2020) 1600.
+
+
+                                                          23
+ [6] R. Ghosh, A. Mishra, G. Orchard, N. V. Thakor, Real-time object recognition and orientation estimation us-
+     ing an event-based camera and cnn, in: 2014 IEEE Biomedical Circuits and Systems Conference (BioCAS)
+     Proceedings, 2014, pp. 544–547. doi:10.1109/BioCAS.2014.6981783.
+ [7] E. Perot, P. De Tournemire, D. Nitti, J. Masci, A. Sironi, Learning to detect objects with a 1 megapixel event
+     camera, Advances in Neural Information Processing Systems 33 (2020) 16639–16652.
+
+ [8] Y. Li, H. Zhou, B. Yang, Y. Zhang, Z. Cui, H. Bao, G. Zhang, Graph-based asynchronous event processing for
+     rapid object recognition, in: Proceedings of the IEEE/CVF International Conference on Computer Vision, 2021,
+     pp. 934–943.
+ [9] S. Schaefer, D. Gehrig, D. Scaramuzza, Aegnn: Asynchronous event-based graph neural networks, in: Proceed-
+     ings of the IEEE/CVF conference on computer vision and pattern recognition, 2022, pp. 12371–12381.
+[10] D. Gehrig, D. Scaramuzza, Pushing the limits of asynchronous graph-based object detection with event cameras,
+     arXiv preprint arXiv:2211.12324 (2022).
+[11] T. Kryjak, Event-based vision on fpgas–a survey, arXiv preprint arXiv:2407.08356 (2024).
+
+[12] Y. Yang, A. Kneip, C. Frenkel, Evgnn: An event-driven graph neural network accelerator for edge vision, arXiv
+     preprint arXiv:1503.02531 (2024).
+[13] Z. Wang, Z. Que, W. Luk, H. Fan, Customizable fpga-based accelerator for binarized graph neural networks, in:
+     2022 IEEE International Symposium on Circuits and Systems (ISCAS), 2022, pp. 1968–1972. doi:10.1109/
+     ISCAS48785.2022.9937817.
+
+[14] Z. Tao, C. Wu, Y. Liang, K. Wang, L. He, Lw-gcn: A lightweight fpga-based graph convolutional network
+     accelerator, ACM Transactions on Reconfigurable Technology and Systems 16 (1) (2022) 1–19.
+[15] H. Zhou, B. Zhang, R. Kannan, V. Prasanna, C. Busart, Model-architecture co-design for high performance
+     temporal gnn inference on fpga, in: 2022 IEEE International Parallel and Distributed Processing Symposium
+     (IPDPS), 2022, pp. 1108–1117. doi:10.1109/IPDPS53621.2022.00111.
+
+[16] Y. Sekikawa, K. Hara, H. Saito, Eventnet: Asynchronous recursive event processing, in: Proceedings of the
+     IEEE/CVF conference on computer vision and pattern recognition, 2019, pp. 3887–3896.
+[17] Q. Wang, Y. Zhang, J. Yuan, Y. Lu, Space-time event clouds for gesture recognition: From rgb cameras to event
+     cameras, in: 2019 IEEE Winter Conference on Applications of Computer Vision (WACV), 2019, pp. 1826–1835.
+     doi:10.1109/WACV.2019.00199.
+[18] Y. Bi, A. Chadha, A. Abbas, E. Bourtsoulatze, Y. Andreopoulos, Graph-based object classification for neuro-
+     morphic vision sensing, in: Proceedings of the IEEE/CVF international conference on computer vision, 2019,
+     pp. 491–501.
+[19] A. Mitrokhin, Z. Hua, C. Fermüller, Y. Aloimonos, Learning visual motion segmentation using event surfaces,
+     in: 2020 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2020, pp. 14402–14411.
+     doi:10.1109/CVPR42600.2020.01442.
+[20] K. Jeziorek, A. Pinna, T. Kryjak, Memory-efficient graph convolutional networks for object classification and
+     detection with event cameras, in: 2023 Signal Processing: Algorithms, Architectures, Arrangements, and Appli-
+     cations (SPA), 2023, pp. 160–165. doi:10.23919/SPA59660.2023.10274464.
+
+[21] K. Jeziorek, P. Wzorek, K. Blachut, A. Pinna, T. Kryjak, Optimising graph representation for hardware imple-
+     mentation of graph convolutional networks for event-based vision, arXiv preprint arXiv:2401.04988 (2024).
+[22] W. Yan, W. Tong, X. Zhi, Fpgan: An fpga accelerator for graph attention networks with software and hardware
+     co-optimization, IEEE Access 8 (2020) 171608–171620. doi:10.1109/ACCESS.2020.3023946.
+
+                                                        24
+[23] N. Messikommer, D. Gehrig, A. Loquercio, D. Scaramuzza, Event-based asynchronous sparse convolutional
+     networks, in: Computer Vision–ECCV 2020: 16th European Conference, Glasgow, UK, August 23–28, 2020,
+     Proceedings, Part VIII 16, Springer, 2020, pp. 415–431.
+[24] H. Rebecq, R. Ranftl, V. Koltun, D. Scaramuzza, High speed and high dynamic range video with an event
+     camera, IEEE transactions on pattern analysis and machine intelligence 43 (6) (2019) 1964–1980.
+
+[25] D. Gehrig, A. Loquercio, K. G. Derpanis, D. Scaramuzza, End-to-end learning of representations for asyn-
+     chronous event-based data, in: Proceedings of the IEEE/CVF International Conference on Computer Vision,
+     2019, pp. 5633–5643.
+[26] M. Cannici, M. Ciccone, A. Romanoni, M. Matteucci, Asynchronous convolutional networks for object detec-
+     tion in neuromorphic cameras, in: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition Workshops, 2019, pp. 0–0.
+[27] A. Sabater, L. Montesano, A. C. Murillo, Event transformer. a sparse-aware solution for efficient event data
+     processing, in: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)
+     Workshops, 2022.
+
+[28] M. Gehrig, D. Scaramuzza, Recurrent vision transformers for object detection with event cameras, in: Proceed-
+     ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2023.
+[29] Y. Peng, Y. Zhang, Z. Xiong, X. Sun, F. Wu, Get: Group event transformer for event-based vision, in: Proceed-
+     ings of the IEEE/CVF International Conference on Computer Vision, 2023, pp. 6038–6048.
+
+[30] J. H. Lee, T. Delbruck, M. Pfeiffer, Training deep spiking neural networks using backpropagation, Frontiers in
+     neuroscience 10 (2016) 508.
+[31] G. Orchard, C. Meyer, R. Etienne-Cummings, C. Posch, N. Thakor, R. Benosman, Hfirst: A temporal approach
+     to object recognition, IEEE transactions on pattern analysis and machine intelligence 37 (10) (2015) 2028–2040.
+[32] M. Gehrig, S. B. Shrestha, D. Mouritzen, D. Scaramuzza, Event-based angular velocity regression with spiking
+     networks, in: 2020 IEEE International Conference on Robotics and Automation (ICRA), IEEE, 2020, pp. 4195–
+     4202.
+[33] M. Yao, H. Gao, G. Zhao, D. Wang, Y. Lin, Z. Yang, G. Li, Temporal-wise attention spiking neural networks for
+     event streams classification, in: Proceedings of the IEEE/CVF International Conference on Computer Vision,
+     2021, pp. 10221–10230.
+
+[34] L. Cordone, B. Miramond, S. Ferrante, Learning from event cameras with sparse spiking convolutional neural
+     networks, in: 2021 International Joint Conference on Neural Networks (IJCNN), IEEE, 2021, pp. 1–8.
+[35] S. Barchid, J. Mennesson, J. Eshraghian, C. Djéraba, M. Bennamoun, Spiking neural networks for frame-based
+     and event-based single object localization, Neurocomputing 559 (2023) 126805.
+
+[36] Y. Zhou, G. Gallego, X. Lu, S. Liu, S. Shen, Event-based motion segmentation with spatio-temporal graph cuts,
+     IEEE Transactions on Neural Networks and Learning Systems 34 (8) (2021) 4868–4880.
+[37] D. Gehrig, D. Scaramuzza, Low-latency automotive vision with event cameras, Nature 629 (8014) (2024) 1034–
+     1040.
+
+[38] G. J. García, C. A. Jara, J. Pomares, A. Alabdo, L. M. Poggi, F. Torres, A survey on fpga-based sensor systems:
+     towards intelligent and reconfigurable low-power sensors for computer vision, control and signal processing,
+     Sensors 14 (4) (2014) 6247–6278.
+[39] X. Lagorce, G. Orchard, F. Galluppi, B. E. Shi, R. B. Benosman, Hots: a hierarchy of event-based time-surfaces
+     for pattern recognition, IEEE transactions on pattern analysis and machine intelligence 39 (7) (2016) 1346–1359.
+
+                                                         25
+[40] B. Ramesh, A. Ussa, L. Della Vedova, H. Yang, G. Orchard, Low-power dynamic object detection and classifi-
+     cation with freely moving event cameras, Frontiers in neuroscience 14 (2020) 505328.
+[41] L. A. Camunas-Mesa, Y. L. Domínguez-Cordero, A. Linares-Barranco, T. Serrano-Gotarredona, B. Linares-
+     Barranco, A configurable event-driven convolutional node with rate saturation mechanism for modular convnet
+     systems implementation, Frontiers in neuroscience 12 (2018) 63.
+
+[42] J. Zhang, L. Feng, T. Wang, W. Shi, Y. Wang, G. Zhang, Fpga-based implementation of an event-driven spiking
+     multi-kernel convolution architecture, IEEE Transactions on Circuits and Systems II: Express Briefs 69 (3)
+     (2021) 1682–1686.
+[43] A. Linares-Barranco, A. Rios-Navarro, S. Canas-Moreno, E. Piñero-Fuentes, R. Tapiador-Morales, T. Delbruck,
+     Dynamic vision sensor integration on fpga-based cnn accelerators for high-speed visual classification, in: Inter-
+     national Conference on Neuromorphic Systems 2021, 2021, pp. 1–7.
+[44] Y. Gao, B. Zhang, Y. Ding, H. K.-H. So, A composable dynamic sparse dataflow architecture for efficient event-
+     based vision processing on fpga, in: Proceedings of the 2024 ACM/SIGDA International Symposium on Field
+     Programmable Gate Arrays, 2024, pp. 246–257.
+
+[45] T. Dalgaty, T. Mesquida, D. Joubert, A. Sironi, P. Vivet, C. Posch, Hugnet: Hemi-spherical update graph neu-
+     ral network applied to low-latency event-based optical flow, in: Proceedings of the IEEE/CVF Conference on
+     Computer Vision and Pattern Recognition (CVPR) Workshops, 2023, pp. 3953–3962.
+[46] M. Fey, J. E. Lenssen, Fast graph representation learning with PyTorch Geometric, in: ICLR Workshop on
+     Representation Learning on Graphs and Manifolds, 2019.
+
+[47] C. R. Qi, L. Yi, H. Su, L. J. Guibas, Pointnet++: Deep hierarchical feature learning on point sets in a metric
+     space, Advances in neural information processing systems 30 (2017).
+[48] B. Jacob, S. Kligys, B. Chen, M. Zhu, M. Tang, A. Howard, H. Adam, D. Kalenichenko, Quantization and train-
+     ing of neural networks for efficient integer-arithmetic-only inference, in: Proceedings of the IEEE conference on
+     computer vision and pattern recognition, 2018, pp. 2704–2713.
+[49] P. Wzorek, K. Blachut, K. Jeziorek, T. Kryjak, Live demonstration: Real-time event-data processing with graph
+     convolutional neural networks and soc fpga, in: Proceedings of the Computer Vision and Pattern Recognition
+     Conference, 2025, pp. 5103–5104.
+[50] A. Sironi, M. Brambilla, N. Bourdis, X. Lagorce, R. Benosman, Hats: Histograms of averaged time surfaces for
+     robust event-based object classification, in: Proceedings of the IEEE conference on computer vision and pattern
+     recognition, 2018, pp. 1731–1740.
+[51] G. Orchard, A. Jayawant, G. K. Cohen, N. Thakor, Converting static image datasets to spiking neuromorphic
+     datasets using saccades, Frontiers in neuroscience 9 (2015) 159859.
+
+[52] H. Li, H. Liu, X. Ji, G. Li, L. Shi, Cifar10-dvs: An event-stream dataset for object classification, Frontiers in
+     Neuroscience 11 (2017). doi:10.3389/fnins.2017.00309.
+     URL      https://www.frontiersin.org/journals/neuroscience/articles/10.3389/fnins.2017.
+     00309
+[53] T. Serrano-Gotarredona, B. Linares-Barranco, Poker-dvs and mnist-dvs. their history, how they were made, and
+     other details, Frontiers in Neuroscience 9 (2015). doi:10.3389/fnins.2015.00481.
+     URL      https://www.frontiersin.org/journals/neuroscience/articles/10.3389/fnins.2015.
+     00481
+[54] A. Paszke, S. Gross, S. Chintala, G. Chanan, E. Yang, Z. DeVito, Z. Lin, A. Desmaison, L. Antiga, A. Lerer,
+     Automatic differentiation in pytorch (2017).
+
+                                                         26
+[55] D. P. Kingma, Adam: A method for stochastic optimization, arXiv preprint arXiv:1412.6980 (2014).
+[56] M. Fey, J. E. Lenssen, F. Weichert, H. Müller, Splinecnn: Fast geometric deep learning with continuous b-spline
+     kernels, in: Proceedings of the IEEE conference on computer vision and pattern recognition, 2018, pp. 869–877.
+[57] M. Horowitz, 1.1 computing’s energy problem (and what we can do about it), in: 2014 IEEE international
+     solid-state circuits conference digest of technical papers (ISSCC), IEEE, 2014, pp. 10–14.
+
+
+
+
+                                                        27
+                      Kamil Jeziorek received the Master of Science degree in Automation and Robotics in 2023 at
+AGH University of Kraków, Poland. He is currently pursuing the Ph.D. degree at the Department of Automatics and
+Robotics, Laboratory of Vision Systems, under the supervision of Prof. dr hab. inż. Marek Gorgoń. His research
+interests include embedded vision systems based on event-driven cameras, graph neural networks, and hardware
+acceleration of deep learning pipelines on FPGA platforms.
+
+
+
+
+                      Piotr Wzorek received his Engineering Degree in Automation and Robotics in 2020 and his
+Master of Science degree in Intelligent Control Systems in 2021. He is currently pursuing a Ph.D. degree and works
+as a research assistant at AGH University of Krakow. His research interests include the application of neuromorphic
+sensors for mobile robotics, the acceleration of deep learning architectures, and perception systems for embedded
+platforms, mainly for SoC FPGAs.
+
+
+
+
+                       Krzysztof Błachut received the Master of Science degree in 2019 in Automation and Robotics at
+AGH University of Krakow, where is currently pursuing the Ph.D. degree and working as research assistant. His pro-
+fessional interests include embedded vision systems, autonomous vehicles, video surveillance systems, event cameras
+and heterogeneous computing platforms such as SoC FPGAs and eGPUs.
+
+
+
+
+                      Andrea Pinna received the engineer diploma in microelectronic from the University of Genoa
+(Italy), in 1999, and the Ph.D. degree in electronic system from the University Pierre and Marie Curie (Paris – France),
+in 2003. He was an Associate Professor from 2004 to 2022 at Sorbonne University (previously Pierre and Marie
+Curie University) in Paris, France. Between 2006 and 2011, he worked in the industrial and semiconductor sector as a
+Project Manager for innovative and technology transfer projects. He joined the Lip6 laboratory at Sorbonne University
+in 2011 and has been a full professor since September 2023. His main research works are designing intelligent med-
+ical devices based on embedded systems to support data analysis and diagnosis. He also explores reconfigurable and
+edge-computing architectures and vision system-on-chip to develop new co-design methods for embedded AI systems.
+
+
+
+
+                                                          28
+                     Tomasz Kryjak is an Associate Professor at the Embedded Vision Systems Group, Department
+of Automatic Control and Robotics, AGH University of Krakow, Poland. His research focuses on embedded per-
+ception and control systems implemented in SoC FPGAs, with an emphasis on hardware-aware algorithm design.
+His application domains span mobile robotics (including drones and autonomous vehicles), Advanced Driver As-
+sistance Systems (ADAS), and intelligent video surveillance. He works at the intersection of classical frame-based
+vision, event-based vision, embedded AI, and neuromorphic computing. He is an IEEE Senior Member, a Steering
+Committee member of the DSD and DASIP conferences, a Technical Program Committee member of the ARC and
+FPL conferences, and an Associate Editor of the Microprocessors and Microsystems journal. He has authored and
+co-authored over 150 scientific publications.
+
+
+
+
+                                                       29
+

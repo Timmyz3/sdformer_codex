@@ -1,0 +1,1321 @@
+Inference-Time Gaze Refinement for Micro-Expression
+Recognition: Enhancing Event-Based Eye Tracking with
+Motion-Aware Post-Processing
+Nuwan Bandara1 , Thivya Kandappu1 and Archan Misra1
+1
+    School of Computing and Information Systems, Singapore Management University, Singapore
+
+
+              Abstract
+               Event-based eye tracking holds significant promise for fine-grained cognitive state inference, offering high
+               temporal resolution and robustness to motion artifacts, critical features for decoding subtle mental states such
+               as attention, confusion, or fatigue. In this work, we introduce a model-agnostic, inference-time refinement
+               framework designed to enhance the output of existing event-based gaze estimation models without modifying their
+               architecture or requiring retraining. Our method comprises two key post-processing modules: (i) Motion-Aware
+               Median Filtering, which suppresses blink-induced spikes while preserving natural gaze dynamics, and (ii) Optical
+               Flow-Based Local Refinement, which aligns gaze predictions with cumulative event motion to reduce spatial
+               jitter and temporal discontinuities. To complement traditional spatial accuracy metrics, we propose a novel Jitter
+               Metric that captures the temporal smoothness of predicted gaze trajectories based on velocity regularity and local
+               signal complexity. Together, these contributions significantly improve the consistency of event-based gaze signals,
+               making them better suited for downstream tasks such as micro-expression analysis and mind-state decoding.
+               Our results demonstrate consistent improvements across multiple baseline models on controlled datasets, laying
+               the groundwork for future integration with multimodal affect recognition systems in real-world environments.
+               Our code implementations can be found at https://github.com/eye-tracking-for-physiological-sensing/EyeLoRiN.
+
+               Keywords
+               eye tracking, event camera, post processing, local refinement, model-agnostic, jitter metric
+
+
+
+
+1. Introduction
+Micro-expressions, brief, involuntary facial expressions that reveal genuine emotional states, have
+gained significant attention as a non-verbal cue for "mind reading", i.e., inferring internal cognitive
+or affective states. Unlike overt expressions, micro-expressions are transient (typically lasting less
+than 0.5 seconds) and often escape conscious control, making them a powerful signal for detecting
+concealed emotions or subtle shifts in mental state [1, 2]. Applications of micro-expression analysis
+span diverse fields, including high-stakes security screening [3], mental health assessment [4], affective
+computing [5], and adaptive human-computer interaction [6]. With the growing demand for systems
+that can sense and respond to users’ cognitive-affective dynamics in real-time, there is increasing
+interest in leveraging micro-expressions for fine-grained, moment-to-moment mind reading.
+   Among the various components of micro-expression analysis, ocular behavior, including pupil
+dilation, blink rate, and eye movement dynamics, has emerged as a particularly informative subregion.
+Eye movements, in particular, offer a window into the user’s attentional focus, cognitive load, emotional
+arousal, and even motivational state. Prior studies have linked gaze dynamics to transient mental
+states such as confusion, boredom, interest, and fatigue [7, 8, 9]. Rapid shifts in gaze (e.g., saccades),
+subtle fixations, and jitter-like microsaccades can serve as physiological markers for processes such
+as attentional lapses or spontaneous engagement. As such, high-fidelity eye tracking forms a crucial
+
+
+4DMR@IJCAI25: International IJCAI Workshop on 1st Challenge and Workshop for 4D Micro-Expression Recognition for Mind
+Reading, August 29, 2025, Guangzhou, China.
+$ pmnsbandara@smu.edu.sg (N. Bandara); thivyak@smu.edu.sg (T. Kandappu); archanm@smu.edu.sg (A. Misra)
+ https://www.nuwanbandara.com/ (N. Bandara); https://www.thivyak.info/ (T. Kandappu);
+https://sites.google.com/view/archan-misra (A. Misra)
+ 0009-0002-2509-5117 (N. Bandara); 0000-0002-4279-2830 (T. Kandappu); 0000-0003-1212-1769 (A. Misra)
+              © 2025 Copyright for this paper by its authors. Use permitted under Creative Commons License Attribution 4.0 International (CC BY 4.0).
+input for real-time micro-expression-based inference systems that aim to detect and respond to users’
+unspoken mental states.
+   However, traditional camera-based eye tracking systems face well-known limitations in capturing
+these micro-level dynamics. Frame-based approaches typically operate at 30 – 1000 Hz and struggle
+with motion blur during rapid eye movements or transient behaviors such as blinking. In contrast,
+event-based vision sensors capture pixel-level brightness changes asynchronously with microsecond
+latency, yielding sparse but high-temporal-resolution data streams. These characteristics make event-
+based sensors ideally suited for fine-grained eye tracking, especially in contexts where temporal fidelity,
+motion robustness, and low-latency processing are critical.
+   Despite these advantages, effective utilization of event data in eye tracking remains a challenge. The
+sparse and asynchronous nature of the data presents difficulties in processing and interpreting, requiring
+specialized models that can handle both the temporal and spatial dimensions of eye movements [10].
+Spatio-temporal models, such as Change-Based ConvLSTM [11], graph-based event representations [12],
+and event binning methods [13], have emerged as promising approaches. These models aim to capture
+the dynamic and continuous nature of eye movements by encoding both spatial and temporal information
+from the event streams. This is particularly important because eye movements are inherently continuous,
+both in terms of space and time, and spatio-temporal models attempt to leverage these properties to
+improve gaze estimation accuracy.
+   However, while these models have shown promise, they suffer from several limitations. A key
+challenge in event-based eye tracking is the handling of blink artifacts, which cause interruptions
+in the event data and lead to erroneous gaze predictions [14]. Another limitation is the temporal
+inconsistency often observed in the predictions, as eye movements are physiologically continuous and
+models sometimes fail to enforce this temporal smoothness, leading to abrupt gaze shifts that undermine
+tracking stability [15]. Additionally, existing models often fail to fully leverage local event distributions,
+resulting in misaligned gaze predictions. These challenges, coupled with the inherent label sparsity of
+event datasets, make it difficult to develop a universally robust event-based tracking system.
+   To address these challenges, we propose a model-agnostic inference-time post-processing and local
+refinement framework to enhance the accuracy and robustness of event-based eye tracking. Our
+approach targets the shortcomings of existing spatio-temporal models by introducing lightweight,
+post-processing techniques that can be integrated with any model without requiring retraining or
+architectural changes. This makes our method flexible and easily applicable to a wide range of existing
+models. The post-processing framework consists of two key components: (i) motion-aware median
+filtering, which enforces temporal smoothness by taking advantage of the continuous nature of eye
+movements, and (ii) optical flow-based local refinement, which improves spatial consistency by aligning
+gaze predictions with dominant motion patterns in the local event neighborhood. These refinements
+not only mitigate blinking artifacts but also ensure that gaze predictions remain temporally continuous
+and spatially accurate, even in the presence of rapid eye movements or motion artifacts.
+   By incorporating these post-processing and refinement techniques, our approach improves the
+overall performance and robustness of event-based eye tracking. This makes it particularly valuable
+in real-world applications where traditional models may fail due to the challenges posed by low-light
+environments, high-speed motion, or intermittent artifacts like blinks. Furthermore, because our
+framework is model-agnostic, it can be applied to any existing event-based eye-tracking model, offering
+a significant boost to accuracy and stability without requiring changes to the core model.
+   In this paper, we make the following key contributions:
+
+    • Model-Agnostic Post-Processing: We propose an inference-time refinement approach that
+      enhances existing event-based pupil estimation models without modifying their architectures or
+      requiring retraining through (1) Motion-Aware Median Filtering: a median filtering technique
+      that incorporates motion-awareness to preserve temporal continuity in gaze predictions and
+      mitigate blinking-induced errors, and (2) Optical Flow-Based Smooth Refinement: a local
+      refinement strategy leveraging optical flow to ensure that predicted gaze positions align with the
+      cumulative local event motion, reducing spatial inconsistencies in tracking results.
+    • Jitter Metric: We propose a complementary metric for pupil tracking task to specifically evaluate
+      the temporal smooth continuity of the predictions with respect to true targets based on (1) global
+      statistical distribution of pupil velocities, addressed via comparative velocity entropy, and (2)
+      local fine-grained frequency content of pupil velocities, addressed via spectral arc length-guided
+      spectral entropy.
+    • Empirical Validation and Performance Gains: Through extensive experiments, we demon-
+      strate that our proposed methods significantly enhance the robustness and accuracy of state-of-
+      the-art event-based eye-tracking models across diverse conditions.
+
+
+2. Related Work
+2.1. Micro-expression Recognition
+Micro-expressions are rapid, involuntary facial movements that reveal transient emotional states often
+concealed from conscious awareness. Due to their subtlety and brevity, automatic recognition of
+micro-expressions remains a challenging task that has garnered significant interest within the computer
+vision and affective computing communities.
+   Early approaches predominantly relied on handcrafted spatio-temporal features extracted from
+high-frame-rate facial video sequences, such as Local Binary Patterns on Three Orthogonal Planes
+(LBP-TOP) [16], optical flow-based descriptors [17], and optical strain [18], to capture nuanced facial
+muscle dynamics. While these methods laid the foundation for subsequent advances, they were often
+limited by their dependence on feature engineering and sensitivity to noise. More recently, deep learning
+architectures, including 3D Convolutional Neural Networks [19] and Long Short-Term Memory (LSTM)
+networks [20], have been employed to automatically learn hierarchical representations from high-
+frame-rate facial video sequences, significantly improving recognition accuracy. Attention mechanisms
+have further enhanced model capacity by focusing on discriminative spatial and temporal regions [21].
+The availability of specialized datasets such as CASME [22], CASME II [2], SMIC [23], and SAMM [24],
+has been foundational, providing high-frame-rate facial videos annotated with micro-expression labels
+under controlled environments.
+   While facial cues remain the primary modality for micro-expression analysis, recent studies under-
+score the complementary value of ocular signals, including pupil dynamics and saccadic eye movements,
+as indicators of cognitive and affective states [25, 26]. Integrating eye-tracking data can enhance
+the robustness and granularity of emotion recognition, particularly in applications such as deception
+detection, clinical assessment of affective disorders, and adaptive human-computer interaction systems
+that respond to user engagement and mental workload.
+   In this paper, we specifically address the challenge of fine-grained eye tracking, an important yet
+often overlooked component of micro-expression analysis, and propose novel techniques to improve
+its accuracy and temporal consistency, thereby enhancing the reliability of eye-based cognitive and
+affective state inference.
+
+2.2. Event-based Pupil and Gaze Tracking
+Event-based cameras, offer a fundamentally different sensing paradigm compared to conventional
+frame-based cameras. By asynchronously recording pixel-level brightness changes with microsecond
+temporal resolution and an extremely high dynamic range (120𝑑𝐵) while consuming minimal power
+(𝑚𝑊 level), these sensors are uniquely suited for applications requiring precise, low-latency motion
+tracking [27]. Consequently, the eye tracking community has recently begun to explore event-based
+approaches for pupil and gaze tracking, motivated by the limitations of traditional RGB and infrared
+systems in terms of temporal resolution and power efficiency [12]. Current research on event-based
+eye tracking can be broadly categorized into two main approaches:
+   Hybrid event-RGB: Several works have proposed combining event data with RGB frames to leverage
+the spatial resolution and structural detail of conventional cameras alongside the temporal advantages
+of event sensors. The approaches presented in [28] exemplify this direction by using RGB frames
+for initial pupil detection, with event streams employed to refine temporal tracking. While effective
+in improving robustness, such hybrid methods are inherently constrained by the frame rate of the
+RGB sensor, typically in the order of tens of milliseconds, which limits the full exploitation of the
+asynchronous, high-frequency event data. Moreover, these methods rely on RGB imagery and thus
+may suffer from environmental limitations such as variable lighting conditions, which event sensors
+are inherently more resilient to.
+   Event-Only Tracking: More recent work focuses exclusively on event streams, aiming to fully
+harness the unique properties of event cameras for pupil and gaze estimation. The event-only ap-
+proaches [29, 12, 30], which aggregate events into either 2D or 3D representations and get inferred
+through either neural networks or traditional computer vision algorithms and thus, occasionally suffer
+from label sparsity and inefficient representations.
+   Bandara et al. [12] proposed EyeGraph, a novel approach that constructs spatiotemporal graphs
+from event data to represent pupil contours, and addressed the issue of label sparsity by proposing an
+unsupervised graph-based clustering approach to spatially localise the pupil in a 3D event volume. In
+contrast, Sen et al. [29] presented EyeTrAES, an event-based adaptive slicing mechanism that adaptively
+adjusts the volume of the event accumulation based on the underlying eye motion.
+   Despite these advances, event-only pupil tracking faces several open challenges. Designing repre-
+sentations that preserve the high temporal fidelity of events without overwhelming computational
+resources remains an active research area. Moreover, the limited availability of synchronized ground
+truth data hinders large-scale supervised training. Event sensors also produce noise from environmen-
+tal artifacts such as illumination flicker or head movement, necessitating robust filtering and model
+designs [27].
+
+2.3. Spatio-Temporal Processing of Events
+Event-based eye tracking requires models that effectively capture the sparse, asynchronous nature of
+event streams while preserving high temporal resolution [27]. Unlike frame-based methods, event-
+based vision demands spatio-temporal representations that can model continuous eye movements with
+precision. Recent prior works have proposed several spatio-temporal models-based event processing to
+capture the temporal evolution of the events. In this paper, we consider three classes of such models:
+(a) ConvGRU and ConvLSTM, (b) graph-based representations, and (c) event-binning methods.
+   ConvLSTM and ConvGRU networks [11], originally designed for dense sequential data, struggle with
+the sparsity of event streams. Change-Based-convLSTM (CB-convLSTM) mitigates this by leveraging
+change-based updates, focusing on local event dynamics rather than static frames [11]. This improves
+tracking accuracy by ensuring temporal continuity while maintaining event efficiency. Graph-based
+models encode events as nodes with spatio-temporal edges, preserving fine-grained motion patterns
+[12]. These approaches enhance tracking by leveraging local event dependencies, making them effective
+for eye movement estimation. Event binning methods aggregate events over predefined intervals to
+create structured inputs for deep temporal networks. While simple and efficient, methods like causal
+event volume binning strike a balance between temporal continuity and real-time feasibility [13].
+   While these models enhance spatio-temporal representation, they often produce temporally incon-
+sistent or spatially misaligned predictions. Our proposed model-agnostic inference-time refinement
+improves accuracy by enforcing temporal smoothness and aligning predictions with local optical
+flow. This enhancement operates independently of the underlying spatio-temporal model, making
+event-based eye tracking more robust across different architectures.
+3. Motivation
+3.1. Inference-time Post-processing
+Even though the current event-based pupil tracking models attempt to incorporate both spatial and
+temporal learning blocks within their pipelines, the empirical results show that they still suffer from
+poor performance when handling blink artifacts. Further, even though the pupil movements are
+physiologically continuous and bounded, these models fail to strictly enforce this rule within the learning
+pipeline, leading to unstable pupil trajectories at the inference time. To address these limitations, here
+we propose a motion-aware median filtering technique as a post-processing method which penalizes
+trajectory outliers, either due to blinking or tracking instability, based on an adaptive motion profiling
+mechanism and thereby, achieves a stable pupil trajectory. Additionally, given that the existing models
+often tend to prioritize global perceptible eye morphology compared to local heuristics, which are
+deduced through event distributions, the pupil trajectory predictions often present an unpreventable
+offset. To circumvent this issue, we propose to utilize the optical flow around the original predictions
+such that if the optical flow at the original prediction does not align with the local optical flow, then an
+offset is assumed and subsequently, corrected by shifting the prediction by a small defined margin. It is
+to be noted that both of these proposed techniques work in model-agnostic fashion and thus, can be
+flexibly applied to any existing model without them being re-trained or modified.
+
+3.2. Jitter Metric
+Existing metrics for evaluating the event-based pupil tracking performance such as p-accuracy and
+pixel distances only capture the per-sample positional accuracy of the methods and thereby neglect
+an essential aspect in pupil tracking: temporal smooth-continuity, which is critical for the stable and
+user-ergonomic performance in many downstream applications such as foveated rendering, gaze-
+based human computer interaction, user authentication, and affective-cognitive modelling [31, 29]. In
+addition, unlike gaze which exhibits both smooth and rapid transitions which sometimes can be almost
+non-continuous with a significantly higher angle acceleration [28], the pupil movements are bounded
+and continuous in nature [12] which further validates the need for an explicit evaluation metric for
+temporal smooth-continuity of pupil tracking. To this end, we propose a velocity-based metric which
+considers and weights both (1) global statistical distribution of velocities via Kullback-Leibler divergence
+and (2) local velocity jaggedness via spectral arc length-guided spectral entropy. Further, it is to be
+noted that our metric is comparative between the predicted and true pupil trajectories while being
+lesser susceptible to measurement or prediction noise in contrast to jerk-based smoothness scores. We
+theoretically and empirically show the efficacy of the proposed metric in the context of pupil tracking.
+
+
+4. Inference-time Post-processing
+To address the shortcomings of existing methods in the inference stage, we propose to add two light-
+weight post-processing techniques specifically targeting the following limitations: (1) motion-aware
+median filtering (algorithm 1) to (a) ensure the temporal consistency of the predictions since the eye
+movements are physiologically bound to be continuous in spatial domain [12] and (b) reduce the blinking
+artifacts and (2) optical flow estimation in the local spatial neighbourhood (algorithm 2) to smoothly
+shift the original predictions if the flow vector at the original prediction is unaligned with the cumulative
+local neighbourhood flow direction. Synoptically, (1) is motivated by our empirical observations which
+convey the abundance of blinking artifacts within the predictions of the existing models (as shown in
+Fig. 1), whereas (2) is specifically inspired by our observations which hint that the original predictions
+tend to occupy a negligence towards the event motion flow in the local neighbourhood, suggesting a
+lack of attention to the local event distribution in the original models.
+   More descriptively, in motion-aware filtering as shown in Algorithm 1, we first estimate the local
+motion variance in temporal dimension (i.e., within a set time window) using a set of alternative methods
+            (a)                         (b)                          (c)                         (d)
+
+
+
+
+                                                      (e)
+Figure 1: Empirical evidence showing that the blinking artifacts significantly deteriorate the prediction perfor-
+mance. Figure 1a to 1d present a near-consecutive scenario where the blinking artifacts (seemingly peaked in
+Fig. 1c) occur in which the ground truth is depicted in green while the predictions from [13] are shown in black.
+Both ground truth and predictions are presented with a 5-pixel-radius tolerance circles. Figure 1e presents the
+global temporal variation of x coordinates around the presented blinking case.
+
+
+including 0𝑡ℎ to 2𝑛𝑑 order kinetics, covariance and frequency (of which the equations are defined in
+Equations below), and subsequently, assign a median-based adaptive filter windows for each set time
+windows such that the kernel size for median filtering is adaptive and appropriate to the variability of
+the background pupil movement while also ensuring the temporal consistency.
+   With respect to the
+                     [︂ local
+                            ]︂ motion variance calculation, more mathematically, if the predicted pupil
+                       𝑥(𝑡)
+trajectory is p(𝑡) =          for discrete time index 𝑡, then, 0𝑡ℎ kinetic-based local motion variance estima-
+                       𝑦(𝑡)
+                         ¯𝑡 = 1 ∑︀𝑤/2
+tion could be derived as 𝑑                    ‖ 𝑑(𝑡 + 𝑖)‖ whereas 𝑑𝑡 = (𝑥𝑡 − 𝑥𝑡−1 )2 + (𝑦𝑡 − 𝑦𝑡−1 )2 and
+                                                                          √︀
+                                𝑤    𝑖=−𝑤/2
+𝑤 being the window size. In extension, velocity is the first derivative of position: v(𝑡) = 𝑑p(𝑡)
+                                                                                             𝑑𝑡 and thus,
+                                                                              vel    1 ∑︀𝑤/2
+the smoothened velocity-based local variance could be calculated through 𝑉𝑡 = 𝑤 𝑖=−𝑤/2 ‖v(𝑡+𝑖)‖.
+                                                                                      2
+Similarly, acceleration is the second derivative of trajectory position: a(𝑡) = 𝑑 𝑑𝑡p(𝑡)
+                                                                                     2 , which leads to the
+                                         acc    1 ∑︀𝑤/2
+local motion variance estimation of 𝑉𝑡 = 𝑤 𝑖=−𝑤/2 ‖a(𝑡 + 𝑖)‖. With respect to the covariance-
+based local motion estimation, given a local window 𝑊𝑡 = {p(𝑡 − 𝑤/2), . . . , p(𝑡 + 𝑤/2)}, we compute:
+Σ𝑡 = Cov(𝑊𝑡 ) and subsequently, the covariance-based motion variance is estimated as:
+
+                                                𝑉𝑡cov = ‖Σ𝑡 ‖𝐹                                               (1)
+
+where ‖ · ‖𝐹 denotes the Frobenius norm.
+   When estimating the local motion variance through frequency   ∫︀ features, we utilize the Short-Time
+Fourier Transform of pupil trajectory signal 𝑥(𝑡) be 𝑍𝑥 (𝑓, 𝑡) = 𝑥(𝜏 )𝑤(𝜏 − 𝑡)𝑒−𝑗2𝜋𝑓 𝜏 𝑑𝜏 of which the
+power spectrum is 𝑃𝑥 (𝑓, 𝑡) = |𝑍𝑥 (𝑓, 𝑡)|2 . Then, the frequency-domain motion variance is estimated as
+  freq
+𝑉𝑡 = Var𝑓 (𝑃𝑥 (𝑓, 𝑡)) + Var𝑓 (𝑃𝑦 (𝑓, 𝑡)).
+         √︀
+
+   In optical flow estimation as shown in Algorithm 2, we first estimate the appropriate size for the
+region of interest (ROI) around the filtered prediction using the first order derivatives of 𝑥 and 𝑦 and
+then, if the number of events within the selected ROI exceeds a set threshold, we accumulate and
+Algorithm 1 Motion-aware median filtering
+Require: Original predictions {𝑥𝑝𝑟𝑒𝑑 , 𝑦𝑝𝑟𝑒𝑑 }, base window for local motion variance estimation 𝑤𝑏𝑎𝑠𝑒 ,
+    minimum allowed smoothing window 𝑤𝑚𝑖𝑛 , maximum allowed smoothing window 𝑤𝑚𝑎𝑥 , per-
+    centile to determine adaptive window size 𝑝, method 𝑓 (.) ∈ {displacement, velocity, acceleration,
+    covariance, frequency}
+ 1: Output: filtered predictions {𝑥(𝑓,𝑝𝑟𝑒𝑑) , 𝑦(𝑓,𝑝𝑟𝑒𝑑) }
+ 2: local motion variance ←− 𝑓 ({𝑥𝑝𝑟𝑒𝑑 , 𝑦𝑝𝑟𝑒𝑑 }, 𝑤𝑏𝑎𝑠𝑒 )
+ 3: smoothened variance ←− rolling mean(𝑤𝑏𝑎𝑠𝑒 , local motion variance)
+ 4: median window ←− clipping(smoothened variance, 𝑤𝑚𝑖𝑛 , 𝑤𝑚𝑎𝑥 )
+ 5: adaptive windows ←− clipping(𝑤𝑚𝑖𝑛 , 𝑤𝑚𝑎𝑥 , rolling(median window, 𝑤𝑏𝑎𝑠𝑒 , 𝑝))
+ 6: {𝑥(𝑓,𝑝𝑟𝑒𝑑) , 𝑦(𝑓,𝑝𝑟𝑒𝑑) } ←− rolling median({𝑥𝑝𝑟𝑒𝑑 , 𝑦𝑝𝑟𝑒𝑑 }, adaptive windows)
+
+determine the cumulative vector trajectory of the events within ROI to softly shift the filtered prediction
+to further refine its spatial position.
+
+Algorithm 2 Rule-based optical flow estimation for smooth shifts
+Require: Continuous event stream with 𝑁 number of events 𝐸𝑖,(𝑡,𝑥,𝑦,𝑝)   𝑣       where 𝑖 ∈ {1, 𝑁 }, filtered
+    predictions {𝑥(𝑓,𝑝𝑟𝑒𝑑) , 𝑦(𝑓,𝑝𝑟𝑒𝑑) }, scaling parameter 𝜏 , count threshold 𝑐, difference threshold 𝛾
+ 1: Output: Refined predictions {𝑥(𝑅,𝑓,𝑝𝑟𝑒𝑑) , 𝑦(𝑅,𝑓,𝑝𝑟𝑒𝑑) }
+                      𝑣               𝑣
+ 2:   timestep ←− 𝐸 (𝑖=𝑁,𝑡        𝑚𝑎𝑥 )−𝐸 (𝑖=1,𝑡𝑚𝑖𝑛 )
+                            |{𝑥(𝑓,𝑝𝑟𝑒𝑑) ,𝑦(𝑓,𝑝𝑟𝑒𝑑) }|
+ 3:   previous timestamp ←− 𝐸 𝑣 (𝑖 = 1, 𝑡𝑚𝑖𝑛 ) ∈ 𝐸𝑖,(𝑡,𝑥,𝑦,𝑝) 𝑣
+
+ 4:   ROI size 𝑅 ←− 𝜏 × 10
+ 5:   for 𝑗, (𝑥𝑗(𝑓,𝑝𝑟𝑒𝑑) , 𝑦(𝑓,𝑝𝑟𝑒𝑑)
+                            𝑗
+                                     ) ∈ {𝑥(𝑓,𝑝𝑟𝑒𝑑) , 𝑦(𝑓,𝑝𝑟𝑒𝑑) } do
+ 6:      current timestamp ←− previous timestamp + (𝑗 + 1) × 𝑡𝑖𝑚𝑒𝑠𝑡𝑒𝑝
+ 7:      if 𝑗 > 𝑐 then
+ 8:         difference in x ←− absolute(𝑥𝑗(𝑓,𝑝𝑟𝑒𝑑) − 𝑚𝑒𝑎𝑛({𝑥𝑗−𝑐:𝑗    (𝑓,𝑝𝑟𝑒𝑑) }))
+                                         𝑗                  𝑗−𝑐:𝑗
+ 9:       difference in y ←− absolute(𝑦(𝑓,𝑝𝑟𝑒𝑑) − 𝑚𝑒𝑎𝑛({𝑦(𝑓,𝑝𝑟𝑒𝑑)  }))
+10:       if difference in x > 𝜏 × 𝛾 ∪ difference in y > 𝜏 × 𝛾 then
+11:          𝑅 ←− (1 + 𝑐) × 𝜏
+12:       else
+13:          𝑅 ←− (1 − 𝑐) × 𝜏
+14:       end if
+15:     end if
+16:     events in ROI ←− 𝐸 𝑣 (𝑡 ∈ {previous timestamp, current timestamp}, 𝑥 ∈ {𝑥𝑗(𝑓,𝑝𝑟𝑒𝑑) −𝑅, 𝑥𝑗(𝑓,𝑝𝑟𝑒𝑑) +
+                    𝑗              𝑗                  𝑣
+        𝑅}, 𝑦 ∈ {𝑦(𝑓,𝑝𝑟𝑒𝑑)   − 𝑅, 𝑦(𝑓,𝑝𝑟𝑒𝑑) + 𝑅} ) ∈ 𝐸𝑖,(𝑡,𝑥,𝑦,𝑝)
+17:     previous timestamp ←− current timestamp
+18:     𝑛 ←− |events in ROI|
+19:     if 𝑛 > 𝜏 × 10 then
+20:        𝑑𝑥 ←− 0; 𝑑𝑦 ←− 0
+21:        for 𝑘 ∈ {1, 𝑛} do
+22:          𝑑𝑥+ = events in ROI(𝑥 = 𝑘) − events in ROI(𝑥 = 𝑘 − 1)
+23:          𝑑𝑦+ = events in ROI(𝑦 = 𝑘) − events in ROI(𝑦 = 𝑘 − 1)
+24:          if absolute(𝑑𝑥) > 0∪ absolute(𝑑𝑦) > 0 then
+25:             𝑥𝑗(𝑅,𝑓,𝑝𝑟𝑒𝑑) ←− 𝑥𝑗(𝑓,𝑝𝑟𝑒𝑑) + ‖𝑑𝑥,𝑑𝑦‖
+                                               𝑑𝑥
+
+                𝑗              𝑗               𝑑𝑥
+26:            𝑦(𝑅,𝑓,𝑝𝑟𝑒𝑑) ←− 𝑦(𝑓,𝑝𝑟𝑒𝑑) +    ‖𝑑𝑥,𝑑𝑦‖
+27:         end if
+28:       end for
+29:     end if
+30:   end for
+5. Jitter Metric
+5.1. Background & Definition
+While the existing metrics for evaluating pupil tracking performance are useful for assessing positional
+accuracy, they fall short in capturing the smooth continuity of the predicted pupil movements. This
+continuity is critical for the stable performance in downstream applications such as foveated rendering
+or gaze-based interaction [31, 29], especially given the bounded and continuous nature of oculomotor
+(i.e., pupil movement) activity. Therefore, as a complementary metric, in this paper, we propose the
+following jitter metric (Eq. 2) to specifically evaluate the temporal smoothness of the predictions while
+also considering the true targets.
+    While designing the jitter metric, we ground our approach in two key premises that leverage pupil
+velocity on both global and local scales: (1) if the predicted trajectory differs substantially from the
+ground truth in how smoothly it evolves, their overall velocity distributions will show statistically
+significant differences, indicating that the predicted trajectory does not realistically reflect natural eye
+movement, and (2) sudden changes and irregular fluctuations in the predicted trajectory will be evident
+in its frequency spectrum, revealing fine-grained temporal mismatches compared to the true trajectory.
+    To operationalise (1) in our jitter metric, we use the Kullback-Leibler (KL) divergence to quantify
+information loss between the predicted and ground-truth velocity distributions. This captures global
+differences in motion realism: if the predicted velocity distribution is overly erratic or unnaturally
+smooth relative to the true distribution, the KL divergence, interpreted as a log-normalized comparative
+velocity entropy, will yield a higher jitter score.
+    To operationalise premise (2), we incorporate a spectral entropy (SPE) measure guided by spectral arc
+length (SPARC), following the framework of [32]. SPE is a frequency-domain metric that is less sensitive
+to high-frequency noise compared to traditional time-domain smoothness metrics (e.g., jerk). In this
+formulation, trajectories with more high-frequency content tend to exhibit longer arc lengths in the
+frequency domain, reflecting greater local irregularity. In contrast, smoother trajectories concentrate
+energy at lower frequencies, leading to simpler spectral profiles. To capture these local differences, we
+compute the spectral entropy of the predicted and ground-truth velocity signals and use their difference
+as a measure of local temporal deviation. The detailed derivation is presented in Section 5.2.
+
+
+                                     |SPE 𝑑(pred) − SPE 𝑑(true) |                     (︁      (︁                                )︁)︁
+𝐽𝑀 (pred(𝑥,𝑦) , true(𝑥,𝑦) ) = 𝜆·            𝑑𝑡                     𝑑𝑡
+                                                                            +(1−𝜆)·log 1 + 𝐷KL 𝑃𝑓 [ 𝑑(pred) ] || 𝑃𝑓 [ 𝑑(true) ]
+                                          |SPE 𝑑(true) | + 𝜀                                                                   𝑑𝑡   𝑑𝑡
+                                                      𝑑𝑡
+                                                                                                                                         (2)
+  where,
+                                                                                                         𝑃𝑓 [ 𝑑(pred) ] (𝑖)
+                                                                                                    (︃                        )︃
+                       (︁                                  )︁     ∑︁
+                  𝐷KL 𝑃𝑓 [ 𝑑(pred) ] || 𝑃𝑓 [ 𝑑(true) ] =                   𝑃𝑓 [ 𝑑(pred) ] (𝑖) log               𝑑𝑡
+                                                                                                                                         (3)
+                                𝑑𝑡                𝑑𝑡                              𝑑𝑡                     𝑃𝑓 [ 𝑑(true) ] (𝑖)
+                                                                       𝑖                                        𝑑𝑡
+
+                               (︂                )︂                                      (︃                          )︃
+                                    𝑑𝑔(𝑥, 𝑦)                    ∑︁                                |𝑉𝑓 |
+                        SPE                           =−               log(𝑓 + 𝜀) ·           ∑︀                                         (4)
+                                       𝑑𝑡
+                                                                𝑓 >0                            𝑓 |𝑉𝑓 | + 𝜀
+
+   Here, pred(𝑥,𝑦) , true(𝑥,𝑦) are predicted and true pupil trajectories whereas 𝑓 [.] is the function for
+velocity histogram estimation from predicted and true trajectories. The input to SPE as in Eq. 4 is
+𝑔(𝑥, 𝑦) ∈ {pred(𝑥,𝑦) , true(𝑥,𝑦) } and 𝑉𝑓 is the Fourier magnitude of the respective velocity signal. The
+weight hyperparameter for balancing the impact of KL divergence and SPE terms is 𝜆 ∈ [0, 1] and 𝜀
+is a small constant to ensure numerical stability (i.e., avoid division by zero). In summary, our jitter
+metric 𝐽𝑀 is computed as a weighted sum of the normalized SPE difference and the log-normalized
+KL divergence of velocity histograms, and in addition, as designed, a lower value would reflect a more
+similar comparative temporal smoothness between the true and predicted pupil trajectories. Further, a
+detailed set of theoretical analysis on the proposed jitter metric, including the boundedness, continuity,
+formal constraints, continuity, and differentiability, is included in section 5.3.
+5.2. Derivation of SPE Equation
+Original Discrete SPARC Definition
+Let 𝑀 (𝑓 ) denote the normalized magnitude spectrum of the velocity signal 𝑣(𝑡), sampled at frequency
+𝑓𝑠 . Let {𝑓𝑖 , 𝑀𝑖 } be the discrete points of this spectrum such that 𝑓𝑖 being the frequency bin and
+𝑀𝑖 being the normalized magnitude of Fourier transform at frequency 𝑓𝑖 (The velocity signal can
+be optionally filtered prior by a cutoff frequency 𝑓𝑐 and amplitude threshold 𝜃). 𝑁 is the number of
+frequency bins used. The SPARC metric is given by:
+                                            √︃(︂
+                                       𝑁 −1
+                                                 𝑓𝑖+1 − 𝑓𝑖 2
+                                        ∑︁                )︂
+                           SPARC = −                         + (𝑀𝑖+1 − 𝑀𝑖 )2                       (5)
+                                                  𝑓𝑁 − 𝑓1
+                                           𝑖=1
+
+  This corresponds to the total normalized negative arc length in the frequency-magnitude plane.
+
+Step 1: Uniform Frequency Spacing Assumption
+Assuming the frequency bins are uniformly spaced, we define:
+
+                                                                                Δ𝑓
+                            Δ𝑓 = 𝑓𝑖+1 − 𝑓𝑖 (is constant),            Δ𝑓 ′ =
+                                                                              𝑓𝑁 − 𝑓1
+ We then simplify the arc length as with Δ𝑀𝑖 = 𝑀𝑖+1 − 𝑀𝑖 and given that the spectrum is smooth
+Δ𝑀𝑖 < 𝛿 where 𝛿 (> 0) is infinitesimally small and ∈ R:
+
+                                 √︃
+                          𝑁 −1
+                                Δ𝑀𝑖 2
+                          ∑︁          (︂
+                                      )︂
+                      ′
+      SPARC ≈ −Δ𝑓           1+                                                                           (6)
+                                 Δ𝑓 ′
+                    𝑖=1
+                    𝑁 −1
+                         (︃             )︂ )︃
+                               1 Δ𝑀𝑖 2                                              𝑥2
+                    ∑︁          (︂                                   √︀
+                  ′
+            = −Δ𝑓          1+                               (using     1 + 𝑥2 ≈ 1 +    when |𝑥| << 1)    (7)
+                               2 Δ𝑓 ′                                               2
+                          𝑖=1
+                                            𝑁 −1
+                                       1 ∑︁
+              = −(𝑁 − 1)Δ𝑓 ′ −                  (Δ𝑀𝑖 )2                                                  (8)
+                                      2Δ𝑓 ′
+                                                 𝑖=1
+
+  This shows that SPARC is negatively correlated with squared variation in spectral magnitude and thus,
+penalizes high spectral variation, which corresponds to non-smooth or jerky movements (Observation
+A).
+
+Step 2: Frequency-Magnitude Reinterpretation
+We now reinterpret 𝑀 (𝑓 ) as forming a normalized (discrete) probability distribution over frequency
+(instead of normalizing using the maximum amplitude), penalizing the higher spectral variation, such
+that 𝑀 (𝑓 ) ≈ |𝑉𝑓 |:
+
+                                                         𝑀 (𝑓𝑖 )
+                                             𝑃 (𝑓𝑖 ) = ∑︀                                                (9)
+                                                          𝑗 𝑀 (𝑓𝑗 )
+
+  Motivated by Observation A, we propose a frequency-weighted sum form that emphasizes smoothness
+by penalizing energy concentrated at high frequencies (Note that the frequency weighting term 𝑙𝑜𝑔(𝑓 )
+penalizes the higher frequencies by leading the SPE towards more negative sum):
+                                                       ∑︁
+                                  SPARC ≈ SPE = −            log(𝑓𝑖 + 𝜖) · 𝑃 (𝑓𝑖 )                      (10)
+                                                        𝑖
+
+  where 𝜖 > 0 is a small constant added for numerical stability.
+   Even though this version drops the explicit arc-length geometry, it retains the original spirit of SPARC
+by favoring low-frequency spectral energy concentration, and is more computationally tractable and
+differentiable.
+
+Summary
+We conclude with the following approximate proxy metric:
+                                           ∑︁                    𝑀 (𝑓𝑖 )
+                                 SPE = −         log(𝑓𝑖 + 𝜖) · ∑︀                                      (11)
+                                             𝑖                   𝑗 𝑀 (𝑓𝑗 )
+
+
+5.3. Theoretical Analysis on Jitter Metric
+5.3.1. Theoretical Justification
+Supplementary to our explanations in section 5.1 and the derivation in section 5.2, below we present
+two lemmas to show why the jitter metric captures the smoothness.
+Lemma 5.1. Let 𝑓 (𝑡) be a continuous-time signal. Then, the smoother 𝑓 (𝑡) is, the more concentrated its
+frequency spectrum is in low frequencies. As a result, the spectral entropy is lower.
+Proof. The underlying intuition behind the lemma is that smoother signals exhibit fewer rapid fluctua-
+tions, which corresponds—in the Fourier domain—to reduced magnitude in high-frequency components.
+The spectral entropy (SPE), used in the first term of our jitter metric, quantifies the dispersion of energy
+across frequency bands. A highly smooth signal concentrates energy in lower frequencies and thus
+yields a lower SPE, reflecting this property in an absolute sense.
+   Formally, in more general sense, if the velocity function 𝑓 ∈ 𝐶 𝑘 (R) with 𝑘−continuous derivatives:
+𝑓, 𝑡𝑓 (𝑡) ∈ 𝐿1 (R) and Fourier transform of 𝑓 , 𝑓^ ∈ 𝐶 1 (R), then by differentiation theorem,
+
+                                                       −1 𝑑𝑓^
+                                           𝑡𝑓 ^(𝛾) =          (𝛾)                                      (12)
+                                                       2𝜋𝑖 𝑑𝛾
+
+Similarly, if 𝑡𝑘 𝑓 (𝑡) ∈ 𝐿1 (R) for some 𝑘 ∈ N, then, 𝑓^ ∈ 𝐶 𝑘 (R) for 0 ≤ 𝑗 ≤ 𝑘,
+
+                                                     −1 𝑗 𝑑𝑗 𝑓^
+                                                  (︂     )︂
+                                          𝑗 ^
+                                        𝑥 𝑓 (𝛾) =                (𝛾)                                   (13)
+                                                     2𝜋𝑖    𝑑𝛾 𝑗
+   This decay property implies that smoother signals, characterized by larger values of 𝑘, exhibit faster
+spectral decay, with their frequency components approaching zero as frequency tends to infinity.
+   Moreover, the log penalizing term in 𝑆𝑃 𝐸 in the first term in jitter metric amplifies the contribution
+of high-frequency components – since log(𝑓 + 𝜖) is monotonically increasing for 𝑓 + 𝜖 > 1, energy
+concentrated at higher frequencies incurs a larger penalty.
+   Therefore, considering the above, a smoother signal 𝑓 (𝑡) has a faster decaying spectrum and thus
+lower weights on high frequency terms, and thus, has lower spectral entropy.
+
+Lemma 5.2. Let 𝑃 and 𝑄 be discrete velocity magnitude distributions for predicted and true trajectories.
+Then, 𝐷𝐾𝐿 (𝑃 ||𝑄) quantifies how different the temporal dynamics are between the predicted and true
+trajectories, with larger divergence implying greater discrepancy in movement similarity.
+Proof. The core intuition behind the lemma is that if the predicted trajectory captures motion variability
+and regularity similar to the ground truth, then fewer additional bits are required to encode samples
+from distribution 𝑃 using a model based on 𝑄. ∑︀
+   Formally, assuming both 𝑃 (𝑖), 𝑄(𝑖) > 0 and 𝑖 𝑃 (𝑖) =            𝑖 𝑄(𝑖) = 1, and noting that the KL
+                                                                 ∑︀
+divergence has the following properties (from Gibb’s inequality),
+
+                          𝐷𝐾𝐿 (𝑃 ||𝑄) ≥ 0 and 𝐷𝐾𝐿 (𝑃 ||𝑄) = 0 ←→ 𝑃 = 𝑄                                 (14)
+In addition, as shown in theorem 5.6, KL divergence is finite only when the support of 𝑃 is contained
+within the support of 𝑄. For instance, if 𝑃 assigns a probability to velocities where 𝑄 is almost 0, then,
+𝐷𝐾𝐿 (𝑃 ||𝑄) −→ ∞.
+   Based on the above properties and the log-likelihood ratio, it implies that,
+                                                  𝑃 (𝑖)
+      • 𝑃 (𝑖) >> 𝑄(𝑖) for some 𝑖 ∈ 𝜒 −→           𝑄(𝑖)    >> 𝛿, which in turn implies that 𝐷𝐾𝐿 increases.
+                                                       𝑃 (𝑖)
+      • Similarly, 𝑃 (𝑖) << 𝑄(𝑖) for some 𝑖 ∈ 𝜒 −→ log 𝑄(𝑖)  << 0 while 𝑃 (𝑖) ≈ 0.
+
+As a case study, consider a simple family of probability distributions parametrized by 𝜃. Let 𝑃𝜃=0 = 𝑄
+and therefore, 𝑃𝜃 differs from 𝑄 as 𝜃 is modified. If 𝜃 = 0 and 𝜃 ∈ N and the family of probability
+distributions be univariate Gaussians, then, 𝑄 is characterized by 𝒩 (0, 𝜎) and generally, 𝑃𝜃 = 𝒩 (𝜃, 𝜎).
+Therefore, it is trivial that as 𝜃 grows, 𝑃𝜃 shifts away from 𝑄. Then, from general case for 𝐷𝐾𝐿 of
+univariate Gaussians,
+                                                 𝜎2 𝜎12 + (𝜇1 − 𝜇2 )2 1
+                              𝐷𝐾𝐿 (𝑃 ||𝑄) = log      +                   −                          (15)
+                                                 𝜎1          2𝜎22           2
+Since in our case, 𝜎1 = 𝜎2 , 𝜇1 = 𝜃, and 𝜇2 = 0, then,
+
+                                                      𝜎1 𝜎12 + (𝜃 − 0)2 1     𝜃2
+                                𝐷𝐾𝐿 (𝑃 ||𝑄) = log        +             −   =                                      (16)
+                                                      𝜎1      2𝜎12       2   2𝜎12
+Therefore, it is trivial that 𝐷𝐾𝐿 increases monotonically with 𝜃, i.e., when 𝑃𝜃 differs more from
+𝑄. Similarly, a more generic proof can follow Donsker and Varadhan’s variational formula in this
+context.
+
+5.3.2. Formal Constraints
+Jitter metric is theoretically plausible under the following set of assumptions:
+      • The predicted and true trajectories must be at least 𝐶 1 −continuous.
+      • The jitter metric must have the full support of 𝑃𝑓 [ 𝑑(true) ] .
+                                                               𝑑𝑡
+
+      • Both predicted and true trajectories must have bounded energies: |𝑓^ (.)|2 𝑑𝜔 < ∞
+                                                                               ∫︀
+
+      • Additionally, as required by the task at hand, the velocity trajectories should be non-negative and
+        temporally aligned.
+                                                                                                         𝑑pred   (𝑡)
+Lemma 5.3. Let pred(𝑥,𝑦) (𝑡) ∈ 𝐶 1 (R) be the predicted pupil trajectory, then, the velocity  (𝑥,𝑦)
+                                                                                              𝑑𝑡     is
+continuous, and the velocity histogram 𝑃𝑣 is well-defined as a Radon-Nikodym derivative with respect to
+the Lebesgue measure.
+Proof. By definition of 𝐶 1 −continuity, pred(𝑥,𝑦) (𝑡) is differentiable (on a closed and bounded interval),
+      𝑑pred(𝑥,𝑦) (𝑡)                                 𝑑pred(𝑥,𝑦) (𝑡)
+and        𝑑𝑡          is continuous. Continuity of       𝑑𝑡        ensures it is measurable, by measure theory.
+                                       𝑑pred       (𝑡)
+   Since pred(𝑥,𝑦) (𝑡) is 𝐶 1 , then,        (𝑥,𝑦)
+                                            𝑑𝑡         is bounded on any compact interval [𝑎, 𝑏]; 𝑎, 𝑏 ∈ R
+                                            𝑑pred(𝑥,𝑦) (𝑡)
+by extreme value theorem. Further,                 𝑑𝑡       does not diverge since it has a finite energy, i.e.,
+∫︀ 𝑑pred(𝑥,𝑦) (𝑡) 2
+  |     𝑑𝑡       | 𝑑𝑡 < ∞ (as it is a physical trajectory, i.e., a pupil velocity trajectory).
+   Considering the constructed velocity histogram 𝑃𝑣 on the time interval [0, 𝑇 ] 𝑇 ∈ R, 𝜇 is the
+Lebesgue measure, and 𝐴 ⊆ R is any measurable set:
+
+                                              1                 𝑑pred(𝑥,𝑦) (𝑡)
+                                   𝑃𝑣 (𝐴) =     𝜇({𝑡 ∈ [0, 𝑇 ]|                ∈ 𝐴})                              (17)
+                                              𝑇                      𝑑𝑡
+     𝑑pred(𝑥,𝑦) (𝑡)                                                                𝑑pred(𝑥,𝑦) (𝑡)
+As        𝑑𝑡          is continuous, then measurable, the preimage {𝑡 ∈ [0, 𝑇 ]|        𝑑𝑡          ∈ 𝐴} is Lebesgue-
+                                                    𝑑pred(𝑥,𝑦) (𝑡)
+measurable for any Borel set 𝐴. Further, as              𝑑𝑡 is bounded and 𝑇 < ∞ (due to being character-
+istics of physical trajectories), 𝑃𝑣 is a valid probability measure.
+                                               𝑑pred     (𝑡)
+  Being a physical trajectory,    (𝑥,𝑦)
+                                  𝑑𝑡      is piecewise monotonic. Therefore, it is possible to further
+extend that 𝑃𝑣 should admit a probability density function 𝑝(𝑣):
+
+                                                              1              ∑︁                   𝑑𝑣
+                                                 𝑝(𝑣) =                                       |      (𝑡𝑖 )|−1                                                 (18)
+                                                              𝑇         𝑑pred(𝑥,𝑦) (𝑡𝑖 )
+                                                                                                  𝑑𝑡
+                                                                   𝑡𝑖 |       𝑑𝑡
+                                                                                         =𝑣
+
+                                                 𝑑pred(𝑥,𝑦) (𝑡)
+where the sum is over roots 𝑡𝑖 of                     𝑑𝑡            − 𝑣 = 0. As a practical implication, velocity from discrete
+                                                                                                                                pred     (𝑡𝑖+1 )−pred         (𝑡𝑖 )
+pupil trajectories (of 𝑁 samples) can be computed via finite differences: 𝑣𝑖 =  (𝑥,𝑦)
+                                                                                      𝑡𝑖+1 −𝑡𝑖
+                                                                                               (𝑥,𝑦)
+                                                                                                     ,
+as if pred(𝑥,𝑦) (𝑡) is 𝐶 , then, the histogram of {𝑣𝑖 } converges to 𝑃𝑣 as 𝑁 −→ ∞. Further, a similar
+                        1
+
+proof can follow true pupil trajectories as well.
+
+5.3.3. Scale Invariance
+Theorem 5.4. Jitter metric is scale-invariant for ∀𝛼 > 0 under negligible 𝜀.
+
+Proof. Consider a linear and consistent scaling factor 𝛼 (> 0) across both predicted and true trajectories.
+Then, the scaled trajectories are: pred′(𝑥,𝑦) (𝑡) = 𝛼 · pred(𝑥,𝑦) (𝑡) and true′(𝑥,𝑦) (𝑡) = 𝛼 · true(𝑥,𝑦) (𝑡).
+                                                     𝑑pred′        (𝑡)                𝑑pred         (𝑡)           𝑑true′    (𝑡)             𝑑true       (𝑡)
+Therefore, the velocities scale as:      (𝑥,𝑦)
+                                         𝑑𝑡       = 𝛼·       (𝑥,𝑦)
+                                                             𝑑𝑡       and       (𝑥,𝑦)
+                                                                                𝑑𝑡     = 𝛼·           (𝑥,𝑦)
+                                                                                                      𝑑𝑡    . By
+extension, the velocity distributions are: 𝑃pred′ (𝑣) = 𝛼 𝑃pred ( 𝛼 ) and 𝑃true′ (𝑣) = 𝛼 𝑃true ( 𝛼 ).
+                                                        1         𝑣                    1         𝑣
+
+  When considering the first term in the jitter metric, from the scaling property of Fourier transform:
+     𝑑pred′(𝑥,𝑦) (𝑡)              𝑑pred(𝑥,𝑦) (𝑡)                  𝑑pred(𝑥,𝑦) (𝑡)
+ℱ(        𝑑𝑡         )   = ℱ(𝛼         𝑑𝑡        )   = 𝛼ℱ(             𝑑𝑡        )     −→ |𝑉𝑓′ | = 𝛼|𝑉𝑓 |. Therefore,
+
+        𝑑pred′(𝑥,𝑦) (𝑡)
+                                                               (︃                         )︃                                       (︃                          )︃
+                                       ∑︁                                    |𝑉𝑓′ |                       ∑︁                                𝛼 · |𝑉𝑓 |
+SPE(                         )=−              log(𝑓 + 𝜀) ·                                        =−             log(𝑓 + 𝜀) ·
+                                                                             |𝑉𝑓′ | + 𝜀
+                                                                    ∑︀                                                                  ∑︀
+                 𝑑𝑡
+                                       𝑓 >0                              𝑓                                𝑓 >0                            𝑓 𝛼 · |𝑉𝑓 | + 𝜀
+
+                                  (︃                     )︃                                          (︃                    )︃                                 (19)
+         ∑︁                              𝛼 · |𝑉𝑓 |                       ∑︁                                𝛼 · |𝑉𝑓 |
+ =−             log(𝑓 + 𝜀) ·            ∑︀                     ≈−                 log(𝑓 + 𝜀) ·             ∑︀                    under negligible 𝜀 (20)
+                                       𝛼 𝑓 |𝑉𝑓 | + 𝜀                                                      𝛼 𝑓 |𝑉𝑓 |
+         𝑓 >0                                                            𝑓 >0
+                                                               (︃                         )︃
+                                       ∑︁                              ·|𝑉𝑓 |                                𝑑pred(𝑥,𝑦) (𝑡)
+                              ≈−              log(𝑓 + 𝜀) ·          ∑︀                            = SPE(                           )                          (21)
+                                       𝑓 >0                           𝑓 |𝑉𝑓 | + 𝜀                                     𝑑𝑡
+
+The same can be proved for true trajectory as well. Therefore, the first term is scale-invariant for 𝛼 > 0
+for negligible 𝜀.
+  Regarding the second term, for scaled 𝑃 ′ and 𝑄′ , while adapting the continuous definition for KL
+divergence,
+                                                                              1
+                                                𝑃 ′ (𝑣)                         𝑃(𝑣 )
+                                    ∫︁                      ∫︁
+                                                                1     𝑣
+                  𝐷𝐾𝐿 (𝑃 ′ ||𝑄′′ ) = 𝑃 ′ (𝑣) log ′ 𝑑𝑣 =           𝑃 ( ) log 𝛼1 𝛼𝑣 𝑑𝑣                   (22)
+                                                𝑄 (𝑣)           𝛼 𝛼           𝛼 𝑄( 𝛼 )
+Changing variables: 𝑢 = 𝛼𝑣 :
+                             ∫︁                                              ∫︁
+                                  1           𝑃 (𝑢)                                                 𝑃 (𝑢)
+                         =          𝑃 (𝑢) log       𝛼 · 𝑑𝑢 =                       𝑃 (𝑢) log              𝑑𝑢 = 𝐷𝐾𝐿 (𝑃 ||𝑄)                                    (23)
+                                  𝛼           𝑄(𝑢)                                                  𝑄(𝑢)
+
+Therefore, 𝐷𝐾𝐿 is scale-invariant, so is log(1 + 𝐷𝐾𝐿 ).
+  Therefore, from all above, the jitter metric is scale invariant for ∀𝛼 > 0 with negligible 𝜀.
+
+5.3.4. Lower Bound
+Theorem 5.5. Jitter metric is lower bounded. In other words, for any predicted (pred(𝑥,𝑦) ) and true
+(true(𝑥,𝑦) ) trajectories, the metric satisfies 𝐽𝑀 (pred(𝑥,𝑦) , true(𝑥,𝑦) ) ≥ 0 with equality iff pred(𝑥,𝑦) =
+true(𝑥,𝑦)
+Proof. Both first and second terms in the jitter metric are strictly non-negative due to both additive
+terms being non-negative (while 𝜆 ∈ [0, 1] and 𝜆 ∈ R):
+     • The first term is trivially non-negative (i.e., |SPE 𝑑(pred) − SPE 𝑑(true) | ≥ 0)
+                                                                                        𝑑𝑡                           𝑑𝑡
+     • The second term is also non-negative since KL divergence is always non-negative (i.e., Gibb’s
+       inequality, 𝐷𝐾𝐿 (𝑃 ||𝑄) ≥ 0 leads to log(1 + 𝑥) ≥ 0 for 𝑥 ≥ 0).
+   Regarding the condition for equality,
+     • When the predicted trajectory and the true trajectory are congruent in 1D sense (i.e., pred(𝑥,𝑦) =
+                              𝑑(pred)            𝑑(true)
+        true(𝑥,𝑦) ), then,      𝑑𝑡        =        𝑑𝑡 .    Therefore, |SPE 𝑑(pred) − SPE 𝑑(true) | = 0 and the first term in jitter
+                                                                                       𝑑𝑡                        𝑑𝑡
+        metric vanishes.                                                                               (︃                          )︃
+                                                                                                            𝑃        𝑑(pred) (𝑖)
+                      𝑑(pred)          𝑑(true)                                                               𝑓[             ]
+     • Similarly,       𝑑𝑡        =      𝑑𝑡      leads to 𝐷𝐾𝐿 (.) = 0, since log                            𝑃
+                                                                                                                       𝑑𝑡
+                                                                                                                                         = 0, and therefore, the
+                                                                                                                     𝑑(true) (𝑖)
+                                                                                                                𝑓[          ]
+                                                                                                                       𝑑𝑡
+        second term also vanishes.
+  Since both first and seconds terms are strictly non-negative, their weighted sum (i.e., jitter metric
+value) is also strictly non-negative. Further, 𝐽𝑀 (.) = 0 is only possible when pred(𝑥,𝑦) = true(𝑥,𝑦)
+which is the lower bound for the metric.
+
+5.3.5. Upper Bound
+Theorem 5.6. Jitter metric is not upper-bounded.
+Proof. The first term in the jitter metric is bounded if both SPE 𝑑(true) and SPE 𝑑(pred) are finite and ∈ R.
+                                                                                                        𝑑𝑡                               𝑑𝑡
+   Regarding the second term: let 𝑃𝑓 [ 𝑑(pred) ] be a velocity distribution with support disjoint from 𝑃𝑓 [ 𝑑(true) ] .
+                                                        𝑑𝑡                                                                                                             𝑑𝑡
+In other words, 𝑃𝑓 [ 𝑑(pred) ] assigns non-zero probability to events where 𝑃𝑓 [ 𝑑(true) ] has zero probability.
+                             𝑑𝑡                                                                                                     𝑑𝑡
+Then, 𝐷𝐾𝐿 (.) −→ ∞, so, 𝐽𝑀 (.) ≥ (1 − 𝜆) · log(1 + ∞) = ∞.
+  To ensure the sufficient condition for KL divergence to be upper-bounded,
+Lemma 5.7. Given both 𝑃𝑓 [ 𝑑(true) ] and 𝑃𝑓 [ 𝑑(pred) ] have the same support 𝜒 and 𝑃𝑓 [ 𝑑(pred) ] has a finite upper
+                                           𝑑𝑡                     𝑑𝑡                                                                          𝑑𝑡
+bound, then 𝐷𝐾𝐿 (𝑃𝑓 [ 𝑑(pred) ] ||𝑃𝑓 [ 𝑑(true) ] ) < ∞
+                                  𝑑𝑡              𝑑𝑡
+
+Proof. Since 𝑃𝑓 [ 𝑑(true) ] has compact support:
+                        𝑑𝑡
+
+                                                           𝑞 = inf 𝑃𝑓 [ 𝑑(true) ] (𝑖) > 0                                                                               (24)
+                                                                   𝑖∈𝜒           𝑑𝑡
+
+Similarly, since 𝑃𝑓 [ 𝑑(pred) ] has compact support,
+                             𝑑𝑡
+
+                                                           ¯ = sup 𝑃𝑓 [ 𝑑(pred) ] (𝑖) > 0
+                                                           𝑝                                                                                                            (25)
+                                                                  𝑖∈𝜒            𝑑𝑡
+
+
+Since both are on the same support and 𝑃𝑓 [ 𝑑(pred) ] is bounded,
+                                                                       𝑑𝑡
+
+                                                                 0<𝑞≤𝑝           ¯<∞                                                                                    (26)
+                                                                𝑃𝑓 [ 𝑑(pred) ] (𝑖)
+                                                           (︃                      )︃
+                                                sup log                𝑑𝑡
+                                                                                      ≤ log 𝑝
+                                                                                            ¯ − log 𝑞                                                                   (27)
+                                                𝑖∈𝜒             𝑃𝑓 [ 𝑑(true) ] (𝑖)
+                                                                       𝑑𝑡
+
+Let 𝐿 = log 𝑝
+            ¯ − log 𝑞, then,
+                                                                                 𝑃𝑓 [ 𝑑(pred) ]                                    𝑃𝑓 [ 𝑑(pred) ] (𝑖)
+                                                                            (︃                    )︃                        (︃                          )︃
+                                           ∑︁                                                                                                                ∑︁
+                                                                                        𝑑𝑡                                                    𝑑𝑡
+𝐷𝐾𝐿 (𝑃𝑓 [ 𝑑(pred) ] ||𝑃𝑓 [ 𝑑(true) ] ) =           𝑃𝑓 [ 𝑑(pred) ] (𝑖) log                              ≤ sup log                                                   𝑃𝑓 [ 𝑑(pred) ] (𝑖)
+               𝑑𝑡            𝑑𝑡                            𝑑𝑡                    𝑃𝑓 [ 𝑑(true) ]              𝑖∈𝜒                   𝑃𝑓 [ 𝑑(true) ] (𝑖)                       𝑑𝑡
+                                           𝑖∈𝜒                                          𝑑𝑡                                                    𝑑𝑡             𝑖∈𝜒
+                                                                        ∑︁                                                                                              (28)
+                                          ≤ (log 𝑝
+                                                 ¯ − log 𝑞)                    𝑃𝑓 [ 𝑑(pred) ] (𝑖) = 𝐿 < ∞                                                               (29)
+                                                                                      𝑑𝑡
+                                                                         𝑖∈𝜒
+  Therefore, if 𝑃𝑓 [ 𝑑(pred) ] is with support disjoint from 𝑃𝑓 [ 𝑑(true) ] , then, second term dominates and the
+                            𝑑𝑡                                                  𝑑𝑡
+metric becomes unbounded above.
+
+5.3.6. Continuity
+Theorem 5.8. Jitter metric is continuous everywhere except when 𝑃𝑓 [ 𝑑(true) ] has zero-mass bins (i.e., if not
+                                                                                             𝑑𝑡
+smoothened). In other words, with full support, jitter metric is continuous.
+
+Proof. Assume both pred(𝑥,𝑦) and true(𝑥,𝑦) are differentiable on a closed and bounded interval (Note
+that these are valid assumptions given the typical ocularmotor i.e., pupil activity, function [12]). Then,
+both 𝑑(pred)
+        𝑑𝑡   and 𝑑(true)
+                    𝑑𝑡   are continuous functions under 𝐿2 norm: if ‖true − pred‖ −→ 0 then ‖ 𝑑(true)
+                                                                                                    𝑑𝑡 −
+𝑑(pred)
+  𝑑𝑡 ‖ −→ 0.
+   Based on the assumptions of differentiability on a closed and bounded interval (and thereby continuous
+since differentiability implies continuity), both 𝑑(pred)
+                                                       𝑑𝑡  and 𝑑(true)
+                                                                  𝑑𝑡   are Riemann integrable, which in
+tern implies that those are Lebesgue integrable. Therefore, both velocity trajectories are in 𝐿1 space:
+𝑑(pred)
+  𝑑𝑡    ∈ 𝐿1 (R𝑛 ) and 𝑑(true)
+                          𝑑𝑡   ∈ 𝐿1 (R𝑛 ).
+       𝑑(pred(𝑥) )
+  If       𝑑𝑡        = 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑡), let Fourier transform of predicted velocity trajectory be:
+                                                     ∫︁
+                                     ^
+                                     𝑓 𝑝𝑟𝑒𝑑(𝑥) (𝛾) =    𝑒−𝑖𝛾𝑧 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧)𝑑𝑧 ; 𝛾 ∈ R                                              (30)
+                                                           R𝑛
+
+. Note that, for simplicity, we only consider 1D case (for 𝑥 coordinate) considering one variable at a
+time in the trajectory and this is easily extendable to multi-variable case as the Fourier transform on
+multivariables is well-defined. ∀𝛾𝑛 −→ 𝛾:
+
+                                      𝑔𝑛 (𝑧) = 𝑒−𝑖𝛾𝑛 𝑧 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧) is measurable ∀𝑛 ∈ N                                          (31)
+
+                                           𝑔𝑛 (𝑧) −→ 𝑒−𝑖𝛾𝑧 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧) = 𝑔(𝑧) ∀𝑧                                                 (32)
+                        |𝑒−𝑖𝛾𝑛 𝑧 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧)| = |𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧)| where |𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧)| is integrable                                (33)
+Therefore, by dominated convergence theorem,
+                               ∫︁                               ∫︁                                             ∫︁
+           ^                        −𝑖𝛾𝑛 𝑧
+     lim 𝑓 𝑝𝑟𝑒𝑑(𝑥) (𝛾𝑛 ) = lim    𝑒        𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧)𝑑𝑧 = lim                                   𝑔𝑛 (𝑧)𝑑𝑧 =             𝑔(𝑧)𝑑𝑧   (34)
+       𝑛−→∞                           𝑛−→∞ R𝑛                                    𝑛−→∞ R𝑛                            R𝑛
+                                                          ∫︁
+                                 lim 𝑓^ 𝑝𝑟𝑒𝑑(𝑥) (𝛾𝑛 ) =          𝑒−𝑖𝛾𝑧 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧)𝑑𝑧 = 𝑓^ 𝑝𝑟𝑒𝑑(𝑥) (𝛾)                            (35)
+                             𝑛−→∞                           R𝑛
+
+Therefore, 𝑓^ 𝑝𝑟𝑒𝑑(𝑥) (𝛾) is uniformly continuous. Similarly, we can prove this for true trajectory as well
+under the same set of assumptions. Since taking the absolute value, normalization, multiplication, and
+log (for 𝑥 > 0) do not violate the continuity, the first term is continuous.
+  Assuming soft histogramming (i.e., soft binning or kernel density estimation), in other words, if
+𝑃𝑓 [ 𝑑(true) ] has full support: 𝑃𝑓 [ 𝑑(true) ] > 0 everywhere, then,
+       𝑑𝑡                                  𝑑𝑡
+
+
+                         𝑃𝑓 [ 𝑑(pred) ] , 𝑃𝑓 [ 𝑑(true) ] ∈ (0, 1] −→ 𝑃𝑓 [ 𝑑(pred) ] /𝑃𝑓 [ 𝑑(true) ] is continuous                 (36)
+                                 𝑑𝑡             𝑑𝑡                         𝑑𝑡           𝑑𝑡
+
+
+As log is continuous over (0, ∞), by extension, under the said assumption, the second term is also
+continuous.
+  As the convex sum of continuous functions is also continuous, the jitter metric is continuous while
+with full support.
+5.3.7. Differentiability
+Theorem 5.9. Jitter metric is differentiable almost everywhere except when (1) 𝑆𝑃 𝐸pred = 𝑆𝑃 𝐸true , (2)
+𝑉𝑓 = 0 for any 𝑓 , (3) with support disjoint from 𝑃𝑓 [ 𝑑(true) ] , and (4) 𝑃𝑓 [ 𝑑(pred) ] is on the simplex boundary.
+                                                                               𝑑𝑡                         𝑑𝑡
+
+Proof. Assume both pred(𝑥,𝑦) and true(𝑥,𝑦) are differentiable on a closed and bounded interval (Note that
+these are valid assumptions given the typical ocularmotor i.e., pupil activity, function [12] as a physical
+signal). Then, both 𝑑(pred)
+                         𝑑𝑡    and 𝑑(true)
+                                     𝑑𝑡    are continuous functions under 𝐿2 norm: if ‖true − pred‖ −→
+0 then ‖ 𝑑(true)
+           𝑑𝑡    − 𝑑(pred)
+                     𝑑𝑡 ‖ −→ 0.
+   Based on the assumptions of differentiability on a closed and bounded interval (and thereby continuous
+since differentiability implies continuity), both 𝑑(pred)
+                                                       𝑑𝑡   and 𝑑(true)
+                                                                  𝑑𝑡    are Riemann integrable, which in
+tern implies that those are Lebesgue integrable. Therefore, both velocity trajectories are in 𝐿1 space:
+𝑑(pred)
+   𝑑𝑡   ∈ 𝐿1 (R𝑛 ) and 𝑑(true)
+                            𝑑𝑡  ∈ 𝐿1 (R𝑛 ).
+        𝑑(pred(𝑥) )
+   If       𝑑𝑡        = 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑡), let Fourier transform of predicted velocity trajectory be:
+                                                      ∫︁
+                                      ^
+                                      𝑓 𝑝𝑟𝑒𝑑(𝑥) (𝛾) =    𝑒−𝑖𝛾𝑧 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑧)𝑑𝑧 ; 𝛾 ∈ R                                                             (37)
+                                                                    R𝑛
+
+. Note that, for simplicity, we only consider 1D case (for 𝑥 coordinate) considering one variable at a
+time in the trajectory and this is easily extendable to multi-variable case as the Fourier transform on
+multivariables is well-defined.
+   Following the theorem 5.8 on the continuity of the jitter metric, more specifically, 𝑓^ 𝑝𝑟𝑒𝑑(𝑥) (𝛾) is uni-
+formly continuous, and assuming 𝑡𝑓          (𝑡) ∈ 𝐿1 (R), define the function 𝑔
+                                                      𝑝𝑟𝑒𝑑(𝑥)                        (𝑡) as −𝑖𝑡𝑓 ^ (𝑡)                  𝑝𝑟𝑒𝑑(𝑥)             𝑝𝑟𝑒𝑑(𝑥)
+which is also uniformly continuous. Consider,
+            ∫︁ 𝑦                  ∫︁ 𝑦 ∫︁                                ∫︁
+                 𝑔𝑝𝑟𝑒𝑑(𝑥) (ℎ)𝑑ℎ =         −𝑖𝑡𝑒 −𝑖𝑡ℎ
+                                                    𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑡) 𝑑𝑡 𝑑ℎ =    𝑒−𝑖𝑡ℎ |𝑦0 𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑡)𝑑𝑡                                              (38)
+                  0                               0        R                                              R
+                                     ∫︁
+                                 =        𝑓𝑝𝑟𝑒𝑑(𝑥) (𝑡)[𝑒−𝑖𝑡𝑦 − 𝑒𝑖𝑡·0 ]𝑑𝑡 = 𝑓^ 𝑝𝑟𝑒𝑑(𝑥) (𝑦) − 𝑓^ 𝑝𝑟𝑒𝑑(𝑥) (0)                                        (39)
+                                      R
+
+Therefore, by fundamental theorem of calculus, 𝑓^ 𝑝𝑟𝑒𝑑(𝑥) (𝛾) is differentiable almost everywhere. Simi-
+larly, we can prove this result for 𝑓^ 𝑝𝑟𝑒𝑑(𝑦) (𝛾), and the true velocity trajectory as well.
+   Upon the immediate above result, the first term in the jitter metric is differentiable almost everywhere
+except when |𝑉𝑓 | = 0 since the absolute value function ∈ R is not differentiable at 0. Further, since
+𝑆𝑃 𝐸pred (.) = 𝑆𝑃 𝐸true leads to vanishing the first term, the differentiability of jitter metric is not
+defined when 𝑆𝑃 𝐸pred (.) = 𝑆𝑃 𝐸true as well.
+   Regarding the second term in the jitter metric, if 𝑃𝑓 [ 𝑑(pred) ] and 𝑃𝑓 [ 𝑑(true) ] can be parametrized using
+                                                                                          𝑑𝑡                  𝑑𝑡
+parameters 𝜃 ∈ R𝑛 and 𝜓 ∈ R𝑚 respectively, then, 𝑃𝑓 [ 𝑑(pred) ] can be written as 𝑃𝑓 [ 𝑑(pred) ](𝑥;𝑦|𝜃) , whereas
+                                                                                         𝑑𝑡                                       𝑑𝑡
+𝑃𝑓 [ 𝑑(true) ] as 𝑃𝑓 [ 𝑑(true) ](𝑥;𝑦|𝜓) . Here, we assume that 𝑃𝑓 [ 𝑑(true) ](𝑥;𝑦|𝜃) , 𝑃𝑓 [ 𝑑(true) ](𝑥;𝑦|𝜓) ∈ 𝐶 1 (R) on the
+        𝑑𝑡                𝑑𝑡                                                                  𝑑𝑡                   𝑑𝑡
+space 𝜒 and 𝑃𝑓 [ 𝑑(true) ](𝑥;𝑦|𝜓) > 0 ∀(𝑥; 𝑦) ∈ 𝜒 and 𝜓. For simplicity, we denote 𝑃𝑓 [ 𝑑(true) ](𝑥;𝑦|𝜓) and
+                            𝑑𝑡                                                                                                         𝑑𝑡
+𝑃𝑓 [ 𝑑(true) ](𝑥;𝑦|𝜓) as 𝑃𝜓 and 𝑃𝜃 respectively. Therefore,
+        𝑑𝑡
+
+                                                                               ∑︁                  𝑃𝜃
+                                                   𝐷𝐾𝐿 (𝑃𝜃 ||𝑃𝜓 ) =                      𝑃𝜃 log(      )                                           (40)
+                                                                                                   𝑃𝜓
+                                                                               𝑖∈𝜒
+
+For a fixed 𝑃𝜓 wrt 𝜃𝑙 ,
+                       𝜕                   ∑︁ [︂ 𝜕𝑃𝜃 (𝑖)     (︂
+                                                                𝑃𝜃 (𝑖)
+                                                                       )︂
+                                                                                    𝜕
+                                                                                           (︂
+                                                                                              𝑃𝜃 (𝑖)
+                                                                                                     )︂]︂
+                          𝐷𝐾𝐿 (𝑃𝜃 ||𝑃𝜓 ) =               log              + 𝑃𝜃 (𝑖)     log                                                        (41)
+                      𝜕𝜃𝑙                         𝜕𝜃𝑙           𝑃𝜓 (𝑖)             𝜕𝜃𝑙        𝑃𝜓 (𝑖)
+                                                      𝑖∈𝜒
+
+                            ∑︁ [︂ 𝜕𝑃𝜃 (𝑖)             (︂
+                                                           𝑃𝜃 (𝑖)
+                                                                    )︂              {︂
+                                                                                          𝜕
+                                                                                                                      }︂]︂
+                        =                       log                      + 𝑃𝜃 (𝑖)            (log 𝑃𝜃 (𝑖) − log 𝑃𝜓 (𝑖))                            (42)
+                                          𝜕𝜃𝑙              𝑃𝜓 (𝑖)                        𝜕𝜃𝑙
+                            𝑖∈𝜒
+                  ∑︁ [︂ 𝜕𝑃𝜃 (𝑖)    (︂
+                                        𝑃𝜃 (𝑖)
+                                                 )︂
+                                                        1 𝜕𝑃𝜃 (𝑖)
+                                                                  ]︂
+              =               log            + 𝑃𝜃 (𝑖)                i.e., a fixed 𝑃𝜓 wrt 𝜃𝑙          (43)
+                         𝜕𝜃𝑙            𝑃𝜓 (𝑖)        𝑃𝜃 (𝑖) 𝜕𝜃𝑙
+                  𝑖∈𝜒
+
+                         𝜕                   ∑︁ [︂ 𝜕𝑃𝜃 (𝑖) (︂ (︂ 𝑃𝜃 (𝑖) )︂       )︂]︂
+                            𝐷𝐾𝐿 (𝑃𝜃 ||𝑃𝜓 ) =                 log             +1                       (44)
+                        𝜕𝜃𝑙                          𝜕𝜃𝑙         𝑃𝜓 (𝑖)
+                                                      𝑖∈𝜒
+
+
+
+
+   Therefore, under the assumptions of 𝑃𝜃 , 𝑃𝜓 ∈ 𝐶 1 in 𝜃, 𝜓, respectively, on 𝜒 and 𝑃𝜓 (𝑖) > 0 ∀𝑖 ∈ 𝜒
+(and given 𝑃𝜃 is not on the simplex boundary), the above sum uniformly converges and the derivative
+exists and continuous. Similarly, the partial derivative of 𝐷𝐾𝐿 wrt 𝜓𝑚 can be proven to be:
+
+                             𝜕                     ∑︁         𝜕
+                                𝐷𝐾𝐿 (𝑃𝜃 ||𝑃𝜓 ) = −    𝑃𝜃 (𝑖)     log 𝑃𝜓 (𝑖)                           (45)
+                            𝜕𝜓𝑚                              𝜕𝜓𝑚
+                                                            𝑖∈𝜒
+
+which exists and continuous under the same set of assumptions.
+  A more detailed proof with gradient derivations can follow as proved in variational bayes [33].
+
+5.3.8. Time Complexity
+The dominant operation in the first term is the Fourier transform. If used fast Fourier transform (FFT)
+on an array of length 𝑛, then,
+
+                                  Time complexity of FFT = 𝑂(𝑛 log 𝑛)                                 (46)
+
+As taking magnitude, normalization, weighted sum are in 𝑂(𝑛), then, the time complexity of the first
+term:
+                Time complexity of the first term = 𝑂(𝑛 log 𝑛 + 𝑛) = 𝑂(𝑛 log 𝑛)                 (47)
+   For the second term, assuming histograms with 𝑏 bins (𝑏 << 𝑛), soft-binning is of order 𝑂(𝑛 · 𝑏) and
+(discrete) KL divergence is of order 𝑂(𝑏). Subsequently,
+
+                     Time complexity of the second term = 𝑂(𝑛 · 𝑏 + 𝑏) = 𝑂(𝑛 · 𝑏)                     (48)
+
+Therefore,
+                  Time complexity of Jitter Metric = 𝑂(𝑛 log 𝑛 + 𝑛 · 𝑏) = 𝑂(𝑛 log 𝑛)                  (49)
+
+5.4. Empirical Justification for Jitter Metric
+To empirically demonstrate the necessity and validity of the proposed jitter metric in the context of
+pupil tracking, we present a set of controlled visual demonstrations in Fig. 2. These examples are
+designed to contrast gaze prediction trajectories with varying degrees of temporal smoothness and
+positional accuracy. In doing so, we highlight the limitations of conventional metrics, such as Mean
+Squared Error (MSE), and illustrate how the proposed jitter metric serves as a complementary measure
+that captures temporal continuity, a crucial yet often overlooked dimension in eye tracking evaluation.
+    Each subfigure (Fig. 2b – Fig. 2g) represents a perturbed version of the predicted pupil trajectory
+(Fig. 2a) obtained from the 3ET+ dataset. Perturbations were deliberately designed to simulate typical
+error modes encountered in real-world event-based eye-tracking pipelines. These include: (i) low-
+amplitude random noise, (ii) blink-induced discontinuities, (iii) pixel shift artifacts, and (iv) high-
+frequency tremor-like oscillations. Each simulated prediction includes at least two of these perturbations
+to reflect realistic degradation patterns observed in practice.
+    We use the prediction in Fig. 2a as the reference trajectory. It achieves a moderate MSE of 15.83 and a
+jitter metric score of 𝐽𝑀𝜆=0.75 = 0.18. This example serves as a baseline for comparing other trajectories
+in terms of both spatial and temporal quality. In Fig. 2b, although the MSE is lower than that of the
+reference, the prediction exhibits reduced temporal smoothness. This discrepancy is effectively captured
+by our jitter metric, which assigns it a higher score, penalizing the temporal instability overlooked by
+conventional positional metrics. Conversely, the prediction in Fig.2e demonstrates superior temporal
+smoothness, despite a slightly higher MSE. The jitter score reflects this improvement, underscoring the
+metric’s ability to reward smooth predictions even in the presence of minor spatial deviations.
+   Figures 2c and 2f present a particularly instructive comparison: both predictions yield nearly identical
+MSE values but differ significantly in their temporal continuity. The proposed jitter metric distinguishes
+between the two, accurately assigning a lower score to the smoother prediction. These cases exemplify
+scenarios where traditional metrics fail to differentiate predictions with similar positional accuracy but
+markedly different perceptual quality.
+   The trajectory in Fig. 2d is characterized by blink-related discontinuities and abrupt pixel
+shifts—common artifacts in event-based systems. While its MSE is comparable to the reference, its
+elevated jitter score reflects the increased temporal noise. This highlights the metric’s sensitivity to
+transient disruptions that can compromise downstream tasks such as attention estimation or gaze-based
+interaction.
+   Finally, Fig. 2g illustrates a case with relatively high MSE but excellent temporal smoothness. The jitter
+metric appropriately assigns it a lower score than the reference, reinforcing its utility as a decoupled
+measure of temporal fidelity.
+   These examples validate the proposed jitter metric as a critical complement to existing positional
+accuracy measures. By capturing trajectory-level smoothness, the metric provides a more holistic
+evaluation of prediction quality, particularly in applications such as micro-expression recognition,
+cognitive state inference, and gaze-based behavioral analytics, where temporal consistency is important.
+
+
+6. Experiments & Results
+6.1. Datasets & Base Models
+By following the recent challenge on event-based eye tracking [10], we test our method on the 3ET+
+dataset [10, 30] since 3ET+ serves as the most prominent benchmark dataset for the task at hand. In
+contrast, since our proposed method is presented as a post-processing step and works in a model-agnostic
+fashion, we select two recent models as base models: CB-ConvLSTM [11], and bigBrains [13], to show
+the impact of the proposed pipeline towards improved pupil coordinate predictions in each case. More
+descriptively, CB-ConvLSTM is a change-based convolutional long short-term memory architecture
+which specifically designed for efficient spatio-temporal modelling to predict pupil coordinates from
+sparse event frames, whereas bigBrains attempts to preserve causality and learn spatial relationships
+using a lightweight model consisting of spatial and temporal convolutions.
+
+6.2. Implementation Details
+We implement and run all our post-processing blocks on a single V100 GPU machine while setting
+the following specifics for each proposed algorithm. For the implementation of algorithm 1, we set
+𝑤𝑚𝑖𝑛 to be 5, 𝑤𝑚𝑎𝑥 to be 20, the percentile to determine adaptive window size to be 75 and the default
+mode of local motion variance estimation method to be based on covariance. For the implementation of
+algorithm 2, we set the scaling parameter 𝜏 to be 8, the count threshold 𝑐 to be 5, and the difference
+threshold 𝛾 to be 2.
+
+6.3. Baselines
+Trivially, we consider two base models, described in section 6.1, as baselines to compare with the
+proposed post-processing techniques. In addition, to further extend our analysis, we compare our
+method with latest other works in the literature as well, including EyeGraph [12], MambaPupil [34],
+FreeEVs [30], and SEE [35].
+                                             (a) MSE: 15.83, JM: 0.18
+
+
+
+
+                (b) MSE: 9.82, JM: 0.23                                     (c) MSE: 14.40, JM: 0.20
+
+
+
+
+               (d) MSE: 59.41, JM: 0.32                                     (e) MSE: 23.07, JM: 0.16
+
+
+
+
+               (f) MSE: 16.32, JM: 0.11                                     (g) MSE: 3.39, JM: 0.05
+Figure 2: Empirical (exemplary) demonstrations to show the (1) necessity of the proposed jitter metric as a
+complimentary metric for the task of pupil tracking and (2) efficacy of the proposed jitter metric to evaluate
+the temporal smooth-continuity. In all sub-figures, the x-axis represents the time domain while the y-axis
+represents the pupil coordinate (to be specific, x-coordinate) variation. The ground truth variation is retrieved
+from 3ET+ dataset and we thoughtfully perturbed the ground truth to imitate (and generate) the potential cases
+of predictions. The perturbation process included randomly adding (1) low-amplitude random noise, (2) blinking
+artifacts, (3) pixel shift artifacts, and (4) high-frequency tremor-like noise, and each generated prediction has at
+least two types of perturbations.
+6.4. Evaluation Metrics
+Along with the proposed jitter metric, we implement three other metrics: p-accuracy, mean Euclidean
+distance (𝑙2 ) and mean Manhattan distance (𝑙1 ), which are utilized in the recent works in the litera-
+ture [30], to quantitatively evaluate the performance of the proposed post-processing methods. As
+defined in [11], p-accuracy, as presented in Eq. 50, indicates the pixel-level accuracy of the predictions
+by checking the Euclidean distance between the predicted coordinates (𝑝𝑟𝑒𝑑𝑖 ) and true coordinates
+(𝑡𝑟𝑢𝑒𝑖 ) is within a specified pixel threshold (𝑇 ℎ). In this work, we set the pixel thresholds to be 10, 5,
+and 1 following [30]. Further, since the pupil coordinate prediction is a regression task, we incorporate
+two well-established regression metrics: 𝑙2 in Eq. 51 and 𝑙1 in Eq. 52 as well.
+
+                                                             𝑁
+                                                         1 ∑︁
+                                                𝑝{𝑇 ℎ} =        𝑓 (𝑡𝑟𝑢𝑒𝑖 , 𝑝𝑟𝑒𝑑𝑖 , 𝑇 ℎ)
+                                                         𝑁
+                                                            𝑖=1
+                                                      {︃                                                   (50)
+                                                        1 if ‖𝑡𝑟𝑢𝑒𝑖 − 𝑝𝑟𝑒𝑑𝑖 ‖ ≤ 𝑇 ℎ
+                       with 𝑓 (𝑡𝑟𝑢𝑒𝑖 , 𝑝𝑟𝑒𝑑𝑖 , 𝑇 ℎ) =
+                                                        0 otherwise
+
+                                               𝑁
+                                            1 ∑︁
+                                       𝑙2 =      ‖𝑡𝑟𝑢𝑒𝑖 − 𝑝𝑟𝑒𝑑𝑖 ‖2                                         (51)
+                                            𝑁
+                                                 𝑖=1
+
+                                                  𝑁
+                                               1 ∑︁
+                                        𝑙1 =        | 𝑡𝑟𝑢𝑒𝑖 − 𝑝𝑟𝑒𝑑𝑖 |                                      (52)
+                                               𝑁
+                                                 𝑖=1
+
+
+6.5. Results
+In this section, we present a comprehensive evaluation of our inference-time post-processing framework
+across four dimensions: standard positional accuracy metrics, our proposed jitter metric, per-component
+ablation analysis, and computational complexity. We also present a set of qualitative results in Fig. 3 for
+further demonstration.
+
+
+
+
+Figure 3: Qualitative results. The first row present a selected set of results from [13] where the second row
+presents the corresponding results from our methods, during a challenging pupil movement scenario. As
+evident, out post-processing methods improve the temporal continuity of the predictions and thereby, the overall
+performance of the base models.
+
+
+  Positional Accuracy: Table 1 reports the performance of our inference-time refinement pipeline
+on standard positional accuracy metrics, evaluated on predictions from the bigBrains model [13]. Our
+post-processing techniques consistently improve the gaze localization accuracy across all benchmarks.
+Notably, when applied to the base model, our method reduces the mean squared error by more than 5.1%
+on average (on both validation and test datasets), outperforming all existing event-based eye tracking
+approaches. These results demonstrate that our method enhances baseline predictions without any
+model retraining or architectural modifications, validating its model-agnostic design.
+       Method                  Supervised?     Post-processing?†      p10↑     p5↑     p1↑     𝑙2 ↓    𝑙1 ↓
+       EyeGraph [12]           ✗               ✗                      91.45    89.22   28.34   3.88    4.24
+       MambaPupil [34]         ✓               ✗                      99.42    97.05   33.75   1.67    2.11
+       FreeEVs [30]            ✓               ✗                      99.26    96.31   23.91   2.03    2.56
+       bigBrains [13]          ✓               ✗                      99.00    97.79   45.50   1.44    1.82
+       SEE [35]                ✓               ✗                      99.00    77.20   7.32    3.51    4.63
+       Ours (based on [13])    ✓               ✓                      99.99    99.84   59.87   0.80    0.65
+Table 1
+Pupil tracking results on 3ET+ validation dataset. † Here, we define whether post-refinement is applied to the
+original predictions to get the final predictions. The results of the prior works are extracted from the respective
+papers [12, 30].
+
+                           Method          M2F‡      OFE‡    Model size         # MACs
+                        ConvGRU [11]        ✗         ✗        417K           2716.419840M
+                        ConvGRU [11]        ✓         ✓        417K           2716.420096M
+                        bigBrains [13]      ✗         ✗        809K            59.537664M
+                        bigBrains [13]      ✓         ✓        809K            59.537920M
+Table 2
+Computational complexity details of the proposed modules. ‡ Here we refer to our motion-aware median filtering
+and optical flow-based local refinement as M2F and OFE respectively.
+
+                                       Method         M2F‡     OFE‡      JM↓
+                                    bigBrains [13]     ✗        ✗       0.4936
+                                    bigBrains [13]     ✓        ✓       0.4372
+Table 3
+Results comparison with respect to the proposed jitter metric on 3ET+ validation dataset. ‡ Here we refer to our
+motion-aware median filtering and optical flow-based local refinement as M2F and OFE respectively.
+    Computational Complexity: Table 2 quantifies the computational overhead introduced by our
+post-processing modules. As our methods operate entirely at inference time and do not include any
+trainable parameters, the additional computational burden is minimal. Specifically, motion-aware
+median filtering and optical flow refinement require approximately 172 and 340 FLOPs per event frame,
+respectively. Across all tested configurations, the total computational overhead remains below 0.00048%
+of the base model’s cost. This confirms the practicality of our approach for real-time deployment on
+edge devices with constrained resources.
+    Temporal Smoothness via Jitter Metric: Table 3 highlights the benefits of our approach with
+respect to temporal smoothness, as measured by the proposed jitter metric. Unlike traditional metrics
+that emphasize spatial proximity to ground truth, the jitter metric captures the fine-grained continuity
+of gaze predictions over time, an essential attribute for downstream applications such as mind-state
+decoding or attention estimation. Our refinement modules yield significantly lower jitter scores than
+both the base model and other state-of-the-art systems, indicating smoother and more stable tracking
+output. This demonstrates that our method not only improves accuracy but also mitigates high-frequency
+noise often induced by sensor sparsity or blinking.
+    Ablation Analysis: To isolate the contribution of each refinement component, we conduct an
+ablation study summarized in Table 4. We evaluate the individual effects of the motion-aware median
+filtering and optical flow-based local refinement modules. The former proves effective in suppressing
+transient spikes caused by blinks and sensor noise, while the latter aligns predictions more closely with
+the underlying motion cues embedded in the event stream. When combined, these components exhibit
+complementary benefits, leading to the highest overall improvements in both accuracy and smoothness.
+These results validate the composability and robustness of our design.
+    As shown in Tab. 4, both of our post processing techniques consistently improved the results of
+vanilla predictions of each method. To this end, only applying the motion-aware median filtering
+improves the vanilla prediction performance of [13] by reducing the 𝑙2 error from 1.500 to 1.466
+                              Method         M2F‡    OFE‡      𝑙2 ↓        𝑙2 ↓
+                                                             (Public)   (Private)
+                           ConvGRU [11]       ✗        ✗      7.914       7.922
+                           ConvGRU [11]       ✓        ✓      7.494       7.504
+                           bigBrains [13]     ✗        ✗      1.431       1.500
+                           bigBrains [13]     ✓        ✗      1.408       1.466
+                           bigBrains [13]     ✓        ✓      1.382       1.423
+Table 4
+Ablations to show the performance improvement by the proposed modules. The results are from the test set at
+the eye tracking challenge [10]. ‡ Here we refer to our motion-aware median filtering and optical flow-based
+local refinement as M2F and OFE respectively.
+whereas applying both motion-aware median filtering and optical flow-based local refinement leads
+to an 𝑙2 of 1.423, thereby marking an overall improvement of 5.13%. Similarly, when we apply our
+model-agnostic methods on [11]’s vanilla predictions, the performance improved from 7.922 to 7.504.
+These observations confirm the validity of the proposed model-agnostic post-processing methods as
+a collective way of improving the existing models while also ensuring the efficacy of the individual
+blocks.
+
+
+7. Discussion & Conclusion
+This work presents a practical, model-agnostic framework for enhancing event-based eye-tracking
+pipelines at inference time. A key strength of our approach is its applicability: the proposed post-
+processing techniques, i.e., Motion-Aware Median Filtering and Optical Flow Estimation for smooth
+shifts, can be seamlessly applied to the output of any existing event-based pupil estimation model,
+improving temporal stability and spatial coherence without retraining or modifying the model architec-
+ture. This makes our method especially valuable in resource-constrained settings or when dealing with
+black-box models, offering a lightweight way to boost performance across a wide range of real-world
+applications. Additionally, the introduction of a dedicated Jitter Metric provides a complementary
+measure on model quality, addressing a critical gap in evaluation criteria for time-sensitive behavioral
+tracking.
+   Despite these strengths, there are important limitations to acknowledge.
+
+    • Our work currently focuses exclusively on the ocular modality. While eye movements, particularly
+      micro-saccades and pupil dynamics, are powerful indicators of cognitive states such as attention,
+      fatigue, or confusion, real-world mind-state inference typically benefits from multi-modal inte-
+      gration, combining gaze with facial micro-expressions, head dynamics, or physiological signals.
+      Extending our refinement pipeline and temporal metrics to accommodate or complement such
+      modalities remains an exciting direction for future work.
+    • Our evaluations are conducted on datasets collected in controlled laboratory settings, where
+      participants are relatively still, lighting is consistent, and noise in the event stream is minimal.
+      In contrast, real-world deployments, for example, in wearable settings or during naturalistic
+      interactions, introduce challenges such as head motion, background clutter, dynamic lighting,
+      and partial occlusions. These conditions may degrade the assumptions behind our refinement
+      techniques (e.g., motion coherence in flow estimation), and thus real-world validation is a critical
+      next step.
+    • While our approach improves temporal smoothness and reduces spatial jitter, it does not correct
+      fundamental prediction errors arising from poor base model performance. If a baseline model
+      consistently mispredicts pupil location due to sensor misalignment, incorrect calibration, or
+      biased training data, our method may smooth those errors rather than eliminate them. Therefore,
+      the method is best viewed as an enhancement layer for models that already offer reasonable
+      accuracy, rather than as a full corrective mechanism.
+Acknowledgments
+This work was supported by both the Ministry of Education (MOE) Academic Research Fund (AcRF)
+Tier 1 grant (Grant ID: 22-SIS-SMU-044), and by Singapore Management University’s Lee Kong Chian
+Professorship Award. Any opinions, findings and conclusions or recommendations expressed in this
+material are those of the author(s).
+
+
+Declaration on Generative AI
+During the preparation of this work, the author(s) used ChatGPT in order to: Grammar and spelling
+check. After using this tool, the author(s) reviewed and edited the content as needed and take(s) full
+responsibility for the publication’s content.
+
+
+References
+ [1] P. Ekman, Emotions revealed, Bmj 328 (2004).
+ [2] W.-J. Yan, X. Li, S.-J. Wang, G. Zhao, Y.-J. Liu, Y.-H. Chen, X. Fu, Casme ii: An improved spontaneous
+     micro-expression database and the baseline evaluation, PloS one 9 (2014) e86041.
+ [3] P. Ekman, Telling lies: Clues to deceit in the marketplace, politics, and marriage (revised edition),
+     WW Norton & Company, 2009.
+ [4] K. Wezowski, I. S. Penton-Voak, An open label pilot study of micro expression recognition training
+     as an intervention for low mood, Scientific Reports 15 (2025) 1–12.
+ [5] C. Wang, M. Peng, T. Bi, T. Chen, Micro-attention for micro-expression recognition, Neurocom-
+     puting 410 (2020) 354–362.
+ [6] M. Alipour, É. Céret, S. Dupuy-Chessa, A framework for user interface adaptation to emotions and
+     their temporal aspects, Proceedings of the ACM on Human-Computer Interaction 7 (2023) 1–25.
+ [7] R. Bixler, S. D’Mello, Automatic gaze-based detection of mind wandering with metacognitive
+     awareness, in: User Modeling, Adaptation and Personalization: 23rd International Conference,
+     UMAP 2015, Dublin, Ireland, June 29–July 3, 2015. Proceedings 23, Springer, 2015, pp. 31–43.
+ [8] M. K. Eckstein, B. Guerra-Carrillo, A. T. M. Singley, S. A. Bunge, Beyond eye gaze: What else
+     can eyetracking reveal about cognition and cognitive development?, Developmental cognitive
+     neuroscience 25 (2017) 69–91.
+ [9] P. Prasse, D. R. Reich, S. Makowski, T. Scheffer, L. A. Jäger, Improving cognitive-state analysis
+     from eye gaze with synthetic eye-movement data, Computers & Graphics 119 (2024) 103901.
+[10] Q. Chen, C. Gao, M. Liu, D. Perrone, et al., Event-Based Eye Tracking. 2025 event-based vi-
+     sion workshop, in: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition Workshops, 2025.
+[11] Q. Chen, Z. Wang, S.-C. Liu, C. Gao, 3ET: efficient event-based eye tracking using a change-based
+     convlstm network, in: 2023 IEEE Biomedical Circuits and Systems Conference (BioCAS), IEEE,
+     2023, pp. 1–5.
+[12] N. Bandara, T. Kandappu, A. Sen, I. Gokarn, A. Misra, EyeGraph: modularity-aware spatio temporal
+     graph clustering for continuous event-based eye tracking, Advances in Neural Information
+     Processing Systems 37 (2024) 120366–120380.
+[13] Y. R. Pei, S. Brüers, S. Crouzet, D. McLelland, O. Coenen, A lightweight spatiotemporal network for
+     online eye tracking with event camera, in: Proceedings of the IEEE/CVF Conference on Computer
+     Vision and Pattern Recognition, 2024, pp. 5780–5788.
+[14] J. W. Grootjen, H. Weingärtner, S. Mayer, Highlighting the challenges of blinks in eye tracking
+     for interactive systems, in: Proceedings of the 2023 Symposium on Eye Tracking Research and
+     Applications, 2023, pp. 1–7.
+[15] P. D. Allopenna, J. S. Magnuson, M. K. Tanenhaus, Tracking the time course of spoken word
+       recognition using eye movements: Evidence for continuous mapping models, Journal of memory
+       and language 38 (1998) 419–439.
+[16]   C. Guo, J. Liang, G. Zhan, Z. Liu, M. Pietikäinen, L. Liu, Extended local binary patterns for efficient
+       and robust spontaneous facial micro-expression recognition, IEEE Access 7 (2019) 174517–174530.
+[17]   M. Verburg, V. Menkovski, Micro-expression detection in long videos using optical flow and
+       recurrent neural networks, in: 2019 14th IEEE International conference on automatic face &
+       gesture recognition (FG 2019), IEEE, 2019, pp. 1–6.
+[18]   S.-T. Liong, J. See, R. C.-W. Phan, A. C. Le Ngo, Y.-H. Oh, K. Wong, Subtle expression recognition
+       using optical strain weighted features, in: Computer Vision-ACCV 2014 Workshops: Singapore,
+       Singapore, November 1-2, 2014, Revised Selected Papers, Part II 12, Springer, 2015, pp. 644–657.
+[19]   Z. Xia, X. Hong, X. Gao, X. Feng, G. Zhao, Spatiotemporal recurrent convolutional networks for
+       recognizing spontaneous micro-expressions, IEEE Transactions on Multimedia 22 (2019) 626–640.
+[20]   M. Bai, R. Goecke, Investigating lstm for micro-expression recognition, in: Companion Publication
+       of the 2020 International Conference on Multimodal Interaction, 2020, pp. 7–11.
+[21]   Y. Wang, S. Zheng, X. Sun, D. Guo, J. Lang, Micro-expression recognition with attention mechanism
+       and region enhancement, Multimedia Systems 29 (2023) 3095–3103.
+[22]   W.-J. Yan, Q. Wu, Y.-J. Liu, S.-J. Wang, X. Fu, Casme database: A dataset of spontaneous micro-
+       expressions collected from neutralized faces, in: 2013 10th IEEE international conference and
+       workshops on automatic face and gesture recognition (FG), IEEE, 2013, pp. 1–7.
+[23]   X. Li, T. Pfister, X. Huang, G. Zhao, M. Pietikäinen, A spontaneous micro-expression database:
+       Inducement, collection and baseline, in: 2013 10th IEEE International Conference and Workshops
+       on Automatic face and gesture recognition (fg), IEEE, 2013, pp. 1–6.
+[24]   A. K. Davison, C. Lansley, N. Costen, K. Tan, M. H. Yap, Samm: A spontaneous micro-facial
+       movement dataset, IEEE transactions on affective computing 9 (2016) 116–129.
+[25]   E. H. Hess, J. M. Polt, Pupil size as related to interest value of visual stimuli, Science 132 (1960)
+       349–350.
+[26]   T. Partala, V. Surakka, Pupil size variation as an indication of affective processing, International
+       journal of human-computer studies 59 (2003) 185–198.
+[27]   G. Gallego, T. Delbrück, G. Orchard, C. Bartolozzi, B. Taba, A. Censi, S. Leutenegger, A. J. Davison,
+       J. Conradt, K. Daniilidis, et al., Event-based vision: A survey, IEEE transactions on pattern analysis
+       and machine intelligence 44 (2020) 154–180.
+[28]   A. N. Angelopoulos, J. N. Martel, A. P. Kohli, J. Conradt, G. Wetzstein, Event-based near-eye gaze
+       tracking beyond 10,000 Hz, IEEE Transactions on Visualization and Computer Graphics 27 (2021)
+       2577–2586.
+[29]   A. Sen, N. S. Bandara, I. Gokarn, T. Kandappu, A. Misra, EyeTrAES: fine-grained, low-latency eye
+       tracking via adaptive event slicing, Proceedings of the ACM on Interactive, Mobile, Wearable and
+       Ubiquitous Technologies 8 (2024) 1–32.
+[30]   Z. Wang, C. Gao, Z. Wu, M. V. Conde, R. Timofte, S.-C. Liu, Q. Chen, Z.-J. Zha, W. Zhai, H. Han,
+       et al., Event-based eye tracking. AIS 2024 challenge survey, in: Proceedings of the IEEE/CVF
+       Conference on Computer Vision and Pattern Recognition, 2024, pp. 5810–5825.
+[31]   P. Majaranta, A. Bulling, Eye tracking and eye-based human–computer interaction, in: Advances
+       in physiological computing, Springer, 2014, pp. 39–65.
+[32]   S. Balasubramanian, A. Melendez-Calderon, A. Roby-Brami, E. Burdet, On the analysis of movement
+       smoothness, Journal of neuroengineering and rehabilitation 12 (2015) 1–11.
+[33]   D. P. Kingma, M. Welling, Auto-encoding variational bayes, 2022. URL: https://arxiv.org/abs/1312.
+       6114. arXiv:1312.6114.
+[34]   Z. Wang, Z. Wan, H. Han, B. Liao, Y. Wu, W. Zhai, Y. Cao, Z.-J. Zha, Mambapupil: Bidirectional
+       selective recurrent model for event-based eye tracking, in: Proceedings of the IEEE/CVF Conference
+       on Computer Vision and Pattern Recognition, 2024, pp. 5762–5770.
+[35]   B. Zhang, Y. Gao, J. Li, H. K.-H. So, Co-designing a sub-millisecond latency event-based eye
+       tracking system with submanifold sparse cnn, in: Proceedings of the IEEE/CVF Conference on
+       Computer Vision and Pattern Recognition, 2024, pp. 5771–5779.
+

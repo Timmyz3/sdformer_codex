@@ -1,6 +1,6 @@
 # 00 — Read this first (Codex / human)
 
-Date: 2026-09-05. Pack: Grok 4.6 under canonical `/home/zhumd/work/ideafromai/`.
+Date: 2026-09-05. Pack: Grok 4.6 under canonical `/home/zhumd/work/sdformer_codex/ideafromai/`.
 
 ## One-line verdict
 
@@ -34,7 +34,7 @@ Signed `load_source_sign` is a downstream polarity/correction protocol, **not** 
 
 **Resolution for Codex:** these do not cancel. If the user wants **novelty of mechanism**, build the Motion-XOR island (object = attention leaf, not whole-net FPS). If the user wants **system cycle speedup ≥1.20× on frozen ep34**, first remeasure attention/FC/conv share on ep34; do not spend a month on an island that cannot move the envelope.
 
-## Conflict with Grok Bot folder `/home/zhumd/work/ideafromai/`
+## Conflict with Grok Bot folder `/home/zhumd/work/sdformer_codex/ideafromai/`
 
 That pack (OP-STW, HBG-RP, int8 ATLIF payload, pyramid residual, occlusion gate) assumes **real-valued ATLIF amplitudes not absorbed into W**. Frozen ep34 capture is **binary**. Do not implement HBG-RP as if it were the deployed contract. Canonical NeurIPS’25 AT-LIF is `{0, θ}`; inference threshold is checkpoint-static (no online homeostasis).
 

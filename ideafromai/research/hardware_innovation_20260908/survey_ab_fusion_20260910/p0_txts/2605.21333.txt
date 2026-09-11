@@ -1,0 +1,1313 @@
+                                                     SymbolicLight V1: Spike-Gated Dual-Path
+                                                  Language Modeling at High Encoder Spike Sparsity
+                                                                                         Ting Liu
+                                                                                  SymbolicLight Research
+                                                                                 Foshan, Guangdong, China
+                                                                              research@symboliclight.com
+arXiv:2605.21333v3 [cs.CL] 7 Sep 2026
+
+
+
+
+                                                                                          September 2026
+
+
+                                         • Public code repository: https://github.com/SymbolicLight-AGI/SymbolicLight-V1.
+                                         • Model artifacts: https://huggingface.co/SymbolicLight-AGI/SymbolicLight-V1.
+
+                                                                                               Abstract
+                                                  Natively trained spiking language models must preserve information across time while operating
+                                              through sparse binary activations, a combination that has produced a persistent quality gap relative to dense
+                                              Transformers. We present SymbolicLight V1, a spike-gated dual-path language model that couples binary
+                                              Leaky Integrate-and-Fire (LIF) dynamics with a continuous residual stream. Its Dual-Path SparseTCAM
+                                              mixer combines a first-order exponential-decay state with windowed local attention on the continuous
+                                              residual stream, followed by a context-conditioned decoding head.
+                                                  We train four 194M-parameter models from scratch on a 3B-token, 10-domain Chinese–English
+                                              corpus. On a fixed token-weighted evaluation set the runs reach perplexity (PPL) 8.88–8.93 (mean 8.904,
+                                              sample standard deviation 0.019). Separation of this set from the training streams has not been verified.
+                                              Training-time encoder probes have a mean zero-spike fraction of 89.96%; this is not a whole-model
+                                              sparsity measure. Code tokens are 43.7% of that set; the unweighted mean of the ten domain PPLs is
+                                              29.38. Under the same corpus, tokenizer, token budget, and hardware, the token-weighted mean is 7.7%
+                                              above GPT-2 201M (PPL 8.27). Across five zero-shot benchmarks the two 200M-scale models show no
+                                              clear accuracy separation. Under sampling with temperature 0.7 and top-𝑘 50, SymbolicLight produces
+                                              lower 4-gram repetition; an entropy-modulated rule reverses that ranking. On an RTX 2080 Ti, measured
+                                              generation throughput is 22.8 versus 91.5 token/s; post-generation power readings give rough energy
+                                              estimates of 2,848 versus 905 mJ/token, without power integration over generation.
+
+                                        Keywords: Spiking neural networks; Language modeling; Activation sparsity; Neuromorphic computing;
+                                        Surrogate gradient; Dual-path architecture; Scale-up evidence
+
+
+                                        1     Introduction
+                                        1.1   The Quality Gap of Native Spiking Language Models
+                                        Natively trained spiking neural networks (SNNs), trained from random initialization under surrogate
+                                        gradients (Neftci et al., 2019), have historically struggled to match dense Transformer (Vaswani et al., 2017)
+                                        quality on autoregressive language modeling. The gap is not only that activations are binary: the model must
+                                        carry information across time through sparse events, and the failure becomes clearer once pre-training leaves
+                                        narrow synthetic text for multi-domain corpora with heterogeneous token distributions. Conversion-based
+
+
+                                                                                                   1
+and quantization-based spiking LMs build on pretrained dense networks (Xu et al., 2026; Xing et al., 2025);
+native models such as SpikeGPT (Zhu et al., 2024) combine RWKV-style recurrence, continuous internal
+states, and spiking activations. Sub-quadratic dense architectures such as Mamba (Gu and Dao, 2024) and
+RWKV (Peng et al., 2023) reduce mixing cost without binarizing activations. Biological circuits combine
+sparse spikes with continuous internal dynamics (Maass, 1997; Roy et al., 2019), which motivates a hybrid
+design but does not by itself close the quality gap.
+
+1.2   Key Insight: Spike-Gated Dual-Path Computation
+SymbolicLight V1 adopts a hybrid view of spiking computation. Binary LIF spikes supply sparse-valued
+inputs to selected projections, while a continuous residual stream carries representational content. The
+current implementation uses dense kernels; zero spike values do not themselves skip arithmetic or memory
+accesses. This design is consistent with the fact that biological circuits combine discrete action potentials
+with continuous dendritic integration (London and Häusser, 2005; Gerstner and Kistler, 2002).
+    The resulting architecture uses spikes as event gates rather than forcing every computation to be one-bit.
+Dual-Path SparseTCAM combines a first-order exponential-decay state, whose learned half-life is about 8–13
+tokens, with windowed local attention on the continuous residual stream, retaining sparse encoder outputs
+while using continuous-valued sequence mixing.
+
+1.3   Contributions
+We report three contributions:
+
+1. A SymbolicLight V1 spike-gated dual-path language model. The architecture combines LIF spike
+   dynamics, Dual-Path SparseTCAM, a context-conditioned MLP head, and a model-specific bilingual
+   tokenizer. Binary spikes feed the decay-path projection and the FFN down-projection; the FFN up-
+   projection and local softmax attention consume continuous inputs.
+2. Native pre-training with sparse encoder outputs. Four 194M-parameter runs trained from scratch on
+   a 3B-token, 10-domain bilingual mixture reach token-weighted evaluation PPL 8.88–8.93 (mean 8.904,
+   sample standard deviation 0.019) with mean sampled encoder zero-spike fraction 89.96%. Code tokens
+   are 43.7% of the evaluation set; the unweighted mean of the ten domain PPLs is 29.38.
+3. Scale-up and public inference artifacts. A 0.8B-parameter run trained for 48.8B tokens shows that the
+   same stack remains trainable at sub-billion scale and yields a loadable checkpoint. We release checkpoints,
+   tokenizer assets, parameter-compatible model definitions, and minimal inference programs for loading and
+   generation.
+
+
+2     Related Work
+Conversion-Based SNN Language Models. NSLLM (Xu et al., 2026) combines spiking representa-
+tions with quantization, sparsification, and algorithm–hardware co-design, including FPGA evaluation.
+SpikeLLM (Xing et al., 2025) applies saliency-based spiking to pretrained large language models. Their use
+of pretrained dense models differs from the random-initialization training studied here; NSLLM also directly
+investigates hardware efficiency.
+
+Natively-Trained SNN Language Models. SpikeGPT (Zhu et al., 2024) combines RWKV-style recurrence
+with continuous internal states and spiking activations, including a 216M-parameter model. An earlier
+SymbolicLight prototype (Liu, 2026) introduced spike-gated associative lookup and LIF spike encoding; a
+
+                                                      2
+follow-up preprint (Liu et al., 2026) scaled native pre-training to a multi-domain mixture. These preprints
+report high activation sparsity together with quality gaps against dense baselines; their comparisons do
+not isolate binarization as the cause. SymbolicLight V1, as presented here, unifies these design lessons in
+a spike-gated dual-path architecture that incorporates continuous local attention and a context MLP head
+while preserving spike-conditioned sparsity on the decay and FFN paths. SpikeGPT evaluates on Enwik8,
+WikiText-2, and WikiText-103, with character-level and BPE tokenization in different experiments and
+OpenWebText2 pre-training for the 216M model. These corpora, tokenizers, and the fine-tuned WikiText
+evaluation protocol differ from ours, so their PPL values are not directly comparable. Architecturally,
+SymbolicLight V1 differs from SpikeGPT in three ways: (i) windowed local attention on continuous Q/K/V
+replaces the RWKV-style recurrent mixer, (ii) a learnable gate fuses that attention path with a first-order decay
+state, and (iii) a context MLP on the residual stream supplements the vocabulary projection.
+
+Linear Attention and Linear-Time Sequence Models. Linear attention variants such as RetNet (Sun et al.,
+2023) and GLA (Yang et al., 2024) replace softmax attention with recurrent state updates; at fixed model
+width, recurrence over 𝑆 tokens takes 𝑂 (𝑆) work and retains state independent of 𝑆. Linear-time sequence
+models such as Mamba (Gu and Dao, 2024) and RWKV (Peng et al., 2023) achieve competitive quality
+with linear complexity. Our exponential-decay aggregation path shares mathematical structure with these
+approaches (a first-order linear recurrence), but differs in using binary spike gates to control information
+flow, producing sparse-valued inputs to the decay projection. The measured 89.96% zero-spike fraction refers
+specifically to sampled encoder outputs.
+
+Hybrid Sparse Attention. Longformer (Beltagy et al., 2020) and BigBird (Zaheer et al., 2020) combine
+sliding-window local attention with global tokens. Our Dual-Path SparseTCAM combines sliding-window
+local attention on the continuous residual stream with per-element sparse representations on the decay path.
+The position-level attention mask almost never excludes a token (Section 3.3.2); the local window restricts
+which weights may be nonzero, but the released implementation still computes a dense attention matrix.
+
+Extreme Quantization. BitNet b1.58 (Ma et al., 2024) restricts weights to ternary states {−1, 0, 1} while
+using 8-bit activations, rather than binarizing the residual stream. Our hybrid model instead uses binary {0, 1}
+activations at selected interfaces and a recurrent membrane state in the encoder; its residual stream remains
+continuous. This differs from BitNet's joint weight and activation quantization. Notably, our parameter budget
+analysis (Table 3) shows that the additional model-specific components (decay path, context MLP, fusion
+gate) consume only ∼12% of total parameters; the architectural novelty lies in how these components interact
+with standard building blocks, not in parameter count.
+
+Energy-Efficient Transformers. Knowledge distillation transfers predictive behavior to a smaller
+model (Hinton et al., 2015), while the lottery-ticket study uses iterative pruning and retraining to identify
+sparse trainable subnetworks (Frankle and Carbin, 2019). SNNs provide a complementary, architecture-level
+approach: sparsity emerges naturally from spiking dynamics during training rather than being imposed during
+compression. Encoder probes average 89.96% zero spikes without explicit sparsity regularization; individual
+logged probes can be lower (Section 5.5).
+
+Biological Neural Computation. Cortical neurons communicate through spike-gated continuous dynamics:
+binary action potentials gate synaptic transmission, while graded potentials in dendrites perform analog
+integration (London and Häusser, 2005; Gerstner and Kistler, 2002). Our spike-gated dual-path architecture
+is motivated by an analogy to this biological organization: binary LIF spikes gate computation flow, while a
+continuous residual stream preserves representational content.
+
+                                                       3
+Auxiliary Losses and Deep Supervision. CALM (Schuster et al., 2022) and DeeBERT (Xin et al., 2020)
+add classifiers at intermediate layers for adaptive inference. Our AuxCE applies exponentially-decayed
+auxiliary cross-entropy at every block during training as deep supervision.
+
+
+3      Model Architecture
+3.1     Architectural Positioning
+We characterize SymbolicLight V1 as a spike-gated dual-path architecture (Figure 1). Binary spikes feed
+the decay-path projection and the FFN down-projection; the FFN up-projection and local softmax attention
+consume the continuous residual stream c. Every ten optimizer steps, the training logger probes the encoder
+on the first 32 tokens of one sample. Across four runs, the 2,288 recorded probes have a mean zero-spike
+fraction of 89.96%. The denominator is the 32 × 768 encoder-output elements in each probe, rather than all
+model activations or all tokens in the batch. These probes do not establish FFN intermediate sparsity or the
+number of executed operations. The reported token-level all-zero rate is < 10−6 , so the position-level mask is
+effectively inactive in the measured setting. It does not provide token-skipping evidence.
+    The architecture retains continuous-valued components for training stability and representational fidelity:
+LayerNorm, a GELU-activated context MLP, and softmax in the local attention computation. The continuous
+residual path c ∈ R 𝐵×𝑆×𝐷 serves as a gradient conduit.
+    Earlier SymbolicLight prototypes (Liu, 2026; Liu et al., 2026) reported high activation sparsity alongside
+quality gaps against dense baselines, without isolating the contribution of activation binarization. This
+unified V1 design tests whether a continuous residual stream and windowed local attention reduce that quality
+gap while keeping spike-gated sparsity on the decay and FFN paths. The resulting architecture is a hybrid
+spike-gated dual-path model, not a pure SNN. Table 1 lists design analogies between architectural components
+and biological processes; a more detailed discussion of the biological grounding appears in Section 6.
+
+Table 1: Design analogies of SymbolicLight components; these are not validations of biological mechanisms
+or hardware efficiency.
+        Architecture Component             Biological Analogy
+        LIF spike output 𝑠 ∈ {0, 1} Axonal action potential (binary, all-or-none)
+        Continuous residual path c  Dendritic integration (graded potentials)
+        Exponential decay aggrega- Passive leaky integration (learned, activity-independent decay per head)
+        tion
+
+      The overall data flow is:
+                                  SpikeEncoder       Blocks×𝐿            Context MLP head
+                             x −−−−−−−−−−→ (s, c) −−−−−−−→ (s′ , c′ ) −−−−−−−−−−−−−→ y,                       (1)
+where s ∈ {0, 1} 𝐵×𝑆×𝐷 are binary spikes and c ∈ R 𝐵×𝑆×𝐷 are continuous representations; 𝐵 is batch size, 𝑆
+sequence length, 𝐷 hidden width, and 𝐿 the number of blocks. In the equations below, vectors are columns
+and batch and block indices are omitted unless needed.
+
+3.2     SpikeEncoder with Chunked Sequential Processing
+Token embeddings are layer-normalized to give the continuous input x𝑡 = c𝑡(0) . The LIF encoder separates the
+pre-reset potential u𝑡 from the carried post-reset state v𝑡 :
+                                       u𝑡 = clip(𝛽v𝑡 −1 + x𝑡 , −3, 3),                                        (2)
+                                        s𝑡 = Θ(u𝑡 − 𝜃),         v𝑡 = u𝑡 ⊙ (1 − s𝑡 ).                          (3)
+
+
+                                                            4
+                            Token embedding + LayerNorm + stateful LIF encoder
+
+                                      s                                c
+
+                           Binary-input projection           Continuous Q/K/V
+                          + exponential-decay state        + masked local softmax
+
+
+                                  𝑔 Attn + (1 − 𝑔) Decay; output projection
+
+
+                                  Add continuous residual + LayerNorm: u            c residual
+
+
+                              Continuous up-projection → threshold → binary b
+                                  → down-projection; add u + LayerNorm
+
+                                  Next block receives c′ and s′ = Θ(c′ − 𝜃)
+                              One repeated block
+
+                             After 12 blocks: continuous c′ → context MLP head
+
+
+Figure 1: Signal flow of the 194M hybrid model. Binary spikes feed only selected projections. The continuous
+stream supplies attention, the FFN up-projection, residual additions, and the decoding head, and passes
+between blocks. FFN thresholds are stateless; the encoder LIF retains membrane state. Dense kernels still
+execute the major projections.
+
+
+Here 𝛽 = 0.95 and 𝜃 = 1 are fixed, Θ(𝑎) = 1[𝑎 ≥ 0] acts elementwise, and ⊙ denotes elementwise
+multiplication. A fresh independent sequence starts with v−1 = 0. Backpropagation uses the surrogate in
+Section 3.4. The encoder returns both the binary spikes and continuous normalized embeddings. The fixed
+encoder leak is distinct from the learned per-head decay factors below.
+
+Chunked Sequential Processing. The length-𝑆 sequence is divided into chunks of size 𝐶=64. Within each
+chunk, the LIF update is computed sequentially; across chunks, the terminal membrane potential is forwarded
+as the initial state of the next. Chunking structures state handoff and bounds the size of intermediate spike
+lists, but the implementation still performs one sequential Python-level LIF update for each of the 𝑆 time steps.
+
+RoPE Decoupling. Position encoding is removed from the SpikeEncoder. Position information is injected
+downstream via Rotary Position Encoding (RoPE) (Su et al., 2024) applied to Q/K projections inside
+SparseLocalAttention (Section 3.3), keeping the residual stream free of accumulated rotational artifacts.
+
+3.3   Dual-Path SparseTCAM
+We call the sequence mixer SparseTCAM, a name inspired by ternary content-addressable memory
+(TCAM) (Pagiamtzis and Sheikholeslami, 2006); it is implemented with learned projections, not a physical
+associative-memory lookup. It combines two pathways: a first-order decay state driven by spike-masked
+projections, and windowed local attention on the continuous residual stream.
+
+
+
+
+                                                       5
+3.3.1   Path 1: Exponential Decay State (First-Order Recurrence)
+Each of 𝐻=12 heads maintains a hidden state hℎ updated via:
+
+                                      hℎ(𝑡 ) = 𝛼ℎ · hℎ(𝑡 −1) + (1 − 𝛼ℎ ) · zℎ(𝑡 ) ,                            (4)
+
+Here 𝛼ℎ = 𝜎(𝛾 ℎ ), with 𝜎 the logistic sigmoid and 𝛾 ℎ learned per head. The input is zℎ(𝑡 ) = (𝑊dec s𝑡 ) ℎ ∈ R𝑑𝑘 ,
+where the subscript selects a head of width 𝑑 𝑘 = 𝐷/𝐻. A fresh sequence starts with hℎ(−1) = 0; concatenating
+the head states gives Decay𝑡 ∈ R𝐷 . Excluding the input projection, the state update admits 𝑂 (𝑆𝐷) work
+for 𝑆 tokens and 𝑂 (𝐷) streaming state. Incremental decoding applies this update directly. The released
+full-sequence path instead uses a length-𝑆 grouped convolution; a linear-work scan is not implemented there.
+Learned 𝛼 values correspond to half-lives of about 8–13 tokens (Section B.1); after 256 steps the residual
+weight is negligible, so the decay path does not implement long-range memory at the trained operating point.
+
+3.3.2   Path 2: Windowed Local Attention
+For head ℎ, the continuous stream supplies
+
+                                   qℎ,𝑡 = 𝑅𝑡 𝑊𝑄,ℎ c𝑡 ,         kℎ,𝑡 = 𝑅𝑡 𝑊𝐾 ,ℎ c𝑡 ,                            (5)
+                                   vℎ,𝑡 = 𝑊𝑉 ,ℎ c𝑡 ,                                                           (6)
+
+where 𝑊𝑄,ℎ , 𝑊𝐾 ,ℎ , 𝑊𝑉 ,ℎ ∈ R𝑑𝑘 ×𝐷 and 𝑅𝑡 is the head-wise RoPE rotation. Positions are zero-indexed. Define
+the active-position indicator and allowed keys by
+
+                          𝑚 𝑡 = 1[∥s𝑡 ∥ 1 > 0],                                                                (7)
+                          K𝑡 = { 𝑗 : 0 ≤ 𝑗 ≤ 𝑡, ((𝑡 − 𝑗 ≤ 𝑤) ∨ ( 𝑗 < 𝑁𝑔 )), 𝑚 𝑗 = 1}.                          (8)
+
+Causality applies to both the local window and the 𝑁𝑔 = 4 initial global anchors. The window parameter is
+the maximum lag: 𝑤 = 256 permits the current token and up to 256 previous tokens before union with the
+anchors. The 0.8B model uses 𝑤 = 512, covering its full training context. The attention output is
+                                         Í               ⊤
+                                                                    √
+                                    
+                                          𝑗 ∈ K𝑡 exp(qℎ,𝑡 k ℎ, 𝑗 / 𝑑 𝑘 )vℎ, 𝑗
+                                    
+                                    𝑚𝑡 Í
+                                                                      √       , K𝑡 ≠ ∅,
+                         Attnℎ,𝑡 =             𝑗 ∈ K𝑡
+                                                      exp(q⊤ℎ,𝑡 kℎ, 𝑗 / 𝑑 𝑘 )                        (9)
+                                    
+                                    
+                                     0,
+                                                                                K𝑡 = ∅.
+
+Concatenating heads gives Attn𝑡 ∈ R𝐷 . Thus inactive keys are excluded, inactive queries have zero output,
+and an empty key set produces zero rather than an undefined softmax.
+     The reported token-level all-zero rate is < 10−6 , so the position mask rarely excludes keys in the reported
+setting. An implementation that visits only the permitted keys could use 𝑂 (𝑆(𝑤 + 𝑁𝑔 )𝑑 𝑘 ) attention work per
+head. The released code instead forms all 𝑆 × 𝑆 scores, masks them, and performs a dense weighted sum:
+full-sequence attention therefore requires 𝑂 (𝑆 2 𝑑 𝑘 ) arithmetic per head and 𝑂 (𝑆 2 ) score storage. Cached
+decoding appends all historical K/V entries without window eviction; its per-token attention work and cache
+storage grow with the accumulated sequence length. Spike-driven sparsity enters through the decay-path
+projection on s and through the stateless threshold at block boundaries, not through this mask. The 89.96%
+zero-spike fraction is measured by encoder probes (Section 5.5).
+
+
+
+
+                                                           6
+3.3.3    Gated Fusion
+The two paths are fused via a learnable scalar gate 𝑔 = 𝜎(𝑤 𝑔 ), defined separately in each block and initialized
+at 𝑤 𝑔 =0 for equal mixing coefficients:
+
+                                         o𝑡 = 𝑔 · Attn𝑡 + (1 − 𝑔) · Decay𝑡 .                                (10)
+
+After fusion, a learned output projection, residual addition, and layer normalization update the continuous
+stream. The feed-forward network (FFN) then applies
+
+                               u𝑡 = LN1 (c𝑡 + 𝑊𝑂 o𝑡 ) ,                                                     (11)
+                               b𝑡 = Θ(𝑊up u𝑡 − 𝜃),                                                          (12)
+                                c′𝑡   = LN2 (u𝑡 + 𝑊down b𝑡 ) ,          s′𝑡   =   Θ(c′𝑡   − 𝜃).             (13)
+
+The two layer normalizations have distinct learned parameters, 𝑊up ∈ R𝐷ff ×𝐷 , 𝑊down ∈ R𝐷×𝐷ff , and 𝜃 = 1.
+Dropout is omitted from these inference equations. The FFN threshold is stateless, whereas the encoder LIF
+has membrane state. Both s′𝑡 and c′𝑡 pass to the next block. Only the down-projection consumes the binary
+FFN intermediate; the up-projection consumes u𝑡 .
+
+3.4     The ATan Surrogate Gradient
+The Heaviside step function 𝑠 = Θ(𝑢 − 𝜃) is non-differentiable. A scaled Sigmoid surrogate with 𝛼=10 has
+peak derivative 𝛼4 = 2.5, allowing worst-case local amplification above one in each layer. The implemented
+backward rule uses an ATan-shaped surrogate:
+                             𝜕𝑠                                           1
+                                ←− e
+                                   𝑔 (𝑢 − 𝜃),               𝑔 (𝑎) =              ,         𝜅 = 2.           (14)
+                                                                      1 + (𝜅𝑎) 2
+                                                            e
+                             𝜕𝑢
+This assignment is not the analytic derivative of the hard step. Its peak magnitude is 1, which bounds this
+local surrogate derivative but does not bound the full network’s gradient norm.
+
+3.5     Context MLP Head
+The decoding head adds a bottleneck MLP on the continuous residual to the vocabulary projection:
+
+                                           y𝑡 = 𝑊vocab c𝑡( 𝐿) + 0.1 𝑓 𝜙 (c𝑡( 𝐿) ),                          (15)
+
+where 𝑓 𝜙 (c) = 𝑊2 GELU(𝑊1 c) has hidden dimension 𝐷/4 = 192 and output dimension 𝑉=48,000 (∼9.4M
+parameters: 𝑊1 ∈ R192×768 , 𝑊2 ∈ R48000×192 ). Both MLP projections are bias-free. The head uses the last
+block's already normalized output c𝑡( 𝐿) , with no additional final normalization. Applying softmax to y𝑡 gives
+the next-token distribution. The factor 0.1 rescales the MLP logits; it does not bound their contribution
+relative to the linear branch.
+
+3.6     Model-Specific Bilingual Tokenizer
+We replace the GPT-2 byte-level BPE tokenizer (50,257 entries, designed primarily for English) with a custom
+48,000-token bilingual tokenizer trained via SentencePiece BPE (Kudo and Richardson, 2018) on a balanced
+Chinese–English corpus, with byte fallback for characters outside the learned pieces and extended subword
+merges (max piece length 24). This 48K tokenizer is used for every 194M-scale model in this paper, including
+both GPT-2 baselines. The 0.8B run uses a separate tokenizer of the same family (55,296 active entries in a
+57,344-entry structural vocabulary); the two vocabularies are not interchangeable. The extended merge length
+is motivated by sequential LIF computation: longer pieces can shorten 𝑆. There is no tokenizer ablation.
+
+                                                             7
+3.7   Auxiliary Deep Supervision CE Training (AuxCE)
+Each SymbolicLightBlock can produce exit logits via the shared decoding head. During training, cross-entropy
+losses at all block outputs provide deep supervision under our weighted objective:
+                                                        𝐿−1
+                                                      𝜆 ∑︁ ( 𝐿−1−𝑖)    (𝑖)
+                                   Ltotal = Lmain +         𝜌       · Lexit ,                             (16)
+                                                      𝐿 𝑖=0
+
+where 𝜆=0.3 is the auxiliary weight and 𝜌=0.5 exponentially down-weights shallower layers. The implemen-
+tation divides the weighted exit-loss sum by 𝐿 before applying 𝜆; this normalization is included above. The
+                                                                          ( 𝐿−1)
+sum includes the final block: with the same shared head and targets, Lexit       = Lmain . The logged training
+loss is the main next-token cross-entropy, with the auxiliary loss logged separately.
+
+
+4     Training and Data Protocol
+4.1   Model Configurations
+
+
+Table 2: Primary model configurations. All 194M-scale models share the same SL-BPE 48K tokenizer. The
+0.8B scale-up is reported separately in Section 5.6 because it uses a different tokenizer and training mixture.
+                Model                 𝐷      Layers    Heads     𝑑𝑘    𝐷 ff     Vocab    Params
+                SymbolicLight V1     768       12          12    64   4,096     48,000    194M
+                GPT-2 124M           768       12          12    64   3,072     48,000   122.7M
+                GPT-2 201M          1,024      12          16    64   4,096     48,000    201M
+
+
+The GPT-2 201M baseline is a parameter-matched reimplementation of the GPT-2 architecture (Radford et al.,
+2019) (𝑑=1024, 𝐿=12, 𝐻=16) and serves as the primary comparison throughout this paper. Both GPT-2
+baselines use the same SL-BPE 48K tokenizer and training corpus. The conventional label GPT-2 124M
+is retained, although its training log reports 122.7M parameters with this vocabulary. The 124M variant
+matches the hybrid model’s hidden dimension and depth, but the architectures allocate parameters differently,
+including the hybrid model’s separate input embedding and output projection. The encoder leak and firing
+threshold are fixed constants, not learned LIF parameters.
+     A separate GPT-2 configuration (𝑑=1008, 𝐿=12, 𝐻=16, 195.9M parameters) trained for 3B tokens on a
+rented 8×RTX 5090 machine reached evaluation PPL 6.97; only a consolidated result record survives, so it is
+not a comparison anchor.
+
+Choice of dense baseline. GPT-2 provides a full-precision Transformer reference under the same corpus,
+tokenizer, token budget, and hardware as the 194M SNN runs. This comparison measures the quality
+difference between the complete spike-gated architecture and a conventional dense Transformer; it does
+not isolate activation binarization from the accompanying changes in sequence mixing and recurrent state.
+Comparisons with dense linear-time or linear-attention models would answer a complementary efficiency
+question and are outside the controlled experiment reported here.
+
+Parameter budget decomposition. Table 3 breaks down where the SNN’s 194M parameters reside. The
+model-specific components (decay path 7.3%, context MLP 4.8%) total ∼12% of parameters, with the majority
+allocated to standard components shared by all language models. The separate output projection (19.0%) is
+
+
+
+                                                       8
+architecturally standard but not weight-tied with the input embedding in this implementation; whether weight
+tying interacts favorably or unfavorably with sparse activations remains an open question for future work.
+
+
+Table 3: Parameter budget decomposition of the 194M SNN. Components marked with ★ are model-specific;
+‡ marks the output projection, which is architecturally standard but not weight-tied with the input embedding
+
+in this implementation.
+                           Component                         Params (M)      Share
+                           Token Embedding                           36.9    19.0%
+                           Feed-Forward Network (FFN)                75.5    38.9%
+                           Sparse Local Attention Path               21.2    10.9%
+                           Output Projection‡                        36.9    19.0%
+                           Decay Path (TCAM projections)★            14.2     7.3%
+                           Context MLP Head★                          9.4     4.8%
+                           Decay Factors + Fusion Gate★              <0.1    <0.1%
+                           LayerNorm (encoder + per-block)           <0.1    <0.1%
+                           Total                                    194.0    100%
+
+
+Batch size note. The SNN and GPT-2 use different effective batch sizes (1,024 vs. 1,536) because SNN
+training requires more memory per sample due to membrane potential state. Both models consume 3B tokens,
+but the resulting numbers of optimizer updates differ (5,722 vs. 3,814); the comparison therefore controls the
+token budget rather than the optimization trajectory.
+
+4.2   Training Protocol
+
+
+Table 4: Training hyperparameters. All models consumed approximately 3B tokens using the same nominal
+source-sampling recipe. The 124M microbatch settings are taken from its console log; the 201M log
+establishes 786,432 tokens per update but does not establish the microbatch decomposition.
+                   Hyperparameter            SNN                     GPT-2
+                   Total tokens               3B                        3B
+                   Optimizer                        AdamW (𝛽1 =0.9, 𝛽2 =0.95)
+                   Peak learning rate      3 × 10−4                  3 × 10−4
+                   LR schedule             Cosine annealing + linear warmup (2,000 steps)
+                   Weight decay               0.1                       0.1
+                   Gradient clipping          1.0                       1.0
+                   Precision                 BF16                      BF16
+                   Per-GPU batch size          16         64 (124M); unverified (201M)
+                   Gradient accumulation       16          6 (124M); unverified (201M)
+                   Effective batch size      1,024                     1,536
+                   Sequence length            512                       512
+                   GPUs                    4× A800                   4× A800
+
+
+
+
+                                                      9
+4.3   Training Data
+
+
+Table 5: Nominal document-sampling probabilities by domain. A source is selected before tokenizing a
+complete document, so these probabilities are not measured token fractions. All 194M-scale models use this
+recipe; raw text is not redistributed.
+                        Category           Domain profile        Sampling probability
+                                           Chinese-Reference              15%
+                        Chinese (40%)      Chinese-Web                    15%
+                                           Chinese-General                10%
+                                           English-Educational            10%
+                                           English-Math                   10%
+                        English (40%)
+                                           English-Reference              10%
+                                           Math-Web                       10%
+                        Code (5%)          Code                           5%
+                                           English-Narrative              5%
+                        Narrative (15%)
+                                           Chinese-Narrative              10%
+
+
+The source streams have heterogeneous redistribution terms, so raw text and shard records are not redistributed.
+The recipe selects a source for each document, then appends the entire tokenized document to the training
+buffer. Consequently, differences in document length can change the realized token mixture. The four Chinese
+domains have a combined nominal document-sampling probability of 50%, including Chinese-Narrative. All
+194M-scale comparisons use this recipe, tokenizer, and last-200 evaluation procedure.
+
+4.4   Evaluation Protocol
+All reported 194M PPL values use the last 200 documents of each of the ten local domain streams. The
+evaluation loader sorts the source files, concatenates each domain’s selected texts without inserting document
+separators, and scores non-overlapping 512-token target chunks, discarding the incomplete tail. Each chunk
+is evaluated independently; recurrent state is not carried between chunks. Token counts in Table 7 refer to
+scored targets.
+
+Training-set separation. The available training loaders read the matching source files without an explicit
+last-200 exclusion, and some training logs report exhausted sources being restarted. No verified pre-training
+split manifest or train/evaluation overlap audit is available. A prior physical split could change the overlap
+status, but it has not been established. We therefore describe these values as fixed-set evaluation PPL, not as
+verified unseen-data performance; shared evaluation text alone does not remove possible contamination bias.
+     Overall PPL is the exponential of the token-weighted mean cross-entropy,
+                                                     Í
+                                                        𝑑, 𝑗 𝑇𝑑, 𝑗 L 𝑑, 𝑗
+                                                                          
+                                         PPL = exp      Í                   .                              (17)
+                                                            𝑑, 𝑗 𝑇𝑑, 𝑗
+
+Here 𝑑 indexes domains, 𝑗 indexes scored chunks, 𝑇𝑑, 𝑗 counts target tokens, and L 𝑑, 𝑗 is their mean next-token
+cross-entropy using natural logarithms. Code accounts for 43.7% of the 2,984,960 scored tokens, while the
+four Chinese domains together account for 9.5%. Their nominal document-sampling probabilities are 5% and
+50%, respectively; these are not observed training-token fractions. The four-run token-weighted SNN mean is
+8.904, and the arithmetic mean of the ten domain PPLs is 29.38. Weighting domain cross-entropies by the
+
+
+                                                      10
+nominal probabilities in Table 5 gives PPL 22.4. This last number is a recipe-reweighted diagnostic, not a
+reconstruction of the realized training-token distribution.
+
+
+5     Experiments and Results
+5.1   Main Results
+
+
+Table 6: Token-weighted evaluation PPL on the last-200-sample shards. Four independent SNN runs (two
+with AuxCE, two without) reach PPL 8.88–8.93 on 4× A800-40GB with the SL-BPE 48K tokenizer. The
+SNN mean is 7.7% above GPT-2 201M (PPL 8.27) and 0.06 below the single GPT-2 124M run (PPL 8.96).
+Encoder zero-spike fractions are training-probe summaries; separation of the evaluation set from training is
+unverified.
+              Model                 Params    Training    Seed          Eval PPL ↓      Encoder probes
+              SNN (AuxCE)           194M      AuxCE           123           8.91            >89%
+              SNN (AuxCE)           194M      AuxCE           456           8.88            >89%
+              SNN (noAuxCE)         194M     noAuxCE           42           8.90            >89%
+              SNN (noAuxCE)         194M     noAuxCE          123           8.93            >89%
+              SNN mean ± sample std                                    8.904 ± 0.019        >89%
+              GPT-2                 122.7M    Standard        —             8.96             —
+              GPT-2                 201M      Standard        —             8.27             —
+
+
+The four SNN runs span two training objectives (AuxCE vs. noAuxCE) and three random seeds (seed 123 is
+shared across objectives). From the unrounded evaluation outputs, the token-weighted mean PPL is 8.904
+with sample standard deviation 0.019. That mean is 7.7% above the single GPT-2 201M run and 0.059 below
+the single GPT-2 124M run; each dense baseline was trained once.
+
+5.2   Per-Domain Analysis
+
+
+Table 7: Per-domain evaluation PPL with scored token counts. SNN values are four-run means; GPT-2
+baselines are single A800 runs. Overall is token-weighted. Shares use the shared 2,984,960-token shard.
+              Domain                         Tokens Share           SNN     GPT-2 124M GPT-2 201M
+              Chinese-Reference               27,648 0.9% 12.53                 10.49          9.47
+              Chinese-Web                    141,824 4.8% 101.71               109.65         95.35
+              Chinese-General                 93,184 3.1% 63.65                 67.70         59.70
+              English-Educational            232,960 7.8% 10.49                 10.91          9.66
+              English-Math                   222,720 7.5% 14.66                 15.12         13.36
+              English-Reference              211,968 7.1% 19.29                 19.58         17.69
+              Math-Web                       687,104 23.0% 14.28                14.27         13.11
+              Code                         1,303,552 43.7% 3.51                  3.46          3.30
+              English-Narrative               41,984 1.4% 9.99                  10.47          9.36
+              Chinese-Narrative               22,016 0.7% 43.69                 48.96         42.21
+              Token-weighted         2,984,960       100%           8.904      8.96           8.27
+              Unweighted domain mean        —           —           29.38      31.07          27.32
+
+
+
+
+                                                         11
+The SNN has lower PPL than GPT-2 124M in 7 of 10 domains, with the largest relative reductions on
+Chinese-Narrative, Chinese-Web, and Chinese-General. It trails on Chinese-Reference (+19.4%) and is nearly
+tied on Code and Math-Web, the two domains that together are 66.7% of evaluation tokens. The unweighted
+domain mean (29.38) and the recipe-reweighted PPL (22.4) sit well above the token-weighted headline of
+8.904 because Code (PPL 3.51) dominates token mass.
+
+5.3   AuxCE vs. noAuxCE
+
+
+       Table 8: AuxCE vs. noAuxCE comparison. Both achieve nearly identical evaluation quality.
+          Variant            Seeds     Mean Eval PPL        Steps         Optimization evidence
+          AuxCE (𝜆=0.3)     123, 456        8.897           5,722   No matched-time benefit established
+          noAuxCE            42, 123        8.912           5,722               Baseline
+          Difference                      Δ = 0.015                              (0.17%)
+
+
+AuxCE and noAuxCE achieve virtually identical evaluation quality (Δ < 0.3%). The evaluation values do
+not establish a quality difference between objectives. Training traces use different seeds and fluctuate with
+sampled data; the longer AuxCE wall-clock times in Table 19 do not establish a time-to-quality advantage.
+
+5.4   Component Ablation
+
+
+Table 9: Component ablation at 0.5B tokens, same data, tokenizer, sequence length, and optimizer. The three
+removal variants were trained with AuxCE on 4×A800; the 0.5B full-model reference used noAuxCE on
+8×RTX 5090.
+        Variant             Params     Eval PPL       Δ PPL     Modification
+        Full model (0.5B)   194M        17.72          —        (reference, 0.5B tokens)
+        Static Prior        185M        21.26       +20.0%      Context MLP → static log 𝜋
+        Decay Only          164M        25.27       +42.6%      Local attention and context MLP removed
+        No Attention        173M        38.56       +117.6%     SparseLocalAttention path removed
+        Full model (3B)     194M         8.91          —        (converged reference, 3B tokens)
+
+
+All ablation variants and the 0.5B full-model reference consume 0.5B training tokens on the same data,
+tokenizer, sequence length, learning-rate schedule, and optimizer. The three removals were trained with
+AuxCE on 4×A800; the 0.5B full-model reference used noAuxCE on 8×RTX 5090, so the Δ values share
+a token budget but not hardware or objective. “No Attention” (decay path + context MLP, PPL 38.56) is
+the largest gap versus the 0.5B full model (17.72), and it is worse than “Decay Only” (25.27), but these
+cross-configuration differences do not identify individual component effects or their interactions. The 3B
+full-model PPL 8.91 is shown for context and is not the Δ baseline. Causal attribution would require a
+full-model control with the same objective and optimization settings at 0.5B tokens; final 3B AuxCE similarity
+does not supply that control. Per-domain values are in Section A.
+
+5.5   Training Dynamics and Sparsity
+Convergence and encoder probes. Figure 2 is regenerated from the step-level records. Both curves report
+main next-token cross-entropy; AuxCE’s auxiliary loss is recorded separately. For legibility the left panel
+
+                                                       12
+groups successive logged observations into non-overlapping bins of 20 and plots each bin’s mean token count
+and mean loss, retaining the final partial bin. Raw final losses are 2.8721 (AuxCE, seed 123) and 2.3453
+(noAuxCE, seed 42). These differ from fixed-set PPL because the data and aggregation differ; the logged
+AuxCE loss is not inflated by adding the auxiliary term.
+    Every ten optimizer steps, the logger separately runs the encoder on the first 32 tokens of the first sample
+of the current microbatch. Across four runs this gives 2,288 probes. Their mean zero-spike fraction is 89.96%,
+the per-run means range from 89.94% to 90.01%, 94.7% of probes are at least 89%, and the minimum is
+77.9%. This measures sampled encoder outputs, not full-batch or whole-model activation sparsity. The right
+panel plots every recorded probe with an uncropped vertical range and a mean line; no uncertainty band is
+implied.
+                                11
+                                                                             AuxCE, seed 123                                        92
+                                10                                           No AuxCE, seed 42
+
+                                                                                                                                    90
+
+
+
+
+                                                                                                  Encoder zero-spike fraction (%)
+Main next-token cross-entropy
+
+
+
+
+                                 9
+                                                                                                                                    88
+                                 8
+                                                                                                                                    86
+                                 7
+
+                                                                                                                                    84
+                                 6
+
+                                 5                                                                                                  82
+
+
+                                 4                                                                                                  80
+
+                                                                                                                                                                      AuxCE 123      No AuxCE 123
+                                 3                                                                                                  78
+                                                                                                                                                                      AuxCE 456      Mean 89.96%
+                                                                                                                                                                      No AuxCE 42
+                                 2                                                                                                  76
+                                  0.0   0.5   1.0          1.5         2.0       2.5        3.0                                       0.0   0.5   1.0          1.5         2.0      2.5        3.0
+                                                Training tokens (billions)                                                                          Training tokens (billions)
+
+
+
+Figure 2: Left: Main next-token training cross-entropy versus tokens consumed, binned over 20 consecutive
+logged observations for the indicated objective and seed. Right: All 2,288 encoder probes from four runs;
+each probes 32 × 768 output elements. The dashed line is the 89.96% mean across probes. The plotted range
+includes the 77.9% minimum. These are training diagnostics, not evaluation-set sparsity measurements.
+
+
+ATan vs. Sigmoid surrogate. A 2,000-step comparison (Figure 3) reveals that ATan produces substantially
+stronger gradient signals: mean pre-clip gradient norm 2.94 (vs. 0.94 for Sigmoid), with ATan often exceeding
+the gradient-clipping threshold of 1.0, while the Sigmoid mean is just below that threshold and some Sigmoid
+observations exceed it. Both surrogates reach similar final loss after 2,000 steps (ATan: 2.62, Sigmoid: 2.55).
+These figures come from a retained log of 201 points sampled every 10 steps; the means are taken over all
+logged points (peak pre-clip norms 12.36 for ATan and 2.43 for Sigmoid), and the final-loss values are trailing
+averages over the last 10 logged points, the single last points being 2.75 and 2.67. This comparison predates
+the 194M bilingual configuration: it was run under the earlier prototype setup, on a single-domain English
+subset with the 50,257-entry GPT-2 tokenizer and batch size 8. It therefore supports the surrogate choice as
+directional evidence and should not be read as a measurement taken on the 3B-token bilingual runs reported
+above. ATan’s peak derivative is bounded by 1.0, whereas the scaled Sigmoid permits a local derivative as
+large as 2.5 before gradient clipping.
+
+Learned gate values. The fusion gate 𝑔 = 𝜎(𝑤 𝑔 ) between the attention and decay paths converges to
+similar depth-wise profiles across the four runs (Table 10). Early layers (0–3) show near-equal mixing
+(𝑔 ≈ 0.50–0.54), while deeper layers (7–11) shift toward attention dominance (𝑔 ≈ 0.58–0.63). The learned
+coefficient is generally larger in deeper blocks. It is not an attention contribution fraction: interpreting branch
+
+                                                                                                 13
+                    Pre-clip Gradient Norm
+                                                                                      ATan (mean 2.94)
+                                                                                     Sigmoid (mean 0.94)
+                                             10
+
+                                              5
+                                                                                                           clip
+                                              0
+                                                  0    200 400 600 800 1,0001,2001,4001,6001,8002,000
+                                                                          Step
+
+Figure 3: Pre-clip gradient norms over 2,000 prototype-training steps. ATan has a larger mean norm than
+Sigmoid and more often exceeds the clipping threshold.
+
+
+importance also requires their output magnitudes, which are not measured here. Across-run population
+standard deviations range from 0.0007 to 0.0264 across layers; most layers are below 0.02, with the largest
+dispersion at Block 10. The full 12-layer, 4-run gate and decay factor table is provided in Section B.
+
+
+Table 10: Learned gate values 𝑔 = 𝜎(𝑤 𝑔 ) across four runs spanning three seeds and two objectives. Higher 𝑔
+= more attention, lower 𝑔 = more decay.
+      Block                                  AuxCE 123     AuxCE 456   noAuxCE 42   noAuxCE 123       Mean          Interp.
+      0                                        0.490          0.489      0.489         0.488          0.489        Balanced
+      3                                        0.537          0.527      0.547         0.533          0.536        Balanced
+      6                                        0.578          0.557      0.576         0.573          0.571       Attn-leaning
+      9                                        0.564          0.604      0.596         0.561          0.582       Attn-leaning
+      11                                       0.609          0.579      0.563         0.582          0.583       Attn-leaning
+      All-layer mean                           0.563          0.562      0.560         0.559          0.561       Gate mean
+
+
+Decay factors. The per-head exponential decay factors 𝛼ℎ = 𝜎(𝛾 ℎ ) show an overall increase from ∼0.91
+in Block 0 to ∼0.95 in Block 11, with a small local decrease from Block 1 to Block 2. This trend indicates
+slower direct state decay in deeper layers overall. Pooling heads across the four runs gives half-lives of about
+7–12 tokens in Blocks 0–5 and 9–15 in Blocks 6–11 (Section B.1).
+    Figure 4 visualizes both the gate and decay trends across layers.
+
+5.6   Scaling Results: 0.8B SymbolicLight V1
+To test whether the training stack extends beyond 200M parameters, we trained a 0.8B-parameter SymbolicLight
+V1 checkpoint for 48.8B tokens. The run uses a larger tokenizer, 𝑤=512 (full training context), and a separate
+14-source mixture, and has no matched dense baseline or post-training alignment.
+
+
+
+
+                                                                        14
+Mixing coefficient 𝑔   0.65
+                        0.6
+
+
+
+
+                                                                             Decay 𝛼
+                                                                                       0.94
+                       0.55
+                        0.5                                                            0.92
+                                                       4-run mean ±𝜎
+                                                                50/50
+                       0.45
+                              0 1 2 3 4 5 6 7 8 9 10 11                                       0 1 2 3 4 5 6 7 8 9 10 11
+                                        Block                                                           Block
+
+Figure 4: Left: Learned gate values across layers (4-run mean ±𝜎). The profile shifts from balanced
+decay/attention mixing in shallow layers toward greater attention weight in deeper layers. Right: Exponential
+decay factors generally increase with depth, with a small Block 1-to-2 reversal.
+
+
+Table 11: Configuration and evaluation diagnostics of the 0.8B scale-up run. All three PPL values use the
+same 186,000-step checkpoint.
+                          Field                     0.8B SymbolicLight V1 status
+                          Parameter count           873,668,135 parameters
+                          Model configuration       𝑑=1536, 22 layers, 24 heads, 𝐷 ff =6144, sliding-window width 512 (full
+                                                    training context)
+                          Tokenizer                 55,296 active entries within a 57,344-entry structural vocabulary
+                          Pre-training mixture      Separate 14-source mixture
+                          Training tokens           48.8B tokens (186,000 steps × 262,144 tokens per step)
+                          Context length            512 tokens
+                          Evaluation PPL            14.17 on a 2,015,232-token evaluation sequence; 16.79 on its first
+                                                    131,072 tokens; 22.53 on a separate 65,536-token evaluation excerpt
+                          Activation sparsity       95.44% at the encoder and 93.77% mean across blocks in an eight-
+                                                    prompt inference audit
+                          Post-training alignment   None
+                          Public artifact           Checkpoint, tokenizer assets, loader, and generation entry point
+
+
+   The three PPL figures are protocol-sensitive diagnostics on one checkpoint, not a comparison with the
+194M tables or with a dense model. The public artifact loads and generates with the released inference code.
+
+5.7                     Zero-Shot Downstream Tasks
+To assess whether the SNN’s representations support reasoning beyond language modeling, we evaluate
+on five standard zero-shot benchmarks (Table 12): PIQA (Bisk et al., 2020) (physical commonsense),
+SciQ (Welbl et al., 2017) (science QA), LAMBADA (Paperno et al., 2016) (long-range word prediction),
+HellaSwag (Zellers et al., 2019) (commonsense sentence completion), and ARC-Easy (Clark et al., 2018)
+(grade-school science).
+
+
+
+
+                                                                        15
+Table 12: Zero-shot accuracy on full test/validation splits with 95% bootstrap confidence intervals (10,000
+resamples). LAMBADA is scored on the final subword token, not the standard whole-word protocol.
+              Model             PIQA               SciQ                 LAMBADA            HellaSwag            ARC-E
+                               n=1838             n=1000                 n=5153             n=10042             n=2376
+              Random            50.0%              25.0%                    ∼0%               25.0%              25.0%
+              SNN-194M       53.8 [51.5,56.1]   31.1 [28.2,34.0]        80.2 [79.1,81.3]   26.5 [25.6,27.4]   32.1 [30.2,34.0]
+              GPT2-201M      54.9 [52.7,57.2]   31.9 [29.1,34.8]        80.6 [79.5,81.7]   26.7 [25.8,27.5]   31.9 [30.1,33.8]
+
+
+    All five benchmarks use their full test or validation splits (20,409 examples in total). The absolute
+SNN–GPT-2 differences range from 0.2 to 1.1 percentage points, and the separately reported bootstrap
+intervals overlap on every task. Interval overlap is not a paired test of the model difference or evidence of
+equivalence; per-example outcomes were not retained to estimate paired difference intervals. Both models
+remain close to chance on PIQA and HellaSwag.
+
+LAMBADA scoring protocol. We score LAMBADA on the final sub-word token: the model receives the
+passage minus that token and must reproduce it by greedy argmax. For multi-piece target words, the leading
+pieces remain in the context, making the scored prediction easier than requiring the complete word. The
+reported >80% therefore cannot establish standard whole-word accuracy. Both models are scored identically,
+so the descriptive difference is 0.4 percentage points, but the absolute values belong to this protocol and
+should not be read against published LAMBADA numbers. The current zero-shot suite is English-only
+despite the bilingual pre-training mixture; Chinese task evaluation remains outside the present evidence.
+
+5.8   Generation Quality
+We compare free-form text generation from the SNN (AuxCE seed 123) and GPT-2 201M using 10 prompts
+spanning English narrative, science, mathematics, Chinese text, and Python code, under sampling decoding
+(temperature 0.7, top-𝑘 50).
+
+Table 13: 4-gram repetition rate in generated text (lower is better). Sampling decoding, 150 tokens per prompt.
+The SNN produces less repetitive text on 8 of 10 prompts.
+                            Domain                 SNN-194M                GPT2-201M           Winner
+                            EN-Story                    6.1%                   14.3%            SNN
+                            EN-Science                 26.5%                   63.3%            SNN
+                            EN-Academic                25.2%                   50.3%            SNN
+                            EN-Physics                 38.8%                   28.6%            GPT-2
+                            ZH-Story                   16.3%                   64.6%            SNN
+                            ZH-Knowledge               31.3%                   45.6%            SNN
+                            ZH-Tech                     5.4%                   49.7%            SNN
+                            Code-General               50.3%                   59.9%            SNN
+                            Code-Numpy                 32.0%                   91.8%            SNN
+                            EN-Math                    41.5%                   24.5%            GPT-2
+                            Mean                       27.3%                   49.3%              SNN
+
+
+   The SNN produces lower repetition rates (mean 27.3% vs. 49.3%), winning 8 of 10 prompts. A
+decoder-sensitivity analysis tests whether this ordering persists when sampling is removed or adapted.
+
+
+
+                                                                   16
+Decoder sensitivity. We re-run the 10 prompts under greedy decoding and under an entropy-modulated
+sampling rule. Greedy decoding removes sampling randomness but does not equalize the entropy or shape of
+the two models’ output distributions. Table 14 compares all three decoding configurations.
+
+Table 14: Mean 4-gram repetition rate over 10 prompts under three decoding strategies. The ranking changes
+with the decoding rule. The entropy-to-sampling transformation is not specified in the retained aggregate
+record, so the adaptive row is a historical diagnostic rather than a reproducible decoder comparison.
+       Decoding                                         SNN-194M       GPT2-201M      Δ (SNN − GPT-2)
+       Greedy (top-𝑘=1)                                     71.16%       78.09%           −6.93 pp
+       Sampling (𝑇=0.7, top-𝑘=50)                           27.35%       49.25%           −21.90 pp
+       Adaptive (𝑇=0.8, top-𝑘=50, entropy-modulated)        36.19%       25.37%           +10.82 pp
+
+
+    The SNN retains a 6.9-point repetition advantage under greedy decoding, but the adaptive rule reverses
+the ordering by 10.8 points. Because decoding changes both the selected tokens and the states subsequently
+presented to each autoregressive model, these results do not decompose repetition into architecture and
+entropy components. The ten-prompt records do not specify whether 4-grams are formed from tokens,
+words, or characters, nor the exact entropy-modulation function. We retain their reported rates as historical
+summaries rather than treating them as directly comparable to the fully specified 500-text lexical metric.
+
+Large-scale lexical diversity. We next generate 500 samples per model (128 tokens each, 20 English
+prompts, temperature 0.7, top-𝑘 50) and compute Distinct-𝑛 metrics (Table 15).
+
+Table 15: Distinct-𝑛 (higher is better) and 4-gram repetition rate (lower is better) over 500 generated samples
+per model (temperature 0.7, top-𝑘 50, 128 tokens). The SNN achieves higher lexical diversity across all
+𝑛-gram orders.
+                    Model          Dist-1   Dist-2   Dist-3   Dist-4   Rep-4    Winner
+                    SNN-194M       0.172    0.491    0.737     0.856   7.7%
+                                                                                SNN (all 𝑛)
+                    GPT2-201M      0.150    0.438    0.653     0.760   16.8%
+
+
+    The script splits decoded text on whitespace and includes the prompt along with its 128 generated tokens.
+For Distinct-𝑛, all within-text 𝑛-grams are pooled across 500 texts and the number of unique 𝑛-grams is
+divided by their total count. Repetition counts duplicate 4-grams within each text, then sums duplicate counts
+and denominators across texts. The 20 prompts are all English, each used 25 times. These definitions and
+prompt inclusion differ from a continuation-only bilingual evaluation; no sampling seed or generated-text
+archive is available for an exact rerun. The SNN has higher Distinct-𝑛 across all reported orders: Dist-1 is
+14.7% higher, Dist-2 is 12.1% higher, Dist-3 is 12.9% higher, and Dist-4 is 12.6% higher, while the 4-gram
+repetition rate is 54% lower (7.7% vs. 16.8%). This larger sample corroborates the lower-repetition result for
+the specified sampling configuration and the GPT-2 201M baseline.
+    The retained narrative excerpts contain sentence-level structure but also grammatical, referential, and
+semantic errors. Scientific prose is not factually reliable; these observations do not establish a general
+capability claim. Code generation is a shared weakness. The nominal 5% code document-sampling probability
+does not establish its realized training-token share or explain this weakness. On the Chinese prompts in the
+ten-prompt set, SNN generation has lower reported repetition. Both models use the same bilingual tokenizer,
+so these results do not identify a tokenizer explanation for their difference. Representative generation samples
+are provided in Section C.
+
+
+                                                       17
+    Generation speed on GPU is approximately 22.8 tok/s for the SNN vs. 91.5 tok/s for GPT-2 (see Section 5.9
+for detailed benchmarks).
+
+5.9     Inference Benchmark: GPU vs. CPU
+To characterize the SNN’s performance profile on consumer-grade hardware representative of edge deployment
+scenarios, we benchmark autoregressive generation on an NVIDIA RTX 2080 Ti GPU and an AMD Ryzen 7
+5800X CPU (Table 16).
+
+Table 16: Inference benchmark (200 tokens generated, temperature 0.7, top-𝑘 50, 5-run average after 3 warmup
+runs). GPU power is queried once after each timed generation via nvidia-smi, so GPU energy is a rough
+power-times-latency estimate, not time-integrated generation energy. CPU values use LibreHardwareMonitor
+package-power records. The scope is device/package power, not whole-system energy.
+         Model         Device                 tok/s   ms/tok   Power (W)    Energy estimate (mJ/tok)
+         SNN-194M      GPU (RTX 2080 Ti)      22.8     43.8        65                 2,848
+         GPT2-201M     GPU (RTX 2080 Ti)      91.5     10.9        83                  905
+         SNN-194M      CPU (Ryzen 7 5800X)    19.8     50.5        90                 4,559
+         GPT2-201M     CPU (Ryzen 7 5800X)    24.6     40.7        92                 3,752
+
+
+      Three findings emerge:
+
+GPU: GPT-2 dominates. On GPU, GPT-2 is 4.0× faster than the SNN (91.5 vs. 22.8 tok/s), reflecting the
+GPU’s optimization for dense matrix operations. The SNN’s LIF membrane potential updates are sequential
+and do not map to dense GPU kernels as GPT-2 does. The post-generation GPU power reading is 22% lower
+for the SNN (65W vs. 83W), which does not offset the 4× latency gap, so the power-times-latency estimate is
+3.1× higher (2,848 vs. 905 mJ/tok).
+
+CPU: narrower speed gap, comparable power. On CPU, the speed gap narrows to 1.24×: the SNN
+achieves 80% of GPT-2’s throughput (19.8 vs. 24.6 tok/s). CPU package power is nearly identical (90 W vs.
+92 W), so the energy gap is driven almost entirely by latency, yielding 1.22× higher energy per token for the
+SNN (4,559 vs. 3,752 mJ/tok). The SNN gains only 1.15× throughput from GPU execution while GPT-2
+gains 3.7×, showing that the current implementation does not map efficiently to dense GPU kernels.
+
+Neuromorphic projection. Only the decay-input projection and FFN down-projection consume spike-
+valued inputs among the major linear operators; the other major operators consume continuous-valued
+inputs. All are executed through conventional dense kernels in this implementation. We report no analytical
+neuromorphic energy number; Section D states what such an estimate would require.
+
+5.10     Artifact Scope
+Table 17 summarizes the records supporting each result family. The public artifacts reproduce checkpoint
+loading and inference; the training and evaluation results rely on retained experimental records.
+
+
+
+
+                                                      18
+                              Table 17: Record type supporting each result family.
+    Result                                Supporting record
+    194M PPL, per-domain results, and     Checkpoints and evaluation outputs for the four SNN runs, the primary
+    ablations                             dense baselines, and the ablation variants
+    Training dynamics, sparsity, gates,   Step-level logs and checkpoint extractions for the four SNN runs
+    and decay factors
+    Zero-shot, generation, speed, and     Aggregate evaluation records; per-example zero-shot outputs and complete
+    power                                 generated sample sets were not retained
+    0.8B scale-up                         Public checkpoint and inference code; internal training and evaluation
+                                          diagnostic records
+
+
+   LAMBADA uses final-subword scoring (Section 5.7), and Distinct-𝑛 is reported against GPT-2 201M
+under one sampling configuration (Section 5.8).
+
+
+6     Discussion
+6.1    From Pure-Spike Prototypes to Spike-Gated Dual-Path
+Earlier SymbolicLight prototypes (Liu, 2026; Liu et al., 2026) reported language modeling with high activation
+sparsity and a quality gap against dense baselines; these observations motivated further study of continuous
+representations. SymbolicLight V1 adds windowed local attention on the continuous residual stream, a
+context MLP head, and a bilingual tokenizer with longer merges. Among the 0.5B-token configurations, the
+variant without local attention has the highest PPL, and the static-prior variant also has higher PPL than
+the full-model reference (Section 5.4). Because the reference uses a different objective and hardware, these
+observations do not isolate the causal contribution of either component. The tokenizer merge length is a
+design choice without an ablation. The resulting model is a hybrid: softmax attention and a GELU MLP are
+continuous, while spikes gate the decay-path projection and FFN binarization.
+
+6.2    Quality Cost in the Primary Comparison
+The token-weighted SNN mean is 7.7% above GPT-2 201M under the shared A800 protocol. SymbolicLight
+changes activation type, sequence mixing, recurrent state, parameter allocation, and the number of optimizer
+updates, so the gap is not a binarization-only tax. The unweighted domain mean of 29.38 further shows that
+the 8.904 headline is a Code-heavy average, not a balanced ten-domain quality number.
+
+6.3    Biological Motivation
+The architecture uses cortical spike-plus-graded-potential organization as a design analogy (London and
+Häusser, 2005; Gerstner and Kistler, 2002), not as a hardware claim. Device power readings and derived
+energy estimates are in Section 5.9.
+
+6.4    Limitations
+Dense GPT-2 baselines are single runs. The 194M evaluation-set separation is unverified, and the component
+comparisons change objective and hardware. Encoder probes do not measure whole-model sparsity, and
+post-generation GPU power sampling does not establish integrated energy. Zero-shot accuracy stays near
+chance on PIQA and HellaSwag at 200M scale. Generation metrics measure n-gram diversity, not factual
+quality.
+
+
+                                                         19
+7    Conclusion
+We introduced SymbolicLight V1, a spike-gated dual-path language model that reaches token-weighted
+evaluation PPL 8.88–8.93 (mean 8.904, sample standard deviation 0.019) with mean sampled encoder
+zero-spike fraction 89.96%. Under the shared A800 protocol that mean is 7.7% above GPT-2 201M; the
+unweighted mean of the ten domain PPLs is 29.38. Five zero-shot tasks show no clear accuracy separation at
+this scale. A 0.8B run trained for 48.8B tokens yields a loadable checkpoint. The RTX 2080 Ti throughput
+is 22.8 versus 91.5 token/s, while post-generation power readings give rough energy estimates of 2,848
+versus 905 mJ/token for GPT-2 201M. Evaluation-set separation remains unverified, so the PPL results cannot
+establish unseen-data generalization.
+
+
+Reproducibility Statement
+The public code repository (https://github.com/SymbolicLight-AGI/SymbolicLight-V1) provides
+parameter-compatible model definitions, tokenizer assets, integrity manifests, checkpoint-loading utilities,
+and minimal generation programs for the 194M and 0.8B models. Checkpoints are distributed through
+https://huggingface.co/SymbolicLight-AGI/SymbolicLight-V1. Together, these artifacts support
+checkpoint loading, tokenizer compatibility checks, inference-path inspection, and short text generation.
+    The release does not include the training or evaluation pipelines, optimizer states, data-processing code, or
+training and validation corpora. It therefore does not enable regeneration of the training, ablation, evaluation,
+speed, or power results. The architecture and reported hyperparameters are specified in Section 3 and tables 2
+and 4; the public reproducibility claim is limited to checkpoint loading and inference. Verifying generalization
+additionally requires source identity, a train/evaluation split manifest, and an overlap audit.
+
+Table 18: SHA-256 manifest for the separately distributed 0.8B checkpoint and its tokenizer model. These
+files must not be paired with the 194M 48K tokenizer. Digests are those of the released files.
+                      Filename                                     Bytes    SHA-256 prefix
+                      weights/pytorch/latest-inference.pt   3,500,562,525   5edc3b6a6d3fb9cf
+                      tokenizer/sl_tokenizer.model                869,691   5b673c90dbcfb8e1
+
+
+Full SHA-256 digests are provided in the release manifests accompanying the code and model-artifact records.
+
+Compute resources. Table 19 summarizes the hardware and time budget for the reported 194M-scale
+training, ablation, and baseline experiments. Total compute is approximately 430 GPU-hours, with the four
+primary SNN training runs accounting for the majority. The 0.8B scale-up run is not included in this compute
+total.
+
+
+
+
+                                                       20
+Table 19: Compute budget for the reported 194M-scale experiments. Rows marked ∗ use wall-clock times
+from training logs; the remaining times are estimates. The total excludes the GPT-2 201M run, whose time
+was not recorded, and the 0.8B scale-up run. The RTX 5090 full-model reference uses a different hardware
+partition from the A800 experiments.
+          Experiment                          Hardware         Runs    Hours/run      GPU-hours
+          SNN training, AuxCE  (3B)∗          4× A800-40GB       2         28.4          227
+          SNN training, noAuxCE (3B)∗         4× A800-40GB       2         16.1          129
+          GPT-2 124M training (3B)∗           4× A800-40GB       1          3.5           14
+          GPT-2 201M training (3B)            4× A800-40GB       1     not recorded      —
+          Component ablations (0.5B)          4× A800-40GB       3          ∼2           24
+          Full model reference (0.5B)         8× RTX 5090        1         ∼1.8          14
+          Surrogate comparison (2K steps)     4× A800-40GB       2         ∼0.5           4
+          Supplementary GPT-2 195.9M (3B)     8× RTX 5090        1          2.2          18
+          Total (excluding the unrecorded 201M run)                                     ∼430
+
+
+Inference benchmarks (zero-shot, generation, speed, power) were conducted on a single NVIDIA RTX 2080
+Ti GPU and an AMD Ryzen 7 5800X CPU, contributing negligible additional compute.
+
+
+References
+Iz Beltagy, Matthew E. Peters, and Arman Cohan. Longformer: The long-document transformer. arXiv
+   preprint arXiv:2004.05150, 2020. URL https://arxiv.org/abs/2004.05150.
+Yonatan Bisk, Rowan Zellers, Ronan Le Bras, Jianfeng Gao, and Yejin Choi. PIQA: Reasoning about
+  physical commonsense in natural language. In Proceedings of the AAAI Conference on Artificial
+  Intelligence, volume 34, pages 7432–7439, 2020. doi: 10.1609/aaai.v34i05.6239. URL https:
+  //doi.org/10.1609/aaai.v34i05.6239.
+Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabharwal, Carissa Schoenick, and Oyvind
+  Tafjord. Think you have solved question answering? Try ARC, the AI2 reasoning challenge. arXiv preprint
+  arXiv:1803.05457, 2018. URL https://arxiv.org/abs/1803.05457.
+Jonathan Frankle and Michael Carbin. The lottery ticket hypothesis: Finding sparse, trainable neural
+  networks. In International Conference on Learning Representations (ICLR), 2019. URL https:
+  //openreview.net/forum?id=rJl-b3RcF7. Oral presentation.
+Wulfram Gerstner and Werner M. Kistler. Spiking Neuron Models: Single Neurons, Populations, Plasticity.
+ Cambridge University Press, 2002. URL https://www.cambridge.org/core/books/spiking-neu
+ ron-models/76A3FC77EC2D24CDD91E29EBB23ADB0B.
+Albert Gu and Tri Dao. Mamba: Linear-time sequence modeling with selective state spaces. In First
+  Conference on Language Modeling, 2024. URL https://openreview.net/forum?id=tEYskw1VY2.
+Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. Distilling the knowledge in a neural network. arXiv preprint
+  arXiv:1503.02531, 2015. URL https://arxiv.org/abs/1503.02531.
+Taku Kudo and John Richardson. SentencePiece: A simple and language independent subword tokenizer and
+  detokenizer for Neural Text Processing. In Proceedings of the 2018 Conference on Empirical Methods
+  in Natural Language Processing: System Demonstrations, pages 66–71. Association for Computational
+  Linguistics, 2018. doi: 10.18653/v1/D18-2012. URL https://aclanthology.org/D18-2012/.
+
+                                                    21
+Ting Liu. SymbolicLight: A neuro-symbolic spiking architecture for language modeling with sparse TCAM
+  and Bayesian decoding. Zenodo Preprint, 2026. URL https://doi.org/10.5281/zenodo.18878295.
+
+Ting Liu, Yong Liu, and Wei Chen. Scaling natively-trained spiking language models to multi-domain
+  pre-training with 85% global activation sparsity. SSRN Preprint, 2026. URL https://doi.org/10.213
+  9/ssrn.6427718.
+
+Michael London and Michael Häusser. Dendritic computation. Annual Review of Neuroscience, 28:503–532,
+ 2005. doi: 10.1146/annurev.neuro.28.061604.135703. URL https://doi.org/10.1146/annurev.ne
+ uro.28.061604.135703.
+
+Shuming Ma, Hongyu Wang, Lingxiao Ma, Lei Wang, Wenhui Wang, Shaohan Huang, Li Dong, Ruiping
+  Wang, Jilong Xue, and Furu Wei. The era of 1-bit LLMs: All large language models are in 1.58 bits. arXiv
+  preprint arXiv:2402.17764, 2024. URL https://arxiv.org/abs/2402.17764.
+
+Wolfgang Maass. Networks of spiking neurons: the third generation of neural network models. Neural
+ Networks, 10(9):1659–1671, 1997. doi: 10.1016/S0893-6080(97)00011-7. URL https://doi.org/10
+ .1016/S0893-6080(97)00011-7.
+
+Emre O. Neftci, Hesham Mostafa, and Friedemann Zenke. Surrogate gradient learning in spiking neural
+ networks: Bringing the power of gradient-based optimization to spiking neural networks. IEEE Signal
+ Processing Magazine, 36(6):51–63, 2019. doi: 10.1109/MSP.2019.2931595. URL https://doi.org/
+ 10.1109/MSP.2019.2931595.
+
+Kostas Pagiamtzis and Ali Sheikholeslami. Content-addressable memory (CAM) circuits and architectures:
+  A tutorial and survey. IEEE Journal of Solid-State Circuits, 41(3):712–727, 2006. doi: 10.1109/JSSC.200
+  5.864128. URL https://doi.org/10.1109/JSSC.2005.864128.
+
+Denis Paperno, Germán Kruszewski, Angeliki Lazaridou, Quan Ngoc Pham, Raffaella Bernardi, Sandro
+  Pezzelle, Marco Baroni, Gemma Boleda, and Raquel Fernández. The LAMBADA dataset: Word
+  prediction requiring a broad discourse context. In Proceedings of the 54th Annual Meeting of the
+ Association for Computational Linguistics, pages 1525–1534, 2016. doi: 10.18653/v1/P16-1144. URL
+  https://doi.org/10.18653/v1/P16-1144.
+
+Bo Peng, Eric Alcaide, Quentin Anthony, Alon Albalak, Samuel Arcadinho, Stella Biderman, Huanqi Cao,
+  Xin Cheng, Michael Chung, Leon Derczynski, Xingjian Du, Matteo Grella, Kranthi Gv, Xuzheng He,
+  Haowen Hou, Przemyslaw Kazienko, Jan Kocon, Jiaming Kong, Bartłomiej Koptyra, Hayden Lau, Jiaju
+  Lin, Krishna Sri Ipsit Mantri, Ferdinand Mom, Atsushi Saito, Guangyu Song, Xiangru Tang, Johan Wind,
+  Stanisław Woźniak, Zhenyuan Zhang, Qinghua Zhou, Jian Zhu, and Rui-Jie Zhu. RWKV: Reinventing
+  RNNs for the Transformer era. In Findings of the Association for Computational Linguistics: EMNLP
+  2023, pages 14048–14077, Singapore, 2023. Association for Computational Linguistics. doi: 10.18653/v1/
+  2023.findings-emnlp.936. URL https://aclanthology.org/2023.findings-emnlp.936/.
+
+Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. Language models
+  are unsupervised multitask learners. Technical report, OpenAI, 2019. URL https://cdn.openai.com
+  /better-language-models/language-models.pdf.
+
+Kaushik Roy, Akhilesh Jaiswal, and Priyadarshini Panda. Towards spike-based machine intelligence with
+  neuromorphic computing. Nature, 575(7784):607–617, 2019. doi: 10.1038/s41586-019-1677-2. URL
+  https://doi.org/10.1038/s41586-019-1677-2.
+
+
+
+                                                   22
+Tal Schuster, Adam Fisch, Jai Gupta, Mostafa Dehghani, Dara Bahri, Vinh Tran, Yi Tay, and Donald Metzler.
+  Confident adaptive language modeling. In Advances in Neural Information Processing Systems (NeurIPS),
+  volume 35, pages 17456–17472, 2022. URL https://proceedings.neurips.cc/paper_files/pap
+  er/2022/hash/6fac9e316a4ae75ea244ddcef1982c71-Abstract-Conference.html.
+
+Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. RoFormer: Enhanced
+   Transformer with rotary position embedding. Neurocomputing, 568:127063, 2024. doi: 10.1016/j.neucom
+   .2023.127063. URL https://doi.org/10.1016/j.neucom.2023.127063.
+
+Yutao Sun, Li Dong, Shaohan Huang, Shuming Ma, Yuqing Xia, Jilong Xue, Jianyong Wang, and Furu Wei.
+  Retentive network: A successor to Transformer for large language models. arXiv preprint arXiv:2307.08621,
+  2023. doi: 10.48550/arXiv.2307.08621. URL https://doi.org/10.48550/arXiv.2307.08621.
+
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Łukasz Kaiser,
+  and Illia Polosukhin. Attention is all you need. In Advances in Neural Information Processing Systems
+  (NeurIPS), volume 30, pages 5998–6008, 2017. URL https://proceedings.neurips.cc/paper_f
+  iles/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html.
+
+Johannes Welbl, Nelson F. Liu, and Matt Gardner. Crowdsourcing multiple choice science questions. In
+  Proceedings of the 3rd Workshop on Noisy User-generated Text, pages 94–106, 2017. doi: 10.18653/v1/
+  W17-4413. URL https://doi.org/10.18653/v1/W17-4413.
+
+Ji Xin, Raphael Tang, Jaejun Lee, Yaoliang Yu, and Jimmy Lin. DeeBERT: Dynamic early exiting
+   for accelerating BERT inference. In Proceedings of the 58th Annual Meeting of the Association for
+   Computational Linguistics (ACL), pages 2246–2251, 2020. doi: 10.18653/v1/2020.acl-main.204. URL
+   https://aclanthology.org/2020.acl-main.204/.
+
+Xingrun Xing, Boyan Gao, Zheng Liu, David A. Clifton, Shitao Xiao, Wanpeng Zhang, Li Du, Zheng Zhang,
+  Guoqi Li, and Jiajun Zhang. SpikeLLM: Scaling up spiking neural network to large language models via
+  saliency-based spiking. In International Conference on Learning Representations (ICLR), 2025. URL
+  https://openreview.net/forum?id=ZadnlOHsHv. Poster presentation.
+
+Han Xu, Xuerui Qiu, Yunhui Xu, Mohammed E. Elbtity, Peng Zhou, Yang Tian, Rui-Jie Zhu, Jiahong
+  Zhang, Shaowei Gu, Yuqi Pan, Yuhong Chou, Qinghao Wen, Man Yao, Jiangbo Qian, Yonghong Tian,
+  Lei Ma, Tiejun Huang, Jason K. Eshraghian, Bo Xu, and Guoqi Li. Neuromorphic spike-based large
+  language model. National Science Review, 13(4):nwaf551, 2026. doi: 10.1093/nsr/nwaf551. URL
+  https://doi.org/10.1093/nsr/nwaf551.
+
+Songlin Yang, Bailin Wang, Yikang Shen, Rameswar Panda, and Yoon Kim. Gated linear attention transformers
+  with hardware-efficient training. In Proceedings of the 41st International Conference on Machine Learning
+  (ICML), volume 235 of Proceedings of Machine Learning Research, pages 56501–56523. PMLR, 2024.
+  URL https://proceedings.mlr.press/v235/yang24ab.html.
+
+Manzil Zaheer, Guru Guruganesh, Kumar Avinava Dubey, Joshua Ainslie, Chris Alberti, Santiago Ontanon,
+ Philip Pham, Anirudh Ravula, Qifan Wang, Li Yang, and Amr Ahmed. Big Bird: Transformers for
+ longer sequences. In Advances in Neural Information Processing Systems (NeurIPS), volume 33, pages
+ 17283–17297, 2020. URL https://proceedings.neurips.cc/paper/2020/hash/c8512d142a2
+ d849725f31a9a7a361ab9-Abstract.html.
+
+Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi. HellaSwag: Can a machine really
+  finish your sentence? In Proceedings of the 57th Annual Meeting of the Association for Computational
+
+
+                                                    23
+    Linguistics (ACL), pages 4791–4800, 2019. doi: 10.18653/v1/P19-1472. URL https://doi.org/10.1
+    8653/v1/P19-1472.
+
+Rui-Jie Zhu, Qihang Zhao, Guoqi Li, and Jason K. Eshraghian. SpikeGPT: Generative pre-trained language
+  model with spiking neural networks. Transactions on Machine Learning Research, 2024. URL https:
+  //openreview.net/forum?id=gcf1anBL9e.
+
+
+
+A     Per-Domain Ablation Results
+Table 20 gives per-domain evaluation PPL for the 0.5B-token full model and the three removal variants.
+
+Table 20: Per-domain evaluation PPL at 0.5B tokens. Full (0.5B) is the matched-budget reference (overall
+17.72).
+                  Domain                Full (0.5B)   Static Prior   No Attn   Decay Only
+                  Chinese-Reference        45.29            52.42     82.92       55.15
+                  Chinese-Web             385.61           415.47    592.84      430.15
+                  Chinese-General         226.42           245.98    362.38      259.06
+                  English-Educational      21.90            26.30     45.71       25.87
+                  English-Math             34.94            41.97     70.74       43.95
+                  English-Reference        38.13            50.96     82.99       49.88
+                  Math-Web                 27.22            32.64     53.72       35.46
+                  Code                     6.00              7.21     15.04       10.14
+                  English-Narrative        20.22            25.53     40.55       24.46
+                  Chinese-Narrative       156.44           175.16    272.87      197.40
+                  Overall                 17.72            21.26      38.56      25.27
+
+
+
+B     Full Gate and Decay Factor Table
+Table 21 reports the learned gate values 𝑔 = 𝜎(𝑤 𝑔 ) and mean exponential decay factors 𝛼 for all 12 layers
+across all four training runs.
+
+
+
+
+                                                      24
+Table 21: Learned gate values from four runs spanning three seeds and two objectives, with mean decay
+factors for all 12 layers. Gate 𝑔 > 0.5 favors attention; 𝑔 < 0.5 favors decay.
+           Block    AuxCE 123      AuxCE 456      noAuxCE 42      noAuxCE 123        Mean 𝑔      Mean 𝛼
+              0        0.490            0.489        0.489             0.488          0.489      0.915
+              1        0.526            0.520        0.521             0.535          0.526      0.929
+              2        0.536            0.529        0.521             0.541          0.531      0.927
+              3        0.537            0.527        0.547             0.533          0.536      0.931
+              4        0.556            0.568        0.556             0.541          0.555      0.933
+              5        0.573            0.590        0.578             0.564          0.576      0.936
+              6        0.578            0.557        0.576             0.573          0.571      0.938
+              7        0.575            0.610        0.606             0.580          0.593      0.941
+              8        0.576            0.599        0.599             0.584          0.589      0.943
+              9        0.564            0.604        0.596             0.561          0.582      0.944
+             10        0.632            0.576        0.574             0.624          0.602      0.948
+             11        0.609            0.579        0.563             0.582          0.583      0.949
+           Mean        0.563            0.562        0.560             0.559          0.561      0.936
+
+
+    The gate progression from ∼0.49 (Block 0) to ∼0.60 (Block 10–11) shows a shallow-decay / deep-attention
+trend in these four runs. Across-run population standard deviation is below 0.02 for 11 of 12 layers and reaches
+0.0264 at Block 10. The decay factor 𝛼 increases from 0.915 (Block 0) to 0.949 (Block 11), corresponding to
+effective memory half-lives of log 0.5/log 𝛼 ≈ 8 tokens (shallow) to ∼13 tokens (deep).
+
+B.1   Per-Head Decay Heterogeneity
+Table 21 reports the layer-wise mean of the per-head decay factor 𝛼ℎ = 𝜎(𝛾 ℎ ) averaged over all 𝐻=12 heads.
+At a finer granularity, the 12 heads within each layer are not constrained to share a single 𝛼 value: each
+head learns its own decay independently, and the table below reports their pooled distribution across training
+runs. Table 22 summarizes the within-layer min/max/range of 𝛼ℎ aggregated over all four training runs (576
+measurements total: 4 runs × 12 layers × 12 heads).
+
+Table 22: Per-head decay factor 𝛼ℎ statistics within each layer, aggregated across four training runs (12 heads
+× 4 runs = 48 measurements per row). The right column is recomputed from the displayed 𝛼 extrema as
+log(0.5)/log(𝛼), rounded to one decimal place (tokens).
+                    Block      Mean 𝛼    Min 𝛼    Max 𝛼      Range    Half-life range (tokens)
+                       0       0.9149    0.9064   0.9219     0.0155              7.1–8.5
+                       1       0.9291    0.9233   0.9347     0.0114             8.7–10.3
+                       2       0.9271    0.9183   0.9346     0.0163             8.1–10.2
+                       3       0.9306    0.9231   0.9374     0.0143             8.7–10.7
+                       4       0.9332    0.9228   0.9423     0.0195             8.6–11.7
+                       5       0.9358    0.9274   0.9423     0.0149             9.2–11.7
+                       6       0.9381    0.9275   0.9432     0.0157             9.2–11.9
+                       7       0.9414    0.9333   0.9549     0.0216            10.0–15.0
+                       8       0.9432    0.9323   0.9491     0.0168             9.9–13.3
+                       9       0.9437    0.9341   0.9532     0.0191            10.2–14.5
+                      10       0.9482    0.9398   0.9559     0.0161            11.2–15.4
+                      11       0.9488    0.9402   0.9550     0.0148            11.2–15.1
+
+
+    The pooled ranges shift from about 7–12 token half-lives in Blocks 0–5 to 9–15 in Blocks 6–11. Their
+
+                                                      25
+widths fluctuate rather than increasing monotonically. Because the extrema are pooled across four runs, a row
+does not establish the head-to-head span within any individual trained model. The half-life describes the
+direct exponential term, not an end-to-end language-memory measurement.
+
+
+C    Generation Samples
+Tables 23 and 24 show representative generation samples (sampling decoding, temperature 0.7, top-𝑘 50,
+150 tokens) for the EN-Story and ZH-Story domains. Both examples contain semantic and referential errors.
+The retained repetition values describe these examples only; lower repetition is not evidence of coherent
+storytelling.
+
+Table 23: EN-Story generation (sampling). Prompt: “Once upon a time, there was a little girl named Lily
+who loved to”
+      Model    Generated Text (truncated)                                                                  Rep.
+      SNN      play in the garden. One day, she found a big cake on it! Lily’s favorite dress was so       6.1%
+               excited to go on the cake. Lily’s friend, Lily, said, “Do you want to go, Lily?” The cake
+               replied, “I don’t want to go to the cake, but I didn’t have anything to do at home.” Lily
+               learned it all about the cake and was a good kind friend. . .
+      GPT-2    play with her friends. One day, Lily’s mom came into her room and said, “I think you        14.3%
+               are boring!” Her mom said, “I want to play with me so much.” Lily said, “I don’t know
+               how to play with me. I can play with me so much.” Lily was excited to see what her
+               mom said. . .
+
+
+
+
+    Table 24: ZH-Story generation (sampling). Prompt: “从前，有一个小男孩叫小明，他住在一个”
+      Model    Generated Text (truncated)                                                                  Rep.
+      SNN      村庄，他家里有一只狗，在那里他遇到了一个名叫杰克的朋友们，他找到了一                                                          16.3%
+               个名叫杰克的家庭，他遇到了一个名叫杰克的弟弟，他们让他有了新的生活。
+               杰克告诉他的好友，他遇到了一个名叫杰克的同事……
+      GPT-2    神秘的房子，他在那里他迷路了，但他已经找到了这个宝藏。他找到了这个宝                                                          64.6%
+               藏，他找到了这个宝藏。他遇到了一个神秘的小村庄，他们发现了他的宝藏。
+               他找到了这个宝藏，他找到了宝藏，他找到了宝藏，他找到了宝藏……
+
+
+
+D    Requirements for a Neuromorphic Energy Estimate
+The decay-input and FFN down-projections consume binary spikes; the FFN up-projection, Q/K/V projections,
+attention, output projection, and context MLP use continuous values. Zeros alone establish neither operation
+skipping nor memory-access savings.
+    We report no analytical neuromorphic advantage. Estimating it requires operator traces, both models’
+precision and memory-placement assumptions, and validation on a sparse runtime or physical hardware. The
+RTX 2080 Ti estimates of 2,848 and 905 mJ/token multiply post-generation power by mean latency. They
+exclude power integration and whole-system accounting, so they cannot validate such an estimate.
+
+
+
+
+                                                         26
+

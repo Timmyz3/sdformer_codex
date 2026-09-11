@@ -1,0 +1,554 @@
+                                                                                                                                                                                      1
+
+
+
+
+                                              SNN-MLIR: An MLIR Dialect for Compiling
+                                             Neuromorphic SNNs from NIR to Bare-Metal C
+                                                                             Alejandro García Gener             ∗,    Álvaro Rollón de Pinedo      ∗,
+
+
+
+
+                                           Abstract—Spiking neural networks (SNNs) are increasingly                    network into a common graph format. NIR has been widely
+                                        trained in a wide range of frameworks (snnTorch, Lava, Norse,                  adopted precisely because it draws the boundary cleanly: it
+                                        and others) each with its own model format. The Neuromorphic                   describes what a network is, deliberately leaving deployment
+                                        Intermediate Representation (NIR) addresses this fragmentation
+                                        by providing a common, framework-independent format for ex-                    out of scope. That is the right decision for an exchange format,
+                                        changing trained SNN models. NIR solves the exchange problem,                  but it leaves a gap. Once a model is in NIR, the path to
+arXiv:2606.09213v1 [cs.PL] 8 Jun 2026
+
+
+
+
+                                        but it stops there. It provides a description of a network, not                a running executable is still undefined, and in practice each
+                                        a path to running one. Each backend is still left to implement                 backend re-implements that path from scratch hand-writing
+                                        deployment on its own, with no shared, transformable compiler                  inference loops, target-specific code, and ad hoc quantization
+                                        representation in between. This paper presents snn-mlir, an out-
+                                        of-tree MLIR dialect for SNNs together with a NIR→MLIR→C                       and runtimes. There is no shared representation that can be
+                                        compilation bridge. The dialect provides a small set of type-                  inspected, transformed, and progressively lowered the way a
+                                        polymorphic operations that work identically on floating-point                 compiler would treat any other program.
+                                        (f32/f64) and quantized (i8/i32) data, so a single intermediate                   Our position is that SNNs need a proper compiler inter-
+                                        representation serves both simulation and hardware-oriented                    mediate representation, and that MLIR is the right substrate
+                                        deployment. A Python front end reads any NIR file and emits
+                                        dialect IR, automatically inserting rescaling operations to keep               to build it on. MLIR [8] is designed for exactly this kind
+                                        quantization scales consistent across layers. A reference lowering             of problem: it supports custom dialects, explicit typing, and
+                                        pass converts the dialect to standard linalg and arith operations,             progressive lowering from a domain-specific representation
+                                        from which the toolchain produces self-contained, dependency-                  down to standard operations and ultimately machine code. By
+                                        free C11 code that compiles and runs on any C-capable CPU                      expressing SNNs as a first-class MLIR dialect, we make the
+                                        or embedded target. We evaluate numerical fidelity against
+                                        reference outputs, portability across CPU targets, and the cost of             network a real compiler object, one that standard tooling can
+                                        quantization. The current scope is feedforward, fully-connected                verify, optimize, and re-target, rather than an opaque graph
+                                        networks with a CPU backend. snn-mlir is released as open                      that each backend interprets on its own.
+                                        source under the Apache-2.0 license with LLVM-exception and                       This paper presents snn-mlir, an out-of-tree MLIR dialect
+                                        it is already available on Github.                                             for SNNs and a compilation bridge that takes a NIR model all
+                                          Index Terms—Spiking neural networks, neuromorphic com-                       the way to self-contained C code. Our contributions are:
+                                        puting, MLIR, NIR, compilers, quantization, edge deployment.                      1) A type-polymorphic SNN dialect. A compact set of
+                                                                                                                             operations models the CUBA-LIF neuron family and
+                                                                                                                             its linear synapses. Each operation works identically on
+                                                                   I. Introduction                                           f32 and on quantized i8/i32 data, so simulation and
+                                                                                                                             deployment share one IR and one set of ops, with no
+                                        S    PIKING neural networks have moved from a neuroscience
+                                             modeling tool to a practical option for low-power inference
+                                        on edge and embedded hardware. Their event-driven, stateful
+                                                                                                                             parallel float and integer op sets to maintain.
+                                                                                                                          2) A NIR bridge with automatic quantization-scale
+                                                                                                                             alignment. A Python front end reads any NIR graph and
+                                        computation maps naturally onto neuromorphic processors
+                                                                                                                             emits dialect IR. In quantized mode it inserts rescaling
+                                        and, increasingly, onto conventional microcontrollers operating
+                                                                                                                             operations automatically to align the differing fixed-
+                                        under tight energy and memory budgets. This growing interest
+                                                                                                                             point scales between linear layers and neuron dynamics,
+                                        has produced a healthy ecosystem of training frameworks
+                                                                                                                             a mechanism that has no NIR counterpart and that
+                                        (snnTorch [1], Lava [2], Norse [3], Nengo [4] Rockpool [5],
+                                                                                                                             removes a common source of silent error in hand-written
+                                        Sinabs [6]) each capable of producing trained models. It has
+                                                                                                                             quantized inference.
+                                        also produced a familiar problem: every framework speaks its
+                                                                                                                          3) A reference CPU lowering. A conversion pass rewrites
+                                        own language, and a model trained in one is not readily usable
+                                                                                                                             dialect operations into standard linalg and arith oper-
+                                        in another, let alone on a target device.
+                                                                                                                             ations, which the existing MLIR and LLVM toolchain
+                                           The Neuromorphic Intermediate Representation (NIR) [7]
+                                                                                                                             compiles to LLVM IR and then to machine code. The
+                                        was introduced to solve exactly this exchange problem. NIR
+                                                                                                                             emitted C runtime is standard, dependency-free C11,
+                                        defines a small, framework-independent vocabulary of neuron
+                                                                                                                             compilable by any C-capable target.
+                                        and synapse primitives (leaky integrate-and-fire variants, linear
+                                                                                                                          4) An evaluation of fidelity and portability. We verify
+                                        and affine connections) and lets any framework export a trained
+                                                                                                                             numerical correctness against reference outputs, demon-
+                                           ∗ INTERA-Group, Barcelona, Spain                                                  strate that the same IR re-targets across multiple CPU
+                                        (e-mail: alejandro.garcia@intera-group.com, alvaro.rollon@intera-group.com)          and embedded targets, and quantify the accuracy-versus-
+                                                                                                                                                  2
+
+
+
+
+Fig. 1. End-to-end compilation flow of snn-mlir. A trained SNN, exported from any NIR-compatible framework, passes through the Python front end into
+the SNN dialect, is lowered to standard MLIR and LLVM IR, and compiled to a self-contained C11 binary that runs on any C-capable target.
+
+
+
+      footprint trade-off of quantization.                                 to one) yields the non-leaky integrate-and-fire case (IF), and
+   This work deliberately targets a well-defined subset. snn-              removing the threshold yields a pure integrator (I) whose
+mlir currently supports feedforward, fully-connected network               continuous membrane potential is read out directly (useful
+topologies (linear-chain graphs without branching or recur-                as a final regression or readout layer). These four behaviors
+rence) operating on one-dimensional activation vectors with                (single versus two-state, and spiking versus integrating) span
+a batch size of one, and provides a single reference CPU                   the operations our dialect needs to model, and they are exactly
+backend. These choices keep the system small and verifiable,               the primitives the NIR standard exposes.
+but they are also real limitations: Convolutional synapses,                   For a compiler audience, the salient point is that these
+branching and recurrent graphs or batched inference are not                neurons are not point-wise functions. Each carries state that
+yet supported. We discuss these constraints in detail later                must persist across timesteps, a threshold, reset and control
+and outline how the design is positioned to lift them. We                  decision, and a sharp distinction between binary spike outputs
+frame the result not as a faster alternative to GPU inference,             and continuous voltage outputs. A representation that flattens
+but as a portable, dependency-free deployment path that any                them into anonymous arithmetic loops discards precisely the
+compatible SNN, from any framework, can reach through NIR.                 structure a compiler would want to reason about.
+
+               II. Background & related work                               B. NIR as an exchange format
+A. SNNs and the Cuba-LIF family                                               The Neuromorphic Intermediate Representation addresses
+   Unlike the static, real-valued activations of conventional              the fragmentation of the SNN ecosystem by defining a
+artificial neural networks, spiking neural networks compute                framework-neutral graph format with a fixed vocabulary of
+over time. A neuron maintains internal state that integrates               node types (linear and affine synapses, and the LIF/CUBA
+incoming signals across discrete timesteps, and it communi-                neuron family among them). A network trained in one frame-
+cates with downstream neurons through spikes (binary, all-or-              work can be exported to NIR and read back in another, and
+nothing events) rather than continuous values. This temporal,              a growing list of simulators (including LAVA, SNNTorch,
+stateful, and largely binary style of computation is what makes            Norse, Nengo, Rockpool, and Sinabs [1], [2], [3], [4], [5],
+SNNs attractive for low-power hardware: work happens only                  [6]) support it as an export target. By consuming NIR, a
+when spikes occur, and the data moving between layers are                  downstream tool inherits all of these frameworks at once,
+sparse.                                                                    rather than maintaining an individual importer per framework.
+   The dominant neuron model in practice is the leaky                         NIR is also deliberately broad in physical scope. It describes
+integrate-and-fire (LIF) [9] family. A LIF neuron accumulates              both continuous-time analog and discrete-time digital neuron
+input into a membrane potential that decays ("leaks") toward               models, parameterizing them with continuous quantities such
+rest each timestep. When the potential crosses a threshold,                as membrane and synaptic time constants, leak, and threshold.
+the neuron emits a spike and resets. The current-based variant             This generality is a strength for exchange, but it means a
+(CUBA-LIF) refines this with a second state variable: incom-               NIR graph is a mathematical description of a network, not
+ing spikes first charge a synaptic current, which then drives              an executable artifact. NIR fixes the semantics of a model. It
+the membrane voltage, giving the neuron two coupled leaky                  intentionally says nothing about how that model is discretized,
+states instead of one. Removing the leak (setting the decay                quantized, scheduled, or compiled for a particular target.
+                                                                                                                                              3
+
+
+
+Turning a NIR graph into running code is left entirely to the          • The dialect is explicitly typed: Every operation carries
+consumer and that is the gap this work fills.                            the element type and shape of its operands in the IR text,
+                                                                         so the same operation reads unambiguously whether it is
+C. MLIR and Progressive Lowering                                         operating on floating-point or integer data.
+                                                                       • The dialect is designed to be one IR for both simu-
+   MLIR is a compiler infrastructure organized around dialects:
+Self-contained sets of operations, types, and attributes that            lation and deployment: The same NIR graph serves as
+model a particular domain at a particular level of abstrac-              a faithful floating-point reference and as the source for a
+tion. A program is expressed in high-level, domain-specific              quantized, hardware-oriented build; there is no separate
+dialects and then progressively lowered (through a sequence              "deployment IR" that can drift out of sync with the
+of rewrite passes) toward successively lower-level dialects,             reference.
+until it reaches a form (such as the LLVM dialect) from                The guiding idea behind all three is that a spiking network
+which machine code can be generated. Every operation, at            should be a first-class compiler object. A neuron layer is one
+every level, is first-class IR: it can be verified, analyzed, and   operation that carries its own decay constants and threshold,
+transformed by standard passes, and dialects can be mixed           not an opaque nest of arithmetic. Standard MLIR passes can
+within a single module. This makes MLIR a natural home              verify it, inspect it, and rewrite it, and the network stays
+for a new domain abstraction. A custom dialect can capture          analyzable and retargetable all the way down.
+domain semantics explicitly at the top of the pipeline, then           The dialect defines six operations, covering linear synapses
+reuse the entire existing ecosystem of lower-level dialects and     (with and without bias), rescaling, and the four neuron be-
+code generators beneath it, rather than building a compiler         haviors of the CUBA-LIF family (TABLE I). Each operation
+stack from scratch.                                                 has a human-readable assembly format, so the IR is directly
+                                                                    inspectable and hand-editable. As an example, the CUBA-
+D. Related Work                                                     LIF neuron layer makes its full structure explicit: The input
+                                                                    current, the two in-place state buffers, the spike output, and
+   Most existing routes from a trained SNN to a deployed one
+                                                                    the dynamics parameters as attributes.
+are framework-specific. A given simulator typically ships its
+                                                                       The operation reads as exactly what it computes: a 256-
+own deployment or code-generation path, tied to its own model
+                                                                    neuron CUBA-LIF layer that decays its synaptic current
+format and often to a particular hardware target. These paths
+                                                                    and membrane voltage each timestep, fires when the voltage
+work well within their ecosystem but do not compose: a model
+                                                                    crosses the threshold, and resets. The state operands are read
+must commit to one framework’s toolchain, and porting to
+                                                                    and written in place, capturing the temporal nature of the
+a different target generally means re-exporting, re-quantizing,
+                                                                    neuron directly in the IR.
+and re-implementing the inference loop. NIR removes the
+format-level barrier between frameworks, but it stops at the
+model boundary, so each backend still re-implements de-              snn.cubalif ins(%input) state(%current, %voltage)
+ployment independently—frequently as hand-written inference              out(%output)
+                                                                         { cur_decay_float = 0.95 : f64,
+loops with target-specific quantization handling.                          vol_decay_float = 0.90 : f64,
+   A second line of work targets neuromorphic hardware                     threshold_float = 1.0 : f64 }
+directly, mapping networks onto specific chips through vendor            : memref<256xf32>, memref<256xf32>,
+                                                                         memref<256xf32> -> memref<256xf32>
+toolchains. Such compilers are valuable but are, by con-
+struction, specialized to their target device and programming
+model. What is missing between these two worlds is a shared,        Fig. 2. A 256-neuron CUBA-LIF layer in floating-point. The state(...)
+                                                                    operands are updated in place each timestep; dynamics parameters are carried
+framework-agnostic compiler IR: a representation that is neu-       as f64 attributes on the op itself.
+tral to the source framework, explicit about SNN semantics,
+and transformable and retargetable like any other compiler             The central design decision of the dialect is that a single
+program. snn-mlir occupies that layer. It takes the framework-      operation works on both floating-point and quantized data.
+neutral model that NIR provides and gives it a compiler-            snn.cubalif operating on memref<256xf32> and the same
+neutral intermediate representation in MLIR, one IR that can        operation operating on memref<256xi32> state with an i8
+be inspected, optimized with standard tooling, and lowered to       spike output are the same op, not two members of a parallel
+a CPU today or to custom hardware tomorrow through the              float and integer op set that must be kept in step.
+same backend-extension mechanism.                                      This is achieved by carrying both parameter representations
+                                                                    on the operation and selecting between them by operand type.
+                   III. The SNN dialect                             Each neuron op holds its dynamics parameters twice: as real-
+  The dialect is built on three deliberate choices.                 valued f64/f32 attributes (cur_decay_float, threshold_float,
+  • It is memref-based: Every operand (inputs, weights, neu-        etc.) and as Q12 fixed-point i32 attributes (cur_decay_int,
+    ron state, and outputs) is a memory reference rather than       threshold_int, etc. together with the d_scale). The lowering
+    an SSA value. This matches the reality of the domain,           reads only the set that matches the operand element type and
+    where neuron state must persist and be updated in place         the unused set keeps its default. The quantized version of the
+    across timesteps, and it maps cleanly onto the buffers a        layer above is the same operation with integer operands and
+    C runtime or an embedded target actually allocates.             the integer attribute set:
+                                                                                                                                                      4
+
+
+
+                                                                             TABLE I
+                                                                          SNN Dialect Ops
+
+  Op                        States                     Output           Summary
+  snn.linear                —                          f32/i32          Matrix-vector synapse layer + optional bias
+  snn.rescale               —                          i32              Per-edge requantization shift to align quantization scales
+  snn.cubalif               Current, voltage           f32/i8           Current-based leaky integrate-and-fire: two states, threshold and reset
+  snn.cubali                Current, voltage           f32/i32          Current-based leaky integrator: two states, continuous voltage output
+  snn.lif                   Voltage                    f32/i8           Leaky integrate-and-fire: single state, threshold and reset
+  snn.li                    Voltage                    f32/i32          Leaky integrator: single state, continuous voltage output
+
+
+
+ snn.cubalif ins(%input) state(%current, %voltage)                                   every rescaling is a bit-shift rather than a multiply-and-divide
+     out(%output)                                                                    (cheap and exact on integer-only embedded hardware) while
+     { d_scale = 12 : i32,                                                           keeping accuracy loss low.
+       cur_decay_int = 3891 : i32,
+       vol_decay_int = 3686 : i32,                                                      Weights: i8. For each synapse layer, a single per-layer scale
+       threshold_int = 4096 : i32}                                                   is chosen so the largest-magnitude weight maps near the i8
+     : memref<256xi32>, memref<256xi32>,                                             range without overflowing it:
+     memref<256xi32> -> memref<256xi8>
+                                                                                                                                 
+                                                                                                                     127     128
+Fig. 3. The same snn.cubalif op in Q12 integer mode. Only the operand                              ratio = min             ,                       (1)
+types and attribute set change; the op, its verifier, and its lowering pattern are                                  maxw     minw
+shared with the float case.
+                                                                                                   wscale = ⌊log2 (ratio)⌋                         (2)
+                                                                                                                         wscale
+   The payoff is concrete. A network can be lowered in floating                                       qw = round(w · 2            )                (3)
+point to produce a bit-faithful reference and lowered again in
+                                                                                        The exponent w_scale (not the factor) is recorded as an
+quantized form for an embedded target, from one dialect, one
+                                                                                     attribute on snn.linear, so the scale is recoverable downstream.
+op set, and one set of verifiers and passes. There is no second
+                                                                                     A bias, if present, is quantized with the same scale and stored
+code path to maintain and no risk that the float and integer
+                                                                                     as int32.
+semantics diverge. The neuron ops split along the output type:
+                                                                                        Neuron state: Q12 fixed point. Neuron parameters (decays,
+   • Spike-output ops (snn.cubalif, snn.lif ) apply a threshold
+                                                                                     threshold) are quantized to a fixed Q12 format, i.e. scaled by
+      and emit binary activations and reset on firing.                               212 , and emitted as integer attributes on the neuron op. The
+   • Voltage-output ops (snn.cubali, snn.li) have no threshold
+                                                                                     state arrays become i32 and spike outputs become i8 (0/1).
+      and emit the continuous membrane potential directly; they                      The neuron’s scale exponent is d_scale = 12
+      serve as the final readout layer in regression or readout                         The problem, rescaling. These two scales are chosen
+      networks.                                                                      independently and almost never match. A snn.linear produces
+   Encoding this distinction in the op set, rather than as a                         values at scale 2w_scale , but the following neuron op expects its
+flag, lets a backend treat the two cases differently without re-                     input at the neuron’s scale 2d_scale . Feeding one into the other
+deriving the network’s intent. The integrate-and-fire variants                       unaltered would silently corrupt the dynamics. The front end
+are not separate ops at all: Setting the decay to one disables                       resolves this by inserting a synthetic snn.rescale operation on
+the exponential leak, so snn.IF and snn.CubaIF are simply the                        every synapse-neuron edge that shifts by exactly the difference
+leaky neurons with unit decay.                                                       of the two exponents:
+   Finally, the dialect treats its restrictions as explicit, verifier-
+enforced design choices rather than silent assumptions. Ev-                                           shif t = d_scale − w_scale
+ery op requires one-dimensional activation vectors (mem-
+ref<Nxf32> or memref<Nxi32>): neuron populations are flat                               A positive shift is a left shift, a negative one an arithmetic
+arrays, not spatial feature maps. Each op carries a verifier                         right shift; the input is sign-extended to i32 before shifting.
+(hasVerifier = 1) that checks operand ranks and type con-                            This operation exists only in quantized output and has no
+sistency, so feeding a two-dimensional feature map produces                          NIR equivalent. It is created by the export layer once both
+a clear diagnostic at verification time instead of a silent miss                     neighboring scales are known, replacing what would otherwise
+compilation downstream. This keeps the compiler honest and                           be a floating-point rescale with a single integer shift.
+machine-checkable, and it gives a well-defined surface against                          A working example. Consider a linear layer whose weights
+which future extensions, such as a convolutional synapse op,                         range over roughly [−0.7, 0.9]. The scale search gives
+can be added.
+
+                                                                                       ratio = min(127/0.9, 128/0.7) ≈ min(141, 183) = 141
+               IV. Quantization & Discretization
+  The quantization scheme is power-of-two (shift-based), in-
+spired by Lava’s approach [2] . Using powers of two means                                          w_scale = f loor(log2 (141)) = 7
+                                                                                                                                                  5
+
+
+
+   Weights are stored as round(w · 27 ), mapping 0.9 to 115                      the activation vector, and reading the float or int parameter
+and −0.7 to −90, safely inside i8. The layer therefore emits its                 attributes according to the operand type. Because the float and
+result at scale 27 . The CUBA-LIF neuron that follows works                      integer cases share one op and one pattern, the two code paths
+in Q12, so d_scale = 12. The front end inserts a rescale with                    cannot drift apart. They are the same lowering, specialized by
+shif t = 12−7 = 5, left-shifting the synapse output to align it                  type.
+with the neuron’s fixed-point format before the dynamics run.                       The network itself is emitted as a single MLIR function,
+In dialect IR this is three consecutive operations:                              carrying the LLVM attribute. This function advances the
+                                                                                 network by exactly one timestep, taking the weight buffers and
+ // int8 synapse, output at scale 2^7
+                                                                                 the neuron state buffers as memref arguments and updating
+ snn.linear ins(%x, %w) out(%syn) { w_scale = 7 :                                the state in place. Driving it across time is left to the runtime,
+     i64 }                                                                       which keeps the compiled kernel small and stateless from the
+     : memref<200xi8>, memref<256x200xi8> ->
+     memref<256xi32>
+                                                                                 caller’s point of view. Then, the snn-opt, the project’s stan-
+                                                                                 dalone opt tool, which registers the dialect and the lowering,
+ // align 2^7 -> 2^12 with a single left shift of 5                              applies SNNToLinalg.
+ snn.rescale ins(%syn) out(%resc) { w_scale = 7 :
+     i64, d_scale = 12 : i64 }
+                                                                                    From here, lowering to an executable is a straight, file-free
+     : memref<256xi32> -> memref<256xi32>                                        chain of standard tools. The result is then handed to stock
+                                                                                 mlir-opt, which converts linalg to affine loops, runs standard
+ // CUBA-LIF dynamics in Q12, i8 spike output
+ snn.cubalif ins(%resc) state(%cur, %vol) out(%spk)
+                                                                                 cleanup (loop-invariant code motion, CSE, canonicalization),
+     { d_scale = 12, cur_decay_int = 3891,                                       and lowers progressively through affine, scf, cf and the mem-
+     vol_decay_int = 3686, threshold_int = 4096 }                                ref/arith/func dialects down to the LLVM dialect. Finally mlir-
+     : memref<256xi32>, memref<256xi32>,
+     memref<256xi32> -> memref<256xi8>
+                                                                                 translate emits textual LLVM IR. From this point, any LLVM-
+                                                                                 based compiler produces an object file or executable.
+                                                                                    Every stage below snn-opt is an unmodified upstream tool.
+Fig. 4. Quantized synapse → rescale → neuron chain in the SNN dialect:
+the linear layer emits at scale 27 , snn.rescale shifts left by 5 to reach the
+                                                                                 The project contributes only the dialect and its one lowering
+neuron’s Q12 scale, and snn.cubalif runs the integer dynamics.                   pass, and inherits the entire optimization and code-generation
+                                                                                 stack beneath them.
+   The result is a fully integer pipeline whose inter-layer scales
+are provably consistent by construction, generated automati-                                             VI. Evaluation
+cally from a float NIR model with a single flag. The mech-                         We evaluate snn-mlir on four questions:
+anism is small, but it removes one of the most common and
+                                                                                   • Fidelity: Does the compiled output reproduce the source
+hardest-to-debug sources of error in hand-written quantized
+                                                                                      framework’s behavior?.
+SNN inference, a silent scale mismatch between a synapse
+                                                                                   • Portability: Does the same IR deploy unchanged across
+and the neuron it drives.
+                                                                                      different targets?.
+                                                                                   • Baseline: How does the dependency-free C binary com-
+               V. Lowering and code generation                                        pare to running the network in its framework?.
+   The dialect is the top of the pipeline. Everything below it                     • Trade-off: What does quantization cost and buy?.
+
+reuses standard MLIR and LLVM infrastructure. This section                       The evaluation is validation-oriented: the goal is a correct,
+describes the reference lowering from snn ops to standard                        deployable path, not one faster than a GPU.
+dialects, the CPU pipeline that carries it to LLVM IR, and
+the C runtime that wraps the result into a self-contained,                       A. Validation Setup
+dependency-free executable.
+   The reference lowering, SNNToLinalg, is a conversion pass                        We use the two example networks shipped with the project,
+that rewrites each snn operation into standard linalg and arith                  each exported to NIR from a different framework:
+operations, the level at which the rest of the MLIR ecosystem                       • snn_oxford: A two-layer current-based LIF network
+can take over. The pass installs one rewrite pattern per op and                        trained with LAVA-DL from the examples documenta-
+marks the snn dialect illegal, so a successful run leaves no snn                       tion [10], evaluated over the first 100 timesteps:
+operation behind.                                                                      Linear(200,256) → CubaLIF(256) → Linear(256,200) →
+   The key point is that the pass dispatches on operand element                        CubaLIF(200)
+type, which is what makes the dialect’s type polymorphism pay                       • snntorch: A four-layer network exported from snnTorch,
+
+off at the code-generation level. For snn.linear, the floating-                        evaluated over 25 timesteps :
+point path lowers to a linalg.matvec; the quantized path lowers                        Linear(784,256) → LIF(256) → Affine(256,10) →
+to a linalg.generic whose body sign-extends the i8 operands                            CubaLIF(10)
+and accumulates into the wider i32 output, implementing the                         Each network is compiled through the full pipeline in both
+integer matrix-vector product with the correct widening. The                     floating point and quantized modes and compared against
+neuron ops lower similarly, expanding their two-line update                      a reference spike trace from the original framework. The
+(decay, integrate, threshold-and-reset) for spiking neurons;                     fidelity metric is per-cell spike equality, the fraction of output
+decay and integrate for integrators into arith operations over                   cells (timesteps × neurons) matching the reference together
+                                                                                                                                                      6
+
+
+
+with the total spike count. Timing is reported in CPU cycles                     That contrast is the practical portability story. Both models
+per timestep, which is frequency-independent and therefore                    fit comfortably on a mid-range microcontroller, but bigger
+comparable across targets.                                                    SNNs would not fit on small devices such as an Arduino-class
+   Two targets are used. The x86 host is a 13th Gen Intel Core                part or a low-end STM32, which offer only tens of kilobytes
+i7-13620H (16 logical cores, x86_64) running Ubuntu 24.04                     of RAM. The limiting factor for deploying a given network
+under WSL2 at an effective 2.04 GHz, with LLVM/MLIR                           is therefore the model size, set almost entirely by its weights,
+22.x and clang (this is a full operating-system environment).                 and this is exactly what quantization addresses, cutting the
+The embedded target is an X-HEEP 32-bit RISC-V core on                        weight footprint and widening the range of devices a network
+FPGA, running bare-metal at a 15 MHz prototyping clock,                       can reach. The fixed ∼12.6 KB kernel, by contrast, is never
+with the C runtime cross-compiled. Only the quantized i8 build                the obstacle.
+is deployed to X-HEEP, as is appropriate for an integer-only
+embedded core.                                                                                            TABLE III
+                                                                                     On-target footprint and per-step cost (quantized int8).
+
+B. Numerical Fidelity                                                          Network        Target       Code+runtime          Weight+state
+   In float mode the compiled output is bit-exact with the                     snn_oxford     X-HEEP      12,584 B (9.6%)     114,416 B (43.6%)
+reference for both networks: every output cell matches and                     snntorch       X-HEEP      12,584 B (9.6%)     172,912 B (67.1%)
+the total spike counts are identical (Table II). This confirms
+that the dialect, its lowering, and the C runtime reproduce the
+                                                                              D. Baseline Comparison
+source framework’s dynamics exactly, with no drift across the
+discretized timestep loop.                                                       To put the compiled binary in context, we compare its per-
+   In quantized int8 mode the output is no longer bit-exact, as               inference-step cost against running the same network in its
+expected from the precision reduction, but the most important                 original Python framework on the same x86 host (Table IV).
+result is consistency across targets: the x86 and the X-HEEP                  The framework baseline is large, 173.3M cycles per step for
+RISC-V runs produce 99.585% accuracy on snn_oxford and                        snn_oxford and 194.0M for snntorch because each step pays
+92.000% on snntorch, the same mismatched cells and the                        the full cost of the Python interpreter and the deep-learning
+same spike counts on both machines. Because the quanti-                       runtime: tensor allocation, dispatch, and library call overhead,
+zation is integer-only and shift-based, the compiled network                  repeated on every timestep. The snn-mlir i8 binary runs the
+is deterministic across two entirely different instruction sets.              same step in 651k and 1.23M cycles respectively, two-to-three
+The embedded target is not an approximation of the desktop                    orders of magnitude lower (≈266× and ≈157×); the bit-exact
+result but exactly equal to it. The residual error versus the                 float binary is 213× and 118× lower.
+float reference is network-dependent: negligible for snn_oxford                  This is not a peak-performance claim. For a small network
+(−0.4%, a net difference of one spike over 100 timesteps) and                 on a CPU, the framework’s per-step time is dominated by fixed
+modest for snntorch (−8%).                                                    interpreter overhead that has nothing to do with the network’s
+                                                                              arithmetic, roughly 85–95 ms per step at 2.04 GHz, versus well
+                                TABLE II                                      under a millisecond for the compiled binary. The point is what
+            Numerical fidelity, across precisions and targets.                that overhead means for embedded deployment. A framework
+                                                                              must carry an interpreter and its dependencies to run a single
+ Network        Target / mode   Spikes (act./ref.)   Mismatches    Bit acc.   timestep, whereas the snn-mlir artifact is a standalone C binary
+ snn_oxford     x86, float32       329 / 329          0 / 20,000   100.000%   with none of it. Removing that stack is precisely what makes
+ snn_oxford     x86, int8          328 / 329         83 / 20,000   99.585%
+ snn_oxford     X-HEEP, int8       328 / 329         83 / 20,000    99.585%
+                                                                              the network deployable on a bare-metal embedded target, the
+                                                                              same artifact that posts these x86 numbers is the one that runs
+ snntorch       x86, float32       178 / 178           0 / 250     100.000%
+ snntorch       x86, int8          180 / 178          20 / 250     92.000%    on X-HEEP.
+ snntorch       X-HEEP, int8       180 / 178          20 / 250      92.000%
+                                                                                                           TABLE IV
+                                                                               Baseline comparison: cycles per inference step (x86). The framework
+                                                                                  baseline includes Python interpreter and runtime overhead.
+C. Portability and Footprint
+   The same NIR graph that produced the x86 binary cross-                                      snn-mlir      snn-mlir     Framework      Speedup
+compiles, unchanged, to the X-HEEP RISC-V core, only the C                     Network          float32        int8        baseline       (int8)
+compiler differs. On-target memory usage (Table III) separates                 snn_oxford       812,110      651,270     173,303,778           266×
+cleanly into two parts. The code and runtime footprint is                      snntorch       1,639,168    1,233,384     194,004,915           157×
+fixed at ≈12.6 KB (9.6% of the 128 KB instruction region)
+and is identical for both networks. It is the timestep kernel,
+the memref glue, and the stack, none of which depend on                       E. Quantization Trade-off
+the model. The data footprint scales with the model and is                      Table V isolates what quantization costs and buys on the x86
+dominated by the i8 weight matrices: 114 KB for snn_oxford                    host, pairing the accuracy from the fidelity results with speed
+(43.6% of the 256 KB data region) and 172 KB for snntorch                     and size. i8 inference is 1.25× faster on snn_oxford (0.398
+(67%).                                                                        → 0.319 ms/step) and 1.34× faster on snntorch (0.819 →
+                                                                                                                                              7
+
+
+
+0.612 ms/step), while shrinking the weight data by roughly 4×.                    Uniform neuron parameters per layer. All neurons in a
+The accuracy cost is small and network-dependent, negligible                   layer share the same decay constants and threshold. Per-neuron
+for snn_oxford, modest for snntorch. The power-of-two, shift-                  parameter arrays are not yet supported.
+based scheme keeps these gains essentially free of arithmetic                     These constraints are enforced rather than silently assumed.
+overhead. Every resize is a single shift, not a multiply-and-                  Each one is surfaced at dialect verification time, so they
+divide, which is also why the integer build is deterministic                   manifest as clear diagnostics rather than incorrect output.
+enough to be bit-identical on x86 and RISC-V.
+                                                                                                    VIII. Future Work
+                              TABLE V
+             Quantization trade-off (float32 → int8, x86).                        Convolutional synapse ops are the most immediate exten-
+                                                                               sions. They would lift the 1-D activation restriction and enable
+ Metric                   snn_oxford                    snntorch               convolutional SNN topologies common in event-driven vision
+                                                                               and time-series workloads. The neuron dynamics ops already
+ Accuracy     100% → 99.59%                       100% → 92.00%
+                                                                               lower through type-dispatch and are not inherently limited to 1-
+ Time/step    0.398 → 0.319 ms                    0.819 → 0.612 ms
+ Speedup            1.25×                               1.34×                  D data; the blocker is the synapse op, not the neuron dynamics.
+ Weight data 1.86 MB → 443 KB                    3.66 MB → 939 KB                 Residual and recurrent graph support requires extending the
+ Compression        4.20×                               3.90×                  Python graph walker and IR emission layer to handle fan-out
+                                                                               and fan-in edges. The MLIR module format already accom-
+                                                                               modates this naturally (a multi-path network is a function with
+                                                                               additional memref arguments) so the change is concentrated
+                                                                               in the front end. Recurrent graph support, in particular, would
+                                                                               extend snn-mlir to Liquid State Machines, an important class
+                                                                               of reservoir computing SNNs not covered by the current linear-
+                                                                               chain walker.
+                                                                                  Neuromorphic hardware backends are a natural next step
+                                                                               once a stable dialect exists. The lowering-pass template estab-
+                                                                               lished by SNNToLinalg generalizes directly: a new conversion
+                                                                               pass targeting a vendor dialect (e.g., Intel Loihi 2 via Lava,
+                                                                               or SpiNNaker) follows the same one-pattern-per-op structure,
+                                                                               inheriting type-polymorphic dispatch and existing verifiers
+                                                                               for free. We actively welcome open-source contributions of
+                                                                               new backends and hardware architecture targets from the
+                                                                               community.
+                                                                                  The most strategically important next step, however, is
+                                                                               coordination with the NIR development team to establish
+Fig. 5. Per-step inference cost on x86 (log scale). The snn-mlir float32 and   a standardized quantization and discretization methodology
+int8 binaries run 213–266× faster than the framework baseline, which pays      across the ecosystem. The current scheme (power-of-two
+the full Python interpreter and runtime overhead on every timestep.
+                                                                               weight quantization, Q12 neuron state, automatic rescaling)
+                                                                               works well in practice, but it is one approach among several
+                           VII. Limitations                                    plausible ones. A shared, NIR-level convention for quanti-
+                                                                               zation parameters agreed upon across frameworks and tools
+   The current implementation covers feedforward, fully-                       would remove the last remaining per-backend divergence and
+connected SNN topologies. The following are known con-                         make quantized SNN deployment truly interoperable. snn-mlir
+straints:                                                                      is committed to contributing to and adopting whatever standard
+   No convolutional ops. NIR nodes such as nir.Conv2d,                         the community converges on.
+nir.AvgPool2d, and nir.SumPool2d operate on
+[channels, height, width] feature maps and have
+no equivalent SNN op yet. Supporting them requires new ops                                            IX. Conclusion
+(e.g., snn.conv2d). The neuron dynamics ops are already                           snn-mlir gives spiking neural networks a proper compiler
+rank-agnostic at the lowering level; extending them to N -D is                 intermediate representation for the first time. A trained SNN,
+straightforward once a convolutional synapse op exists.                        exported from any NIR-compatible framework, enters a type-
+   Linear-chain graphs only. The Python graph walker fol-                      polymorphic MLIR dialect whose operations carry explicit
+lows a single path from input to output. Branching, residual                   neuron semantics, are verified by the standard MLIR in-
+connections, and recurrent edges are not supported.                            frastructure, and lower through a single, auditable pass to
+   Batch size 1. There is no batched-inference mode. Each call                 dependency-free C11 code that runs unchanged on any C-
+to the compiled function processes one input sample as it is                   capable CPU or embedded target. The same IR serves both
+intended by NIR standard. The objective are embedded stream                    floating-point simulation and integer deployment, with quanti-
+applications rather than batch training acceleration.                          zation scales aligned automatically by the front end, removing
+                                                                                  8
+
+
+
+one of the most common sources of silent error in hand-
+written quantized SNN inference. Numerical fidelity is bit-
+exact in floating point and deterministic across architectures
+in i8. The project is open source under the Apache-2.0 license
+with LLVM-exception and is available at https://github.com/
+INTERA-GROUP/snn-mlir.
+   snn-mlir is a starting point, not a finished product. We hope
+it serves as a useful foundation and we welcome collaborators,
+new backends, hardware targets, and ecosystem integrations.
+The project is designed to grow with the neuromorphic com-
+munity, and every contribution (from a new lowering pass to
+a standards discussion) is valued.
+
+                           Acknowledgment
+   The authors thank the Open Neuromorphics community
+and the NIR development team for maintaining an open,
+framework-neutral SNN exchange format that made this work
+possible, and the MLIR and LLVM communities for the
+infrastructure on which snn-mlir is built. We also extend our
+thanks to all future contributors who will help shape, extend,
+and improve this project, this work belongs to the community
+as much as to its authors.
+
+                               References
+ [1] J. K. Eshraghian, M. Ward, E. Neftci, X. Wang, G. Lenz, G. Dwivedi,
+     M. Bennamoun, D. S. Jeong, and W. D. Lu, “Training spiking neural
+     networks using lessons from deep learning,” Proceedings of the IEEE,
+     vol. 111, no. 9, pp. 1016–1054, 2023.
+ [2] Intel Labs, “Lava: An open-source software framework for developing
+     neuro-inspired applications,” https://lava-nc.org, 2021, online; accessed
+     2025.
+ [3] C. Pehle and J. E. Pedersen, “Norse: A deep learning library for spiking
+     neural networks,” https://doi.org/10.5281/zenodo.4422025, Jan. 2021,
+     documentation: https://norse.ai/docs/.
+ [4] T. DeWolf, P. Jaworski, and C. Eliasmith, “Nengo and low-power AI
+     hardware for robust, embedded neurorobotics,” Frontiers in Neuro-
+     robotics, vol. 14, p. 568359, 2020.
+ [5] SynSense, “Rockpool: A python package for developing signal process-
+     ing networks for neuromorphic processors,” https://github.com/synsense/
+     rockpool, 2021, online; accessed 2025.
+ [6] S. Sheik, G. Lenz, F. Bauer, and N. Kuepelioglu, “SINABS: A simple
+     PyTorch-based SNN library specialised for Speck,” https://github.com/
+     synsense/sinabs, 2023.
+ [7] J. E. Pedersen, S. Abreu, M. Jobst, G. Lenz, V. Fra, F. C. Bauer, D. R.
+     Muir, P. Zhou, B. Vogginger, K. Heckel, G. Urgese, S. Shankar, T. C.
+     Stewart, S. Sheik, and J. K. Eshraghian, “Neuromorphic intermediate
+     representation: A unified instruction set for interoperable brain-inspired
+     computing,” Nature Communications, vol. 15, no. 1, p. 8122, Sep. 2024.
+ [8] C. Lattner, M. Amini, U. Bondhugula, A. Cohen, A. Davis, J. Pienaar,
+     R. Riddle, T. Shpeisman, N. Vasilache, and O. Zinenko, “MLIR:
+     Scaling compiler infrastructure for domain specific computation,” in
+     2021 IEEE/ACM International Symposium on Code Generation and
+     Optimization (CGO), 2021, pp. 2–14.
+ [9] W. Gerstner, W. M. Kistler, R. Naud, and L. Paninski, Neuronal
+     Dynamics: From Single Neurons to Networks and Models of
+     Cognition. Cambridge University Press, 2014. [Online]. Available:
+     https://neuronaldynamics.epfl.ch
+[10] Intel Labs, “Lava-DL SLAYER: Oxford flower dataset training note-
+     book,” https://lava-nc.org/lava-lib-dl/slayer/notebooks/oxford/train.html,
+     2021, online; accessed 2025.
+

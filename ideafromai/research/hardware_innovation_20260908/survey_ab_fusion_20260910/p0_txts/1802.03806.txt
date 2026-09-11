@@ -1,0 +1,401 @@
+                                                ThUnderVolt: Enabling Aggressive Voltage Underscaling and
+                                                Timing Error Resilience for Energy Efficient Deep Learning
+                                                                       Accelerators
+                                                                    Jeff (Jun) Zhang                                                    Kartheek Rangineni
+                                                                   New York University                                                    New York University
+                                                                  jeffjunzhang@nyu.edu                                                     kr2195@nyu.edu
+
+                                                                     Zahra Ghodsi                                                          Siddharth Garg
+                                                                   New York University                                                    New York University
+arXiv:1802.03806v2 [cs.NE] 13 Mar 2018
+
+
+
+
+                                                                     zg451@nyu.edu                                                          sg175@nyu.edu
+
+                                         ABSTRACT                                                                       Voltage underscaling based timing speculation is a promising tech-
+                                         Hardware accelerators are being increasingly deployed to boost the         nique that enables the energy consumption of digital circuits to be
+                                         performance and energy efficiency of deep neural network (DNN)             reduced beyond that achievable by conventional worst-case design
+                                         inference. In this paper we propose Thundervolt, a new framework           methodologies [12]. The idea is based on the observation that worst-
+                                         that enables aggressive voltage underscaling of high-performance DNN       case timing critical paths in digital logic are rarely exercised, making it
+                                         accelerators without compromising classification accuracy even in          possible to run digital circuits at supply voltages lower than the nomi-
+                                         the presence of high timing error rates. Using post-synthesis timing       nal voltage if timing errors can be dealt with. Two broad techniques
+                                         simulations of a DNN accelerator modeled on the Google TPU, we show        are proposed in literature to cope with timing errors: (i) timing error
+                                         that Thundervolt enables between 34%-57% energy savings on state-          detection and recovery (TED) [9, 12–14]; and (ii) timing error propaga-
+                                         of-the-art speech and image recognition benchmarks with less than          tion (TEP) [20, 23, 28, 42, 43]. TED detects timing errors (using Razor
+                                         1% loss in classification accuracy and no performance loss. Further, we    flip-flops [12], for instance) and recovers by safely re-executing the
+                                         show that Thundervolt is synergistic with and can further increase the     offending input. TEP, on the other hand, allows errors to propagate
+                                         energy efficiency of commonly used run-time DNN pruning techniques         to subsequent logic stages in the expectation that the algorithm itself
+                                         like Zero-Skip.                                                            is error resilient. Unfortunately, as discussed below and in Section 2,
+                                                                                                                    TED and TEP only provide limited voltage underscaling opportunities
+                                                                                                                    for high-performance DNN accelerators.
+                                         1   INTRODUCTION                                                               The challenge with applying TED to DNN accelerators with thou-
+                                         Deep neural networks (DNN) have achieved or surpassed state-of-            sands of parallel MAC units is that the global timing error rate (likeli-
+                                         the-art results in a wide range of machine learning applications, from     hood of at least one MAC experience a timing error) grows dramatically
+                                         image, video and text classification to speech recognition and language    with the number of MAC units — a TPU-like array with roughly 65K
+                                         translation [37]. DNNs contain multiple layers of computation, where       MACs, for instance, has a 50% global timing error rate even if each
+                                         each layer multiplies inputs from the previous layer with a matrix of      MAC unit only experiences 10−5 timing errors/clock cycle. Even as-
+                                         weights followed by a non-linear transformation such as a sigmoid or       suming an ideal single-cycle recovery penalty, a 50% global timing
+                                         linear rectification. State-of-the-art DNNs have millions of parameters    error rate imposes significant performance (and energy) overheads
+                                         requiring large matrix multiplications (or convolutions) and are thus      (see Section 2 for more detailed evaluation). On the other hand, al-
+                                         computationally challenging workloads. Consequently, there have            though TEP does not have a performance penalty, prior work [20] and
+                                         been several efforts from academia and industry on the design of           our own empirical evaluations in Section 4.2 show that simply allow-
+                                         special-purpose hardware accelerators for both DNN training and            ing timing-induced errors to propagate results in significant drops in
+                                         DNN inference [6, 7, 11, 21, 30, 35]. This paper focuses specifically on   classification accuracy even at timing error rates as low as 0.1%.
+                                         hardware accelerators for DNN inference.                                       In this paper, we propose Thundervolt, a framework that enables
+                                            While several different architectures for DNN acceleration have         aggressive voltage underscaling of DNN accelerators without compro-
+                                         been proposed, systolic array based implementations are among the          mising performance and with negligible (< 1%) impact on classification
+                                         most promising [21, 25, 40]. Systolic arrays are 2-D grids of homoge-      accuracy. Specifically, we make the following novel contributions:
+                                         neous processing elements (PE) that perform only nearest neighbour             • We propose TE-Drop, a new timing error recovery technique
+                                         communication, thus obviating the need for input buffering and com-              for DNN accelerators. TE-Drop detects timing errors using Ra-
+                                         plex routing. Furthermore, systolic arrays enhance energy efficiency             zor flip-flops (like TED), but avoids the performance impact of
+                                         by amortizing frequent (and power-hungry) reads of DNN weights                   re-execution by dropping the MAC operation subsequent to an
+                                         and activations over multiple compute operations. The Tensor Pro-                erroneous MAC and using the extra clock cycle to correctly
+                                         cessing Unit (TPU), an accelerator for DNN inference that is currently           compute the erroneous MAC’s result. Empirically, we show that
+                                         deployed in Google datacenters, uses a systolic array with a 256 × 256           TE-Drop enables execution at at timing error rates greater than
+                                         grid of multiply-and-accumulate (MAC) units at its core and provides             10% without compromising accuracy.
+                                         30×-80× greater performance/Watt than CPU and GPU based servers                • Second, we show empirically that the timing error rate of state-
+                                         at a raw throughput of 90 TOPS/second [21].                                      of-the-art DNNs varies significantly across layers. Motivated
+                                                                                                                1
+                                                                                                         
+                                                                                i.e., Ai+1 = ϕ Y i . Note that DNNs are generalizations of convolutional
+                                                                                neural networks (CNN) in which the matrix multiplication is replaced
+                                                                                with convolutions; the proposed techniques apply to CNNs as well but
+                                                                                a detailed description of CNN execution is omitted for lack of space.
+                                                                                     DNN accelerators aim to speed-up the most computationally ex-
+                                                                                pensive operation in DNN execution, i.e., computing the matrix mul-
+                                                                                tiplication W × A (the superscript indicating the layer is dropped for
+                                                                                simplicity). Figure 1 shows a block-diagram of an exemplar DNN ac-
+                                                                                celerator modeled closely on the TPU that contains, at its heart, a
+                                                                                systolic array with an N × N grid of MAC units that accelerates matrix
+                                                                                multiplication. Assume that w i j (ai j ) is the element in the i th row and
+                                                                                j t h column of weight (activation) matrix W (A). The operation of the
+                                                                                systolic array can be explained as follows.
+Figure 1: Architecture of a systolic array based DNN accelera-                       First, weights are pre-loaded into array and remain stationary
+tor that serves as a baseline for Thundervolt.                                  throughout a block of computation. We refer to the MAC unit that
+      by this observation, we propose a dynamic per-layer voltage               stores w i j as MACij . Next, activations stream in from the activation
+      underscaling scheme that determines the voltage underscaling              memory, one activation per row per clock cycle, and move from left to
+      ratio of each layer to balance timing error rates across layers           right. The activation streams are purposefully staggered by one clock
+      of the DNN. Empirically, the proposed scheme significantly                cycle. MAC11 computes w 11a 11 in the first clock cycle, MAC12 unit
+                                                                                adds w 12a 21 to MAC11 ’s product in the next clock cycle, and so on.
+      outperforms an alternative in which each layer is under-scaled                                                                        Í
+      by the same amount.                                                       In clock cycle N , the MAC1N unit outputs y11 = i w 1i ai1 , which
+    • We show that Thundervolt can be applied synergistically                   is the first element of the output matrix. MAC1N proceeds to output
+      with Zero-Skip, an energy reduction technique employed in                 y12 , . . . , y1B in subsequent clock cycles.
+      several DNN accelerators [1, 7, 22, 29, 32]. Notably, while Zero-              The second column receives the same stream of inputs as the
+      Skip reduces the energy of MACs with zero inputs (either weight           first column, but delayed by one clock cycle. This column outputs
+      or activation), Thundervolt reduces the energy of all remaining           y21 , y22 , . . . , y2B . In this manner, a batch of B inputs is multiplied by
+      non-zero MAC operations by executing them at an underscaled               an N × N weight matrix in 2N + B clock cycles.
+      voltage.                                                                       If the size of matrix-matrix multiplication is larger than the sys-
+    • Empirical evaluations of Thundervolt based on detailed post-              tolic array, the operation is performed in several blocks. The result
+      synthesis timing simulations show that Thundervolt enables                of each block is stored in accumulators and is added to the result of
+      between 34.36%-57.75% energy savings over a baseline DNN ac-              the next block. After matrix-matrix multiplication is complete, the
+      celerator modeled on the Google TPU enhanced with Zero-Skip               activation function is applied to the results stored in accumulators
+      optimization. These savings are achieved with no performance              using a separate layer of logic. For ReLU non-linearities, only a single
+      overhead and at most a 1% reduction in classification accuracy.           comparator per accumulator is required and therefore the activation
+                                                                                layer constitutes less than 0.3% of the systolic array’s total area. Note
+  To the best of our knowledge, ours is the first paper to investi-
+                                                                                that convolutional layers can also use the same DNN architecture by
+gate the use voltage underscaling based timing speculation for high-
+                                                                                loading weights and activation values into the systolic array with an
+performance, highly-parallel DNN accelerators like the Google TPU.
+                                                                                appropriate schedule.
+2   BACKGROUND AND MOTIVATION                                                   2.2    Timing Speculation for DNN Accelerators
+In this section, we describe the relevant background on hardware                We now discuss the limitations of conventional timing speculation
+acceleration for DNNs, and motivate Thundervolt by discussing why               schemes, i.e., TED and TEP, in the context of DNN accelerators.
+existing timing speculation mechanisms such as TED and TEP can                  Timing Error Detection and Recovery (TED) First proposed by
+only provide limited energy savings for high-performance DNN accel-             Ernst et al. [12], TED uses so-called Razor flip-flops to sample the
+erators.                                                                        output of combinational logic twice: once using the regular clock and
+                                                                                again using a delayed clock. If the two samples are different, a timing
+2.1 Hardware Accelerators DNNs                                                  error is flagged and the input is safely re-executed at a reduced clock
+We begin by mathematically describing how a DNN performs infer-                 frequency by gating the subsequent clock edge.
+ence (i.e., predictions) on a batch of B inputs. A DNN consists of L                An ideal TED scheme detects if any flip-flop in the design has a
+stacked layers of computation. Layer i has N i neurons whose outputs            timing error, and if so, distributes a clock gating signal to each flip-flop,
+                                                                                all within one clock cycle. We refer to this technique as global TED. As
+                                                                  i
+are referred to as activations, represented by an matrix Ai ∈ RN ×B , in
+which each column corresponds to an input from the batch. Layer i mul-          the authors note [12], global TED is impractical for even moderately
+                                                             i +1
+tiplies its activation matrix with weight matrix W i ∈ RN ×N and
+                                                                    i
+                                                                                sized designs. Consequently, several distributed TED schemes that use
+                      i +1                                          i +1
+adds a bias b i ∈ RN to yield Y i = W i Ai + b i , where Y i ∈ RN ×B .          pipelined error detection and recovery logic have been proposed [9, 13],
+The matrix multiplication outputs are passed through an element-                but incur higher performance overhead than global TED.
+wise non-linearity ϕ(.), such as the tanh, sigmoid and rectified linear             Figure 2a illustrates the limitations of global TED on a 256 × 256
+(ReLU) non-linearities [37], to yield the activations for the next layer,       MAC array; note from the figure that even though the local timing
+                                                                            2
+                   (a)                                   (b)
+Figure 2: (a)Timing error probabilities versus voltage under-
+                                                                                  Figure 3: A block-level diagram illustrating TE-Drop and its im-
+scaling ratio, and the corresponding energy cost for global
+                                                                                  pact of timing errors on the computation of a neuron.
+TED. (b) TEP versus the error-free outputs of the network.
+error rate (i.e., timing errors per MAC operation) increases only grad-           TE-Drop builds on the observation that the distribution of weights in
+ually with voltage underscaling, the global timing error rate shoots up           DNNs (and CNNs) is biased towards small values [16] (we also validate
+when the voltage is underscaled below r = 0.9 of the nominal voltage              this observation in our own experiments); hence, the contribution of
+(r is referred to as the voltage underscaling ratio). Therefore, even             each individual MAC operation to the output of a neuron is small.
+optimistically assuming that single-cycle error detection and recovery                When a MAC incurs a timing error, TE-Drop steals the next clock
+is feasible, voltage underscaling below r = 0.9 results in increased              cycle from its successor MAC to correctly finish its own update to
+energy consumption. A more realistic five cycle error recovery penalty            the partial sum, and bypass (or drops) the successor MAC’s update.
+further increases the energy costs of global TED.                                 As shown in Figure 3, TE-Drop requires minimal hardware changes.
+   While we omit a detailed discussion of distributed TED schemes                 In addition to Razor flip-flops, TE-Drop adds a multiplexor (MUX)
+for brevity, we note that a timing error in any MAC unit introduces a             controlled by the error signal from the prior MAC unit. If the previous
+bubble that is propagated downstream (towards the right and down-                 MAC unit incurs an error, the MUX forwards the previous MAC’s
+wards in Figure 1) and a stall signal that propagates upstream (towards           correctly computed partial sum (obtained from Razor’s shadow flip-
+the left and upwards in Figure 1). When the stall signal eventually               flop) to the next MAC unit; if not, the current MAC unit updates the
+reaches the left-most column, it causes all of the array’s N parallel             partial sum as it normally would and forwards to the next MAC.
+inputs to skip one clock cycle. Note that to maintain synchrony in the                Figure 3 illustrates TE-Drop’s operation with a timing diagram. As
+systolic array, it is important that all inputs skip a cycle. Consequently,       in prior work, we assume that the shadow clock is delayed by 50% of
+distributed TED schemes perform no better than global TED.                        the clock period, after which the error signal and correct partial sum
+Timing Error Propagation (TEP) An alternative approach is to ex-                  from the prior MAC become available. Note that, although not shown
+ploit algorithmic noise tolerance and simply allow timing errors to               in Figure 3, the error signal is obtained by OR-ing the error outputs
+propagate to subsequent stages of computation instead of re-executing             of each of individual Razor flip-flop at the output of the MAC. This
+inputs that cause errors [18, 20, 42]. Recent work [20] has demon-                requires at worst a 24-input OR gate, although, as we note in Section 4.1,
+strated that TEP causes the classification accuracy of DNNs to drop               only a fraction of the MAC units outputs need to be protected using
+sharply for timing error rates as low as 0.1%. Our empirical evaluations          Razor flip-flops. For correct operation, the error signal computation and
+of TEP in Section 4.2 reach the same conclusion.                                  propagation through the MUX must complete within the remaining
+   The sensitivity of TEP to timing errors is because the errors fre-             half clock cycle. This constraint is easily met; in our implementation,
+quently flip high-order bits of MAC outputs (i.e., the partial sums),             error signal computation and MUX propagation consume only 16.7%
+resulting in large computational errors even at low timing error rates.           and 2% of the clock period.
+Figure 2b plots the error-free (golden) vs. the TEP activations for Layer             The effect of TE-Drop on the DNN execution can be captured math-
+3 of a MNIST digit recognition network executing at a voltage under-              ematically as follows. Let ei jk be a binary variable that is zero if the
+scaling ratio of r = 0.85. The timing error rate per MAC at r = 0.85              MAC operation that multiplies weight w ik with activation ak j is erro-
+                                                                                  neous and one otherwise. The systolic array augmented with TE-Drop
+is only 0.01%; yet the root mean square error between the TEP and                                                                 Í
+golden activations is as high as 33.9x the average value of golden                computes the output yi j as follows: yi j = kN=1 w ik ak j ei jk ′ , where
+activations.                                                                      k ′ = k − 1. Equivalently, as illustrated in Figure 3, TE-Drop can be
+                                                                                  viewed as “randomly" dropping a fraction of connection between input
+3     THUNDERVOLT DESIGN                                                          and output neurons, where the randomness arises from timing errors.
+                                                                                  Interestingly, randomly dropping neurons and connections during
+We now describe in detail the new architectural innovations that we
+                                                                                  training are commonly used techniques, referred to as dropout [19]
+propose as part of of Thundervolt.
+                                                                                  and dropconnect [39], respectively, that prevent overfitting and help
+3.1    TE-Drop                                                                    reduce generalization error.
+At the heart of Thundervolt is TE-Drop, a new technique to deal
+with timing errors in MAC units. Like TED, TE-Drop instruments                    3.2    Per-layer Voltage Underscaling
+Thundervolt with Razor flip-flops to detect timing errors, but recovers           Our baseline accelerator computes on each layer of the DNN iteratively.
+from timing errors without re-executing erroneous MAC operations.                 Each layer can take thousands of clock cycles to execute, depending
+                                                                              3
+                  (a)                                   (b)                                          (c)                                              (d)
+               Figure 4: Timing error probabilities for each layer of (a) MNIST, (b) Reuters, (c) TIMIT, and (d) ImageNet.
+
+on its size. We have so far assumed that the voltage underscaling ratio,          Algorithm 1: Per-layer voltage underscaling algorithm.
+r , is constant across layers. However, empirical evidence suggests that           Data: L, pt ot al , rmin , pi (r ) ∀i ∈ [1, L]
+it might be beneficial to dynamically adjust the extent of of voltage              Result: r i∗ ∀i ∈ [1, L]
+underscaling from one layer to the next.                                         1 pr emain = ptot al ;
+     Figure 4 plots the timing error rate for each layer of four DNN
+                                                                                 2 Sort layers in ascending order of pi (rmin );
+architectures (more details about each DNN can be found in Section 4.1)
+                                                                                 3 Store sorted order in vector idx;
+as a function of the voltage underscaling ratio. In all four cases, we
+                                                                                 4 for i ∈ [1, L] do
+find that the timing error rate varies significantly from one layer to the
+next. For instance, at the lowest voltage underscaling ratio of r = 0.65,        5     j = idx(i);
+                                                                                                    pr emain
+the error rates for layers with the highest and lowest timing error                                             ;
+                                                                                                                                    
+                                                                                 6     pt ar дet = L−i+1
+rates differs by between 2× to 20×. Further, we find that for the two            7     r j∗ = arg minr :p j (r )≤pt ar дe t p j (r ) ;
+smaller networks, MNIST and Reuters, the timing error rate is highest            8       pr emain = pt ot al − p j (r j∗ );
+for deeper layers in the network, while for the two larger networks,             9    end
+TIMIT and AlexNet, the timing error rate decreases with depth.
+     Using the same voltage underscaling ratio for each layer might
+limit the potential for some layers to run at low voltages because
+the high error rate for another layer has an unacceptable impact on
+classification accuracy. Hence, we propose per-layer voltage under-
+scaling scheme that aims to equally distribute a total timing error
+budget, pt ot al , equally among layers. Our approach is described in
+Algorithm 1.
+     Algorithm 1 takes as input the timing error profile as a function of
+the voltage underscaling ratio for each layer in the DNN (character-
+ized by the function pi (r )), a net timing error budget ptot al , and the             Figure 5: Online distributed error tracking circuitry.
+minimum allowed voltage underscaling ratio rmin , and outputs the                current layer is set to the ratio that achieves the largest error probabil-
+optimal voltage underscaling ratio r i∗ for each layer i ∈ [1, L].               ity that is less than or equal to the target. Finally, the current layer’s
+     The timing error rates per layer can be obtained using a validation         error probability at this ratio is subtracted from the remaining budget.
+dataset via timing simulations, or, practically, from production chips           The rationale for looping through the layers in ascending order of
+via the online error tracking logic shown in Figure 5. The error tracking        timing probability is to ensure that low error probability layers do not
+logic sums up the single-bit error signals generated by MAC units along          get assigned budgets they cannot fully utilize.
+the array’s columns. The total error of each column is then summed
+along the bottom row to obtain the total error for an entire batch of            4 EMPIRICAL EVALUATION
+execution. The proposed error tracking logic has low area overheads              4.1 Experimental Setup
+(less than 10%), and has significant timing slack. Further, the circuitry        Table 1: Details of the DNN benchmarks used and accuracy of
+does not incur in-field power overhead (on test data) once the optimal           32-bit and 8-bit implementations for the entire test set.
+underscaling ratios are determined using Algorithm1. Note that in the                                             Benchmarks                                        Accuracy (%)
+presence of process variations, the timing error profile of each chip                   Name                               Architecture                            32-bit  8-bit
+may be different and is characterized separately.                                    MNIST                    L1-L4 (FC): 784 × 256 × 256 × 256 × 10               98.15   98.15
+                                                                                     Reuters [5]             L1-L4 (FC): 2048 × 256 × 256 × 256 × 52               91.32   91.32
+     Algorithm 1 first sorts the layers in ascending order of timing error           TIMIT [4]             L1-L4 (FC): 1845 × 2000 × 2000 × 2000 × 183             74.13   73.91
+rate, using the timing error of each layer at the minimum voltage                                     L1-L2 (Conv): (224, 224, 3) × (27, 27, 64) × (13, 13, 192)
+                                                                                                                                                                   Top 5   Top 5
+                                                                                     ImageNet [10]    L3-L5 (Conv): (13, 13, 384) × (13, 13, 256) × (6, 6, 256)
+underscaling ratio. Next, the algorithm loops through layers in sorted                                            L6-L8 (FC): 4096 × 4096 × 1000                   79.06   76.33
+order and in each iteration computes a target error rate for the layer
+                                                                                 Benchmarks. We evaluate Thundervolt on four benchmarks, MNIST
+by dividing the remaining error budget (initialized to ptot al ) by the
+                                                                                 digit classification, Reuters text categorization [5], TIMIT speech recog-
+remaining number of layers. The voltage underscaling ratio for the
+                                                                                 nition [4] and image recognition using the ImageNet dataset [10]. The
+                                                                             4
+first three benchmarks use multi-layer perceptrons (MLPs) trained              prediction probabilities for the top two classes will be lower, making
+from scratch, while for ImageNet, we used the pre-trained AlexNet              it more susceptible to noise.
+CNN from PyTorch based on [24]. We note that MLPs account more                 Energy Savings on Test Data The validation data in Figure 6 is used
+than 66% of Google’s datacenter workload [21]. Table 1 shows the               to select the lowest energy design point for each benchmark where
+parameters of the four DNN architectures.                                      the loss in classification accuracy compared to nominal is less than 1%.
+Thundervolt Hardware Parameters Our baseline DNN accelera-                     The selected voltage underscaling ratios and corresponding timing
+tor is modeled around the Google TPU (see Figure 1) and contains               error rates are marked in Figure 6. Note that the reported timing error
+256 × 256 MACs with 8-bit weights and activations and a 24-bit output.         rates are per MAC operation; the corresponding global error rates at
+We implemented a prototype of the baseline accelerator in synthesiz-           these design points are much higher. In fact, we find that over all four
+able Verilog, and synthesized it with OSU FreePDK 45 nm standard cell          benchmarks, even an ideal TED implementation achieves at most 20%
+library using the Cadence Genus synthesis tool. Note that although             energy savings.
+Thundervolt performs voltage underscaling on the accelerator’s sys-               In Figure 7, we use the test dataset to compare the energy con-
+tolic array only, we estimate that the array consumes roughly 80% of           sumption of ThVolt-Dynamic with (a) the baseline TPU (base); (b)
+chip’s power, ignoring peripherals. Further, we determine that only 14         Zero-Skip [1, 7, 22, 29, 32], that saves energy at run-time by skipping
+out of 40 flip-flops in the MAC unit needed to be protected by Razor,          over all MAC operations with zero weights and/or activations, and (c)
+which imposes a roughly 3.35% power penalty, consistent with [12].             Zero-Skip+ThVolt-Dynamic, that applies ThVolt-Dynamic on top of
+Simulation Methodology We scheduled the benchmark DNNs on                      Zero-Skip. Several obervations can be made.
+the systolic array using the mapping described in [34]. The three                 First, compared to the baseline, ThVolt-Dynamic yields energy sav-
+MLPs are run with a batch size of 256 inputs, while for ImageNet               ings ranging from 36.3% on ImageNet, 50% on TIMIT and 56% on
+each batch has a single image, corresponding to an effective batch             MNIST and Reuters. Interestingly, applying ThVolt-Dynamic on top
+size of 3025 for the input convolutional layer and 169 for the output          of Zero-Skip (i.e., Zero-Skip+ThVolt-Dynamic) provides roughly the
+convolutional layer. As in [2, 29, 31], Thundervolt is only used to            same energy savings over Zero-Skip alone, demonstrating that Thun-
+accelerate ImageNet’s convolutional layers, which make up more than            dervolt is indeed synergistic with the Zero-Skip optimization. Finally,
+90% of its computational cost.                                                 Zero-Skip+ThVolt-Dynamic, the best performing scheme reduces en-
+   We model timing errors via detailed post-synthesis gate-level tim-          ergy consumption over the baseline by 73.27%-89.49%. We repeated
+ing simulations using ModelSim. For the three MLP benchmarks, we               these experiments by injecting σ = 5% process-induced variations
+simulate the entire 256 × 256 systolic array. However, simulating even         over 50 chip samples and note that the average energy savings remain
+a single ImageNet input takes 8 hours on a 40-core Intel Xeon server.          the same. However, the distribution of energy savings is not shown
+Thus, for the ImageNet CNN we obtain error probabilities from de-              for lack of space.
+tailed timing simulations of 32 randomly selected columns, and inject          5   RELATED WORK
+timing errors in the remaining columns [20] based on these probabili-
+                                                                               Thundervolt builds on a considerable body of literature on timing
+ties. For each DNN, we executed 7 × 256 inputs, of which 256 are used
+                                                                               speculation based TED techniques [12, 13]. Watmough et al. [43] re-
+as validation data, while the remaining are used for test.
+                                                                               cently implemented TED on a small, ultra-low power DNN accelerator
+4.2 Experimental Results                                                       with only 16 parallel MAC units. However, as discussed in Section 2
+Energy vs. Accuracy Trade-offs We begin by evaluating Thunder-                 and Section 4.2, these baseline TED techniques provide limited energy
+volt’s energy vs. accuracy trade-offs on the validation dataset in Fig-        saving potential for highly-parallel, high performance DNN accelera-
+ure 6. We report results for two versions of Thundervolt: ThVolt-              tors because of high global timing error rates. Techniques like time
+Static where each layer executes at the same voltage underscaling              borrowing [8, 43] and timing-error aware synthesis [14, 27, 38] reduce
+ratio, and ThVolt-Dynamic that performs per-layer underscaling                 baseline timing error rates and can be leveraged by Thundervolt to
+based on Algorithm 1. Also shown, for comparison, is energy vs. accu-          enable more aggressive underscaling.
+racy data for a baseline TEP scheme [20]. The results for ThVolt-Static           Approximate computing techniques have also been leveraged in
+are obtained by sweeping voltage underscaling ratios, and those for            the design of energy-efficient DNN accelerators including techniques
+ThVolt-Dynamic are obtained by sweeping the total timing error bud-            that use approximate multipliers [36] and reduced precision arith-
+get, pt ot al , in Algorithm 1.                                                metic [15, 17, 26, 32]. Here, the approximations are by design, while
+   Several observations can be made from Figure 6. First, note that            Thundervolt approximates due to timing errors. Thundervolt can po-
+for all four benchmarks, the accuracy of TEP falls sharply beyond              tentially be applied on top of these techniques to exploit timing slack in
+an energy savings of 20% (corresponding to a voltage underscaling              approximate circuits. A related line of research uses stochastic comput-
+ration of r = 0.9). From Figure 2a, it can be seen that this is the            ing for energy efficient DNN accelerators [3, 33]; however, stochastic
+point at which timing errors first start appearing, demonstrating the          logic based designs have yet not been adopted in commercial chips.
+poor timing error resilience of TEP. In contrast, both ThVolt-Static              Another commonly used technique for energy efficient DNN hard-
+and ThVolt-Dynamic continue to provide high accuracy even with                 ware prunes neurons and connections at design-time [16, 41, 44], thus
+aggressive voltage underscaling. Second, ThVolt-Dynamic consistently           reducing the size of the DNN. While we have evaluated Thundervolt
+outperforms ThVolt-Static, demonstrating the benefits of balancing             using standard architectural parameters reported in prior work, we
+error probabilities across layers. Finally, of the two large benchmarks,       note that Thundervolt can be applied on a pruned DNN as well. A
+TIMIT and ImageNet, the former is more resilient to timing errors — we         quantitative evaluation of Thundervolt on compressed DNN models is
+believe this is in part because ImageNet has 1000 output classes while         demarcated as future work. Another common technique to enhance
+TIMIT has only 138. Hence, for ImageNet, the distance between the              DNN efficiency is run-time pruning [1, 7, 22, 29, 32]; we show in
+                                                                           5
+                                               (a)                                                     (b)                                                        (c)
+                                                            Figure 6: Validation Data: Accuracy energy tradeoff using Thundervolt.
+                          1
+                               A               A                  A               A                           [7] Yu-Hsin Chen et al. 2017. Eyeriss: An energy-efficient reconfigurable accelerator for
+                                                                                                                  deep convolutional neural networks. IEEE JSSC 52, 1 (2017), 127–138.
+                                                                                              Layer1          [8] Mihir Choudhury et al. 2010. TIMBER: Time borrowing and error relaying for online
+                                                                                                                  timing error resilience. In IEEE DATE. 1554–1559.
+                                                                                              Layer2
+                         0.8
+    Normarlized Energy
+
+
+
+
+                                                                                              Layer3
+                                                                                      B       Layer4          [9] Shidhartha Das et al. 2009. RazorII: In situ error detection and correction for PVT
+                         0.6
+                                                                                              Layer5              and SER tolerance. IEEE JSCC 44, 1 (2009), 32–48.
+                                                                      B                                      [10] Jia Deng et al. 2009. Imagenet: A large-scale hierarchical image database. In IEEE
+                                   B                B                                                             CVPR. 248–255.
+                         0.4                                              C               C                  [11] Zidong Du et al. 2015. ShiDianNao: Shifting vision processing closer to the sensor.
+                                       C                                                      D                   In ACM SIGARCH Computer Architecture News, Vol. 43. 92–104.
+                         0.2
+                                                        C                     D                              [12] Dan Ernst et al. 2004. Razor: circuit-level correction of timing errors for low-power
+                                           D                 D
+                                                                                                                  operation. IEEE Micro 24, 6 (2004), 10–20.
+                                                                                                             [13] Matthew Fojtik et al. 2012. Bubble Razor: An architecture-independent approach to
+                          0                                                                                       timing-error detection and correction. In IEEE ISSCC. 488–490.
+                                   MNIST           Reuters            TIMIT       ImageNet
+                                                                                                             [14] Brian Greskamp et al. 2009. Blueshift: Designing processors for timing speculation
+               A: Base, B: Base+ThVolt-Dyn, C: Base+Zero-Skip, D: Zero-Skip+ThVolt-Dyn                            from the ground up.. In IEEE ISCA. 213–224.
+                                                                                                             [15] Suyog Gupta et al. 2015. Deep learning with limited numerical precision. In Proceed-
+Figure 7: Layer-wise energy reduction techniques compared                                                         ings of ICML. 1737–1746.
+to the baseline. For all cases, the classification accuracy loss                                             [16] Song Han et al. 2015. Deep compression: Compressing deep neural networks with
+                                                                                                                  pruning, trained quantization and huffman coding. arXiv preprint arXiv:1510.00149
+is within 1% of nominal, and no performance loss.                                                                 (2015).
+Section 4.2 that Thundervolt is synergistic with Zero-Skipping, a com-                                       [17] Soheil Hashemi et al. 2017. Understanding the impact of precision quantization on
+monly used instantiation of run-time pruning.                                                                     the accuracy and energy of neural networks. In IEEE DATE. 1474–1479.
+                                                                                                             [18] Rajamohana et al. Hegde. 2001. Soft digital signal processing. IEEE VLSI (2001),
+                                                                                                                  813–823.
+6   CONCLUSION AND FUTURE WORK                                                                               [19] Geoffrey Hinton et al. 2012. Improving neural networks by preventing co-adaptation
+                                                                                                                  of feature detectors. arXiv preprint arXiv:1207.0580 (2012).
+In this paper, we have presented and evaluated Thundervolt, a new                                            [20] Xun Jiao et al. 2017. An Assessment of Vulnerability of Hardware Neural Networks
+framework to enable aggressive voltage underscaling of high-performance                                           to Dynamic Voltage and Temperature Variations. In Proceedings of IEEE/ACM ICCAD.
+                                                                                                             [21] Norman Jouppi et al. 2017. In-datacenter performance analysis of a tensor processing
+DNN accelerators. Thundervolt deals with timing errors using a novel                                              unit. arXiv preprint arXiv:1704.04760 (2017).
+TE-Drop mechanism that incurs no performance penalty while pro-                                              [22] Dongyoung Kim et al. 2017. ZeNA: Zero-Aware Neural Network Accelerator. IEEE
+viding robust classification accuracy. Further, Thundervolt performs                                              Design Test (2017).
+                                                                                                             [23] Eric Kim et al. 2016. Error Resilient and Energy Efficient MRF Message-Passing-Based
+per-layer dynamic voltage underscaling and can be synergistically ap-                                             Stereo Matching. IEEE VLSI (2016).
+plied with dynamic DNN pruning techniques to further reduce energy                                           [24] Alex Krizhevsky. 2014. One weird trick for parallelizing convolutional neural net-
+consumption. Our experiments demonstrate significant reductions in                                                works. arXiv preprint arXiv:1404.5997 (2014).
+                                                                                                             [25] Hsiang-Tsung Kung. 1982. Why systolic architectures? IEEE computer (1982), 37–46.
+energy consumption at no performance cost and less than 1% accuracy                                          [26] Seogoo Lee et al. 2017. High-level Synthesis of Approximate Hardware Under Joint
+loss. As future work, we would like to explore the synergy between                                                Precision and Voltage Scaling. In Proceedings DATE.
+                                                                                                             [27] Yuxi Liu, Feng Yuan, and Qiang Xu. 2011. Re-synthesis for cost-efficient circuit-level
+Thundervolt and techniques such as time borrowing and approximate                                                 timing speculation. In Proceedings of the 48th DAC. ACM, 158–163.
+or reduced precision MAC units. Further, given the appealing anal-                                           [28] Farzane Nakhaee et al. 2017. Lifetime improvement by exploiting aggressive voltage
+ogy between TE-Drop and neural network regularization techniques                                                  scaling during runtime of error-resilient applications. Integration, the VLSI Journal
+                                                                                                                  (2017).
+like dropconnect, we would like to explore the use of Thundervolt in                                         [29] Angshuman Parashar et al. 2017. SCNN: An Accelerator for Compressed-sparse
+accelerating DNN training.                                                                                        Convolutional Neural Networks. SIGARCH Comput. Archit. News 45, 2 (June 2017).
+                                                                                                             [30] Seongwook Park et al. 2015. 93TOPS/W scalable deep learning/inference processor
+REFERENCES                                                                                                        with tetra-parallel MIMD architecture for big-data applications. In IEEE ISSCC.
+[1] Jorge Albericio et al. 2016. Cnvlutin: ineffectual-neuron-free deep neural network                       [31] Atul Rahman et al. 2016. Efficient FPGA acceleration of convolutional neural networks
+    computing. In Processdings of ACM/IEEE ISCA. 1–13.                                                            using logical-3D compute array. In IEEE DATE. 1393–1398.
+[2] Manoj Alwani et al. 2016. Fused-layer CNN accelerators. In IEEE/ACM MICRO. 1–12.                         [32] Brandon Reagen et al. 2016. Minerva: Enabling Low-Power, Highly-Accurate Deep
+[3] Arash Ardakani et al. 2017. VLSI implementation of deep neural network using                                  Neural Network Accelerators. In ACM/IEEE ISCA. 267–278.
+    integral stochastic computing. IEEE VLSI (2017).                                                         [33] Ao Ren et al. 2017. Sc-dcnn: Highly-scalable deep convolutional neural network
+[4] Jimmy Ba and Rich Caruana. 2014. Do deep nets really need to be deep?. In Advances                            using stochastic computing. In Proceedings of ACM ASPLOS. 405–418.
+    in neural information processing systems. 2654–2662.                                                     [34] Jonathan Ross et al. 2016. Neural Network Processor. (2016).
+[5] Ana Margarida de Jesus Cardoso Cachopo. 2007. Improving methods for single-label                         [35] Murugan Sankaradas et al. 2009. A massively parallel coprocessor for convolutional
+    text categorization. Instituto Superior Técnico, Portugal (2007).                                             neural networks. In IEEE ASAP 2009. 53–60.
+[6] Srimat Chakradhar et al. 2010. A dynamically configurable coprocessor for convolu-                       [36] Syed Shakib Sarwar et al. 2016. Multiplier-less artificial neurons exploiting error
+    tional neural networks. In ACM Computer Architecture News, Vol. 38. 247–257.                                  resiliency for energy-efficient neural computing. In IEEE DATE. 145–150.
+                                                                                                        6
+[37] Jürgen Schmidhuber. 2015. Deep learning in neural networks: An overview. Neural
+     networks 61 (2015), 85–117.
+[38] Lu Wan and Deming Chen. 2012. CCP: Common Case Promotion for Improved
+     Timing Error Resilience with Energy Efficiency. In Proceedings of ACM/IEEE ISLPED.
+[39] Li Wan et al. 2013. Regularization of neural networks using dropconnect. In Proceed-
+     ings of ICML. 1058–1066.
+[40] Xuechao Wei et al. 2017. Automated Systolic Array Architecture Synthesis for High
+     Throughput CNN Inference on FPGAs. In Proceedings of IEEE DAC.
+[41] Wei Wen et al. 2016. Learning structured sparsity in deep neural networks. In NIPS.
+     2074–2082.
+[42] Paul N Whatmough et al. 2013. Circuit-level timing error tolerance for low-power
+     DSP filters and transforms. IEEE VLSI 21, 6 (2013), 989–999.
+[43] Paul N Whatmough et al. 2017. 14.3 A 28nm SoC with a 1.2 GHz 568nJ/prediction
+     sparse deep-neural-network engine with> 0.1 timing error rate tolerance for IoT
+     applications. In Processings of IEEE ISSCC. 242–243.
+[44] Jiecao Yu et al. 2017. Scalpel: Customizing DNN Pruning to the Underlying Hardware
+     Parallelism. In Proceedings of ACM ISCA. 548–560.
+
+
+
+
+                                                                                            7
+

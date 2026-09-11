@@ -20,7 +20,7 @@
 | 旧Card G/H/I外部喂peak/warp的比较器草图 | 先验生产成本、因果接口和真实网络消费者未闭合，不足以支持论文机制。 | 从事件或上一帧生成的完整二维运动先验与因果唤醒仍未完成。 |
 | Motion-XOR整窗memo和K=0删分数 | 整窗干净率不足；K=0仍可能贡献分母，不能直接删分数。 | 行内配对分数复用、K=0仅跳输出乘积有合法机会；优先级受真实份额约束。 |
 
-证据分别在：[完整C1/C2净收益](/home/zhumd/work/ideafromai/research/same_workload_c1c2_20260907/report-source.md)、[当前工程总入口](/home/zhumd/work/ideafromai/research/hardware_innovation_20260908/README.md)、[patch真实试验](/home/zhumd/work/ideafromai/research/hardware_innovation_20260908/algorithm/patch_probe/README.md)、[支持码一页](/home/zhumd/work/ideafromai/research/hardware_innovation_20260908/bn_state/response_zero_one_page.md)、[PSN一页](/home/zhumd/work/ideafromai/research/hardware_innovation_20260908/psn/psn_decision_one_page.md)。以上数字不同分母，不横比、不相乘。
+证据分别在：[完整C1/C2净收益](/home/zhumd/work/sdformer_codex/ideafromai/research/same_workload_c1c2_20260907/report-source.md)、[当前工程总入口](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/README.md)、[patch真实试验](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/algorithm/patch_probe/README.md)、[支持码一页](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/bn_state/response_zero_one_page.md)、[PSN一页](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/psn/psn_decision_one_page.md)。以上数字不同分母，不横比、不相乘。
 
 ## 2. 条件改变后，应恢复哪些研究资格
 

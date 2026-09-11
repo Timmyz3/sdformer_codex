@@ -1,0 +1,944 @@
+                                                  T RAINING FOR TEMPORAL SPARSITY IN DEEP NEURAL
+                                                     NETWORKS , APPLICATION IN VIDEO PROCESSING
+
+                                                                                               A P REPRINT
+
+
+                                                               Amirreza Yousefzadeh                                   Manolis Sifalakis
+                                                         Amirreza.Yousefzadeh@imec.nl                           Manolis.Sifalakis@imec.nl
+arXiv:2107.07305v1 [cs.CV] 15 Jul 2021
+
+
+
+
+                                                                                               July 16, 2021
+
+                                                                                              A BSTRACT
+                                                  Activation sparsity improves compute efficiency and resource utilization in sparsity-aware neural
+                                                  network accelerators. As the predominant operation in DNNs is multiply-accumulate (MAC) of
+                                                  activations with weights to compute inner products, skipping operations where (at least) one of
+                                                  the two operands is zero can make inference more efficient in terms of latency and power. Spatial
+                                                  sparsification of activations is a popular topic in DNN literature and several methods have already
+                                                  been established to bias a DNN for it (e.g. regularization, quantization, boxing, etc). On the other
+                                                  hand, temporal sparsity is an inherent feature of bio-inspired spiking neural networks (SNNs), which
+                                                  neuromorphic processing exploits for hardware efficiency. Introducing and exploiting spatio-temporal
+                                                  sparsity, is a topic much less explored in DNN literature, but in perfect resonance with the trend
+                                                  in DNN, to shift from static signal processing (e.g. image processing) to more streaming signal
+                                                  processing (e.g. video and audio).
+                                                  Towards this goal, in this paper we introduce a new DNN layer (called Delta Activation Layer), whose
+                                                  sole purpose is to promote temporal sparsity of activations during training. A Delta Activation Layer
+                                                  casts temporal sparsity into spatial activation sparsity to be exploited when performing sparse tensor
+                                                  multiplications in hardware. By employing delta inference and “the usual” spatial sparsification
+                                                  heuristics during training, the resulting model learns to exploit not only spatial but also temporal
+                                                  activation sparsity (for a given input data distribution). One may use the Delta Activation Layer either
+                                                  during vanilla training or during a refinement phase.
+                                                  We have implemented Delta Activation Layer as an extension of the standard Tensoflow-Keras (2.0)
+                                                  library, and applied it to train deep neural networks on the Human Action Recognition (UCF101)
+                                                  dataset. We report an almost 3x improvement of activation sparsity, with recoverable loss of model
+                                                  accuracy after longer training.
+                                                  For reproducibility of the results we have made available the source for the Delta Activation Layer at
+                                                  https://github.com/msifalakis/delta_activation_layer.
+
+
+                                         1   Introduction
+
+                                         As the depth, size, and complexity of neural network models increases, training but also inference is becoming
+                                         increasingly more expensive in terms of resources to perform, often even on tailor-made accelerator platforms.
+                                         Therefore, model compression and efficiently compressed inference processing has became very important in DNN
+                                         literature [Sze et al., 2017]; and over years, several strategies and solutions have been proposed for reducing the memory
+                                         and compute requirements of DNN models.
+                                         By training with sparsity penalties, and/or employing clever quantization, and network pruning heuristics, e.g. [Han
+                                         et al., 2016a] [Gale et al., 2019], it is possible to reduce the network size, so as to consume less memory and perform
+                                         less operations, with often unsubstantial loss (or even improvement) of accuracy. Likewise, by employing dual-training
+                                         of teacher and student models[Hinton et al., 2015], it has been shown possible to produce very compact and stable
+                                         (student) inference models that even generalize better (than the teacher).
+                                                         arXiv Template                                                A P REPRINT
+
+
+
+In all these approaches and strategies, sparsity is paramount as sparse tensors are not only easier to store and access in
+memory, but can also be (under conditions) more efficient to process. In practical reality, performing sparse operations
+on parallelizing accelerators often accounts a little extra effort per operation due to the fact that the resulting irregularity
+of computation cannot be optimally distributed across the parallel cores. In this case if the sparsity level is not sufficiently
+high, executing sparse operations in off-the-shelf accelerators will even be less efficient1 .
+Interestingly, as the competition for tera-operations (TOPS) per Watt in the DNN accelerator architectures has become
+less relevant over time [Sze et al., 2020], the focus of academic research in DNN accelerator and architectures has
+shifted towards sparsity exploitation in memory and compute operations [Albericio et al., 2016] [Han et al., 2016b]
+[Parashar et al., 2017] [Aimar et al., 2018] [Kepner et al., 2020]. This resulted in the new terminology of “effective
+TOPS"2 . Besides academic research, several start-ups are developing commercial versions of sparsity exploiting neural
+network inference processors [Moreira et al., 2020] [Demler, 2019]. Finally, recently the new NVIDIA GPU A100
+architecture was released with features to exploit fine-grained sparsity in deep learning networks, which doubles the
+throughput of Tensor Core operations."[Choquette and Gandhi, 2020].
+Unlike structural (weight) sparsity and spatial (activation) sparsity, discussed so far, which are hot topics in DNN
+literature [Wen et al., 2016], there is also temporal activation sparsity, which is less explored in the context of DNN, yet
+rather popular theme in signal processing (compressed sensing), and neuromorphic computing. By definition, temporal
+sparsity exists in a signal which is not changing over time. Fig. 1 (a) shows evolution of a signal f (t) over time. For
+processing this signal in DNN, it is sampled in a fixed periodic time-steps and every sample is processed separately.
+Since some of the samples in time may be redundant, their processing can be safely skipped, as shown in Fig. 1 (b). Fig.
+1 (c) and (d) shows the same concept in a two dimensional signal (sequence of video frames). And since processing of
+temporal signals maps to the same linear algebra operations as typical of DNNs, temporal sparsity can also lead to
+skip processing of zeros in sparse matrix operations sparing redundant operations. Unsurprisingly as streaming and
+sequence data applications (for example real-time video/audio processing) have become mainstream in DNNs, interest
+in exploiting temporal sparsity is relevant and slowly growing. The questions we would like to answers in this paper
+are 1) how it is possible to exploit temporal sparsity in a DNN, 2) how much sparsity can be added when exploiting
+temporal sparsity on top of the spatial sparsity and 3) what are the consequences of this technique (disadvantages).
+
+
+
+
+Figure 1: (a) Concept of temporal sparsity in a signal, (b) temporally sparse processing, (c) Sequence of 2D images in
+time from a video, (d) Temporally sparse processing of video frames. Images are taken from [Benosman, 2018]
+
+In compressed sensing, temporal sparsity is used in signal compression for efficient use of memory and communication
+bandwidth. As natural signals are inherently sparse in time (low information density), most video/audio stream
+
+    1
+      For example sparsity less than 98% in NVIDIA V100 GPU when using NVIDIA cuSPARSE library results in less processing
+throughput than dense execution [Gale et al., 2020]
+    2
+      Effective TOPS refers to the equivalent amount of TOPS when the sparsity is not taken into account. For an accelerator that can
+exploit sparsity, effective TOPS is higher than its actual TOPS.
+
+
+                                                                 2
+                                                          arXiv Template                                                 A P REPRINT
+
+
+
+recordings contain too much redundant information. Video/Audio compression algorithms exploiting the spatio-
+temporal sparsity in these signals can easily achieve a compression factor of 100x to 1000x [Richardson, 2004].
+More pertinent to the field of deep learning and machine learning (ML), neuromorphic computing exploits spatio-
+temporal sparsity as one of the key biology motivated principles of neural processing, for engineering hardware efficient
+algorithms and scalable, energy efficient, processing architectures. Unlike DNN accelerators, a design tenet of Spiking
+Neural Network accelerators [Furber et al., 2014] [Davies et al., 2018] [Akopyan et al., 2015] has always been to
+perform efficient sparse operations; as a consequence of the very degree of temporal sparsity in the activations of
+spiking neurons.
+Motivated by neuromorphic compute-platform engineering, we present here a simplified methodology for inducing
+temporal sparsity to any DNN, by means of a new activation layer (called Delta Activation Layer), that can be introduced
+in a DNN at any phase (training, refinement, or inference only). A Delta Activation Layer contains rather simple
+stateful neurons that remember past activations and quantize-propagate only changes in activations over time. While it
+functions similar to delta-inference [Neil et al., 2017] or sigma-delta networks [O’Connor and Welling, 2017], there
+is however no threshold [Neil et al., 2017] or PID parameters [O’Connor and Welling, 2017] to be learned. Instead a
+generic activation quantization method is used that can easily integrate most existing or emerging quantization methods,
+e.g. [Yang et al., 2020] [Jin et al., 2020]. This extensibility is motivated by the desire to choose quantization method
+based on the accuracy trade-off it provides. During training of a DNN, the Delta Activation Layer adds sparsity penalty
+to the overall cost function of the DNN together with a proper gradient to automatically optimize the quantization level
+for the best sparsity-accuracy balance. In this sense, the attained accuracy is equivalent to that of a quantized DNN.
+This Delta Activation Layer can be introduced in all or some of the DNN layers as deemed beneficial.
+In the remaining of this paper, we explain the Delta Activation Layer in more detail and present the results of experiments
+with ResNet-50 and the UCF101 dataset. We also relate this work to previous literature and discuss current limitations
+of the Delta Activation Layer and the future directions.
+
+1.1       Related Work
+
+Arguably, exploitation of (spatio-)temporal activation sparsity in neural network processing has origins in neuromorphic
+research [Linares-Barranco, 2006], and more recently it has become a hot-topic in mainstream DNN literature3 .
+In [Wu et al., 2018], the authors defend the use of compressed videos (using H.264, HVEC, etc.) directly as inputs to
+a DNN, by conjecturing that the higher information density of compressed video frames compared to “raw” frames,
+makes training easier and inference faster. The type of video compression they consider account for both spatial sparsity
+(in base I-frames) as well as temporal sparsity (optical flow in P-frames). While effective, this method only considers
+temporal sparsity in the input layer (P-frames of compressed video). In addition to that our results show that temporal
+sparsity can also be very high and beneficial when going deeper into the neural network, where higher-level features are
+extracted.
+In [Buckler et al., 2018], the authors propose a novel DNN inference algorithm (AMS) alongside a DNN accelerator
+optimized for video-based inference. Inspired by video compression methods the algorithm skips the processing of
+invariant information across input frames (temporal sparsity), and also largely reduces the processing of motion-related
+features in the input; by using optical flow information from P-frames to do motion compensation directly on the
+activation maps of previous frames. In this way large parts of the neural network “hybernates“ (as opposed of computing
+new activation maps for every frame) for more of the inputs. The AMS algorithm is integratable in any video-processing
+CNN model/pipeline through an “extension” DNN accelerator on top of any existing CNN accelerator, and improves
+efficiency by a factor of two. This is analogous to the functioning of our Delta Activation Layer. Also similar to our
+method, AMS is required to keep track of the neurons’ activation state to exploit temporal sparsity.
+In delta networks [Neil et al., 2017], which are motivated by neuromorphic engineering in RNNs, and sigma-delta
+quantized neural networks [O’Connor and Welling, 2017], which relate to herding [Welling, 2009] in Markov random
+fields, each neuron only processes input signal changes between successive timesteps, thus exploiting temporal sparsity
+at any layer depth. In delta-networks [Neil et al., 2017] a signal change is propagated downstream only when a certain
+threshold is exceeded (thereby encouraging further sparsity). By analogy in sigma-delta networks [O’Connor and
+Welling, 2017] a signal change is quantized to produce a stochastically discretized binary signal (spike train), which is
+temporally sparse. In [Cavigelli and Benini, 2020] the authors applied delta network inference on pre-trained CNNs
+with videos recorded from a fixed camera (video surveillance). As the temporal sparsity is very high in these video
+frames, the presented results show a considerable speedup even with the off-the-shelf GPUs, without a sparsity-aware
+      3
+    Albeit exploitation of structural (aka weight) sparsity for network pruning is also very old topic in ANN literature [LeCun et al.,
+1989]
+
+
+                                                                  3
+                                                             arXiv Template                                   A P REPRINT
+
+
+
+compute architecture. And likewise in [Gao et al., 2018] the authors report a substantial inference speed-ups and
+power-efficiency improvements on RNN FPGA-based accelerators by exploiting temporal sparsity in delta-networks.
+An issue when it comes to previous works in delta network inference is the accumulation of errors over time due to the
+use of a threshold (level-crossing), deeper in the network, which can lead to drift in the approximation of the activation
+signal over time (and hurts the accuracy). Therefore in practice, it is required to reset the state of all the neurons
+periodically. In sigma-delta networks a similar problem is addressed by employing a form of PID control to “regulate”
+the hysteresis [O’Connor et al., 2018]. Another “nuissance” is the optimization of hyper-parameters (threshold value,
+step-size, ...) through an additional optimization process [Yousefzadeh et al., 2019] [Khoei et al., 2020] [Cavigelli and
+Benini, 2020] after and outside the training loop.
+While using similar concept, the function provided by the proposed Delta Activation Layer differs from both typical
+delta networks and sigma-delta networks. During training, the Delta Activation Layer only quantizes the activation
+values and therefore acts as a conventional quantization layer. The quantization step size, however, is dynamic and
+trainable, and is optimized by using a temporal sparsity penalty. A bigger (coarser) step-size increases the temporal
+sparsity but tend to reduce the accuracy. The training optimizer tries to find an optimal set of parameters, including
+step-size, that trade the highest possible sparsity (minimizing the sparsity penalty) and highest possible accuracy
+(minimizing the accuracy loss).
+Our training process results in a conventional quantized DNN. During inference, sigma and delta operations are
+introduced at each layer’s quantized output without using threshold. As the activations are already quantized with an
+optimum quantization level, the delta operation leads to a particularly sparse signal that merely enumerates quantizer
+step changes. By extension to the simpler approach in [Cavigelli and Benini, 2020], which also operates on video data,
+our experiments show temporal sparsity can also be very high for recordings with moving cameras, since in deeper
+layers of the neural network, where higher-level features are extracted, movement of the camera does not introduce
+considerable changes.
+In [Chen et al., 2019] the authors demonstrated how quantization results in sparsity improvements for both temporal and
+spatial dimensions (with application to 3D CNNs). By contrast to this work, here we train the activation quantization
+level per each neuron, channel, or layer for the highest possible temporal sparsity. Potentially seen as a disadvantage is
+that this introduces more parameterization and requires more fine-tuning epochs. We discuss this further in section 4.
+An important caveat of the nature of the delta operation (including the work presented here), is the requirement for
+stateful neurons deeper in a DNN, so as to keep account of past activations. Algorithmically and in software this is
+a minor cost as this state is rather simple and most of the times well compressible, however in terms of a hardware
+accelerator implementation, this cost might not be negligible. We show in the section 4 that using full Delta Activation
+Layers in ResNet-50 results in 40% increase in the usage of memory. We suggest partial use of stateful layers (where
+it is more optimized) to partially alleviate this problem. We believe the ultimate solution for memory limitation is
+advancement in technology which is discussed in section 4.
+
+2         Methods
+2.1        Delta inference
+
+In a general DNN, the output signal of a layer is related to it’s inputs and weights with the following equations:
+
+                                                        Z(t) = g(W, X(t)) + B                                         (1)
+
+
+                                                            O(t) = f (Z(t))                                           (2)
+
+where W and B are the weight and bias tensors(trainable parameters), X(t) is the input tensor in discrete time (t) 4 and
+g is a linear function of the DNN layer inputs (for example dense layer matrix product, strided convolution over a region
+of the input, average pooling, or a combination of them). O(t) is the output tensor in time t and f (.) is a non-linear
+activation function. Z(t) is an intermediate variable which we can call it “neuron state”.
+One can typically introduce temporal sparsity by using the first order difference, as follows:
+
+                                             Linear operations: ∆Z(t) = g(W, ∆X(t))                                   (3)
+      4
+          t is the algorithm time-step (t > 0), for example can be the frame number in a frame-based system
+
+
+                                                                    4
+                                                       arXiv Template                                           A P REPRINT
+
+
+
+                                                t
+                                                X
+                 Integration(Sigma): Z(t) =           ∆Z(i) + B = ∆Z(t) + Z(t − 1) where Z(0) = B                        (4)
+                                                i=1
+
+          Differentiation (Delta): ∆O(t) = O(t) − O(t − 1) = f (Z(t)) − f (Z(t − 1)) where f (Z(0)) = 0                  (5)
+Eq. 4 and 5 shows the foundation of delta inference algorithms and sigma-delta networks. In Eq. 3, rather than
+processing input tensor (X) directly, only changes are processed. This is possible because g(.) is a linear function.
+When temporal sparsity is very high, we expect ∆X(t) (and ∆O(t)) to be sparse tensors, which immediately leverage
+zero-skipping operations in Eq. 3.
+One difference between the delta inference and the normal inference is the use of bias. In delta inference bias is only
+used to initialized the ‘neuron states’ in Eq. 4. However, since bias tensors do not change over time, their delta is zero
+and is factored out from Eq. 3.
+As neuron state is integrating all the inputs over time, Z(t) in Eq. 1 and 4 are always equal, and so long as the input
+is the same, both normal and delta inference provide the exact same result at any time step. To increase the sparsity
+in ∆O(t), previous works introduced a threshold on the minimum amount of change to be propagated [Cavigelli and
+Benini, 2020] [O’Connor and Welling, 2017] [Neil et al., 2017], which can result in a discrepancy between normal
+and delta inference (the latter being a rectified form of the former). The effect of this rectification may be seen as
+introducing noise, which a DNN should in principle be robust against. However, if this noise does not have a zero mean
+and since it is cumulative over time, it results in bias, which can lead to considerable drift; and necessitates a periodical
+network reset or re-calibration to remediate.
+
+2.2   Activation sparsification through quantization
+
+Instead of a level-crossing threshold, here we propose a quantization method for the activations of a DNN, by replacing
+f (.) with a quantized fq (., q) in equations 2 and 5; where q refers to the quantization step-size.A larger quantization
+step-size decreases the resolution of the signal reconstruction levels (coarser quantization), and therefore neurons of the
+next layer receiving this activation signal will process less changes (deltas) between subsequent inputs at (t − 1) and
+(t). Fig. 2 shows an illustration of two quantized popular activation functions.
+
+
+
+
+Figure 2: ReLU (y = max(x, 0)), Quantized ReLU(with q = 1), Sigmoid (y = 1/(1 + e−x )) and Quantized
+Sigmoid(with q = 0.2) activation functions. Higher level of q results in higher amount of sparsity in ∆O(t)
+
+Note that the quantization operation of the Delta Activation Layer resembles the operation of a Sigma-Delta network
+[O’Connor and Welling, 2017], however the Delta Activation Layer propagates a non-binary signal, and thus the
+herding-type of operations for the conversion to a binary spike-trains are spared. When using quantization (with a
+step-size) instead of a level-crossing threshold, quantized inference and quantized delta-inference provide exact
+same results and therefore no error will be accumulated over time (since the threshold on propagation of ∆O is zero).
+
+
+                                                             5
+                                                      arXiv Template                                           A P REPRINT
+
+
+
+In addition, as we do quantization during training (in contrast with post-training threshold adjustment in [Cavigelli and
+Benini, 2020] and [Yousefzadeh et al., 2019]), most of the accuracy drop due to the quantization error can be corrected
+with longer training.
+
+2.2.1        Temporal sparsity loss function
+By introducing the Delta Activation Layer, we need to add a regularization term in the loss function for encouraging
+sparsity optimization. A partial sum is added for every layer to the overall loss function and the sparsity factor (λ), is a
+hyper-parameter to adjust the contribution of sparsity loss of every layer in the total loss5 .
+
+                                                                  X
+                                               LossSparsity,l =         |∆O(t)l |                                       (6)
+
+                                                                  X
+                                   LossT otal = LossAccuracy +          λl × LossSparsity,l                             (7)
+                                                                    l
+
+where l is the layer index.
+Note that LossSparsity,l is entering the cost function as an L1-penalty term for a set of constraints that relate parameters
+though the activation tensors (and in this sense the sparsity factors λl are the respective Lagrange multipliers). This
+implies that the LossSparsity,l and LossAccuracy are competing and the optimization strives to find a set of parameters
+that balance the two losses for error (accuracy) and sparsity.
+
+2.3        Surrogate gradient of the quantization function
+
+As described the Delta_activation layer framework and library takes advantage of activation quantization in order to
+introduce temporal sparsity. To recap, the way this is effected is as follows. Quantization confines and bins the real
+numbers into a fixed set centroids represented in the levels of the quantization scheme. When two numbers (e.g. two
+subsequent in time activations) lie nearby in range, namely within one quantization step, they get binned in the same
+level by the quantizer and their delta produces a zero. The smaller the set of levels (or the larger the quantization
+step) the more likely it gets for two numbers to get quantized in the same level (i.e. have the same centroid) and their
+delta to be zero. The smaller the set of levels, on the other hand, the larger the quantization error/noise introduced,
+which, when it is in the same range as the optimization error, the training convergence can slow down or get stuck
+prematurely, and consequences for the final achievable model accuracy. There is therefore an objective tussle and an
+optimal trade-off between quantization induced sparsity and accuracy, which we would like optimization process to
+auto-fine-tune. And this motivates making the quantization step a “learnable” parameter in the cost function. This, also
+enables the additional flexibility of maintaining a different quantization step per-layer, or per-channel as opposed to a
+globally uniform one (with entails benefits in terms of resource utilisation and better sparsity control).
+Now, in practise a quantization function is by virtue non-smooth and non-continuous, making its presence inside the
+cost function problematic in face of gradient-based optimisation (through back-propagation), simply because it has
+no closed-form gradient (it is non differentiable). For this reason one need to resort in an approximate or a surrogate
+gradient as a replacement.
+The key insight for finding a good choice of a surrogate gradient to use with the Delta_activation layer, lies in expressing
+mathematically the relationship between the quantization step (or number of levels) and the induced temporal sparsity
+by means of the delta operator (described above). And the goal is to formalize this relationship through a constraint,
+which can be made part of the cost function as a Lagrangian term; essentially the penalty term that we have shown in
+Eq. 6 and 7 above.
+Here, we introduce and motivate the surrogate that we chose for our experiments, although for the herein described
+methodology this is neither the only plausible, nor likely the best possible one can use in the Delta_activation layer.
+In this work, we chose to perform quantization by using the straight-forward uniform (linear step) quantization function,
+shown in Eq.8.
+
+                                                                    f (Z)
+                                               fq (Z, q) = round(         )×q                                           (8)
+                                                                       q
+      5
+          Essentially
+
+
+                                                             6
+                                                            arXiv Template                                                   A P REPRINT
+
+
+
+For gradient optimization with back-propagation, the gradient of fq (Z, q) with regard to Z and q needs to be computed
+for the minimization of the cost function of the accuracy loss and sparsity loss. As the quantization function is
+non-differentiable, we need to provide replacements for the actual gradients.
+For the gradient of fq (Z, q) with regard to Z we used the gradient of the non-quantized activation function, as it is
+typical with quantization training of neural networks [Jacob et al., 2018], and which dissolves to the straight-through
+estimator (STE) for f (Z).
+
+                                                         ∂fq (Z, q)   ∂f (Z)
+                                                                    =                                                                   (9)
+                                                            ∂Z         ∂Z
+
+Next, as we want the step-size q in the Delta Activation Layer to also be a trainable parameter6 , the gradient of fq (Z, q)
+with regard to q needs to be functionally connected to the credit assignment aspect of the error back propagation process,
+so as to influence with the right incentive the optimization process; namely towards increasing the quantization step q
+and thereby the activation sparsity after the delta operation.
+The quantization step q gets updated with Eq.10.
+
+                                   ∂Losstotal             ∂Lossaccuracy X ∂Losssparsity,l
+                      ∆q = −η                 =⇒ ∆q = −η(              +                  )                                           (10)
+                                      ∂q                      ∂q               ∂q
+                                                                                             l
+
+Because increase in q generally results in decrease of the sparsity penalty Losssparsity , in its simplest probably form it
+                                  ∂Losssparsity,l
+suffices to take the surrogate of                 to be equal −|Losssparsity,l | or simply −Losssparsity,l (since from
+                                        ∂q
+Eq. 7 Losssparsity,l is an L1-norm and thus always positive).
+
+                                                ∂Losssparsity,l
+                                                                = −ηLosssparsity,l                                                    (11)
+                                                     ∂q
+
+Eq.11 encourages higher increase in the quantization step q, for bigger Losssparsity,l . In turn the larger quantization
+step, leads to fewer quantization levels, and a higher probability for delta activations to result in zeros, thereby reduction
+in Losssparsity,l .
+While this seemed to be consistent in our experimentation, we found that a further extension of it, where we use the
+current step size q as a normalizing reciprocal (E.q. 12), gives an “accelerated” gradient and better results.
+
+                                                ∂Losssparsity,l    Losssparsity,l
+                                                                =−                                                                    (12)
+                                                     ∂q                 q
+
+                                                     ∂Lossaccuracy X Losssparsity,l
+                                        ∆q = −η(                  −                 )                                                 (13)
+                                                         ∂q               q
+                                                                             l
+
+The intuition now is that, when the penalty Losssparsity,l is high, a small currently quantization step q will be subjected
+to a larger increase than an already large quantization step. And when the penalty Losssparsity,l is small (and the delta
+activation model is already sparse), a small currently quantization step will be subject to a rather small increase, while
+an already large quantization step will virtually remain the unchanged.
+We can break-down the LHS and RHS of Eq. 12 in components of the chain-rule as follows7 :
+
+                                        ∂Losssparsity,1   X ∂|∆Ol | ∂∆Ol   X |∆Ol | ∂∆Ol
+                     LHS(Eq.12) :                       =          ×     =         ×                                                  (14)
+                                             ∂q             ∂∆Ol     ∂q       ∆Ol    ∂q
+    6
+      The step-size (q) can be global for the entire network, or different per layer, or different per neuron. In addition, in the case of a
+CNN (as in our experiments), it can be shared across every channel (convolutional feature map), so as to “interact” with the bias term
+during the optimization process. In this case, the number of additional trainable parameters (quantization levels) equals the number
+of biases.
+    7        ∂|x|     |x|
+      Given       =       , x 6= 0
+             ∂x        x
+
+                                                                     7
+                                                     arXiv Template                                           A P REPRINT
+
+
+
+
+                                           LossSparsity,l   X |∆Ol | X |∆Ol | ∆Ol
+                         RHS(Eq.12) :                     =         =        ×                                        (15)
+                                                q               q       ∆Ol    q
+Comparing Eq.14 and Eq.15 we can conclude the final form of the surrogate of the gradient with regard to the
+quantization step (which we used in Keras):
+
+                         ∂∆Ol    ∆Ol    ∂Ol    Ol    ∂fq (Z, q)    fq (Z, q)
+                              =−     =⇒     =−    =⇒            =−                                                    (16)
+                          ∂q      q      ∂q    q        ∂q             q
+So finally, substituting Eq. 16 back in Eq. 10 we get
+
+                            ∂Losstotal                   ∂Lossaccuracy X ∂Losssparsity,l
+                      ∆q = −η            =⇒ ∆q = −η(                     +                   )
+                                ∂q                            ∂q                   ∂q
+                                                                             l
+                               ∂Lossaccuracy    ∂fq (Z, q) X ∂Losssparsity,l      ∂fq (Z, q)
+                  =⇒ ∆q = −η (               ×             +                    ×            )
+                                 ∂fq (Z, q)         ∂q               ∂fq (Z, q)       ∂q
+                                                               l
+                                                                                                                      (17)
+                              ∂Lossaccuracy    −fq (Z, q) X ∂Losssparsity,l       −fq (Z, q)
+                 =⇒ ∆q = −η (                ×            +                     ×            )
+                                ∂fq (Z, q)          q               ∂fq (Z, q)         q
+                                                              l
+                                              fq (Z, q) ∂Lossaccuracy X ∂Losssparsity,l
+                                 =⇒ ∆q = η             (                 +                   )
+                                                  q        ∂fq (Z, q)           ∂fq (Z, q)
+                                                                                     l
+
+To summarize our answer, the surrogate gradients are as follows:
+
+                                                  ∂fq (Z, q)   ∂f (Z)
+                                                             =                                                        (18)
+                                                     ∂Z         ∂Z
+
+                                                ∂fq (Z, q)    fq (Z, q)
+                                                           =−                                                         (19)
+                                                   ∂q             q
+It is also worth pointing out that there are several options [Gale et al., 2019] that can be used to encourage sparsity of
+the ∆O activations tensor, most of which are compatible with the Delta Activation Layer. The more promising options
+in recent literature [Kurtz et al., 2020] are the various forms of the Hoyer penalty, and the difference of L1 and L2
+norms. Nevertheless, as our focus is in show-casing the temporal sparsification pipeline with the Delta Activation Layer,
+we confined our experimentation with the more popular L1 penalty, for comparison purposes against a larger corpus of
+DNN literature, e.g. [Georgiadis, 2019].
+
+2.4   Selective spatio-temporal sparsification
+
+Since delta type of inference incurs additional operations and memory overheads per each non-zero delta value, one
+may prefer to only use it for specific layers where the saving from sparsity can be considerable. Typically, besides the
+linear operations in Eq. 3, two extra operations (integration in Eq. 4 and differentiation in Eq. 5) are required. However,
+if one wants to feed-in a Delta Activation Layer from a “normal” activation layer, as the input will be X(t) instead of
+∆X(t), the integration step in Eq. 4 should be skipped. Similarly, if the output of a Delta Activation Layer is connected
+to a “normal” inference layer, the differentiation operation in Eq. 5 should be skipped. Two figurative examples of such
+configurations are laid out in Fig. 3.
+
+2.5   Delta Activation Layer configurations
+
+Our Delta Activation Layer comes with many several configuration options to make the use customizable. Here is a list
+of most important parameters:
+
+      1. Quantization mode: the granularity of applying quantization, which can be neuron-wise, channel-wise or
+         layer-wise
+      2. Activation function: the type of activation function for DNN layer (e.g ReLU, Softmax, etc.)
+      3. Sparsity factor (λ in E.q. 7)
+
+
+                                                            8
+                                                          arXiv Template                                                A P REPRINT
+
+
+
+
+Figure 3: A) An example of a delta inference when the input and output of the network are not delta type. DAL
+stands for Delta Activation Layer. DAL(Delta-Only) layer is Delta Activation Layer where the integration phase is
+skipped. Similarly, DAL(Sigma-Only) layer is a configuration of the Delta Activation Layer where the differentiation is
+skipped. And DAL(Sigma-Delta) layer is a complete Delta Activation Layer. B) When only 2 layers of the 5-layer
+DNN is configured to process in the delta inference method. Normal activation layers are activation layers without state
+and therefore are cheaper to be implemented. Normal activation may also use L1 regularization on the activations to
+improve spatial sparsity as described in [Kurtz et al., 2020]
+
+
+       4. Max Pooling: Poolings are one of the most important operations in the DNN. Even-tough some types of
+          poolings are linear (for example Average Pooling or Stride) and can be integrated normally as part of Eq. 3,
+          Max Pooling is an exception. It is not possible to apply Max Pooling directly on ∆O(t), since it is a non-linear
+          operation. When Max Pooling is used, it should be applied on O(t). Therefore it is implemented as an option
+          inside the Delta Activation Layer. To use Max_Pooling, this option should be activated and the size of the
+          pooling should be defined.
+       5. Integration skip: if the integration operation (Eq.4) should be skipped or not.
+       6. Differentiation skip: if the differentiation operation (Eq.5) should be skipped or not.
+
+We have used channel-wise quantization mode in all experiments in this paper, since it is a good balance between
+number of parameters and performance, and suits the CNN structure.
+The optimal selection of a sparsity factor may be automated through grid-searched as a hyper-parameter. However,
+in practise it is subject to user/system requirements since it is the knob that controls the trade-off between activation
+sparsity rate8 (compute and power efficiency) and accuracy. For the experiments in this work we have used a heuristic
+way of setting the sparsity factor relating to each Delta Activation Layer such that it is proportional to the the fan-out in
+terms of MAC operations downstream. For example when a layer is connected to 128 convolution filters with 3 × 3
+kernels, every non-zero neuron activation feeds in 128 × 3 × 3 MAC operations. Since our final goal is to reduce
+the number of operations, we increased the sparsity factor more for layers whose neurons can triggers more MAC
+operations.
+   8
+     Activation sparsity rate which measures the rate of zero activations in a feature map, is not to be confused with sparsity factor
+λl in E.q. 7; albeit the two are correlated by virtue of optimizing the cost function.
+
+
+                                                                  9
+                                                          arXiv Template                                                 A P REPRINT
+
+
+
+3    Results
+
+Our experiments with temporally sparse video inference are mostly based on the ResNet-50 [He et al., 2016] and
+MobileNet [Howard et al., 2017] DNN architectures, and the challenging UCF-101 dataset. UCF-101 contains 13320
+videos from 101 action categories for human action recognition taken with both fixed and moving cameras. Even
+though a fixed camera seems more appealing for exploiting temporal sparsity, our results show that temporal sparsity in
+deeper layers of a DNN is also very high in recordings with a moving camera.
+ResNet-50 and MobileNet were originally used for image processing, however we used them here for video stream
+processing by employing it in the single-frame arrangement described in [Karpathy et al., 2014], and leaving the temporal
+dimension as the task for the delta inference processing. Having said that the best accuracies for the UCF101 dataset to
+our knowledge have been achieved using 3D convnets with two-stream input (frames and optical flows)[Carreira and
+Zisserman, 2017]. The simpler model we consider however, permits an easier understanding of the sparsification effects
+of the Delta Activation Layer.
+To benchmark the sparsity/accuracy trade-off when applying the Delta Activation Layer we have used 4 different
+setups9 . In the baseline setup we have fine-tuned Resnet-50 for UCF101 dataset without using any sparsity penalty. In
+this case, we used a pre-trained ResNet-50 for ‘image-net’ dataset [He et al., 2016] and fine-tune only its last Dense
+(fully connected) layer and the output layer for UCF101 dataset. We used a standard input image size of (224, 224),
+batch size of 32, and the SGD optimizer for 8 epochs. We have tried to extend fine-tuning to more layers but the best
+results were achieved by fine-tuning the last two layers. For MobileNet, we fine-tuned the whole network for 3 epochs.
+For our second setup, we applied “L1 regularization loss" on activations of the baseline network to have a conventional
+spatially sparse DNN. For this setup (and the remaining two setups), we had to fine-tune (re-train) the whole ResNet-50
+network. For Spatial Sparsification setup, we started from the pre-trained weights of our baseline network and re-train
+all the layers until it is relatively converged.
+As the third setup for our experiments, we have used a network where a Delta Activation Layer is only used as the input
+layer as illustrated in Fig. 4. In this case, the network only processes changes of the scene (deltas only) without having
+the reference background in its state, which is sparse, to begin with. This is equivalent to providing inputs from a DVS
+sensor [Lichtsteiner et al., 2008], or similar to the method presented in [Chadha et al., 2019] where the input deltas are
+considered as a simpler version of optical flows. The “normal activation" layers in this experiment are also equipped
+with “L1 regularization" of activations during training for higher spatial sparsity. Therefore this setup is called Spatial
+sparsification + Input delta. Same as the second setup, here we started from a baseline network and fine-tune all the
+layers until it relatively converges.
+The last setup is using Delta Activation Layer in place of all the activation layers in ResNet-50 network (same as Fig.
+3(A)) and therefore results in exploitation of temporal sparsity in all the layers of ResNet-50. We called this setup
+Temporal sparsification. Again, here we started from the pre-trained weights of the baseline model and fine-tune
+all the layers until a relatively good convergence. In this setup and during training, Delta Activation Layer calculates
+temporal sparsity loss by using Eq.6 and perform activation quantization during training to minimize the temporal
+sparsity loss. We repeated the same process for MobileNet.
+Table 1 reports results on sparsity gains during inference versus accuracy, from experiments with different training
+setups of the ResNet-50/MobileNet networks (alongside some reference accuracy scores achieved in the literature for
+the same dataset, albeit by using different DNN architectures).
+The results reported in Table 1 aim to highlight a couple of important aspects. First of all similarly to spatial sparsification
+(e.g. by means of L1 Regularization), temporal sparsification my means of the Delta Activation Layer may affect
+adversely the accuracy. Since adding the Delta Activation Layer requires quantization and fine-tuning of the entire
+network (in comparison with the baseline network where only the last layers are fine-tuned), there is a tussle between
+training error and quantization error that can either lower accuracy or cost the training process more iterations to
+recover it10 . Second, at the same time, the gain in sparsity increase is also considerable when accounting for temporal
+sparsification. Table 1 shows that spatio-temporal specification results in better sparsity in the operations while the
+accuracy drop is in the same range of “L1 Regularization" for spatial sparsity.
+
+    9
+      training/fine-tuning were performed on an NVIDIA Geforce RTX 2080, but experiments are expected to be reproducible in any
+recent CUDA-enabled GPU.
+   10
+      we noticed that different quantization schemes seem to affect variably the percent of accuracy loss in conjunction with the time
+the model is allowed to train. The longer the training time, the closer it comes to recovering the accuracy loss, but at a slowing-down
+convergence rate (which also gets even slower with coarser quantization levels). Due to the time constraints the stopping criterion for
+which we reported the results was based on number of epochs and not the convergence error.
+
+
+                                                                 10
+                                                     arXiv Template                                           A P REPRINT
+
+
+
+                          Training setup                         Classification accuracy Operation Sparsity
+          3D two-stream CNN [Kalfaoglu et al., 2020]                       98.69%                        –
+              Slow fusion in [Karpathy et al., 2014]                        65.4%                        –
+       Spatial convent in [Simonyan and Zisserman, 2014]                    72.8%                        –
+                       ResNet-50 (Baseline)                                  73%                      49.1%
+                ResNet-50 (Spatial sparsification)                          65.4%                     65.3%
+         ResNet-50 (Spatial sparsification + Input delta)                   70.4%                     68.8%
+              ResNet-50 (Temporal sparsification)                          67.6%                      93.1%
+                       MobileNet (Baseline)                                 77.1%                     38.2%
+             MobileNet (Temporal sparsification)                             73%                      77.7%
+Table 1: Results for UCF101-based human action recognition, from our experiments and some those reported in
+previous works. The reported results from [Karpathy et al., 2014] and [Simonyan and Zisserman, 2014] have used 2D
+convolutions over individual frames (similar to our approach), while [Kalfaoglu et al., 2020] used a more complex
+approach and we include their results here only to reference the best achieved accuracy on this dataset. In our
+experiments, the classification accuracy is the average of the classification results across the 32 consecutive frames (for
+every each video in the dataset). Operation sparsity is the ratio of MAC operations with zero activations over the total
+number of MAC operations (weight sparsity is not accounted here).
+
+
+
+
+ Figure 4: A) An example of a delta inference when only input is in the form of delta [Chadha et al., 2019]. This
+ network exploits temporal sparsity only in its input (DAL stands for Delta Activation Layer). Here we skipped the
+‘DAL(Sigma-Only)’ layer and process the input deltas directly in the following layers. In this case, the following layers
+ process the deltas without remembering the past. This network should learn to recognize actions only based on the delta
+ frames and won’t be equivalent to the original DNN. please note that the number of layers and network configuration in
+ this figure is only an example and does not represent ResNet-50.
+
+
+Fig. 5 shows details ratio of activation sparsity in ResNet-50 per layer. It is evident that both temporal and spatial
+sparsity in general increase when going deeper inside the ResNet-50 network. A fully connected layer (layer 50) has
+less spatio-temporal sparsity than previous layers. It is interesting to note that the layers where skip connections are
+merging with the main branch (layers 4,7,10,13,16,..,46), illustrated in Fig.6, exhibit the lowest temporal sparsity in
+their neighbourhood (non-zero deltas are maximum compares to the neighboring layers), while this is not the case for
+spatial sparsity.
+One observed advantage of temporal sparsity in these experiments, is that number of inference operations does not scale
+up linearly with the increase in frame rate. Increasing the frame-rate increases the temporal precision of the network
+and is important when a low-latency inference is required (for example in self-driving cars). However, increasing
+the frame-rate does not increase the amount of computations linearly. In general, higher frame-rates results in higher
+temporal sparsity as our results in Fig. 7 show; where we run the inference on UCF101 dataset with different frame-rates
+(by sub-sampling in time). This observation is more prominent with higher frame rates (like 120fps).
+The degree of temporal sparsity is also dependent on the type of motion actions in the scene. In Table 2 we list the ‘3’
+classes with highest average temporal sparsity across layers and the ‘3’ classes with lowest. For the low sparsity classes,
+we noticed that most of the videos are recorded with moving cameras while the highly sparsity classes correspond
+to videos recorded with fixed cameras. Also, the actions in videos of high sparsity classes are slow and limited. We
+therefore were curious to find out how the amount of movement in the input affects the temporal sparsity in the features
+generated deeper inside the neural network. Fig. 8 shows the layer-wise non-zero deltas for two classes of the test set,
+the one with lowest temporal sparsity (swing) and the one with highest temporal sparsity (wall push ups), normalized
+by the average sparsity degree of all classes. In general, the effect of movement in the input frames has less effect on
+the last layers of neural network where high level features (concepts) are extracted.
+
+
+                                                            11
+                                                     arXiv Template                                            A P REPRINT
+
+
+
+
+Figure 5: The number of non-zero activations for the baseline network, spatial sparsification with “L1 regularization",
+and temporal sparsification with Delta_Action layer in Resnet-50. Layer ‘0’ is the input layer and the Layer ‘50’ is the
+dense layer. The output layer is not shown since activations in the output layer does not trigger any internal operation.
+Layer indexing here is always the same as original ResNet-50. Delta Activation Layers are not considered as extra
+layers but as a replacement for activations in the original network.
+
+
+
+
+Figure 6: Residual block in ResNet-50, the shortcut path is either just a bypass connection or it contains a convolution
+operation. Temporal sparsity in the Delta Activation Layer just after the ADD operation is minimum.
+
+
+We also tried to find a correlation between the degree of temporal sparsity and the rate of compression by the video
+codec used. Fig. 9 suggests that there maybe some weak correlation but this relationship is not straight-forward. Our
+calculated correlation coefficients using Pearson (assuming Gaussianity) and Spearman (non-Gaussianity assumptions)
+methods [Artusi et al., 2002] give a coefficient of about 0.36%. PCA and ICA analyses point to another strong
+component in video compression rate beside temporal activation sparsity rate. Video compression techniques are very
+advanced compared to our simple temporal delta processing and while both temporal and spatial redundancies are
+properly exploited in the compression algorithms there are other also other aspects that such clever algorithms capture
+(e.g. non-uniform redundancies by learning dictionaries of sequences or filters). It can be seen that the compression
+rates in videos are an order of magnitude higher than the activation sparsity rates. This means there is still a large space
+for improvement to “properly” sparsify DNN computations.
+
+
+                                                            12
+                                                    arXiv Template                                           A P REPRINT
+
+
+
+
+ Figure 7: Activation sparsity rate (percent of zero activations in a feature map) versus number of frames per second
+
+                                          Class name         Activation Sparsity
+                                             Swing                 83.5%
+                                             Punch                 84.2%
+                                            Lunges                 84.5%
+                                       Cricket Bowling             93.2%
+                                      Writing On Board             93.9%
+                                        Wall Push ups              94.4%
+Table 2: Selected classes of UCF101 dataset with highest and lowest activation sparsities in temporally sparse ResNet-50.
+
+
+
+4   Discussion
+
+In this work, we introduced a method of adding temporal sparsity in general DNN inference on video data. There are
+two key aspects that make this work distinctive. One is the fact that given a trained model we look into sparsifying
+activations arbitrarily deep in the network structure, i.e. we do not only focus on preprocessing the inputs or the first
+layers of the network. Rather, the proposed mechanism is deployable after any layer, and can be flexibly employed with
+any subset of the network’s layers. The other aspect is that our approach can work synergetically with training. This
+means that where refinement phase (e.g. transfer-learning) or vanilla training is feasible, an optimization constraint is
+introduced to leverage the sparsification effectiveness of our mechanism during inference.
+Integration of the Delta Activation Layer in a DNN is not cost-free. There are two main overheads introduced which
+need to be weighed against the benefits of introducing temporal sparsity (discussed below). For this reason we promote
+the selective use of the Delta Activation Layer only between layers where there is a clear gain to be made. More
+specifically, in Fig.10 we observe that the temporal sparsity gain (over spatial sparsity) is very different in different
+layers.
+The first overhead introduced by a Delta Activation Layer stems from the requirement to keep track of the associated
+neuron states, which increases the overall memory footprint. For example in ResNet-50 where the number of parameters
+is almost 23M, there are 9.2M neurons. When using normal inference (not using Delta Activation Layer), it is required
+to store only activations for two consecutive layers at any moment during inference (the input to a layer and its output).
+To account for the widest layers this is only about 1M neurons which leads to total 25MB of memory (when states
+store in 16b floating-point format and weights are 8b). Inference with full Delta Activation Layer in all layers requires
+about 41MB compared to 25MB for normal inference of a single frame. In general, memory footprint is a serious
+constraint in all DNN accelerators and for this reason newer DNN accelerator architectures are catering for it (e.g. use
+of flash-memory is becoming more mainstream [Fick, 2018]). The new NVIDIA Ampere architecture contains 40GB
+of DRAM memory which is 70% more than its predecessor).
+
+
+                                                           13
+                                                     arXiv Template                                            A P REPRINT
+
+
+
+
+Figure 8: Average ratio of non-zero activations (deltas) for videos of ‘swing’ action (lowest temporal sparsity) and
+videos of ‘wall push ups’ (highest temporal sparsity) versus the average sparsities of all classes. It is interesting to see
+that the low/high amount of changes in the input frame mostly affect the low level features in the beginning layers.
+
+
+
+
+Figure 9: Averaged activation sparsity rate versus the averaged video compression rate for each UCF101 class (i.e. data
+points are centroids
+
+
+The second overhead, and since more memory is involved, is memory access time and energy. Increasing memory
+footprint may force the DNN accelerator architecture to use a hierarchical memory structure to balance the memory
+
+
+                                                            14
+                                                      arXiv Template                                            A P REPRINT
+
+
+
+footprint and the platform cost. For example, external DRAM memory is two orders of magnitude cheaper than a
+local SRAM memory but at the same time it consumes two orders of magnitude more energy [Sze et al., 2017]. To
+have a clear picture, imagine a DNN accelerator with only 1MB of on-chip memory. For the normal inference with
+ResNet-50, we could use the local memory for activations state (read and write operations) and external memory for the
+weights (read operations). However, for delta-based inference, we are forced to use external memory for both weights
+and neuron activations. This will results in three times more external memory accesses (reading weights and states,
+writing states back) which is almost equal to three to five times more energy consumption (since external memory
+access consumes much more than any internal operation, and since neuron states normally have higher bit-width than
+weights). As a result, although we have observed that temporal sparsity typically reduces the number of operations, on
+average, by a factor of five or more when compared to spatial sparsification, in practice the amount of energy savings is
+less than 5x and very dependent on the memory hierarchy in the hardware. On the more optimistic side, however, our
+comparison against video compression rates in Fig. 9 suggests that there is plenty of room for achieving even higher
+sparsity, perhaps exploitable with more advanced algorithms, or future ramifications of the Delta Activation Layer. In
+addition, new memory technologies (like resistive RAM, embedded DRAM, and embedded Flash memory) may change
+the aforementioned cost calculations for on-chip memory in the near future.
+
+
+
+
+Figure 10: Layer-wise sparsity gain for temporal sparsity setup over spatial sparsity setup (ratio of non-zero activations)
+in our experiments with ResNet-50 and UCF101. The average gain is 5. The blue/red bars are the low gain layers with
+the gains of less than two/one.
+
+Each Delta Activation Layer instantiation also introduces additional trainable parameters to the network. For our
+experiments with ResNet-50, a total of around 23K new parameters are added to the previous 23M weights and biases
+(+0.1%). As the Delta Activation Layer introduces temporal sparsity constraint terms in the optimisation objective
+during training, these are in effect also regularizes against over-fitting. Besides that, it would also be possible to
+consider additional regularization terms in the cost function (e.g. Lasso, group Lasso, etc) targeting explicitly the
+weights/parameters controlling the network structure, rather than implicitly through the activations. In our experiment
+here we did not see such a need, however, a more systematic exploration and comparison with different regularisation
+regimes are the next steps for our future work with the Delta Activation Layer.
+Other interesting aspects which we have not experimented with at this point, but which are in our plans for follow-up
+work include (a) to confirm the current results or their variability on different network architectures, but more importantly
+in relation to the capacity of the network, e.g. with lottery ticket [Frankle and Carbin, 2018] and distilled [Hinton et al.,
+2015] type of networks; (b) the potential effects of other activation functions than ReLU in the effectiveness of the
+Delta Activation Layer, (c) using an advance quantization scheme along with the sparsity loss to reduce the accuracy
+
+
+                                                            15
+                                                   arXiv Template                                         A P REPRINT
+
+
+
+drop and (d) the effect of lateral inhibition and winner-take-all strategies in promoting temporal sparsity [Ahmad and
+Scheinkman, 2019].
+
+Conflict of Interest Statement
+The authors declare that the research was conducted in the absence of any commercial or financial relationships that
+could be construed as a potential conflict of interest.
+
+Author Contributions
+A.Y and M.S. contributed equally in this work.
+
+Funding
+This work was supported in part by the EU H2020 grants “TEMPO” and “ANDANTE”.
+
+Acknowledgments
+This work is partially funded by EU H2020 grants 826655 “TEMPO” and 876925 “ANDANTE".
+
+References
+V. Sze, Y. Chen, T. Yang, and J. S. Emer. Efficient processing of deep neural networks: A tutorial and survey.
+   Proceedings of the IEEE, 105(12):2295–2329, 2017. doi:10.1109/JPROC.2017.2761740.
+Song Han, Huizi Mao, and W. Dally. Deep compression: Compressing deep neural network with pruning, trained
+   quantization and huffman coding. CoRR, abs/1510.00149, 2016a.
+Trevor Gale, Erich Elsen, and Sara Hooker. The state of sparsity in deep neural networks. arXiv preprint
+   arXiv:1902.09574, 2019.
+Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. Distilling the knowledge in a neural network. arXiv preprint
+   arXiv:1503.02531, 2015.
+Trevor Gale, Matei Zaharia, Cliff Young, and Erich Elsen. Sparse gpu kernels for deep learning. arXiv preprint
+   arXiv:2006.10901, 2020.
+Vivienne Sze, Yu-Hsin Chen, Tien-Ju Yang, and Joel S Emer. How to evaluate deep neural network processors: Tops/w
+  (alone) considered harmful. IEEE Solid-State Circuits Magazine, 12(3):28–41, 2020.
+Jorge Albericio, Patrick Judd, Tayler Hetherington, Tor Aamodt, Natalie Enright Jerger, and Andreas Moshovos.
+   Cnvlutin: Ineffectual-neuron-free deep neural network computing. ACM SIGARCH Computer Architecture News,
+  44(3):1–13, 2016.
+Song Han, Xingyu Liu, Huizi Mao, Jing Pu, Ardavan Pedram, Mark A Horowitz, and William J Dally. Eie: efficient
+   inference engine on compressed deep neural network. ACM SIGARCH Computer Architecture News, 44(3):
+   243–254, 2016b.
+Angshuman Parashar, Minsoo Rhu, Anurag Mukkara, Antonio Puglielli, Rangharajan Venkatesan, Brucek Khailany,
+  Joel Emer, Stephen W Keckler, and William J Dally. Scnn: An accelerator for compressed-sparse convolutional
+   neural networks. ACM SIGARCH Computer Architecture News, 45(2):27–40, 2017.
+Alessandro Aimar, Hesham Mostafa, Enrico Calabrese, Antonio Rios-Navarro, Ricardo Tapiador-Morales, Iulia-
+  Alexandra Lungu, Moritz B Milde, Federico Corradi, Alejandro Linares-Barranco, Shih-Chii Liu, et al. Nullhop: A
+   flexible convolutional neural network accelerator based on sparse representations of feature maps. IEEE transactions
+   on neural networks and learning systems, 30(3):644–656, 2018.
+Jeremy Kepner, Simon Alford, Vijay Gadepally, Michael Jones, Lauren Milechin, Albert Reuther, Ryan Robinett, and
+   Sid Samsi. Graphchallenge. org sparse deep neural network performance. arXiv preprint arXiv:2004.01181, 2020.
+O. Moreira, A. Yousefzadeh, F. Chersi, G. Cinserin, R. J. Zwartenkot, A. Kapoor, P. Qiao, P. Kievits, M. Khoei,
+   L. Rouillard, A. Ferouge, J. Tapson, and A. Visweswara. Neuronflow: a neuromorphic processor architecture for live
+   ai applications. In 2020 Design, Automation Test in Europe Conference Exhibition (DATE), pages 840–845, 2020.
+   doi:10.23919/DATE48585.2020.9116352.
+
+
+                                                         16
+                                                   arXiv Template                                         A P REPRINT
+
+
+
+Mike Demler. Brainchip akida is a fast learner, spiking-neural-network processor identifies patterns in unlabeled data.
+ Microprocessor Report (2019), 2019.
+J. Choquette and W. Gandhi. Nvidia a100 gpu: Performance innovation for gpu computing. In 2020 IEEE Hot Chips
+   32 Symposium (HCS), pages 1–43, 2020. doi:10.1109/HCS49909.2020.9220622.
+Wei Wen, Chunpeng Wu, Yandan Wang, Yiran Chen, and Hai Li. Learning structured sparsity in deep neural networks.
+ arXiv preprint arXiv:1608.03665, 2016.
+R. Benosman. What is neuromorphic event-based computer vision? sensors, theory and applications. 2018.
+Iain E Richardson. H. 264 and MPEG-4 video compression: video coding for next-generation multimedia. John Wiley
+   & Sons, 2004.
+S. B. Furber, F. Galluppi, S. Temple, and L. A. Plana. The spinnaker project. Proceedings of the IEEE, 102(5):652–665,
+   2014. doi:10.1109/JPROC.2014.2304638.
+M. Davies, N. Srinivasa, T. Lin, G. Chinya, Y. Cao, S. H. Choday, G. Dimou, P. Joshi, N. Imam, S. Jain, Y. Liao,
+ C. Lin, A. Lines, R. Liu, D. Mathaikutty, S. McCoy, A. Paul, J. Tse, G. Venkataramanan, Y. Weng, A. Wild, Y. Yang,
+ and H. Wang. Loihi: A neuromorphic manycore processor with on-chip learning. IEEE Micro, 38(1):82–99, 2018.
+ doi:10.1109/MM.2018.112130359.
+F. Akopyan, J. Sawada, A. Cassidy, R. Alvarez-Icaza, J. Arthur, P. Merolla, N. Imam, Y. Nakamura, P. Datta, G. Nam,
+   B. Taba, M. Beakes, B. Brezzo, J. B. Kuang, R. Manohar, W. P. Risk, B. Jackson, and D. S. Modha. Truenorth: Design
+   and tool flow of a 65 mw 1 million neuron programmable neurosynaptic chip. IEEE Transactions on Computer-Aided
+   Design of Integrated Circuits and Systems, 34(10):1537–1557, 2015. doi:10.1109/TCAD.2015.2474396.
+Daniel Neil, Jun Haeng Lee, Tobi Delbruck, and Shih-Chii Liu. Delta networks for optimized recurrent network
+  computation. In International Conference on Machine Learning, pages 2584–2593. PMLR, 2017.
+Peter O’Connor and Max Welling. Sigma delta quantized networks. ICLR, 2017.
+Yukuan Yang, Lei Deng, Shuang Wu, Tianyi Yan, Yuan Xie, and Guoqi Li. Training high-performance and large-scale
+  deep neural networks with full 8-bit integers. Neural Networks, 125:70–82, 2020.
+Qing Jin, Linjie Yang, and Zhenyu Liao. Adabits: Neural network quantization with adaptive bit-widths. In Proceedings
+  of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 2146–2156, 2020.
+Bernabé Linares-Barranco. Spike-based vision processing. seeing without frames. In IEEE International Symposium
+  on Circuits and Systems (ISCAS’07). Citeseer, 2006.
+Yann LeCun, John Denker, and Sara Solla. Optimal brain damage. Advances in neural information processing systems,
+  2:598–605, 1989.
+Chao-Yuan Wu, Manzil Zaheer, Hexiang Hu, R Manmatha, Alexander J Smola, and Philipp Krähenbühl. Compressed
+  video action recognition. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition,
+  pages 6026–6035, 2018.
+Mark Buckler, Philip Bedoukian, Suren Jayasuriya, and Adrian Sampson. Eva2 : Exploiting temporal redundancy in
+ live computer vision. In 2018 ACM/IEEE 45th Annual International Symposium on Computer Architecture (ISCA),
+ pages 533–546. IEEE, 2018.
+Max Welling. Herding dynamical weights to learn. In Proceedings of the 26th Annual International Conference on
+ Machine Learning, pages 1121–1128, 2009.
+L. Cavigelli and L. Benini. Cbinfer: Exploiting frame-to-frame locality for faster convolutional network inference
+  on video streams. IEEE Transactions on Circuits and Systems for Video Technology, 30(5):1451–1465, 2020.
+  doi:10.1109/TCSVT.2019.2903421.
+Chang Gao, Daniel Neil, Enea Ceolini, Shih-Chii Liu, and Tobi Delbruck. Deltarnn: A power-efficient recurrent neural
+  network accelerator. In Proceedings of the 2018 ACM/SIGDA International Symposium on Field-Programmable
+  Gate Arrays, pages 21–30, 2018.
+Peter O’Connor, Efstratios Gavves, Matthias Reisser, and Max Welling. Temporally efficient deep learning with spikes.
+  In International Conference on Learning Representations, 2018. URL https://openreview.net/forum?id=
+  HkZy-bW0-.
+Amirreza Yousefzadeh, Mina A Khoei, Sahar Hosseini, Priscila Holanda, Sam Leroux, Orlando Moreira, Jonathan
+ Tapson, Bart Dhoedt, Pieter Simoens, Teresa Serrano-Gotarredona, et al. Asynchronous spiking neurons, the natural
+ key to exploit temporal sparsity. IEEE Journal on Emerging and Selected Topics in Circuits and Systems, 9(4):
+ 668–678, 2019.
+
+
+                                                         17
+                                                    arXiv Template                                          A P REPRINT
+
+
+
+Mina A Khoei, Amirreza Yousefzadeh, Arash Pourtaherian, Orlando Moreira, and Jonathan Tapson. Sparnet: Sparse
+   asynchronous neural network execution for energy efficient inference. In 2020 2nd IEEE International Conference
+   on Artificial Intelligence Circuits and Systems (AICAS), pages 256–260. IEEE, 2020.
+Huixiang Chen, Mingcong Song, Jiechen Zhao, Yuting Dai, and Tao Li. 3d-based video recognition acceleration by
+   leveraging temporal locality. In Proceedings of the 46th International Symposium on Computer Architecture, pages
+   79–90, 2019.
+Benoit Jacob, Skirmantas Kligys, Bo Chen, Menglong Zhu, Matthew Tang, Andrew Howard, Hartwig Adam, and
+   Dmitry Kalenichenko. Quantization and training of neural networks for efficient integer-arithmetic-only inference.
+   In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 2704–2713, 2018.
+Mark Kurtz, Justin Kopinsky, Rati Gelashvili, Alexander Matveev, John Carr, Michael Goin, William Leiserson, Sage
+   Moore, Bill Nell, Nir Shavit, et al. Inducing and exploiting activation sparsity for fast neural network inference. In
+   Proceedings of the International Conference on Machine Learning, 2020.
+Georgios Georgiadis. Accelerating convolutional neural networks via activation map compression. In Proceedings of
+   the IEEE Conference on Computer Vision and Pattern Recognition, pages 7085–7095, 2019.
+Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recognition. In Proceedings
+   of the IEEE conference on computer vision and pattern recognition, pages 770–778, 2016.
+Andrew G Howard, Menglong Zhu, Bo Chen, Dmitry Kalenichenko, Weijun Wang, Tobias Weyand, Marco Andreetto,
+   and Hartwig Adam. Mobilenets: Efficient convolutional neural networks for mobile vision applications. arXiv
+   preprint arXiv:1704.04861, 2017.
+Andrej Karpathy, George Toderici, Sanketh Shetty, Thomas Leung, Rahul Sukthankar, and Li Fei-Fei. Large-scale
+   video classification with convolutional neural networks. In Proceedings of the IEEE conference on Computer Vision
+   and Pattern Recognition, pages 1725–1732, 2014.
+Joao Carreira and Andrew Zisserman. Quo vadis, action recognition? a new model and the kinetics dataset. In
+   proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 6299–6308, 2017.
+P. Lichtsteiner, C. Posch, and T. Delbruck. A 128× 128 120 db 15 µs latency asynchronous temporal contrast vision
+   sensor. IEEE Journal of Solid-State Circuits, 43(2):566–576, 2008. doi:10.1109/JSSC.2007.914337.
+Aaron Chadha, Yin Bi, Alhabib Abbas, and Yiannis Andreopoulos. Neuromorphic vision sensing for cnn-based action
+   recognition. In ICASSP 2019-2019 IEEE International Conference on Acoustics, Speech and Signal Processing
+   (ICASSP), pages 7968–7972. IEEE, 2019.
+M Kalfaoglu, Sinan Kalkan, and A Aydin Alatan. Late temporal modeling in 3d cnn architectures with bert for action
+   recognition. arXiv preprint arXiv:2008.01232, 2020.
+Karen Simonyan and Andrew Zisserman. Two-stream convolutional networks for action recognition in videos. In
+   Advances in neural information processing systems, pages 568–576, 2014.
+R Artusi, P Verderio, and E Marubini. Bravais-pearson and spearman correlation coefficients: meaning, test of
+   hypothesis and confidence interval. The International journal of biological markers, 17(2):148–151, 2002.
+Dave       Fick.             Mythic      @     hot    chips     2018.             https://medium.com/mythic-ai/
+   mythic-hot-chips-2018-637dfb9e38b7, 2018.
+Jonathan Frankle and Michael Carbin. The lottery ticket hypothesis: Finding sparse, trainable neural networks. arXiv
+   preprint arXiv:1803.03635, 2018.
+Subutai Ahmad and Luiz Scheinkman. How can we be so dense? the benefits of using highly sparse representations.
+   arXiv preprint arXiv:1903.11257, 2019.
+
+
+
+
+                                                          18
+

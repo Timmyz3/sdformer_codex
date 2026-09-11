@@ -1,0 +1,1301 @@
+                                              From Bit-Position Sensitivity to Unequal Error Protection for
+                                                                DNN Inference Memory
+                                             Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan,
+                                                                                 Kunal Tyagi
+                                                                                                           Advanced Micro Devices, Inc., USA
+                                         Abstract                                                                                       compute capacity and consequent large power dissipation in cur-
+                                         We characterize per-bit-position fault sensitivity in ML inference                             rent ML hardware, the compute and area footprint required for
+                                         across 16 workloads — spanning transformer-based models and                                    this uniform protection becomes an increasingly expensive and
+                                         attention-free CNNs — and across three floating-point formats.                                 (potentially unnecessary) guarantee for every bit.
+                                         Our central empirical finding is a sharp bit-sensitivity transition:                              Since IEEE 754 [17, 26] encodes magnitude non-uniformly, this
+                                         flipping any of the least-significant fraction bits up to a data-type-                         asymmetry raises three questions. (1) Can we protect only some
+                                         specific threshold, Xsafe, degrades task metrics by less than 1%                               bits (e.g., the sign and exponent bits) and leave other bits unpro-
+                                         under deterministic single-bit stress tests. Sensitivity rises through                         tected? (2) Is there a threshold number of unprotected bits below
+                                         the upper fraction bits and spikes at the exponent-mantissa bound-                             which task-quality metrics remain acceptable? (3) Is that threshold
+                                         ary, where a single-bit flip causes catastrophic collapse. Because                             universal across model architectures and data types – and therefore
+                                         low-order bits are largely inconsequential while high-order and ex-                            usable as a hardware design parameter?
+arXiv:2607.19623v1 [cs.AR] 21 Jul 2026
+
+
+
+
+                                         ponent bits are critical, uniform SECDED protection—which guards                                  In this paper, we present a comprehensive per-bit-position fault-
+                                         every bit equally at 12.5% storage overhead—is unnecessarily con-                              sensitivity study across 16 models, 6 modalities, and three floating-
+                                         servative. We derive per-data-type Xsafe floors {FP16: 6, BF16: 4,                             point formats (FP16, BF16, FP32) to derive conservative per-data
+                                         FP32: 15} and workload-aware tiers that widen the unprotected re-                              type floor for bits that can safely remain unprotected (§ 3). We
+                                         gion for resilient model classes, raising ECC savings to 37.5–62.5%                            propose workload-aware tiers that trade additional mantissa-bit ex-
+                                         without retraining. Text-conditioned diffusion models dictate the                              posure for greater ECC savings (§ 4). The existence of these thresh-
+                                         conservative floor; vision encoders, NLU models, and resilient LLMs                            olds motivates Unequal Error Protection (UEP)—an error-correction
+                                         tolerate wider bypass regions. These floors and tiers drive an Un-                             strategy that assigns different protection levels to different bits in
+                                         equal Error Protection (UEP) codec with per-cacheline data-type                                the data word [32]. We design a UEP codec and per-cacheline tag
+                                         tags and a dual-partition SRAM architecture for ML accelerators.                               architecture (§ 5) based on these thresholds and validate the design
+                                         Validation across 870+ fault-injection runs confirms selective protec-                         under multi-bit fault patterns and evaluate SRAM-level area, en-
+                                         tion holds under contiguous 2- and 3-bit upsets. The codec reduces                             ergy, and reliability impact (§ 6). § 2 surveys prior approaches and
+                                         ECC area by 27.8% relative to uniform SECDED; dual-voltage oper-                               shows that this is the first work to identify bit-protection floors
+                                         ation of the non-critical partition lowers gross BF16 read energy                              across data types and workloads and co-design them into a UEP
+                                         by ∼17%, with a ∼4% dual-partition macro-area overhead.                                        codec with SRAM-level partitioning. Our contributions are:
+                                                                                                                                        (1) Per-bit-position fault-sensitivity characterization: We systemati-
+                                         CCS Concepts                                                                                       cally study the effect of single-bit faults at every bit position,
+                                         • Hardware → Memory and dense storage; Error detection                                             identify conservative per-data-type thresholds for the number
+                                         and error correction; • Computing methodologies → Neural                                           of fraction LSBs that can safely remain unprotected, and define
+                                         networks.                                                                                          workload-aware tiers that further relax protection for more
+                                                                                                                                            resilient model classes.
+                                         Keywords                                                                                       (2) UEP codec and tag architecture: We design a UEP codec that
+                                         selective ECC, DNN inference, bit-position sensitivity, floating-                                  assigns graded protection by bit significance (e.g., full SECDED
+                                         point reliability, memory fault tolerance, unequal error protection                                on sign and exponent bits, single-error correction on high-
+                                                                                                                                            order fraction bits, and no protection on tolerant fraction LSBs)
+                                                                                                                                            controlled by per-cacheline data-type tags.
+                                         1     Introduction                                                                             (3) Multi-bit fault validation: We validate the selective protection
+                                         Deep Neural Network (DNN) inference is increasingly deployed in                                    scheme under contiguous 2- and 3-bit upsets across 870+ fault-
+                                         environments with frequent memory faults: radiation-induced soft                                   injection experiments and show that bit-plane interleaving
+                                         errors in high-reliability accelerators [61, 65], retention failures in                            eliminates boundary-crossing failures between protected and
+                                         scaled main-memory technologies [38, 41, 46, 51, 58], and bit-flips                                unprotected bit regions.
+                                         from low-voltage SRAM operations [63]. The standard response is                                (4) SRAM-level hardware evaluation. We synthesize the codec in
+                                         uniform error correction, protecting every stored bit equally. Con-                                RTL and model the SRAM macro to evaluate area, read energy,
+                                         ventional Hamming SECDED adds 8 check bits per 64 data bits                                        and reliability. The UEP codec reduces ECC codec area by 27.8%
+                                         (12.5% storage overhead) [20, 24, 38, 67]. With the ever-increasing                                relative to uniform SECDED; dual-voltage operation of the non-
+                                                                                                                                            critical partition reduces BF16 read energy by ∼17% (gross; net
+                                         This is the authors’ preprint version of a paper accepted to appear at the 59th IEEE/ACM
+                                         International Symposium on Microarchitecture (MICRO 2026).
+                                                                                                                                    1
+                                                      Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan, Kunal Tyagi
+
+
+                                                                               Table 1: SERA-Float’s fixed 𝑋 =8 policy versus our per-data type Xsafe floor.
+      positive after level shifters, no precision loss), while the dual-
+      partition macro adds ∼4% area that is recovered by these energy            data    SERA 𝑋      Our floor    Fixed-policy error of SERA 𝑋 =8
+                                                                                 type                 Xsafe
+      savings, with all SER-regime configurations remaining below
+                                                                                FP16        8           6         Exposes critical bits in low-Xsafe diffusion
+      10 failures in time (FIT) and the dual-voltage operating point            BF16        8           4         Unsafe: 𝑋 =8 exceeds BF16’s 7 mantissa bits
+      maintaining an MTTF of ∼900 years.                                        FP32        8           15        Over-protects: 7 safe bits wasted
+
+
+2 Related Work                                                                 et al. [76] protect memory subsets at page-level granularity. None
+2.1 DNN fault tolerance and approximate                                        distinguishes floating-point bit positions.
+    computing                                                                      GPU-centric precedents support structure-local deployment: Pal-
+Prior work establishes that DNN fault tolerance depends strongly               framan et al. [47] explore precision-aware soft-error protection for
+on where corruption lands, but it stops short of the per-bit-position,         GPU register files, and AFT-ECC [64] shows that ECC-path bits
+cross-data type characterization developed in this paper.                      can carry metadata without a separate side array. Our tiers derive
+   Ares [54] and ThUnderVolt [74] (34–57% energy savings at <1%                from per-bit-position DNN sensitivity rather than static precision
+accuracy loss) quantify DNN vulnerability per layer and accelerator            classes, but the mechanisms are compatible.
+structure yet treat all bits within a floating-point word uniformly.               At the rank and controller level, Chipkill RS [19] uses (10,8)
+   Approximate-memory based approaches move closer to value                    4-bit symbol Reed–Solomon codes for DDR5 chipkill-level pro-
+awareness: EDEN [31], the Approximate Memory architecture [45],                tection; Frugal ECC [29] frees space for stronger check bits via
+Stutz et al. [63], Catalán et al. [9], and FIGARO [68] achieve 20–37%          fine-grained compression; Breaking the HBM Bit Cost Barrier [72]
+energy savings at <1% accuracy loss, but characterize tolerance                moves Reed–Solomon protection into the memory controller with
+at word, column, cache-block, or weight level rather than per bit              an importance-adaptive bit-plane policy; and REACH [71] extends
+position within a floating-point word, and most require retraining.            this with two-level erasure coding. All four use Reed–Solomon or
+Security-oriented fault-attack and accelerator-resilience studies              system-level codes for DRAM/HBM and are orthogonal to our work:
+reach a similar conclusion from another angle: targeted single-bit             they target raw channel bit-error rate (BER) at the rank or controller
+faults in model parameters can be catastrophic [22], and propa-                level (and can leverage our per-cacheline format tag), whereas UEP
+gation through DNN accelerators depends strongly on data type,                 derives per-bit-position protection tiers from measured task-level
+value range, reuse, and layer type [35].                                       sensitivity.
+   This paper differs from all of the above in three ways: (1) per-                Across these prior schemes, the key distinction is therefore the
+bit-position characterization, (2) no retraining, and (3) actionable           protection boundary. The construction here uses a single-codeword,
+thresholds that translate directly to ECC design parameters.                   weight-partitioned parity-check matrix whose tier boundaries come
+                                                                               from per-bit-position DNN sensitivity data across multiple data
+2.2      Selective and adaptive ECC for memory                                 types rather than from fixed width classes, page categories, or
+                                                                               controller-scale HBM codeword spans. The distinguishing novelty
+Tang et al. [67] combine repetition codes with Bose–Chaudhuri–
+                                                                               is thus threefold: the tier boundaries are derived empirically from
+Hocquenghem (BCH) codes for unequal error protection of em-
+                                                                               per-bit-position task sensitivity (16 models, 6 modalities, 3 data
+bedded SRAM in DSPs, assigning stronger ECC to high-order bits
+                                                                               types) rather than from a heuristic split or a single fixed policy;
+(HOB) and lighter ECC to low-order bits (LOB). This is direct prior
+                                                                               this is the first precision-aware selective-ECC scheme co-designed
+art for bit-position-selective ECC. However, the HOB/LOB split is
+                                                                               for SRAM bit positions; and the resulting floor is validated end-to-
+arbitrary (not derived from application-level sensitivity data), the
+                                                                               end on task metrics across modalities and under multi-bit upsets,
+scheme requires two codec passes, and the tier boundaries are not
+                                                                               beyond the single-bit “exponent matters” observation.
+optimized for floating-point bit-field structure.
+   SERA-Float [42] protects sign+exponent with ECC and stores 8
+                                                                               3 Fault modeling and experimental setup
+fraction bits with lossy-compression, achieving up to 80.3% energy
+savings per multiply at 0.9% accuracy loss. It is focused on FP32              3.1 Fault model
+and uses three independent codecs for one value while our work                 Memory faults in this study fall into two domains: continuous
+achieves similar guarantees with a single lossless codec.                      analog noise and discrete digital bit-flips.
+   A single fixed, data type-agnostic protection boundary cannot be               Continuous noise is parameterized along two axes:
+both safe and efficient across datatypes. SERA-Float commits one               (1) Coupling mode: relative noise scales with the signal (𝑥˜ = 𝑥 (1 +
+𝑋 =8 (FP32-tuned) policy; Table 1 contrasts it with our empirically                𝜖)), while constant noise is signal-independent (𝑥˜ = 𝑥 + 𝜖).
+derived per-data type Xsafe floor. Because 𝑋 =8 exceeds the FP16                   These map to effects such as voltage-dependent SRAM errors
+and BF16 floors, it leaves task-critical bits unprotected for the most             and quantization rounding, respectively.
+sensitive models, yet it still over-protects FP32 where 15 low bits            (2) Distribution shape: Gaussian (thermal), uniform (quantization),
+are provably safe to bypass.                                                       log-uniform (continuous relaxation of mantissa flips), power-
+   Several adaptive ECC schemes adjust protection strength with-                   law 1/𝑓 (flicker [28]), and lognormal (device variation [28, 44]).
+out data type awareness. Stealth ECC [33] varies correctability by                Discrete faults inject bit-flips under three complementary pro-
+data width (47.9% failure-probability reduction, 0.9% performance              tocols:
+overhead); COMET [3] co-designs on-die SEC with in-controller                  (1) Deterministic fixed-position stress tests: one fixed bit is flipped in
+SECDED; AFT-ECC [64] repurposes check bits for metadata; Zheng                     every floating-point element to isolate per-position sensitivity.
+                                                                           2
+From Bit-Position Sensitivity to Unequal Error Protection for DNN Inference Memory
+
+
+(2) Stochastic random-position sweeps: one random bit/word is flipped                        15, 16, 18, 21, 23, 27, 34, 36, 49, 50, 52, 53, 55, 57, 59, 66]. Dataset
+    with probability 𝑝 𝑤𝑜𝑟𝑑 , approximating realistic fault rates.                           provenance follows original releases [40, 48, 56, 60]; C4 [14] and
+(3) Correlated multi-bit patterns: contiguous 2- or 3-bit flips model                        HellaSwag [73] provide external-validity checks. Auxiliary diffusion
+    multi-cell upsets from one strike.                                                       checkpoints used in focused analyses do not change the cross-model
+Transient faults (single-bit SEUs [61, 65]) isolate per-layer vulner-                        floors in Table 5.
+ability; persistent faults (stuck-at behavior from aging/retention                              For generative models, LPIPS [75] is the preferred perceptual
+effects [38, 51]) corrupt layers 𝑃 through 𝑃 + 𝑖. Continuous cam-                            distance metric. KL divergence, rank correlation, and top-k stabil-
+paigns sweep coupling/distribution effects on task metrics, while                            ity complement primary metrics, and robustness curves plot each
+discrete campaigns locate the benign-to-catastrophic cliff location                          metric against perturbation severity. When later sections call a bit
+and test whether stochastic, correlated, or persistent faults shift it.                      position “safe” or report an Xsafe floor, the criterion is always eval-
+   Primary fault combinations: Each campaign pairs a physically                              uated relative to that modality’s clean baseline metric in Table 3; we
+motivated coupling mode with a distribution or flip pattern in Table                         do not compare raw percentage changes across disparate metrics.
+2.                                                                                              For synthetic layer-wise profiling of vision transformers and
+Table 2: Primary fault combinations tested. Each campaign pairs a coupling                   CNNs, top-1 accuracy is not meaningful, so we report scaled logit
+mode with a distribution or flip pattern, mapped to its physical analog.                     cosine divergence: 𝐷 logit = 100 (1 − cos(𝑧 clean, 𝑧 faulty )), averaged
+ Campaign                   Fault Mode                  Physical analog                      across input logits (𝑧). Since cosine similarity lies in [−1, 1], 𝐷 logit ∈
+ SRAM Voltage Scaling       Relative × Gaussian         Voltage-dependent (BER) [63]         [0, 200], values above 100 indicate mean negative cosine similarity.
+ Fraction relaxation        Relative × log-uniform      Continuous approximation of             For the main decoder-LLM case study, we also run a compact
+                                                        random fraction flips
+ Quantization rounding      Constant × uniform          Narrow-format arithmetic             external-validity check on C4 and HellaSwag with the same Llama-
+ Cell variation             Constant × lognormal        Device-to-device SRAM mismatch       3 8B BF16 attention injector, so conclusions are not anchored to
+ Radiation SEU              Discrete random ×           Single-event upsets                  WikiText-2 alone.
+                            transient
+ Aging / retention          Discrete fixed-value ×      Stuck-at faults
+                            persistent
+
+   Two additional matched-variance shape-analysis cases (relative                            3.3    Injection protocol
+log-normal and pink (1/𝑓 )) are included in § 4.2 to test if degradation                     Design principle. Every campaign keeps fault family and injection
+depends on distribution shape independently of variance.                                     site conceptually separate: the fault family (continuous vs. discrete,
+                                                                                             transient vs. persistent) defines what is injected; the model family
+3.2     Models and metrics                                                                   defines where—i.e. which logical tensor is exposed.
+The evaluation spans 16 models across 6 modalities. The set is cho-                             Injection sites. For attention-based models the primary tar-
+sen to test both cross-modal generality and attention-independence:                          get is the pre-Softmax 𝑄𝐾⊤ score tensor; when a fused-attention
+attention-free CNNs serve as controls for whether the cliff follows                          kernel hides the intermediate logits we materialize an explicit
+attention structure or floating-point data type. Table 3 lists modali-                       𝑄𝐾⊤ → Softmax → 𝑉 path. For non-attention paths and mixed
+ties, models, attention types, and primary metrics; per-model Xsafe                          architectures, we target the native Feed-Forward Network (FFN) /
+outcomes are reported in Table 5.                                                            Multi-Layer Perceptron (MLP) block outputs (decoder-LLM MLP
+Table 3: Evaluation modalities, models, attention mechanisms, and primary                    blocks, ViT/Swin feed-forward blocks, BERT intermediate layers,
+task metrics. Attention abbreviations: MHA (multi-head attention), MMDiT                     Whisper FFN, diffusion FFN modules). Convolutional Neural Net-
+(multimodal diffusion transformer), GQA (grouped-query attention), SWA
+(sliding-window attention), MQA (multi-query attention), and SE (squeeze-                    works (CNN) are injected at convolutional blocks and the final
+and-excitation).                                                                             classifier. Additional loci—weights, activations, inputs, and normal-
+Modality       Models                       Attention        Metric                          ization layers—are tested for selected models only when a within-
+                                            types                                            model sensitivity ranking is needed.
+Image          SD3.5-Medium (2.5B),         MHA,             PSNR / SSIM [69] / LPIPS           Fault campaigns. Each injection site is tested against every
+generation     DiT-XL/2 (675M), SD 1.5      MMDiT,
+               (860M), PixArt-𝛼 (611M)      MHA+Cross
+                                                                                             fault family in § 3.1 and Table 2. Continuous campaigns sweep
+Text           Llama-3 8B, Phi-3-mini       GQA,             WikiText-2 perplexity           noise amplitude (e.g., 𝜎 ∈ {1%, 5%, 10%}) across coupling mod-
+generation     (3.8B), Mistral-7B (7.3B),   GQA+SWA,         (2048-token, headline           es/distributions. Discrete campaigns cover transient and persistent
+               GPT-2 Medium (355M),         MHA, MQA         10-segment 95%
+               Falcon-7B (7B)                                confidence interval (CI))       axes in single-event mode (inject at layer 𝑃, measure at 𝑃+𝑖) and
+Vision clas-   ViT-L/16 (304M), Swin-B      MHA, shifted     ImageNet-1K top-1               continuous-event mode (corrupt layers 𝑃 through 𝑃+𝑖).
+sification     (88M)                        window           accuracy (5,000 images)            Precision scope. Campaigns run in FP16, BF16, and FP32 (na-
+Language       BERT-base (110M)             MHA (bidi-       SST-2 classification
+understand-                                 rectional)       accuracy (872 examples)         tive and accumulation data types). FP8 formats are storage-only
+ing                                                                                          (accumulation still uses FP16/BF16/FP32), so selective ECC targets
+Speech         Whisper-small (244M)         MHA+Cross        LibriSpeech test-clean
+recognition                                                  WER (200 utterances)
+                                                                                             long-lived FP16/BF16/FP32 values in registers and SRAM. Xsafe
+CNN image      ResNet-50 (25M),             None, SE         ImageNet-1K top-1               denotes the number of fraction LSBs that remain unprotected while
+classifica-    EfficientNet-B0 (5.3M),      (channel)        accuracy (5,000 images)         staying within a modality-specific quality bound: perplexity ≤ 1.01×
+tion           MobileNetV3-Large
+               (5.4M)                                                                        baseline (LLMs), accuracy ≥ baseline − 1 pp (vision/NLU), WER ≤
+                                                                                             baseline + 1 pp (speech), or the first bit before a single-step PSNR
+  Model/architecture provenance and decoder-attention labels                                 drop > 5 dB (diffusion). Xsafe is derived in § 4 and characterized
+(MQA/GQA/SWA) follow the original publications [1, 2, 4, 10, 13,                             under both full-precision and FP8-quantized workloads.
+                                                                                         3
+                                                                                                                        Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan, Kunal Tyagi
+
+
+                 1.0
+                                          BF16                                  FP16                                   FP32
+                                                                                                                                                 Table 4: Xsafe-floor stability across the evaluation protocol. Under the oper-
+                 0.8
+                                                                                                                                                 ating quality bound the conservative floors (FP16=6, BF16=4, FP32=15) are
+                 0.6
+                                                                                                                                                 preserved; a stricter bound only tightens them. Per-model Xsafe varies by at
+                                                                                                                                                 most one bit across datasets, sample counts, and injection sites, and the swept
+          SSIM
+
+
+
+
+                 0.4
+
+
+                 0.2
+                           SD3.5
+                           DiT-XL/2
+                                                                 SD3.5
+                                                                 DiT-XL/2
+                                                                                                       SD3.5
+                                                                                                       DiT-XL/2
+                                                                                                                                                 resilient models stay well above the floor.
+                           SD 1.5                                SD 1.5                                SD 1.5
+
+
+                                                                                                                                                 Axis             Variation tested                    Effect on Xsafe
+                           PixArt-α                              PixArt-α                              PixArt-α
+                 0.0
+
+                       0              5          10     15   0              5          10     15   0    5         10   15     20   25   30
+                            Bit position (LSB → sign)             Bit position (LSB → sign)             Bit position (LSB → sign)
+
+
+Figure 1: Per-model SSIM under deterministic single-bit-position stress tests                                                                    Quality bound    Cliff 3/5 dB; PSNR −3/ −6 dB        FP16=6, BF16=4 preserved
+for SD3.5-Medium, DiT-XL/2, SD 1.5, and PixArt-𝛼 across BF16 (left), FP16                                                                        Quality bound    Stricter PSNR −1 dB / SSIM bound    Tightens monotonically
+(center), and FP32 (right). Each point stresses one bit position across all targeted                                                             Dataset/task     SST-2/MNLI/QQP; test-clean/other;   ≤ 1 bit; above floor
+floating-point words (𝑝 word = 1); dashed lines mark the fraction/exponent                                                                                        ImageNet
+boundary for each data type. Fraction LSBs up to Xsafe cause negligible quality                                                                  Sample count     500–5000                            0 bit
+loss; sensitivity ramps through the upper fraction bits before collapsing at the                                                                 Injection site   Attention vs. MLP/conv              ≤ 1 bit
+exponent field. The data-type-specific onset of this ramp — not the exponent
+boundary itself — defines Xsafe.                                                                                                                 upper fraction bits before collapsing catastrophically once the ex-
+                                                                                                                                                 ponent field is reached. The same two-phase pattern holds across
+3.4      Statistical protocol                                                                                                                    architecturally distinct model types, as shown in Table 6: for Llama-
+Unless noted otherwise, each robustness condition uses at least                                                                                  3 8B, perplexity remains stable through bit 11 but jumps from 7.01
+35 matched inputs and is reported with 95% confidence intervals;                                                                                 to 98.6 at bit 12; for ViT-L/16, top-1 accuracy drops 3.94 percentage
+headline counts are listed in Table 3. Key diffusion 𝑝 word sweeps                                                                               points over the same two-bit window; for SD3.5-Medium, SSIM
+(§ 4) are rerun with 100 prompts to validate the 35-sample choice.                                                                               falls by 0.19 per step once the transition begins.
+Noise-shape comparisons (§4.2) use paired Wilcoxon signed-rank
+tests [70]. Classification intervals (BERT, ViT) use exact Clopper–                                                                                 The Xsafe threshold. The onset of this sensitivity ramp defines
+Pearson binomial intervals [11]. Paired significance cross-checks in                                                                             a data-type-specific protection threshold, Xsafe: the number of
+§ 4.1.1 use McNemar tests [39], one per bit position with Bonferroni                                                                             fraction LSBs that can safely remain unprotected without crossing
+correction (family size = data type width: 16 for FP16/BF16, 32 for                                                                              each modality’s quality bound (§ 3.3). Table 5 consolidates Xsafe
+FP32).1                                                                                                                                          across all 16 evaluated models. The cross-model floor — the most
+                                                                                                                                                 conservative value across all workloads — is Xsafe=6 for FP16,
+4       Bit-Position Sensitivity Results                                                                                                         Xsafe=4 for BF16, and Xsafe=15 for FP32, set in each case by the
+This section characterizes per-bit-position fault sensitivity under                                                                              most sensitive model class (text-conditional diffusion for FP16 and
+discrete (§ 4.1) and continuous (§ 4.2) faults.                                                                                                  BF16; PixArt-𝛼 for FP32). These floors are the hardware design
+                                                                                                                                                 parameter: bits below Xsafe can be left unprotected; bits above it,
+4.1      Discrete Bit-Flip Sensitivity                                                                                                           including the remaining upper fraction bits, require ECC coverage.
+The subsections below systematically establish which bits can safely
+remain unprotected, then stress-test that conclusion by relaxing                                                                                    Stability of the floors. A natural question is whether the floors
+one experimental assumption at a time. § 4.1.1 establishes the base-                                                                             FP16=6, BF16=4, FP32=15 are artifacts of the specific evaluation
+line answer under controlled conditions: deterministic single-bit-                                                                               protocol. Table 4 addresses this by varying five axes of the protocol
+position sweeps at maximum stress isolate the contribution of each                                                                               and recording the effect on Xsafe. The floors are preserved under
+bit position individually and yield a conservative per-data-type pro-                                                                            the operating quality bound and are insensitive to sample count.
+tection threshold, Xsafe. § 4.1.2 relaxes the transient-fault assump-                                                                            Varying dataset, injection site, and GPU architecture moves per-
+tion, showing that Xsafe holds under permanent stuck-at faults                                                                                   model Xsafe by at most one bit, and the resilient models swept
+and characterizing the polarity asymmetry they introduce. § 4.1.3                                                                                in these tests stay well above the floor in every case. The funda-
+relaxes the deterministic and single-bit assumptions, showing that                                                                               mental reason the floors are stable to quality bound choice is that
+random bit-flips at realistic fault rates respect the same threshold.                                                                            the diffusion sensitivity transition is near-vertical: SD3.5-Medium
+§ 4.1.4 shows that the conservative floor can be widened for more                                                                                BF16 PSNR falls from 31 dB to 14 dB across just four adjacent bit
+resilient workloads, yielding per-modality tiers that increase ECC                                                                               positions, so the exact placement of the quality threshold line does
+savings without retraining. § 4.1.5 relaxes the single-bit-per-event                                                                             not change which bit position it selects. A stricter bound tight-
+assumption, showing that multi-cell upsets contract Xsafe by at                                                                                  ens the floors monotonically as expected; a looser bound relaxes
+most one bit per additional flipped bit.                                                                                                         them. Per-model Xsafe values should therefore be understood as
+                                                                                                                                                 exhibiting bounded sub-bit drift across protocol variants, not literal
+4.1.1    Per-Bit Sensitivity and the Xsafe Protection Threshold.                                                                                 invariance. Stochastic behavior at realistic fault rates is analyzed in
+   Evidence from deterministic sweeps. Deterministic single-bit-position                                                                         § 4.1.3.
+sweeps – where each bit position is individually stressed at a per-                                                                                 Is Xsafe governed by model architecture? Figure 2 tests whether
+word fault rate 𝑝 word = 1 (every floating-point word in the targeted                                                                            Xsafe variation across decoder LLMs reflects attention head struc-
+tensor has that specific bit toggled) – reveal a consistent two-phase                                                                            ture rather than data type, by plotting Xsafe against the heads/KV
+sensitivity pattern. Figure 1 shows this pattern for four diffusion                                                                              ratio (num_heads/num_kv_heads) for the five decoder LLMs — a
+models (SD3.5-Medium, DiT-XL/2, SD 1.5, and PixArt-𝛼) across                                                                                     ratio that increases under grouped-query and multi-query atten-
+BF16, FP16, and FP32: corrupting the least-significant fraction bits                                                                             tion and could in principle confer KV-cache redundancy that masks
+causes negligible quality loss, while sensitivity ramps through the                                                                              bit errors. Spearman correlation is non-significant across all data
+1 Tomatch ViT’s 5,000-image subset, the BERT McNemar study uses 5,000 SST-2                                                                      types (𝜌≈ − 0.031, 𝑝≈0.953): attention head structure is not a pre-
+examples (872 validation plus 4,128 training examples reserved for this diagnostic).                                                             dictor of Xsafe. Xsafe is determined by the floating-point data
+                                                                                                                                             4
+From Bit-Position Sensitivity to Unequal Error Protection for DNN Inference Memory
+
+
+Table 5: Per-model Xsafe — the number of fraction LSBs that can safely remain
+unprotected without crossing the modality-specific quality bound — for FP16,
+BF16, and FP32 across 16 evaluated models. The cross-model floor (bold) is the
+conservative hardware design parameter: FP16 Xsafe=6, BF16 Xsafe=4, FP32
+Xsafe=15. Floors are set by text-conditional diffusion models for FP16 and
+BF16, and by PixArt-𝛼 for FP32; other families tolerate wider unprotected
+regions. PPL = perplexity.
+Model                       Family               FP16       BF16        FP32    Metric
+Diffusion
+DiT-XL/2 (675M)             Class-cond MHA           7        6          20     PSNR                              Figure 3: Paired McNemar tests for single-bit flips at matrix-multiply outputs
+SD 1.5 (860M)               Text-cond                6        4          18     PSNR                              (BERT-base SST-2, ViT-L/16 ImageNet), across attention and MLP paths, for
+                            MHA+Cross
+                                                                                                                  FP16, BF16, and FP32. Color: − log10 (𝑝 ) (darker = stronger significance); dark
+PixArt-𝛼 (611M)             Text-cond                8        5          15     PSNR
+                            MHA+Cross                                                                             outlines mark Bonferroni-significant positions. Fraction LSBs are statistically
+SD3.5-Medium (2.5B)         MMDiT                    6        4         OOM     PSNR                              indistinguishable from baseline across all panels; significance peaks at the
+                                                                                                                  exponent boundary (shifting with data type), consistently across attention
+Decoder LLMs                                                                                                      and MLP paths.
+Llama-3 8B                  GQA                      9        7          23     PPL
+Phi-3-mini (3.8B)           MHA                      10       7          23     PPL
+Mistral-7B                  GQA+SWA                  10       7          24     PPL                               than at a fixed bit position. Attention-free CNN classifiers reinforce
+GPT-2 Medium                MHA                      9        6          22     PPL                               this: they match the data-type-scaled pattern of transformer models,
+(355M)
+Falcon-7B                   MQA (71:1)               10       7          23     PPL                               confirming that the sensitivity structure follows the floating-point
+Encoder / Enc-Dec                                                                                                 format, not the attention mechanism. Statistical confirmation fol-
+BERT-base (110M)            MHA (bidir)              12       8          25     Accuracy                          lows.
+Whisper-small               MHA+Cross                9        6          24     WER
+(244M)
+Vision Encoders
+                                                                                                                     Statistical confirmation of the boundary. Paired McNemar tests
+ViT-L/16 (304M)             MHA                      11       8          24     Top-1                             applied per bit position to BERT-base and ViT-L/16 — across atten-
+Swin-B (88M)                Shifted window           14       8          27     Top-1
+                                                                                                                  tion and MLP paths for all three data types — confirm the transition
+CNNs (no self-attention)                                                                                          statistically (Figure 3). After Bonferroni correction, significance is
+ResNet-50 (25M)          None                        11       8          24     Top-1
+EfficientNet-B0          SE (channel)                11       8          24     Top-1                             concentrated exclusively in the exponent and sign positions; frac-
+(5.3M)                                                                                                            tion LSBs are indistinguishable from baseline across all six panels.
+MobileNetV3-L            SE (channel)                10       7          23     Top-1
+(5.4M)                                                                                                            The statistical scope is limited to these two classification models;
+Cross-model floor                                                                                                 the deterministic sweeps in Table 5 and Table 6 extend the pattern
+Minimum Xsafe                                        6        4          15                                       to the remaining 14 models.
+                                                                                                                  4.1.2 Persistent-Fault Polarity Asymmetry. § 4.1.1 established Xsafe
+                                                                                                                  under transient faults — bits that flip and recover. We now relax this
+                                                                                                                  assumption and ask whether Xsafe holds when a bit is permanently
+                                                                                                                  stuck at a fixed value, as occurs under aging, retention failure, or
+                                                                                                                  manufacturing defects. Figure 4 sweeps stuck-at-0 and stuck-at-1
+                                                                                                                  faults across all bit positions for BERT-base, ViT-L/16, and Whisper-
+                                                                                                                  small, across both attention and MLP paths and all three data types.
+Figure 2: Attention-path Xsafe for five decoder LLMs plotted against their
+heads/KV ratio — the number of query heads sharing each key-value head pair                                       Xsafe survives: fraction LSBs remain benign under both polarities
+— on a log scale, for FP16, BF16, and FP32. A higher heads/KV ratio (as in multi-                                 across all models and data types, and the protection boundary is
+query attention) compresses key-value memory across more query heads                                              preserved.
+and could in principle confer redundancy that masks bit errors. Spearman
+correlation is non-significant across all data types (𝜌≈ − 0.031, 𝑝≈0.953), ruling                                   However, persistent faults introduce a polarity asymmetry absent
+out attention head structure as a predictor of Xsafe.                                                             in transient flips — stuck-at-0 and stuck-at-1 cause qualitatively
+Table 6: Sharpness of the sensitivity transition near each model’s Xsafe bound-                                   different damage at the same bit position. On the sign bit, stuck-at-0
+ary (FP16, single-bit-position faults at 1% element rate). Columns Bit N through                                  forces all values positive, which can raise perplexity by more than
+Bit N+2 show a three-bit window starting at the first bit above Xsafe: 𝑁 =10 for
+Llama-3 8B and ViT-L/16, 𝑁 =12 for BERT-base, and 𝑁 =8 for SD3.5-Medium. In                                       1500×; stuck-at-1 at the same position is far milder (< 1.1×) because
+every case, one or two bits above the threshold move behavior from tolerable                                      attention scores are typically near-zero or negative. Exponent bits
+to catastrophic with no gradual plateau, confirming Xsafe is a hard boundary.
+                                                                                                                  show rate-dependent behavior: bit 10 stuck-at-1 in FP16 raises
+Model               Xsafe     Baseline       Bit N         Bit N+1        Bit N+2       Metric (Δ)                perplexity by only 1.05× when 0.1% of words are affected, but by
+Llama-3 8B            9       6.64 PPL    6.81 (b10)       7.01 (b11)     98.6 (b12)    PPL ( × 14.8)             30× when 5% of words are affected, because a higher fraction of
+ViT-L/16             11        80.20%     80.34 (b10)     76.26 (b11)    73.38 (b12)    Top-1 ( − 3.94pp)
+BERT-base            12        92.43%     91.06 (b12)     90.94 (b13)    91.86 (b14)    Acc ( − 1.49pp)           corrupted exponent bits pushes more values toward overflow. Stuck-
+SD3.5-Med             6          1.0      0.950 (b6)       0.873 (b7)    0.568 (b8)     SSIM ( − 0.19/step)       at-0 at the same position remains benign across all tested rates. The
+                                                                                                                  same polarity pattern holds consistently across models and data
+type, not by the model’s attention configuration. We therefore use
+                                                                                                                  types.
+Xsafe=6 (FP16), Xsafe=4 (BF16), and Xsafe=15 (FP32), then derive
+workload-aware tiers in § 4.1.4.                                                                                  4.1.3 Stochastic BER Sweeps. § 4.1.1 used deterministic sweeps
+   The sensitivity pattern is also consistent across data types: Ta-                                              that stress one fixed bit position at a time across every word in
+ble 6 shows that running the same models in FP16, BF16, and FP32                                                  the targeted tensor — a controlled experiment that isolates bit
+produces the same abrupt two-phase transition in each case, with                                                  importance but does not reflect how faults occur in real hardware,
+Xsafe shifting with the format at a model-dependent offset rather                                                 where any bit in a word may flip at random. We now relax both the
+                                                                                                              5
+                                                                                                                                                                                                                                                          Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan, Kunal Tyagi
+
+
+                                                                                                                                          Stuck-at vs bit index                                                                                                                                Table 7: Per-layer sensitivity spread under Gaussian noise injection (𝜎=0.01,
+                                                 BF16 stuck-0                  BF16 stuck-1           FP16 stuck-0          FP16 stuck-1                 FP32 stuck-0         FP32 stuck-1            BF16 man.|exp.                    FP16 man.|exp.          FP32 man.|exp.
+                                                           0.2
+                                                                                      BERT-base
+                                                                                                                                           0
+                                                                                                                                                                        ViT-L/16
+                                                                                                                                                                                                                          120
+                                                                                                                                                                                                                                                 Whisper-small                                 one layer at a time) for 8 core evaluation models plus 3 auxiliary diffusion
+                                                                                                                                                                                                                                                                                               checkpoints. The remaining 8 evaluation models were not profiled at this
+                                                           0.0
+                                                                                                                                          10                                                                              100
+                                                           0.2
+                                         accuracy (pp)
+
+
+
+
+                                                                                                                                                                                                                           80
+                                  Attention
+
+
+
+
+                                                           0.4
+
+
+
+
+                                                                                                                             top-1 (pp)
+                                                                                                                                          20
+
+
+
+
+                                                                                                                                                                                                               WER (pp)
+                                                           0.6
+                                                           0.8
+                                                                                                                                          30
+                                                                                                                                                                                                                           60
+                                                                                                                                                                                                                           40
+                                                                                                                                                                                                                                                                                               granularity; their per-model Xsafe values appear in Table 5. Spreads exceed
+                                                                                                                                                                                                                                                                                               an order of magnitude for LLMs and 3–14 dB for diffusion.
+                                                           1.0                                                                            40
+                                                                                                                                                                                                                           20
+                                                           1.2                                                                            50
+                                                                                                                                                                                                                            0
+                                                           1.4
+
+
+                                                            0                                                                              0
+                                                                                                                                          10
+                                                                                                                                                                                                                          350                                                                  Model               Metric               Min         Max             Spread
+                                                           10                                                                                                                                                             300
+                                                                                                                                          20
+                                           accuracy (pp)
+
+
+
+
+                                                                                                                                                                                                                          250
+
+                                                                                                                                                                                                                                                                                               DiT-XL/2            PSNR (dB)           16.55        30.24            13.69
+                                                                                                                             top-1 (pp)
+                                                                                                                                          30
+
+
+
+
+                                                                                                                                                                                                               WER (pp)
+                                                           20
+                                                                                                                                                                                                                          200
+                                  MLP
+
+
+
+
+                                                                                                                                          40
+                                                           30                                                                             50                                                                              150
+                                                           40
+                                                           50
+                                                                                                                                          60
+                                                                                                                                          70
+                                                                                                                                          80
+                                                                                                                                                                                                                          100
+                                                                                                                                                                                                                           50
+                                                                                                                                                                                                                            0
+                                                                                                                                                                                                                                                                                               SD 1.5              PSNR (dB)           20.85        26.34             5.49
+                                                                 0        4     8    12       16
+                                                                                          Bit index
+                                                                                                       20    24    28       31                 0         4   8     12       16
+                                                                                                                                                                        Bit index
+                                                                                                                                                                                          20    24   28   31                    0      4    8     12       16
+                                                                                                                                                                                                                                                       Bit index
+                                                                                                                                                                                                                                                                   20   24   28   31           PixArt-𝛼            PSNR (dB)           18.15        30.15            12.00
+                                                                                                                                                                                                                                                                                               SDXL                PSNR (dB)           30.10        34.17             4.07
+Figure 4: Permanent stuck-at-0 (solid lines) and stuck-at-1 (dashed lines) faults                                                                                                                                                                                                              Llama-3 8B          PPL ratio           12.5 ×     174,520 ×        174,507 ×
+swept across all bit positions (1% incidence) for BERT-base, ViT-L/16, and                                                                                                                                                                                                                     Falcon-7B           PPL ratio           1.05 ×      189.9 ×          188.9 ×
+Whisper-small, on attention (top) and MLP (bottom) paths. The 𝑦 -axis is                                                                                                                                                                                                                       BERT-base           Acc. delta (pp)     − 8.03       − 0.34            7.68
+the change in each model’s primary quality metric; dotted lines mark the                                                                                                                                                                                                                       Whisper-small       WER delta (pp)      − 0.64      +86.90            87.54
+fraction/exponent boundary per data type. Fraction LSBs remain benign under                                                                                                                                                                                                                    ViT-L/16            Logit cos. div.     0.0000      0.0467           0.0467
+both polarities, confirming Xsafe holds under persistent faults. Above the                                                                                                                                                                                                                     Playground V2.5     PSNR (dB)           23.13        27.40             4.27
+boundary, stuck-at-0 and stuck-at-1 produce asymmetric damage: stuck-at-1                                                                                                                                                                                                                      SDXL Turbo          PSNR (dB)           15.11        18.39             3.28
+at exponent bits inflates magnitude toward overflow, while stuck-at-0 at the
+same position is typically benign.
+                                                                                    Threshold behavior and the full Q/K/V/KV/QK/output ranking
+                                                                                                                                                                                                                                                                                                  Per-modality Xsafe tiers. Grouping the per-model Xsafe values
+                                                                 Realistic bit-flip threshold is abrupt                                                                                                    Attention-path sensitivity ranking
+                                                                                                                                                                                                                                                                                               from Table 5 by modality yields three natural tiers (Table 8), cov-
+                                                                                                                                                                                                                                                                                               ering all workloads from the most conservative (text-conditional
+                                                                                                                                          Bit class PSNR
+                                                                                still usable
+                                                                                                            LSB mant.             27.7              26.5         27.9
+                                                                                                                                                                                           25
+      Aggregate PSNR (dB)
+
+
+
+
+                            25
+
+                                                                                                                                                                                                                                                                                               diffusion, Tier 0, Xsafe=6) through resilient vision, NLU, and CNN
+                                                                                                            MSB mant.             26.3              25.9         16.9
+
+                                                                                                                   Sign           24.3              14.0         12.3
+                                                                                                                                                                              PSNR (dB)
+
+
+
+
+                                                                                                                                                                                           20
+                            20
+
+                                                                                                                                                                                                                                                                                               workloads (Tier 2, Xsafe=10). A runtime-configurable bypass width
+                                                                                                             Exponent             10.7              8.4          8.2
+                                                                                                                                  1e-4              1e-3         1e-2
+                                                                                                                                                                                           15
+                            15
+
+                                                                                                                                                                                                                                                                                               allows a single hardware design to serve all three tiers without re-
+                                                                                                                                          catastrophic cliff
+
+                                                                                                                                                                                           10
+                            10
+
+
+
+                                 10   −6
+                                                                     10   −5
+                                                                                          10   −4
+                                                                                                                  10   −3
+                                                                                                                                               10   −2
+                                                                                                                                                                   10    −1                     Output                     KV                V                  QK            K        Q
+                                                                                                                                                                                                                                                                                               design or retraining; the hardware implications are developed in
+                                                                                    Word fault rate pword                                                                                                                                  Injection site
+                                                                                                                                                                                                                                    Relative noise                 SECDED bitflip
+                                                                                                                                                                                                                                                                                               § 5.
+Figure 5: Aggregate SD3.5-Medium PSNR under random bit-flips as a function                                                                                                                                                                                                                     Table 8: Three FP16 protection tiers with their X value, modality coverage,
+of per-word fault rate 𝑝 word . Quality stays above 24 dB for 𝑝 word ≤ 10 −4 and                                                                                                                                                                                                               unprotected bit count, and cumulative model coverage. Tier boundaries use
+collapses near 10 −3 . The inset breaks PSNR down by bit class at 10 −4 /10 −3 /10 −2 :                                                                                                                                                                                                        family minima, ensuring no model is exposed beyond its validated Xsafe
+LSB mantissa bits stay near 27 dB even at high rates, while sign/exponent                                                                                                                                                                                                                      threshold.
+corruption drops below 10 dB. Bit class — not fault rate alone — is the dominant
+determinant of fault severity.                                                                                                                                                                                                                                                                 Tier    X    Modality        Models covered                    Unprotected
+                                                                                                                                                                                                                                                                                                                                                                 bits   Models
+                                                                                                                                                                                                                                                                                                                                                               (FP16)    in tier
+deterministic and the uniform-fault assumptions and ask whether
+Xsafe holds under realistic stochastic fault conditions.                                                                                                                                                                                                                                        0      6    All             SD3.5-Medium, PixArt-𝛼 , SD       6 of 16        4
+                                                                                                                                                                                                                                                                                                            (conservative   1.5, DiT-XL/2, + all below
+                                                                                                                                                                                                                                                                                                            floor incl.
+   Rate dependence. Figure 5 plots aggregate PSNR for SD3.5-Medium                                                                                                                                                                                                                                          text-cond.
+as a function of the per-word fault rate 𝑝 word — the probability that                                                                                                                                                                                                                                      diffusion)
+                                                                                                                                                                                                                                                                                                1      9    LLMs, enc-dec   Llama-3 8B, GPT-2 Medium,         9 of 16        7
+any given floating-point word suffers a random bit-flip — across the                                                                                                                                                                                                                                                        Whisper-small, + all below
+range 10−6 to 10−1 . Quality remains above 24 dB for 𝑝 word ≤ 10−4                                                                                                                                                                                                                              2      10   Vision, NLU,    Phi-3-mini, Mistral-7B,           10 of 16       16
+                                                                                                                                                                                                                                                                                                            resilient LLMs, Falcon-7B, MobileNetV3-L,
+and collapses catastrophically near 10−3 , producing a sharp usable-                                                                                                                                                                                                                                        CNNs            ViT-L/16, ResNet-50,
+to-catastrophic threshold rather than a gradual degradation curve.                                                                                                                                                                                                                                                          EfficientNet-B0, BERT-base,
+The inset breaks this down by bit class at three fault rates: even at                                                                                                                                                                                                                                                       Swin-B
+the high fault rate of 𝑝 word = 10−2 , LSB mantissa bits remain near
+27 dB while sign and exponent bit corruption collapses PSNR to
+                                                                                                                                                                                                                                                                                               4.1.5 Multi-Cell Upset Robustness. All preceding subsections in-
+below 10 dB. This confirms that bit class — and therefore Xsafe —
+                                                                                                                                                                                                                                                                                               jected single-bit faults. We now relax this assumption: in advanced
+remains the dominant determinant of fault severity at realistic rates,
+                                                                                                                                                                                                                                                                                               process nodes, a single particle strike can flip multiple physically
+not fault rate alone. Across all 16 evaluated models, degradation
+                                                                                                                                                                                                                                                                                               adjacent memory cells simultaneously, producing a multi-cell upset
+stays within 1% for 𝑝 word ≤ 10−4 and becomes rapid near 10−3 .
+                                                                                                                                                                                                                                                                                               of 𝑁 contiguous bits (MCU-𝑁 ) [25]. We ask whether Xsafe holds
+4.1.4 Per-Layer and Per-Modality Sensitivity Tiers. The conserva-                                                                                                                                                                                                                              when an event corrupts 2 or 3 adjacent bits rather than one. MCU-𝑁
+tive Xsafe floor guarantees safety across all workloads but is set                                                                                                                                                                                                                             experiments repeat the deterministic sweeps of § 4.1.1 but corrupt
+by the most sensitive model. We now ask whether it can be safely                                                                                                                                                                                                                               𝑁 contiguous bits per event. Table 9 reports the results: Xsafe con-
+widened for more resilient workloads without retraining.                                                                                                                                                                                                                                       tracts by at most one bit per additional flipped bit across all tested
+                                                                                                                                                                                                                                                                                               data types and architectures. Figure 6 confirms this contraction is
+   Per-layer sensitivity spread. Gaussian noise injected one layer at                                                                                                                                                                                                                          consistent across models. The contraction is bounded because an
+a time reveals that sensitivity varies substantially within a single                                                                                                                                                                                                                           MCU-𝑁 event whose entire footprint lies within the safe LSB region
+model (Table 7): the spread between the most and least sensitive lay-                                                                                                                                                                                                                          causes no additional damage; only events that straddle the Xsafe
+ers exceeds an order of magnitude for LLMs and spans 3–14 dB for                                                                                                                                                                                                                               boundary produce a contraction, and in that case the outcome is
+diffusion models. Uniform per-layer protection therefore simultane-                                                                                                                                                                                                                            dominated by the highest corrupted bit position — equivalent in
+ously over-provisions resilient layers and under-provisions critical                                                                                                                                                                                                                           effect to a single-bit fault at that position. The 𝑁 −1 contraction is
+ones. This wide intra-model spread motivates a tiered protection                                                                                                                                                                                                                               therefore a worst case arising only at the boundary, not a general
+policy where the bypass width can be adjusted per workload.                                                                                                                                                                                                                                    property of all MCU events.
+                                                                                                                                                                                                                                                                                           6
+From Bit-Position Sensitivity to Unequal Error Protection for DNN Inference Memory
+
+          Observed contraction is ~1 bit per upset order                                                                      Cross-model MCU cliff positions
+                                                                                    BF16
+          Xsafe under non-interleaved upset
+
+                                              10                                    FP16     Llama-3 8B MCU-3                                    MCU-2
+                                                                                                             cliff                               cliff
+
+                                                                                               Phi-3 Mini
+                                               9
+                                                                                           GPT-2 Medium
+                                                            -1 bit / order
+                                               8
+                                                                                              Mistral-7B
+
+                                                                                               Falcon-7B                                                                           no cliff
+                                               7
+
+                                                                                                  ViT-L/16                                                                         no cliff
+                                               6
+                                                                                              BERT Base
+
+                                               5                                           Whisper Small                                                           MCU-2           MCU-3
+
+
+                                               Single-bit             MCU-2          MCU-3                           6              8                  10          12              14
+                                                                                                                                    BF16 MLP cliff start position
+
+
+Figure 6: Left: BF16 and FP16 Xsafe under MCU-2 and MCU-3 compared to
+single-bit faults, showing a contraction of at most one bit per additional flipped
+                                                                                                                                                                                                  Figure 8: Cross-model diffusion harness summary showing mean SSIM drop
+bit. Right: cross-architecture BF16 MLP sensitivity-transition positions under
+                                                                                                                                                                                                  (a) and mean LPIPS increase (b) relative to clean baselines, across evaluated
+MCU-2 and MCU-3, confirming that the contraction pattern is consistent
+                                                                                                                                                                                                  checkpoints (rows) and experimental conditions (columns). The severity or-
+across all evaluated models.
+                                                                                                                                                                                                  dering of noise families is consistent across all checkpoints, confirming that
+Table 9: Cross-data-type Xsafe contraction under MCU-2 and MCU-3. Each                                                                                                                            the coupling-mode and distribution-shape findings from SD3.5-Medium gen-
+entry reports the worst-case safe-LSB count across all evaluated models. Xsafe                                                                                                                    eralize across diffusion model architectures.
+contracts by at most one bit per additional flipped bit — MCU-2 costs at most
+one safe bit, MCU-3 costs at most two — and only when the upset footprint                                                                                                                         5    Hardware Architecture: Unequal Error
+straddles the Xsafe boundary.
+                                                                                                                                                                                                       Protection for ML Inference
+                                                                              Single-bit                         MCU-2                                      MCU-3
+                                                                                                                                                                                                  § 4.1 and § 4.2 converge on three findings that constrain the hard-
+                                                         FP16                Xsafe = 6                       Xsafe ≥ 5                              Xsafe ≥ 4
+                                                         BF16                Xsafe = 4                       Xsafe ≥ 3                              Xsafe ≥ 2
+                                                                                                                                                                                                  ware design. First, Xsafe — a data-type-specific threshold within
+                                                         FP32                Xsafe = 15                      Xsafe ≥ 14                             Xsafe ≥ 13                                    the fraction field — defines which bits can safely remain unprotected:
+                                                                                Gaussian           Log-normal            Bit-flip              Log-uniform
+                                                                                                                                                                                                  FP16 Xsafe=6, BF16 Xsafe=4, FP32 Xsafe=15, with workload-aware
+                                                                   BF16                                         FP16                                              FP32                            tiers that widen the unprotected region for more resilient modalities
+                                                                                                                                                                                                  (§ 4.1.4). Second, digital bit-flips degrade quality by 28–40 dB more
+                                              50
+
+
+                                              40
+
+                                                                                                                                                                                                  than Gaussian noise of identical variance (Figure 7), confirming
+          PSNR (dB)
+
+
+
+
+                                              30
+
+
+                                              20
+                                                                                                                                                                                                  that any viable protection scheme must distinguish which bits are
+                                              10                                                                                                                                                  corrupted, not merely how many — this is unequal error protection
+                                              0
+                                                   Low          Medium
+                                                         Matched-variance regime
+                                                                                   High     Low            Medium
+                                                                                                    Matched-variance regime
+                                                                                                                                        High     Low            Medium
+                                                                                                                                                         Matched-variance regime
+                                                                                                                                                                                     High         (UEP) by definition. Third, multi-cell upsets contract Xsafe by at
+Figure 7: Matched-variance comparison across four noise families (Gauss-
+                                                                                                                                                                                                  most one bit per additional flipped bit, and only when the upset
+ian, log-normal, bit-flip, log-uniform) at low, medium, and high variance                                                                                                                         footprint straddles the protection boundary (§ 4.1.5). These three
+regimes, for BF16, FP16, and FP32. At identical variance, digital bit-flips (red)                                                                                                                 findings are the inputs to the hardware design that follows.
+are 28–40 dB worse than Gaussian noise (blue), confirming that fault severity
+is determined by which bit fields are corrupted, not by noise magnitude alone.                                                                                                                       Translating this into hardware imposes four requirements:
+                                                                                                                                                                                                  R1 Selective application: UEP applies only to inference-produced
+4.2     Continuous Noise Tolerance                                                                                                                                                                     floating-point values (activations, partials, accumulators); weights,
+§ 4.1 characterized sensitivity to discrete digital bit-flips. We now                                                                                                                                  inputs, and integer control data retain full ECC. Fused-attention
+ask whether the same conclusions hold under continuous analog                                                                                                                                          kernels already separate weight traffic from result traffic [12,
+noise — perturbations that nudge floating-point values by some                                                                                                                                         43], so UEP targets the result path without affecting inputs.
+amount rather than flipping a specific bit, as occurs under voltage                                                                                                                               R2 Per-cacheline metadata: each cacheline must encode its active
+scaling, thermal fluctuation, or device variation. The central ques-                                                                                                                                   bypass width, because Xsafe varies by data type and modality
+tion is: does noise distribution shape alone determine fault severity,                                                                                                                                 tier. A single 3-bit tag per cacheline suffices since ML output
+or does the way noise couples to the signal matter more?                                                                                                                                               tensors are uniformly typed.
+                                                                                                                                                                                                  R3 Partitioned SRAM: bypassed LSBs must be physically separated
+    Coupling mode dominates distribution shape. Four noise families
+                                                                                                                                                                                                       from protected bits and check bits, so the non-critical partition
+— Gaussian, log-normal, log-uniform, and matched-variance bit-
+                                                                                                                                                                                                       can operate at reduced voltage for energy savings proportional
+flip — are each injected under the two coupling modes defined in
+                                                                                                                                                                                                       to bypass width.
+§ 3.1, across 3,780 images on SD3.5-Medium in FP16, BF16, and
+                                                                                                                                                                                                  R4 Modality-aware configurability: the bypass width 𝑋 must be
+FP32. The dominant effect is coupling mode, not distribution shape:
+                                                                                                                                                                                                       programmable at model load time to match the workload’s
+relative coupling yields approximately 22 dB higher PSNR than
+                                                                                                                                                                                                       modality tier without hardware redesign.
+constant coupling across all noise families. Within each coupling
+                                                                                                                                                                                                  The architecture satisfying R1–R4 has three components (Figure 9):
+mode, severity orders as Gaussian > log-uniform > log-normal ≫
+                                                                                                                                                                                                  a UEP codec (§ 5.1) that computes check bits over the 𝑁 − 𝑋 most-
+bit-flip (Figure 7). The critical observation is that digital bit-flips are
+                                                                                                                                                                                                  significant bits; a per-cacheline format tag (§ 5.2) that stores the
+the most damaging family even at matched variance — a 28–40 dB
+                                                                                                                                                                                                  active mode and is programmed at model load; and a dual-partition
+gap relative to Gaussian noise at identical variance — confirming
+                                                                                                                                                                                                  SRAM macro (§ 5.3) that separates protected and bypassed bits, with
+that fault severity is determined by which bit fields are corrupted,
+                                                                                                                                                                                                  the bypass partition running at 𝑉low for area and energy savings.
+not by noise magnitude. The same coupling-mode ordering holds
+                                                                                                                                                                                                     The per-data-type Xsafe floors (FP16=6, BF16=4, FP32=15) vary
+on MLP blocks, with only a 1–3 dB absolute PSNR shift.
+                                                                                                                                                                                                  by at most one bit across workloads, datasets, and injection sites
+   Generalization across diffusion checkpoints. The continuous-noise                                                                                                                              (Table 4). This stability is what makes it practical to fix the protec-
+campaign above is run on SD3.5-Medium only. Figure 8 confirms                                                                                                                                     tion boundary in hardware at design time rather than provision it
+the severity ordering generalizes across additional diffusion check-                                                                                                                              entirely at runtime. A purely runtime-configurable boundary would
+points, with no checkpoint showing a qualitatively different pattern.                                                                                                                             need to accommodate the worst-case workload at every operating
+                                                                                                                                                                                              7
+                                                           Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan, Kunal Tyagi
+
+
+
+
+                                                                                     Figure 10: Mean HumanEval pass@1 drop (baseline minus injected), averaged
+                                                                                     over 32-layer sweeps, for three UEP double-error patterns and BF16/FP16/FP32,
+                                                                                     on Llama-3 8B and Phi-3-mini (attention vs. MLP).
+
+                                                                                         and 𝐶 even = 2𝑟 −1 − 1 (excluding all-zero). In standard SECDED,
+                                                                                         all 𝑁 data bits compete for 𝐶 odd . In UEP, Tier 1 and Tier 2 split
+                                                                                         across odd/even classes, which can reduce required 𝑟 .
+                                                                                     5.1.3 Trade-Off: Reduced Double-Error Detection. Assigning even-
+                                                                                     parity codes to Tier 2 breaks the SECDED parity invariant: an
+                                                                                     even syndrome now admits two interpretations—(i) a single Tier 2
+                                                                                     error (correctable) or (ii) a double Tier 1 error (uncorrectable). The
+Figure 9: Tagged selective-ECC access path for one 128-bit granule: the per-         syndrome alone cannot distinguish them. To stress this ambiguity,
+cacheline tag selects routing and recovery (Pattern MUX/gather and SECD-
+ED/SEC/bypass decode path), while the physical Partition A/B boundary re-
+                                                                                     we inject three double-error patterns on two decoder LLMs (Llama-
+mains fixed.                                                                         3 8B and Phi-3-mini, full 32-layer sweeps). MMLU mean Δ remains
+                                                                                     ∼10−3 , while HumanEval shows larger pass@1 drops; aggregate
+point, forfeiting the energy savings that a fixed low-voltage parti-                 attention-path impact is not catastrophic (Figure 10) even with
+tion enables. The per-cacheline tag (R2, R4) preserves per-workload                  three rare errors.
+flexibility above this fixed floor: software can widen the unpro-                       For transient faults, ambiguity is usually benign: two indepen-
+tected region for resilient workloads at model load time without                     dent same-cycle errors in one codeword scale as BER2 ; at raw
+any hardware change.                                                                 BER = 10−7 , the expected interval exceeds 1014 hours. Even rare
+                                                                                     miscorrections land in Tier 2 fraction bits, which are less critical
+5.1      UEP ECC Codec
+                                                                                     by design (§4.2). For persistent faults, risk is higher: a stuck Tier 1
+5.1.1 Background: Hamming SECDED. Hsiao SECDED [24] pro-                             bit can combine with a transient Tier 1 error to produce an even
+tects 𝑁 data bits with 𝑟 parity bits (𝑟 ≈ ⌈log2 (𝑁 )⌉ + 2). The code is              syndrome that miscorrects a Tier 2 bit while leaving the stuck
+defined by a parity-check matrix H ∈ {0, 1}𝑟 × (𝑁 +𝑟 ) whose columns                 sign/exponent bit uncorrected.
+are unique bit-position codes. On a read, parity checks produce an                      This path is closed by adding an extra check-bit and restoring the
+𝑟 -bit syndrome: zero means no error; non-zero identifies a single-                  DED guarantee by occupying only the odd columns. Safety-critical
+bit error for correction. In Hsiao SECDED, data-bit columns use                      paths may enable this while throughput-oriented paths may omit it
+odd-parity codes, so single-bit errors produce odd syndromes and                     and accept the BER2 residual risk. Section 6 quantifies FIT impact.
+double-bit errors produce even syndromes (detected, not corrected).
+Among the 2𝑟 − 1 non-zero length-𝑟 codes, half are odd parity and                    5.1.4 Codeword Construction. Multiple floating-point words are
+half are even parity. Standard SECDED uses only the odd-parity                       packed into a single codeword aligned to the SRAM word width.
+class for data bits, leaving the even-parity class unused.                           For example, eight BF16 words form a 128-bit data payload. The
+                                                                                     codec assigns Tier 1 and Tier 2 protected bits to columns in H. The
+5.1.2 Three-Tier Unequal Protection. The UEP codec reduces ECC                       lower 𝑋 fraction bits per word are assigned no code and excluded
+cost by observing that not all bit positions require the same level of               from the codeword entirely — they are stored in a separate SRAM
+protection. Our proposed three-tier UEP partitions the bits of each                  with no parity coverage.
+floating-point number into three tiers:
+Table 10: Three-tier partition of sign+exponent bits, protected fraction MSBs,       5.1.5 Check-Bit Budget. Given the capacities above, the minimum
+and unprotected fraction LSBs for a packed codeword of 𝑊 floating-point              check-bit count 𝑟 min is the smallest 𝑟 for which both parity classes
+words.                                                                               accommodate their tier demands:
+  Tier          Bits Covered          Protection Level   Code Assignment
+                                                                                           (𝑆 + 𝐸) × 𝑊 ≤ 2𝑟 −1 − 𝑟          (Tier 1: odd-parity codes)        (1)
+   1          Sign + exponent            SECDED          Odd-parity codes
+   2        Upper fraction (MSBs           SEC           Even-parity codes                 (𝐹 − 𝑋 ) × 𝑊 ≤ 2𝑟 −1 − 1         (Tier 2: even-parity codes)       (2)
+           above bypass width 𝑋 )
+   3        Lower fraction (LSBs     None — bypassed     No code assigned            where 𝑆, 𝐸, and 𝐹 are sign/exponent/fraction widths, 𝑋 is bypass
+           within bypass width 𝑋 )                                                   width, and 𝑊 is words per codeword. Table 11 evaluates 𝑟 = 7 and
+                                                                                     𝑟 = 8. At 𝑟 = 7, BF16 Tier 1 demand (1 + 8) × 8 = 72 exceeds the 57
+   This separation provides two benefits:
+                                                                                     available odd-parity codes, so 𝑟 = 7 is only viable for FP16/FP32. At
+(1) Graded correction. The decoder infers the tier directly from
+                                                                                     𝑟 = 8, all three data types fit; therefore BF16-capable systems use
+    syndrome parity in one cycle and applies the corresponding
+                                                                                     𝑟 = 8, giving a fixed 128 + 8 = 136-bit codeword across data types.
+    recovery action (SECDED for Tier 1, SEC for Tier 2), with no
+    additional lookup logic.                                                         5.1.6 Implementation and area. The UEP codec is implemented
+(2) Reduced check-bit demand. Available codes per parity class are                   in synthesizable Verilog RTL and verified with 146,000+ directed
+    𝐶 odd = 2𝑟 −1 − 𝑟 (single-1 codes reserved for check-bit columns)                and random vectors across all tiers, including double-bit patterns
+                                                                                 8
+From Bit-Position Sensitivity to Unequal Error Protection for DNN Inference Memory
+
+
+Table 11: Check-bit budget at 𝑟 =7 (left) and 𝑟 =8 (right). 𝑊 is the number of           Table 13: Routing-architecture design-space exploration (sky130). The hard-
+floating-point elements per codeword. T1 and T2 refer to Tier 1 and Tier 2               wired Pattern MUX is the right design point for a fixed set of data type/tier
+demands. The Codes row shows the number of available codes in each parity                swizzle patterns.
+class (𝐶 odd and 𝐶 even ). A demand exceeding the available codes is marked ✗.
+See Table 10 for tier definitions.                                                                      Architecture                  Area (𝜇 m2 )    Relative
+                 𝑟 =7                                      𝑟 =8                                         Pattern MUX (hardwired)             2,546        1.0 ×
+                                                                                                        Butterfly                           9,129        3.6 ×
+                   𝑊       T1      T2                          𝑊       T1      T2                       Barrel shifter                     10,090        4.0 ×
+                                                                                                        Beneš                              16,816        6.6 ×
+          Codes            57      63                  Codes           120    127                       Full crossbar                     127,370        50 ×
+          BF16      8     72 ✗    16 ✓                 BF16     8     72 ✓    16 ✓
+          FP16      8     48 ✓    32 ✓                 FP16     8     48 ✓    32 ✓       Table 14: Dual-partition SRAM sizing per 128-bit logical word (𝑟 =8). Partition A
+          FP32      4     36 ✓    32 ✓                 FP32     4     36 ✓    32 ✓       operates at 𝑉nom ; Partition B at 𝑉low .
+                                                                                                                                BF16           FP16              FP32
+Table 12: UEP codec implementation summary (sky130, TT corner, 1.8 V, 25 °C;
+7 nm scaled estimate in parentheses).                                                           Words per codeword 𝑊              8              8                4
+            Metric                                                       Value                  Partition A data (Tier 1)     88 (11×8)     96 (12×8)      96 (24×4)
+                                                                                                Partition A check bits             8             8              8
+            Encoder area                                              6,884 𝜇 m2
+            Decoder area                                             11,266 𝜇 m2                Partition A total                96             104              104
+            Total codec area                                        17,895 𝜇 m2                 Partition B data (Tier 2+3)   40 (5×8)       32 (4×8)       32 (8×4)
+            Uniform-SECDED baseline                                  24,780 𝜇 m2
+            Area reduction vs. baseline                                   27.8%                 Grand total                     136             136              136
+
+            BF16 sub-codec (𝑟 =8)                                      825 𝜇 m2
+              Detection coverage                                         87.5%           The hardwired Pattern MUX is ∼4× cheaper than a barrel shifter or
+              Correction coverage                                       68.75%           butterfly network and 50× smaller than a full crossbar, confirming
+            Full datapath (tag + MUX + codec)      2,220 𝜇 m2 (∼15 𝜇 m2 @7 nm)           that data type-aware hardwired routing is the right design point
+              vs. 256 × 256 systolic tile                             < 0.004%           for a fixed set of IEEE 754 formats. The bit-plane interleave itself
+            Cross-tier miscorr. MTBF†                                  ∼ 900 yr          is a fixed bit-to-bitline permutation, i.e. wiring only: the synthe-
+†𝜆           −12 /bit/hr, BER=10 −4 , 8 MB SRAM.                                         sized interleave router adds zero logic cells, area, and power, so the
+     SEU =10
+                                                                                         sole routing logic is the Pattern MUX, which is far cheaper than
+for DED. Table 12 summarizes synthesis results. The 27.8% area                           provisioning a multi-bit code (Table 17).
+reduction follows from the reduced code-space requirement (§5.1.5),
+and cross-tier miscorrection MTBF supports the code-separation                           5.3     Dual-Partition SRAM
+argument in §5.1.2. System-level energy/reliability composition is                       Requirement R3 calls for physically separating bypassed fraction
+evaluated in §6.                                                                         LSBs (Tier 3) from sign/exponent/check bits (Tiers 1/2), so the non-
+                                                                                         critical partition can run at lower voltage. This section summarizes
+5.2        Per-Cacheline Format Tag                                                      partition sizing, voltage scaling, level-shifter overhead, and macro
+The UEP codec (§ 5.1) assumes known data type and bypass width                           area.
+𝑋 per 128-bit codeword. To satisfy Requirements R2 and R4, we                            5.3.1 Partition Sizing. Each 128-bit logical word is stored as a 136-
+attach a lightweight per-cacheline format tag, inspired by hardware                      bit physical word (128 data + 8 check bits at 𝑟 =8; § 5.1.5) and split
+memory-tagging schemes (ARM MTE [6], lowRISC [37]).                                      across two independently powered partitions:
+5.2.1 Tag Encoding. Each 128-byte cacheline carries a 3-bit tag                          • Partition A (𝑉nom ): holds the Tier 1 data bits (sign, exponent,
+stored alongside the existing cache-state metadata. The encoding                            and upper-fraction MSBs) and all 8 check bits.
+is:                                                                                      • Partition B (𝑉low ): holds the Tier 2 and Tier 3 fraction bits. Tier 2
+• tag[2] — element size: 0=16-bit (BF16 or FP16), 1=32-bit (FP32).                          bits retain detection coverage via the shared Hamming codeword;
+• tag[1:0] — protection tier, selecting the bypass width 𝑋 and                              Tier 3 bits are stored without parity.
+    hence the partition between Tier-1 (SECDED), Tier-2 (SEC), and                       Table 14 shows data type-specific partition widths. Total physi-
+    Tier-3 (bypassed) bit groups within the codeword.                                    cal width is always 136 bits, enabling one SRAM macro across
+The overhead is 3 bits per 1024 data bits (0.29% per cacheline),                         IEEE 754 formats; only logical routing changes with tag-selected pol-
+10–30× lower than ARM MTE (3.1%) or lowRISC (6.25%). Tags                                icy. The invariant width follows from fixing 𝑟 =8 across all formats
+change only routing/recovery behavior; the physical Partition A/B                        (§5.1.5): regardless of bypass width, the physical word is always
+boundary (§5.3) is fixed at design time. Tags are set via overloaded                     128 + 8 = 136 bits. The A/B boundary is fixed at design time.
+load/store instructions at model load. If deploying only a single
+                                                                                         5.3.2 Voltage-Scaling Model. Partition B stores expendable fraction
+data type, just 2 bits are sufficient.
+                                                                                         LSBs, so it can tolerate higher raw BER and operate at reduced
+5.2.2 Pattern MUX. On writes, the tag drives a Pattern MUX that                          voltage (𝑉low < 𝑉nom ). Let 𝑓nc denote the fraction of the 136-bit
+scatters 128 data bits into Tier-1, Tier-2, and Tier-3 groups and                        physical word stored in Partition B (Table 14). For BF16, 𝑓nc =
+routes them to codec/partitions; on reads, a gather restores logical                     40/136 ≈ 0.29; for FP16 and FP32, 𝑓nc = 32/136 ≈ 0.24. The dynamic
+layout. Because valid (data type, tier) combinations are few and                         and leakage power savings are:
+fixed (10–12 for BF16/FP16/FP32), the MUX uses hardwired swizzle                                       𝑃dyn,saved = 𝑓nc 𝑃dyn 1 − (𝑉low /𝑉nom ) 2 ,
+                                                                                                                                               
+                                                                                                                                                          (3)
+patterns selected by the 3-bit tag, avoiding barrel shifters/crossbars.
+Table 13 compares five routing architectures synthesized in sky130.                                      𝑃 leak,saved ≈ 𝑓nc 𝑃leak (1 − 𝑉low /𝑉nom ).                    (4)
+                                                                                     9
+                                                                                                                               Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan, Kunal Tyagi
+
+
+                                                        14                                                                                              Table 16: CACTI macro area comparison: monolithic vs. dual-partition SRAM
+
+
+
+                     Net SRAM read saving (fJ/access)
+                                                                                   BF16           FP16            FP32
+
+                                                        12
+                                                                   V 2 sweep from Eq. (6)                                                               (64 KB, 7 nm, single R/W port).
+                                                        10                                10.1                                                                    Design                              Area (mm2 )   Relative
+                                                                                                   Paper point
+                                                                                                   1.2 V
+                                                         8                                                                                                        Monolithic 136-bit, 𝑉nom full ECC     0.0281       1.00 ×
+                                                         6
+                                                                                          6.3
+                                                                                                                                                                  Dual-partition 136-bit (A+B)          0.0293       1.04 ×
+                                                                                          5.1
+
+                                                         4
+
+
+                                                         2
+                                                             1.0          1.1        1.2         1.3        1.4          1.5
+                                                                      Low-voltage partition supply Vlow (V)
+
+Figure 11: Net SRAM read-energy savings vs. 𝑉low for BF16, FP16, and FP32. The                                                                          single R/W port) using published scaling equations [62] together
+adopted operating point 𝑉low =1.2 V (dashed line) yields positive net savings
+for all three formats after level-shifter overhead.
+                                                                                                                                                        with a published 7 nm SRAM bitcell, since CACTI does not di-
+                                                                                                                                                        rectly model sub-22 nm nodes. Table 16 compares monolithic and
+          Table 15: Level-shifter energy per 136-bit SRAM access.
+                                                                                                                                                        dual-partition designs. Dual partitioning incurs 4% area overhead
+                                                             Signals              Energy/sig               Total           vs. macro                    (partition boundary, integrated shifters, per-bank LDO), recovered
+          Integrated                                     40 (BF16)                      0.4 fJ             16 fJ                2.1%                    by the energy savings in Figure 11.
+                                                         32 (FP16)                      0.4 fJ            12.8 fJ               1.7%
+                                                         32 (FP32)                      0.4 fJ            12.8 fJ               1.7%                       System-level applicability and overheads. Because UEP is
+                                                                                                                                                        applied only to inference-produced values (R1), the result/accu-
+          Discrete                                       40 (BF16)                      5.0 fJ             200 fJ               26%
+                                                                                                                                                        mulator SRAM it modifies is essentially all UEP-eligible by con-
+At target raw BER 10−4 (≈ 0.90 𝑉min ), SRAM-cell energy drops by                                                                                        struction, while weights and inputs remain in separate full-ECC
+about 20%. We adopt 𝑉low = 1.2 V (𝑉nom = 1.8 V in sky130), selected                                                                                     structures. The accumulator is the widest datapath format (≥ 2× the
+from Figure 11. Scaled by the Partition-B bypass fraction 𝑓nc and                                                                                       operand width) and is always UEP-eligible. For FP16/BF16 operands
+net of the integrated level-shifter overhead (Table 15), this is a ∼17%                                                                                 with an FP32 accumulator the activation is also wide, so the bypass-
+gross read-energy reduction for BF16 (net positive, +6.3 fJ/access af-                                                                                  able activation-plus-accumulator share of per-MAC traffic is 75%
+ter level shifters) and ∼14% for FP16/FP32 (+5.1 and +10.1 fJ/access                                                                                    (the full-ECC weight is the remaining 25%). For sub-byte operands
+net).                                                                                                                                                   the activation has no safe LSBs (§ 7); only the wide accumula-
+   Because Tier 2 bits in Partition B retain detection coverage via                                                                                     tor is bypassable, and that share grows from ∼67% (FP8) to ∼80%
+the shared codeword, corrected-error counts at 𝑉low provide a built-                                                                                    (FP4) as the operands shrink. Even in capacity terms the inference-
+in feedback signal for closed-loop voltage tuning, enabling more                                                                                        produced KV-cache reaches ∼52% of weight-plus-KV storage at a
+aggressive voltage reduction while the correction rate remains                                                                                          128K-token context for Llama-3 8B. The corresponding mechanism
+below a target threshold.                                                                                                                               overheads are small: the per-cacheline tag is 0.29% (§5.2.1), the full
+                                                                                                                                                        tag + MUX + codec datapath is <0.004% of a 256×256 systolic tile
+5.3.3 Level-Shifter Analysis. The A/B voltage boundary requires
+                                                                                                                                                        (Table 12), and the dual-partition macro’s ∼4% area (Table 16) is
+level shifters on all cross-domain signals. We compare:
+                                                                                                                                                        recovered by the dual-voltage energy saving. These overheads do
+• Integrated level shifters (placed at the partition boundary
+                                                                                                                                                        not erode the savings.
+   inside the SRAM macro): 0.4 fJ/transition.
+                                                                                                                                                           Read/write latency. Three effects could matter, all benign. The
+• Discrete level shifters (external to the macro): 5.0 fJ/transition.
+                                                                                                                                                        tag-driven Pattern MUX adds one pipelined cycle (scatter/gather)
+Integrated shifters are essential: 0.4 fJ adds only 2–3% macro-energy
+                                                                                                                                                        with no throughput loss; it and the UEP codec (smaller than uniform
+overhead, while 5.0 fJ discrete shifters consume most voltage-scaling
+                                                                                                                                                        SECDED, Table 12) sit off the array-read critical path that sets
+gains. Voltage is managed at SRAM-bank granularity by a per-bank
+                                                                                                                                                        timing. The dual partition adds no new SRAM—ML accumulator
+LDO (938 𝜇m2 per 8-macro bank at 7 nm). Table 15 shows energy
+                                                                                                                                                        SRAM is already sub-banked [5], so routing Tier-1 vs. Tier-2/3 bits
+per 136-bit access; integrated shifters keep overhead below 2.1% for
+                                                                                                                                                        to separate sub-banks is a static wire permutation, zero logic and
+all formats.
+                                                                                                                                                        timing overhead (§ 5.2.2). Finally, Partition B at 𝑉low keeps the clock
+    Beyond per-access energy, integrating the dual-voltage macro
+                                                                                                                                                        fixed; unresolved cells appear as the reduced-voltage BER already
+imposes modest physical-layout complexity. Level conversion is
+                                                                                                                                                        modeled (§ 5.3.2) and, being Tier-2/3 LSBs, fall within Xsafe with
+required only on the Partition B cross-domain signals and is folded
+                                                                                                                                                        no task-quality effect (§ 6). The only added latency is the single
+into the sense amps and write drivers rather than a discrete shifter
+                                                                                                                                                        Pattern-MUX cycle.
+array [30], keeping the energy overhead below 2.1% (Table 15). The
+                                                                                                                                                           Net benefit. Taken together, and at iso-reliability for the crit-
+dominant place-and-route costs are distributing a second (𝑉low )
+                                                                                                                                                        ical bits (sign, exponent, and check bits remain at 𝑉nom under
+power rail decoupled from the 𝑉nom periphery and providing n-
+                                                                                                                                                        full SECDED, Table 19), UEP delivers a 27.8% smaller ECC codec
+well/guard-band separation between the two voltage domains. Be-
+                                                                                                                                                        (Table 12) and a ∼17% gross BF16 (∼14% FP16/FP32) non-critical-
+cause the A/B boundary is fixed at design time at bank granularity,
+                                                                                                                                                        partition read-energy reduction (Fig. 11; net-positive after inte-
+a single macro serves all formats and only the per-cacheline tag
+                                                                                                                                                        grated level shifters, Table 15) for a ∼4% macro-area overhead that
+changes routing; the per-bank LDO switches 𝑉low at model load
+                                                                                                                                                        the energy saving recovers (Table 16) — without retraining or any
+(∼10 ns settle), off the inference critical path. The resulting macro-
+                                                                                                                                                        change to the stored numeric representation.
+area overhead is the ∼4% of Table 16, recovered by the energy
+                                                                                                                                                        This completes the three-component architecture: the UEP codec
+savings, with full post-layout/silicon validation left as future work.
+                                                                                                                                                        (§5.1) provides graded correction, the per-cacheline tag (§5.2) se-
+5.3.4 SRAM Macro Area. We synthesize the codec in sky130 and                                                                                            lects mode per tensor, and the dual-partition SRAM (§5.3) captures
+model the SRAM macro in CACTI 7.0 [7], projecting to 7 nm (64 KB,                                                                                       energy savings. Section 6 evaluates the composed system.
+                                                                                                                                                   10
+From Bit-Position Sensitivity to Unequal Error Protection for DNN Inference Memory
+
+
+                                                                                                                                                                          Table 18: MBU-correction rates for a 4K-word SRAM model under conventional
+6 Design Space Exploration and Reliability                                                                                                                                versus bit-plane SECDED layouts.
+6.1 X-Boundary Sweep and Protection Tier                                                                                                                                    MBU           Conv. SECDED                Bit-plane SECDED          Advantage
+    Comparison                                                                                                                                                               2-bit             52.41%                         100%              +47.59 pp
+                                                                                                                                                                             3-bit             28.16%                         100%              +71.84 pp
+Given the codec construction in §5, this section evaluates which                                                                                                             4-bit             15.13%                         100%              +84.87 pp
+protection boundary, MCU strategy, and operating point close the                                                                                                             5-bit              8.84%                         100%              +91.16 pp
+hardware design loop. Sweeping the UEP boundary 𝑋 from full                                                                                                                  6-bit              4.95%                         100%              +95.05 pp
+                                                                                                                                                                             7-bit              3.30%                         100%              +96.70 pp
+to selective reduces codec area, with the largest gain in BF16 and                                                                                                           8-bit              1.77%                         100%              +98.23 pp
+smaller but still positive savings in FP32 (see Figure 12 left). Across
+the evaluated configurations (uniform SECDED, selective SECDED                                                                                                            Table 19: FIT/MTTF summary for the 8 MB SRAM reference design under no
+at varying 𝑋 , and our 3-tier UEP) and three data types (BF16, FP16,                                                                                                      ECC, uniform SECDED, selective SECDED, and 3-tier protection. The first four
+                                                                                                                                                                          rows use the terrestrial-neutron SER model (1000 FIT/Mbit) [8]; the last row
+FP32), we use 𝑘 = exponent_width_max + 1 (the transition-derived                                                                                                          accounts for voltage-scaling BER on the low-𝑉 partition.
+exp_sign boundary) as the representative selective/UEP boundary
+                                                                                                                                                                          Configuration                                         Uncorr. FIT                MTTF
+in this section. A fixed 𝑘 = 8 is inferior in BF16 (𝑘 < 𝑘 crit = 9, misses
+                                                                                                                                                                          No ECC                                                  64,000                 1.8 years
+exponent LSB).                                                                                                                                                            Uniform SECDED                                          ∼ 0.004               28.5M years
+      (a)                                              Boundary sweep                                    (b)                         BCH t=2 penalty                      Selective SECDED (BF16 𝑋 =2)                            ∼ 0.006               19.0M years
+                                                                                                                                                                                                                                  ∼ 0.005
+                               70                                                                                                    4.2x
+                                                                                                                                                                          3-tier BF16 (ours)                                                            22.8M years
+                                        BF16         FP16        FP32                                                       4.2x                     4.2x
+                                                                                                                                             3.9x             4.0x
+      Codec area savings (%)
+
+
+
+
+                                                                FP16 X=10                                               4
+                               60
+                                                                                                   BCH / Hamming area
+
+
+
+
+                               50                                            FP32 X=15
+                                                                                                                        3
+                                                                                                                                                                          3-tier BF16 (high BER)†                                  ∼127                 ∼900 years
+                               40
+                                                     BF16 X=6
+                                                                                                                                                                          † Dual-voltage model: 𝜆             −12 /bit/hr (Partition A), BER=10 −4 (Partition B); cross-tier
+                               30                                                                                       2                                                                           SEU =10
+                               20                                                                                                                                         miscorrection dominated.
+                                                                                                                        1
+                               10
+
+                                0
+
+                                                                                                                                                                          6.3        Reliability
+                                                                                                                        0
+                                    0            5          10              15           20                                 11       12      16      24       32
+                                               Unprotected mantissa suffix X (bits)                                                Protected payload bits k
+
+Figure 12: Design-space tradeoffs for the 𝑋 -boundary sweep. Left: codec area                                                                                             FIT rate and mean time to failure (MTTF). Under the analytic
+across BF16, FP16, and FP32 as the protection boundary 𝑋 is varied. Right:
+relative BCH 𝑡 = 2 and Hamming SECDED area for the representative protected
+                                                                                                                                                                          terrestrial-neutron model, Table 19 reports the FIT/MTTF tradeoff.
+payload widths used in this section.                                                                                                                                      All protected configurations remain inside the screening envelope.
+                                                                                                                                                                          Relative to uniform SECDED, selective protection modestly reduces
+                                                                                                                                                                          MTTF because mantissa LSBs are exposed. When the low-𝑉 par-
+6.2                            MCU-Aware Design Selection                                                                                                                 tition operates at BER=10−4 , cross-tier miscorrection in the UEP
+BCH 𝑡=2 costs 3.9–4.2× Hamming SECDED [20, 24] area across                                                                                                                codec becomes the dominant failure mode (∼ 127 FIT, MTTF ∼ 900
+tested codeword widths (64, 128, 256 bits). Once bit-plane inter-                                                                                                         years); the SECDED-protected partition at 𝑉nom is unaffected.
+leaving is included, the practical area–correction frontier for DNN                                                                                                       FIT-level reliability target. At the assumed flux [41, 58, 61, 65],
+inference SRAM is dominated by interleaved Hamming SECDED.                                                                                                                the dominant undetected multi-bit failure mode in SECDED-protected
+We keep Hamming SECDED as the primary baseline because light-                                                                                                             bits remains below 0.1 FIT for the exp_sign operating point.
+weight single-symbol correction remains the common starting                                                                                                                   The ∼900-year row is the most aggressive operating point and
+point in practical selective or collaborative memory-protection                                                                                                           reflects only Partition B: sign, exponent, and all check bits remain
+schemes [3, 33, 67]. Table 17 reports the correction/area frontier                                                                                                        at 𝑉nom under full SECDED, so critical-bit MTTF is unchanged
+for the compared options.                                                                                                                                                 (millions of years), and a cross-tier miscorrection lands in a Tier-2
+Table 17: MCU-2 and MCU-3 correction coverage and area relative to BCH                                                                                                    fraction LSB that §4 shows is fault-tolerant—the end-to-end results
+𝑡 = 2 for the listed Hamming and interleaved protection options.                                                                                                          (Table 21) confirm task quality holds at this point. The operating
+Design                                                                      MCU-2             MCU-3                                Area (relative to BCH t=2)             point is tunable via the Tier-2 detection feedback: a 10× lower
+                                                                            correction        correction                                                                  Partition-B BER raises this MTTF to ∼9,000 years and 100× to
+Hamming SECDED                                                              0%                0%                                   ∼25% of BCH 𝑡 =2 (baseline)            ∼89,000 years. Even the aggressive ∼900-year point exceeds a 3–5
+(Figure 12)                                                                                                                                                               year accelerator service life by ∼180–300×, so the residual events are
+Hamming + D=2 interleave                                                    100%              0%                                   56% of BCH t=2
+Hamming + D=3 interleave                                                    100%              100%                                 85% of BCH t=2                         rare, benign LSB miscorrections rather than critical data corruption.
+BCH t=2                                                                     100%              52%                                  100% (3.9–4.2× Hamming)
+
+    Recommendation: Under the modeled contiguous-upset SRAM                                                                                                               6.4        Validation
+geometry, use Hamming SECDED + D=2 bit-plane interleave as                                                                                                                System-level validation (Llama-3 8B). Table 20 reports BF16
+the default for DNN inference SRAM, and reserve D=3 interleave                                                                                                            perplexity and tier-1 miscorrection counts across representative
+for radiation-hard MCU-3 requirements. Table 17 contains the full                                                                                                         (BER𝑝 , BER𝑢 ) operating points, and serves as the task-level check
+quantitative comparison.                                                                                                                                                  for the selective-exposure assumptions in the voltage-scaling and
+    The same recommendation also has a simple geometric inter-                                                                                                            selective-protection analysis.
+pretation. Without interleaving, one contiguous upset can cross                                                                                                              To show the selective-protection boundary generalizes beyond
+the mantissa/exponent boundary inside a single protected word;                                                                                                            Llama-3 8B, we run the same tiered-BER end-to-end protocol on
+with bit-plane striping, the same spatial event becomes at most one                                                                                                       one model per category (Table 21). At the realistic operating point
+flipped bit per word, which is corrected by SECDED. Table 18 quan-                                                                                                        all categories preserve task quality; the five non-diffusion models
+tifies this structure-level effect for the modeled contiguous-upset                                                                                                       additionally hold at the Stressed-protected point. Diffusion (SD3.5-
+SRAM pattern.                                                                                                                                                             Medium) holds at the realistic protected-tier rate (BER𝑝 =10−7 ) and
+                                                                                                                                                                     11
+                                                                     Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan, Kunal Tyagi
+
+
+Table 20: Llama-3 8B WikiText-2 perplexity under 3-tier ECC (baseline PPL =
+5.3659). BER𝑝 and BER𝑢 denote protected-tier and unprotected-tier bit error
+                                                                                                 opportunity for area and energy savings. SERA-Float [42] remains
+rates; the table reports PPL change and tier-1 miscorrection counts for each                     complementary rather than competing: it changes the stored repre-
+operating point.                                                                                 sentation lossily, whereas our UEP policy keeps the representation
+Scenario              BER𝑝       BER𝑢     PPL (BF16)    Δ%         T1 Miscorr.                   fixed and varies ECC strength by bit significance, so the two can
+Ultra-conservative      0        10 −5      5.3646     -0.02       —                             compose by compressing first and then applying tiered protection
+Moderate                0        10 −3      5.3634     -0.05       —                             to the retained bits.
+Aggressive              0        10 −2      5.3674     +0.03       —
+Realistic-moderate    10 −7      10 −3      5.3621     -0.07       0 / 18,181
+                                                                                                    Three limitations remain: synthetic plus bounded-neighborhood
+Stressed-protected    10 −6      10 −2      5.3682     +0.04       1 / 145,748                   injection only partially captures field-correlated fault processes [3,
+Table 21: Tiered-BER end-to-end validation extended to one model per cate-
+                                                                                                 41, 61, 65], the study does not yet include a full accelerator prototype
+gory (BF16) at the Realistic-moderate operating point (BER𝑝 =10 −7 , BER𝑢 =10 −3 ).              with the selective-ECC controller in the execution loop, and dual-
+Task quality is preserved across all categories. The five non-diffusion models                   voltage SRAM integration is constrained by bank-level partition
+also hold at the Stressed-protected point (BER𝑝 =10 −6 ); diffusion, the most
+                                                                                                 granularity, rail-switch latency, and physical-routing overhead. The
+fault-sensitive class that sets the conservative floor, degrades only beyond that
+regime. For SD3.5-Medium the Baseline column is the near-clean reproducibil-                     next steps are clear: incorporate trace-derived spatial/temporal fault
+ity reference (∼33 dB, ultra-conservative point), as a clean-vs-clean PSNR is                    logs, perform post-layout or silicon-proximate validation of the full
+undefined; at realistic-moderate, PSNR 29.83 dB and SSIM 0.95 (image quality
+preserved).
+                                                                                                 selective-ECC stack, and extend deployment from RF/controller-
+                                                                                                 local opportunities to mixed-type L1/L2 cache hierarchies with
+Model                       Metric                     Baseline            Realistic-mod.
+                                                                                                 per-cacheline data type metadata.
+Mistral-7B                  PPL (↓)                     5.4415                   5.4431
+ViT-L/16                    Top-1 %                      80.30                    80.35             The decision to keep weights and inputs under full protection is
+BERT-base                   SST-2 Acc %                  92.43                    92.32          not merely conservative: because they are loaded once and reused
+ResNet-50                   Top-1 %                      81.25                    81.25
+Whisper-small               WER % (↓)                   17.39                    17.48           throughout inference, a single persistent fault propagates to every
+SD3.5-Medium                PSNR (dB)                  ∼33 (ref)                  29.83
+                                                                                                 downstream use—a sign-bit flip in BF16 weights raises Llama-3 8B
+                                                                                                 perplexity by over four orders of magnitude, to ∼1.3×105 . Yet weight
+degrades only beyond the operating regime, consistent with it being
+                                                                                                 mantissa LSBs are themselves tolerant, so a weight-side UEP whose
+the most fault-sensitive class that sets the conservative floor.
+                                                                                                 protection cost is amortized over the load-once lifetime is a promis-
+   End-to-end validation chain. The chain has four steps: (1) RTL                                ing direction for future work. This need only grows as models are
+fixes which bits are exposed, (2) the Stutz mapping sets BER at the                              compressed: quantization or pruning removes redundant bits, so
+adopted 𝑉low operating point [63], (3) BER-matched Ares heatmaps                                 each retained weight bit becomes more critical, and a significance-
+provide a conservative all-bit reference, and (4) direct selective BF16                          aware, per-bit-position scheme is exactly the “more intelligent”
+runs confirm the milder LSB-only regime. The per-data type RTL                                   error correction such compressed weights would require.
+operating points, following the exp_sign partitioning of § 5.1 (a
+conservative boundary distinct from the Xsafe floors), are 𝑘=11                                  8    Conclusion
+for BF16 (5 unprotected LSBs, bits 0–4), 𝑘=12 for FP16 (4 LSBs,                                  This paper establishes that the mantissa-to-exponent sensitivity
+bits 0–3), and 𝑘=24 for FP32 (8 LSBs, bits 0–7); shared BER and                                  transition is a data type-level IEEE 754 property, not a model ar-
+read/write-energy assumptions follow the dual-voltage model in                                   tifact, and that conservative floors (FP16 Xsafe=6, BF16 Xsafe=4,
+§ 5.3. Table 20 provides the task-metric check.                                                  FP32 Xsafe=15) remain stable across the evaluated workloads.
+                                                                                                 Translating this boundary into data type-aware UEP delivers effi-
+7       Discussion, Limitations, and Future Work                                                 ciency gains without retraining: a 37.5% conservative FP16 reduc-
+UEP is applicable to the wide floating-point formats in which re-                                tion floor, 56.25–62.5% workload-aware FP16 reduction, a 27.8% ECC
+sults are produced and accumulated—the FP16/BF16/FP32 partial                                    codec area reduction, and ∼17% gross BF16 read-energy reduction
+sums and accumulators of the matmul/result path. These wide for-                                 from dual-voltage operation (the dual-partition macro adds ∼4%
+mats carry the measured Xsafe headroom (6/4/15) and therefore                                    area, recovered by these savings). Reliability stays within the same
+expose mantissa LSBs that selective ECC can safely leave unpro-                                  hierarchy-local envelope: MCU-3 results preserve the boundary,
+tected. UEP does not apply to narrow stored operands: as weights                                 and FIT-level modeling stays below 10 FIT under the terrestrial-SER
+and activations move to sub-byte formats such as FP8/FP4 (e.g.                                   regime (MTTF above 19.0M years); under dual-voltage operation
+E4M3/E2M1), they have too few mantissa bits to admit a safe un-                                  (BER=10−4 ), cross-tier miscorrection dominates at ∼127 FIT (MTTF
+protected region, so UEP yields no reduction on narrow-format                                    ∼900 years). Overall, data type-aware ECC is not a secondary op-
+storage and such operands retain full protection. Crucially, this                                timization; it is a practical memory co-design lever for ML acceler-
+boundary does not shrink UEP’s relevance—it grows it: as the same                                ators, especially on on-chip SRAM/RF paths where data format is
+on-chip bandwidth is spent on ever-narrower operands, each trans-                                explicit and policy can align directly with floating-point semantics.
+fer brings a larger number of elements; accumulating more elements
+per operation only increases the need for the wide, higher-precision                             References
+accumulation formats (FP16/BF16/FP32) where UEP applies. More-                                    [1] Marah Abdin, Jyoti Aneja, Hany Awadalla, Ahmed Awadallah, Ammar Ahmad
+                                                                                                      Awan, et al. 2024. Phi-3 Technical Report: A Highly Capable Language Model
+over, as operands narrow, the accumulation/result path stays wide                                     Locally on Your Phone. arXiv:2404.14219 https://arxiv.org/abs/2404.14219
+(FP16/BF16/FP32) while the operands’ byte footprint shrinks, so                                   [2] Joshua Ainslie, James Lee-Thorp, Michiel de Jong, Yury Zemlyanskiy, Federico
+the wide, UEP-eligible accumulator becomes a growing share of                                         Lebron, and Sumit Sanghai. 2023. GQA: Training Generalized Multi-Query
+                                                                                                      Transformer Models from Multi-Head Checkpoints. In Proceedings of the 2023
+on-chip floating-point traffic in absolute bytes—the relevant figure                                  Conference on Empirical Methods in Natural Language Processing. 4895–4901.
+of merit for an ECC budget—expanding rather than eroding the                                          doi:10.18653/v1/2023.emnlp-main.298
+                                                                                            12
+From Bit-Position Sensitivity to Unequal Error Protection for DNN Inference Memory
+
+
+ [3] Irina Alam and Puneet Gupta. 2022. COMET: On-Die and In-Controller Collabora-            [25] Eishi H. Ibe, Hitoshi Taniguchi, Yasuo Yahagi, Ken-ichi Shimbo, and Tadanobu
+     tive Memory ECC Technique for Safer and Stronger Correction of DRAM Errors.                   Toba. 2010. Impact of Scaling on Neutron-Induced Soft Error in SRAMs From a
+     In DSN. IEEE, Baltimore, MD, USA, 124–136. doi:10.1109/DSN53405.2022.00024                    250 nm to a 22 nm Design Rule. IEEE Transactions on Electron Devices 57, 7 (2010),
+ [4] Ebtesam Almazrouei, Hamza Alobeidli, Abdulaziz Alshamsi, et al. 2023. The                     1527–1538. doi:10.1109/TED.2010.2047907
+     Falcon Series of Open Language Models. arXiv:2311.16867 https://arxiv.org/abs/           [26] IEEE Computer Society. 2019. IEEE Standard for Floating-Point Arithmetic. Insti-
+     2311.16867                                                                                    tute of Electrical and Electronics Engineers, New York, NY, USA. doi:10.1109/
+ [5] Bharadwaj S Amrutur. 1999. Design and Analysis of Fast Low-Power SRAMs.                       IEEESTD.2019.8766229 IEEE Std 754-2019 (Revision of IEEE 754-2008).
+     Stanford University.                                                                     [27] Albert Q. Jiang, Alexandre Sablayrolles, Arthur Mensch, et al. 2023. Mistral 7B.
+ [6] Arm. 2019. Armv8.5-A Memory Tagging Extension White Paper. Arm.                               arXiv:2310.06825 https://arxiv.org/abs/2310.06825
+     https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/                       [28] Vinay Joshi, Manuel Le Gallo, Simon Haefeli, Irem Boybat, S. R. Nandakumar,
+     Arm_Memory_Tagging_Extension_Whitepaper.pdf                                                   Christophe Piveteau, Martino Dazzi, Bipin Rajendran, Abu Sebastian, and Evan-
+ [7] Rajeev Balasubramonian, Andrew B. Kahng, Naveen Muralimanohar, Ali Shafiee,                   gelos Eleftheriou. 2020. Accurate Deep Neural Network Inference Using Com-
+     and Vaishnav Srinivas. 2017. CACTI 7: New Tools for Interconnect Exploration                  putational Phase-Change Memory. Nature Communications 11 (2020), 2473.
+     in Innovative Off-Chip Memories. ACM Trans. Archit. Code Optim. 14, 2 (2017),                 doi:10.1038/s41467-020-16108-9
+     14:1–14:25. doi:10.1145/3085572                                                          [29] Jungrae Kim, Michael B. Sullivan, Seong-Lyong Gong, and Mattan Erez. 2015.
+ [8] Robert C. Baumann. 2005. Radiation-Induced Soft Errors in Advanced Semicon-                   Frugal ECC: Efficient and Versatile Memory Error Protection Through Fine-
+     ductor Technologies. IEEE Transactions on Device and Materials Reliability 5, 3               Grained Compression. In SC. ACM, Austin, TX, USA, 12:1–12:12. doi:10.1145/
+     (2005), 305–316. doi:10.1109/TDMR.2005.853449                                                 2807591.2807659
+ [9] Izan Catalán, José Flich, and Carles Hernández. 2025. Exploiting Neural Networks         [30] Tae Hyun Kim, Hanwool Jeong, Juhyun Park, Hoonki Kim, Taejoong Song, and
+     Bit-Level Redundancy to Mitigate the Impact of Faults at Inference. The Journal               Seong-Ook Jung. 2020. An Embedded Level-Shifting Dual-Rail SRAM for High-
+     of Supercomputing 81 (2025), 183. doi:10.1007/s11227-024-06693-7                              Speed and Low-Power Cache. IEEE Access 8 (2020), 187126–187139. doi:10.1109/
+[10] Junsong Chen, Jincheng Yu, Chongjian Ge, Lewei Yao, Enze Xie, Yue Wu, Zhong-                  ACCESS.2020.3030099
+     dao Wang, James Kwok, Ping Luo, Huchuan Lu, and Zhenguo Li. 2023. PixArt-𝛼 :             [31] Skanda Koppula, Lois Orosa, A. Giray Yağlıkçı, Roknoddin Azizi, Taha Shahroodi,
+     Fast Training of Diffusion Transformer for Photorealistic Text-to-Image Synthe-               Konstantinos Kanellopoulos, and Onur Mutlu. 2019. EDEN: Enabling Energy-
+     sis. arXiv:2310.00426 https://arxiv.org/abs/2310.00426                                        Efficient, High-Performance Deep Neural Network Inference Using Approximate
+[11] C. J. Clopper and E. S. Pearson. 1934. The Use of Confidence or Fiducial Limits               DRAM. In MICRO. ACM, Columbus, OH, USA, 218–231. doi:10.1145/3352460.
+     Illustrated in the Case of the Binomial. Biometrika 26, 4 (1934), 404–413. https:             3358280
+     //barestatistics.nl/uploads/1/1/7/9/11797954/clopper__pearson_1934.pdf                   [32] Andres Kwasinski and Vinay Chande. 2023.              Unequal Error Protection
+[12] Tri Dao and Albert Gu. 2025. FlashAttention-4: Hardware-Friendly Fused At-                    Source–Channel Coding. 135–172. doi:10.1002/9781118693803.ch5
+     tention with Warp-Specialization and Pingpong Scheduling. arXiv preprint                 [33] Young Seo Lee, Gunjae Koo, Young-Ho Gong, and Sung Woo Chung. 2022. Stealth
+     arXiv:2603.05451 (2025).                                                                      ECC: A Data-Width Aware Adaptive ECC Scheme for DRAM Error Resilience. In
+[13] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. BERT:                 DATE. IEEE, Antwerp, Belgium, 382–387. doi:10.23919/DATE54114.2022.9774775
+     Pre-training of Deep Bidirectional Transformers for Language Understanding.              [34] Daiqing Li, Aleks Kamko, Ehsan Akhgari, Ali Sabet, Linmiao Xu, and Suhail Doshi.
+     In NAACL-HLT. https://arxiv.org/abs/1810.04805                                                2024. Playground v2.5: Three Insights towards Enhancing Aesthetic Quality in
+[14] Jesse Dodge, Maarten Sap, Ana Marasović, William Agnew, Gabriel Ilharco,                      Text-to-Image Generation. arXiv:2402.17245 https://arxiv.org/abs/2402.17245
+     Dirk Groeneveld, Margaret Mitchell, and Matt Gardner. 2021. Documenting                  [35] Guanpeng Li, Siva Kumar Sastry Hari, Michael Sullivan, Timothy Tsai, Karthik
+     Large Webtext Corpora: A Case Study on the Colossal Clean Crawled Corpus.                     Pattabiraman, Joel Emer, and Stephen W. Keckler. 2017. Understanding Error
+     In Proceedings of the 2021 Conference on Empirical Methods in Natural Language                Propagation in Deep Learning Neural Network (DNN) Accelerators and Applica-
+     Processing. Association for Computational Linguistics, 1286–1305. doi:10.18653/               tions. In SC. Denver, CO, USA. doi:10.1145/3126908.3126964
+     v1/2021.emnlp-main.98                                                                    [36] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei, Zheng Zhang, Stephen Lin,
+[15] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weissenborn, Xi-                  and Baining Guo. 2021. Swin Transformer: Hierarchical Vision Transformer
+     aohua Zhai, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer, Georg                    using Shifted Windows. In ICCV. https://arxiv.org/abs/2103.14030
+     Heigold, Sylvain Gelly, Jakob Uszkoreit, and Neil Houlsby. 2021. An Image                [37] lowRISC. 2014. Tagged Memory and Minion Cores in the lowRISC SoC. Technical
+     is Worth 16x16 Words: Transformers for Image Recognition at Scale. In ICLR.                   Report memo-2014-001. lowRISC. https://lowrisc.org/docs/memo-2014-001-
+     https://arxiv.org/abs/2010.11929                                                              tagged-memory-and-minion-cores/
+[16] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas Müller,            [38] Deepak M. Mathew, Martin Schultheis, Carl C. Rheinländer, Chirag Sudarshan,
+     Harry Saini, Yam Levi, Dominik Lorenz, Axel Sauer, Frederic Boesel, Dustin                    Christian Weis, Norbert Wehn, and Matthias Jung. 2018. An Analysis on Reten-
+     Podell, Tim Dockhorn, Zion English, and Robin Rombach. 2024. Scaling Rectified                tion Error Behavior and Power Consumption of Recent DDR4 DRAMs. In DATE.
+     Flow Transformers for High-Resolution Image Synthesis. In Proceedings of the 41st             IEEE, Dresden, Germany, 293–296. doi:10.23919/DATE.2018.8342023
+     International Conference on Machine Learning. 12606–12633. https://proceedings.          [39] Quinn McNemar. 1947. Note on the Sampling Error of the Difference Between
+     mlr.press/v235/esser24a.html                                                                  Correlated Proportions or Percentages. Psychometrika 12, 2 (1947), 153–157.
+[17] David Goldberg. 1991. What Every Computer Scientist Should Know About                         doi:10.1007/BF02295996
+     Floating-Point Arithmetic. Comput. Surveys 23, 1 (1991), 5–48. doi:10.1145/              [40] Stephen Merity, Caiming Xiong, James Bradbury, and Richard Socher. 2017.
+     103162.103163                                                                                 Pointer Sentinel Mixture Models. In ICLR. https://openreview.net/forum?id=
+[18] Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, et al. 2024. The Llama 3                  Byj72udxe&noteId=Byj72udxe
+     Herd of Models. arXiv:2407.21783 https://arxiv.org/abs/2407.21783                        [41] Justin Meza, Qiang Wu, Sanjeev Kumar, and Onur Mutlu. 2015. Revisiting Mem-
+[19] Taeuk Ha, Gyuri Kim, Chanki Kim, and Sang-Hyo Kim. 2025. Chipkill-Level                       ory Errors in Large-Scale Production Data Centers: Analysis and Modeling of
+     ECC Using 4-Bit Symbol Reed–Solomon Codes for DDR5 DRAM. In ICTC. IEEE,                       New Trends from the Field. In DSN. https://research.facebook.com/publications/
+     Jeju, South Korea, 371–375. doi:10.1109/ICTC66702.2025.11387968                               revisiting-memory-errors-in-large-scale-production-data-centers-analysis-
+[20] Richard W. Hamming. 1950. Error Detecting and Error Correcting Codes. Bell                    and-modeling-of-new-trends-from-the-field/
+     System Technical Journal 29, 2 (1950), 147–160. doi:10.1002/j.1538-7305.1950.            [42] Vishesh Mishra, Marcello Traiola, Angeliki Kritikakou, Olivier Sentieys, and Urbi
+     tb00463.x                                                                                     Chatterjee. 2025. SERA-Float: A Soft Error Resilient Approximate Floating-Point
+[21] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep Residual                    Computing Format. In ICCAD. IEEE, Munich, Germany, 1–9. https://inria.hal.
+     Learning for Image Recognition. In CVPR. http://openaccess.thecvf.com/content_                science/hal-05333255v1/file/SERA_FLOAT_v2.pdf
+     cvpr_2016/html/He_Deep_Residual_Learning_CVPR_2016_paper.html                            [43] Modal Team. 2025. Reverse-Engineering FlashAttention-4. https://modal.com/
+[22] Sanghyun Hong, Pietro Frigo, Yigitcan Kaya, Cristiano Giuffrida, and Tudor                    blog/reverse-engineer-flash-attention-4.
+     Dumitras. 2019. Terminal Brain Damage: Exposing the Graceless Degradation                [44] Pritish Narayanan, Alessandro Fumarola, Lucas L. Sanches, Kohji Hosokawa,
+     in Deep Neural Networks Under Hardware Fault Attacks. In USENIX Security                      Scott C. Lewis, Robert M. Shelby, and Geoffrey W. Burr. 2017.                 To-
+     Symposium. https://www.usenix.org/conference/usenixsecurity19/presentation/                   ward On-Chip Acceleration of the Backpropagation Algorithm Using Non-
+     hong                                                                                          volatile Memory.        IBM Journal of Research and Development 61, 4/5
+[23] Andrew Howard, Mark Sandler, Grace Chu, Liang-Chieh Chen, Bo Chen,                            (2017). https://research.ibm.com/publications/toward-on-chip-acceleration-
+     Mingxing Tan, Weijun Wang, Yukun Zhu, Ruoming Pang, Vijay Vasude-                             of-the-backpropagation-algorithm-using-nonvolatile-memory
+     van, Quoc V. Le, and Hartwig Adam. 2019. Searching for MobileNetV3.                      [45] Duy Thanh Nguyen, Hyun Kim, Hyuk-Jae Lee, and Ik Joon Chang. 2018. An
+     In ICCV. http://openaccess.thecvf.com/content_ICCV_2019/html/Howard_                          Approximate Memory Architecture for a Reduction of Refresh Power Con-
+     Searching_for_MobileNetV3_ICCV_2019_paper.html                                                sumption in Deep Learning Applications. In ISCAS. IEEE, Florence, Italy, 1–5.
+[24] M. Y. Hsiao. 1970. A Class of Optimal Minimum Odd-Weight-Column SEC-                          doi:10.1109/ISCAS.2018.8351021
+     DED Codes. IBM Journal of Research and Development 14, 4 (1970), 395–401.                [46] Byoungchan Oh, Nilmini Abeyratne, Jeongseob Ahn, Ronald G. Dreslinski, and
+     doi:10.1147/rd.144.0395                                                                       Trevor Mudge. 2016. Enhancing DRAM Self-Refresh for Idle Power Reduction.
+                                                                                         13
+                                                                   Muhammad Husnain Mubarik, Karthik Mohan Kumar, Pedro Antonio Pena, Keshavan Varadarajan, Kunal Tyagi
+
+
+     In ISLPED. ACM, San Francisco, CA, USA, 254–259. doi:10.1145/2934583.2934632                       Fine-Grained In-DRAM Data Relocation and Caching. In MICRO. IEEE, Virtual
+[47] David J. Palframan, Nam Sung Kim, and Mikko H. Lipasti. 2014. Precision-                           (originally Athens, Greece), 235–249. https://ieeexplore.ieee.org/document/
+     Aware Soft Error Protection for GPUs. In HPCA. IEEE, Orlando, FL, USA, 49–59.                      9251865
+     doi:10.1109/HPCA.2014.6835966                                                               [69]   Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P. Simoncelli. 2004.
+[48] Vassil Panayotov, Guoguo Chen, Daniel Povey, and Sanjeev Khudanpur. 2015.                          Image Quality Assessment: From Error Visibility to Structural Similarity. IEEE
+     LibriSpeech: An ASR Corpus Based on Public Domain Audio Books. In ICASSP.                          Transactions on Image Processing 13, 4 (2004), 600–612. doi:10.1109/TIP.2003.
+     https://us.openslr.org/resources/12/about.html                                                     819861
+[49] William Peebles and Saining Xie. 2023. Scalable Diffusion Models with Trans-                [70]   Frank Wilcoxon. 1945. Individual Comparisons by Ranking Methods. Biomet-
+     formers. In ICCV. https://www.wpeebles.com/DiT.html                                                rics Bulletin 1, 6 (1945), 80–83. https://sci2s.ugr.es/keel/pdf/algorithm/articulo/
+[50] Dustin Podell, Zion English, Kyle Lacey, Andreas Blattmann, Tim Dockhorn,                          wilcoxon1945.pdf
+     Jonas Müller, Joe Penna, and Robin Rombach. 2023. SDXL: Improving Latent                    [71]   Rui Xie, Yunhua Fang, Asad Ul Haq, Linsen Ma, Sanchari Sen, Swagath Venkatara-
+     Diffusion Models for High-Resolution Image Synthesis. arXiv:2307.01952 https:                      mani, Liu Liu, and Tong Zhang. 2025. Making Strong Error-Correcting Codes
+     //arxiv.org/abs/2307.01952                                                                         Work Effectively for HBM in AI Inference. arXiv:2512.18152 doi:10.48550/arXiv.
+[51] Moinuddin K. Qureshi, Dae-Hyun Kim, Samira Manabi Khan, Prashant J. Nair,                          2512.18152
+     and Onur Mutlu. 2015. AVATAR: A Variable-Retention-Time (VRT) Aware Refresh                 [72]   Rui Xie, Asad Ul Haq, Yunhua Fang, Linsen Ma, Sanchari Sen, Swagath Venkatara-
+     for DRAM Systems. In DSN. IEEE, Rio de Janeiro, Brazil, 427–437. doi:10.1109/                      mani, Liu Liu, and Tong Zhang. 2025. Breaking the HBM Bit Cost Bar-
+     DSN.2015.58                                                                                        rier: Domain-Specific ECC for AI Inference Infrastructure. arXiv:2507.02654
+[52] Alec Radford, Jong Wook Kim, Tao Xu, Greg Brockman, Christine McLeavey,                            doi:10.48550/arXiv.2507.02654
+     and Ilya Sutskever. 2022. Robust Speech Recognition via Large-Scale Weak                    [73]   Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin Choi. 2019.
+     Supervision. arXiv:2212.04356 https://arxiv.org/abs/2212.04356                                     HellaSwag: Can a Machine Really Finish Your Sentence?. In Proceedings of the
+[53] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, and Ilya                          57th Annual Meeting of the Association for Computational Linguistics. Association
+     Sutskever. 2019. Language Models are Unsupervised Multitask Learners. OpenAI                       for Computational Linguistics, 4791–4800. doi:10.18653/v1/P19-1472
+     technical report. https://cdn.openai.com/better-language-models/language_                   [74]   Jeff Zhang, Kartheek Rangineni, Zahra Ghodsi, and Siddharth Garg. 2018. ThUn-
+     models_are_unsupervised_multitask_learners.pdf                                                     derVolt: Enabling Aggressive Voltage Underscaling and Timing Error Resilience
+[54] Brandon Reagen, Udit Gupta, Lillian Pentecost, Paul Whatmough, Sae Kyu Lee,                        for Energy Efficient Deep Learning Accelerators. In DAC. ACM, San Francisco,
+     Niamh Mulholland, David Brooks, and Gu-Yeon Wei. 2018. Ares: A Framework                           CA, USA, 19:1–19:6. doi:10.1145/3195970.3196129
+     for Quantifying the Resilience of Deep Neural Networks. In DAC. ACM, San                    [75]   Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, and Oliver Wang.
+     Francisco, CA, USA, 17:1–17:6. doi:10.1145/3195970.3195997                                         2018. The Unreasonable Effectiveness of Deep Features as a Perceptual Metric.
+[55] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn                         In CVPR. http://richzhang.github.io/PerceptualSimilarity/
+     Ommer. 2022. High-Resolution Image Synthesis with Latent Diffusion Models.                  [76]   Ruohuang Zheng and Michael C. Huang. 2017. Redundant Memory Array
+     In CVPR. https://arxiv.org/abs/2112.10752                                                          Architecture for Efficient Selective Protection. In ISCA. ACM, Toronto, ON,
+[56] Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, Sanjeev Satheesh, Sean Ma,                    Canada, 214–227. doi:10.1145/3079856.3080213
+     Zhiheng Huang, Andrej Karpathy, Aditya Khosla, Michael Bernstein, Alexan-
+     der C. Berg, and Li Fei-Fei. 2015. ImageNet Large Scale Visual Recognition
+     Challenge. International Journal of Computer Vision 115, 3 (2015), 211–252.
+     doi:10.1007/s11263-015-0816-y
+[57] Axel Sauer, Frederic Boesel, Tim Dockhorn, Andreas Blattmann, Patrick Esser,
+     and Robin Rombach. 2024. Fast High-Resolution Image Synthesis with Latent
+     Adversarial Diffusion Distillation. arXiv:2403.12015 https://arxiv.org/abs/2403.
+     12015
+[58] Bianca Schroeder, Eduardo Pinheiro, and Wolf-Dietrich Weber. 2009. DRAM
+     Errors in the Wild: A Large-Scale Field Study. In SIGMETRICS. https://research.
+     google/pubs/dram-errors-in-the-wild-a-large-scale-field-study/
+[59] Noam Shazeer. 2019. Fast Transformer Decoding: One Write-Head is All You
+     Need. arXiv:1911.02150 https://arxiv.org/abs/1911.02150
+[60] Richard Socher, Alex Perelygin, Jean Wu, Jason Chuang, Christopher D. Manning,
+     Andrew Ng, and Christopher Potts. 2013. Recursive Deep Models for Seman-
+     tic Compositionality Over a Sentiment Treebank. In EMNLP. Association for
+     Computational Linguistics, 1631–1642. https://aclanthology.org/D13-1170/
+[61] Vilas Sridharan, Nathan Debardeleben, Sean Blanchard, Kurt Ferreira, Sudhanva
+     Gurumurthi, and John Shalf. 2015. Memory Errors in Modern Systems: The
+     Good, The Bad, and The Ugly. In ASPLOS. doi:10.1145/2694344.2694348
+[62] Aaron Stillmaker and Bevan M. Baas. 2017. Scaling Equations for the Accu-
+     rate Prediction of CMOS Device Performance from 180 nm to 7 nm. Integra-
+     tion, the VLSI Journal 58 (2017), 74–81. http://vcl.ece.ucdavis.edu/pubs/2017.02.
+     VLSIintegration.TechScale/
+[63] David Stutz, Nandhini Chandramoorthy, Matthias Hein, and Bernt Schiele. 2021.
+     Bit Error Robustness for Energy-Efficient DNN Accelerators. In Proceedings of
+     MLSys. MLSys, Virtual, 1–21. https://proceedings.mlsys.org/paper_files/paper/
+     2021/file/2f9b1b6b29361118f630783c19891ea0-Paper.pdf
+[64] Michael B. Sullivan, Mohamed Tarek Ibn Ziad, Aamer Jaleel, and Stephen W.
+     Keckler. 2023. Implicit Memory Tagging: No-Overhead Memory Safety Using
+     Alias-Free Tagged ECC. In ISCA. ACM, Orlando, FL, USA, 1–14. doi:10.1145/
+     3579371.3589079
+[65] Michael B. Sullivan, Nirmal Saxena, Mike O’Connor, Donghyuk Lee, Paul Racu-
+     nas, Saurabh Hukerikar, Timothy Tsai, Siva Hari, and Stephen W. Keckler. 2021.
+     Characterizing and Mitigating Soft Errors in GPU DRAM. In MICRO. ACM.
+     doi:10.1145/3466752.3480111
+[66] Mingxing Tan and Quoc V. Le. 2019. EfficientNet: Rethinking Model Scaling
+     for Convolutional Neural Networks. In ICML. https://research.google/pubs/
+     efficientnet-rethinking-model-scaling-for-convolutional-neural-networks/
+[67] Hoyoung Tang and Jongsun Park. 2016. Unequal-Error-Protection Error Cor-
+     rection Codes for the Embedded Memories in Digital Signal Processors. IEEE
+     Transactions on Very Large Scale Integration (VLSI) Systems 24, 6 (2016), 2397–2401.
+     doi:10.1109/TVLSI.2015.2497368
+[68] Yaohua Wang, Lois Orosa, Xiangjun Peng, Yang Guo, Saugata Ghose, Minesh
+     Patel, Jeremie S. Kim, Juan Gómez Luna, Mohammad Sadrosadati, Nika Mansouri
+     Ghiasi, and Onur Mutlu. 2020. FIGARO: Improving System Performance via
+                                                                                            14
+

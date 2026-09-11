@@ -1,0 +1,608 @@
+“This work has been submitted to the IEEE for possible publication.
+Copyright may be transferred without notice, after which this version may no longer be accessible.”
+  Hardware-aware training of models with synaptic delays for
+        digital event-driven neuromorphic processors
+             Alberto Patiño-Saucedoa , Roy Meijerb , Amirreza Yousefzadehc, d , Manil-Dev Gomonyb ,
+  Federico Corradib , Paul Detteterc , Laura Garrido-Regifea , Bernabé Linares-Barrancoa , and Manolis Sifalakisc
+             a
+               Instituto de Microelectrónica de Sevilla, CSIC/Universidad de Sevilla, Seville, Spain,
+          b
+            Eindhoven University of Technology, Dept. Electrical Engineering, Eindhoven, Netherlands,
+                                  c
+                                     IMEC-Netherlands, Eindhoven, Netherlands,
+                                    d
+                                       University of Twente, Twente, Netherlands
+                              Corresponding author email: manolis.sifalakis@imec.nl
+
+
+   Abstract—Configurable synaptic delays are a basic feature         in [16] it was also observed that such models additionally tend
+in many neuromorphic neural network hardware accelerators.           to have sparser activity, which makes them more memory and
+However, they have been rarely used in model implementations,        energy efficient, despite the memory overhead in neuromor-
+despite their promising impact on performance and efficiency in
+tasks that exhibit complex (temporal) dynamics, as it has been       phic accelerators for implementing the delay structures.
+unclear how to optimize them. In this work, we propose a frame-         Motivated by the study in [16], which defended the en-
+work to train and deploy, in digital neuromorphic hardware,          ergy and memory efficiency of delay models executing on
+highly performing spiking neural network models (SNNs) where         neuromorphic accelerators based on estimations, in this paper
+apart from the synaptic weights, the per-synapse delays are also     we conduct actual experiments with two digital hardware
+co-optimized. Leveraging spike-based back-propagation-through-
+time, the training accounts for both platform constraints, such      platforms (Intel’s Loihi [5] and Imec’s Seneca [3]), in order
+as synaptic weight precision and the total number of parameters      to assess various aspects of the efficiency of delay models.
+per core, as a function of the network size. In addition, a          One key question regards the fidelity of delay models trained
+delay pruning technique is used to reduce memory footprint           offline and deployed for inference on neural accelerators. A
+with a low cost in performance. We evaluate trained models           second question regards the actual energy/power, latency, and
+in two neuromorphic digital hardware platforms: Intel’s Loihi
+and Imec’s Seneca. Loihi offers synaptic delay support using         memory efficiency of deploying delay models on hardware.
+the so-called Ring-Buffer hardware structure. Seneca does not        The main contributions of this paper are
+provide native hardware support for synaptic delays. A second           • a hardware-aware training framework generating (synap-
+contribution of this paper is therefore a novel area- and memory-          tic) delay models suited for hardware acceleration
+efficient hardware structure for acceleration of synaptic delays,
+                                                                        • a newly proposed hardware structure for accelerating
+which we have integrated in Seneca. The evaluated benchmark
+involves several models for solving the SHD (Spiking Heidelberg            synaptic delays in digital neuromorphic processors, with
+Digits) classification task, where minimal accuracy degradation            amortizable memory cost that scales with model density
+during the transition from software to hardware is demonstrated.           and not network depth or size
+To our knowledge, this is the first work showcasing how to train        • a first-of-its-kind benchmark of (synaptic) delay models
+and deploy hardware-aware models parameterized with synaptic
+delays, on multicore neuromorphic hardware accelerators.                   executed on neuromorphic hardware accelerators
+   Index Terms—Spiking Neural Networks, Synaptic Delays, Neu-           • a validation of the credibility of the methodology pre-
+romorphic processors, Loihi, Temporal Signal Analysis, Spiking             sented in [21] for algorithm-hardware benchmarking
+Heidelberg Digits
+                                                                                            II. R ELATED W ORK
+                       I. I NTRODUCTION                                 A canonical formalization of delays, often seen in the
+Axonal and dendritic synaptic delays are known to be subject         literature has been to parameterize synapses with an additional
+to learning and play a time-warping role in the information          learnable delay variable, which can be learned with back-
+propagation in biological neural networks [1]. Therefore,            propagation [10]–[12], [19], [22], local Hebbian-like learn-
+drawing inspiration from neuroscience, many neuromorphic             ing rules [17], annealing algorithms [7], etc. An alternative
+neural network accelerators offer primitives and constructs to       approach featured in TDNNs [8], [14], [15], [23], [24], and
+facilitate synaptic delays [2]–[6].                                  recently for SNNs [18] involves mapping delays in the spatial
+   However, up until recently, parameterization of neural net-       domain and train them with autoregressive models as temporal
+works models with synaptic delays had been a largely unex-           convolution kernels (of fixed receptive fields).
+plored territory (for SNNs and ANNs alike), with only a small           Digital neuromorphic accelerator platforms have typically
+corpus of literature historically dedicated in the topic [7]–[15].   implemented support structures for synaptic delays using one
+   Nevertheless, recently, a few alternative approaches have         of two methods: Ring Buffer [4], [5], [25] or Shared Delay
+started emerging for training such delay models using back-          Queue [2], [3]. A ring buffer is a special type of circular queue
+propagation [16]–[20], offering a fresh coverage of the topic        where currents with different delays accumulate in separate
+with promising results. A shared observation that seems to           slots of the queue. When using the ring buffer, the maximum
+be confirmed in all of these recent works is that models             possible delay in the system will be limited to the size of
+parameterized with synaptic delays achieve competitive, and          the buffer, and the set of possible delays is linearly distributed
+often superior, performance than other models (both spiking or       i.e., the temporal stride is constant. In this method, there is one
+non-spiking), with on-average smaller model sizes. In addition       ring buffer per neuron; therefore, the memory overhead scales
+with the number of neurons. By contrast, a delay queue is a
+shared structure across neurons, lending to more area/memory
+efficiency when spike activity is sparse. The axon delay is
+encoded directly in each spike packet containing a few extra
+bits to indicate the amount of delay. The destination neuro-
+synaptic core has several queues, each corresponding to a
+specific delay amount, connected in a cascade. In this scheme,
+the number of queues scales with the number of possible
+delays and not the maximum delay. The size of each queue
+increases if the queue applies more delay on the spikes.
+   In [21] a useful hardware-algorithm benchmarking method-
+ology was introduced, which was adopted in [16] for produc-
+ing estimates of the memory and energy cost of deploying
+synaptic delay models on a neuromorphic accelerator. In
+this work, we follow this methodology to generate similar
+reference estimates for the networks that we deployed and
+contrast them with the actual measurements that we performed.
+                                                                   Fig. 1. Weight-delay representation before (a) and after (b) prune delay-
+                                                                   synapses.
+                        III. M ETHODS
+
+A. Delay Model Description                                         B. Training Framework
+
+    In this work, we use a multilayer Spiking Neural Network          We train models that incorporate synaptic delays using the
+(SNN) based on Leaky Integrate-and-Fire (LIF) neurons. Their       following strategy, which is compatible with vanilla training
+dynamic depends on their internal state, known as the mem-         frameworks used to train SNNs and RNNs today (i.e. no
+brane potential, u, and their time-dependent input, I. Also, it    special framework extensions), such as back-propagation in
+considers leaky integration that depends on a time constant,       our case.
+τ . This model permits computational efficiency for hardware          The idea is to express the (temporal) parameterization of
+implementation and, at the same time, reproduces biological        delays as a spatial parameterization of synaptic weights, such
+processes. In a discrete-time realization of a LIF neuron, the     that delay training is effected by merely optimizing for synap-
+membrane potential updates as follows:                             tic weights. We start with a set of parallel synapses per pair of
+                                                                   pre- and post-synaptic neurons, each associated with a delayed
+                             1                                     output from the pre-synaptic neuron (using a predetermined
+              uk = uk−1 e− τ (1 − θk−1 ) + Ik−1              (1)   range of delays and stride, see Fig.1(a)). We optimize the
+                                                                   model as usual and prune all delay-synapses that end up with
+                                                                   small weights. We then fine-tune the model with only the
+                                                                   remaining synapses (see Fig.1(b)). We may introduce new
+                            
+                                1   uk ≥ uth
+                     θk =                                    (2)   synapses to replace the pruned ones, with incrementally higher
+                                0   otherwise
+                                                                   delay resolution in localized sub-regions of the initial delay
+                                                                   range, and repeat the process. As a result, different neurons end
+where θ denotes a function to generate activations or spikes       up with different fan-in delay inputs. The resulting models are
+whenever the membrane potential reaches a threshold, uth .         topologically feed-forward, consistently shallower with fewer
+   To incorporate synaptic delays in a conventional feed-          parameters than their recurrent-connectivity counterparts, and
+forward SNN, we create multiple time-delayed projections           exhibit state-of-art performance (observed in in [16] and
+or synapses for every pre-synaptic/post-synaptic neuron pair.      confirmed in other related literature [18], [19], [26]). Their
+Consequently, the firing of a neuron at a specific time depends    simpler structure renders them attractive for resource-efficient
+on both its current state and a subset of past activations from    deployment on neuromorphic accelerators.
+neurons in the pre-synaptic layer, connected through direct           Note that this training strategy for the delays allows us a
+projections. The input of a neuron implementing the suggested      priori to take into account hardware constraints such as the
+framework for synaptic delays is:                                  maximum delay supported in the platform (e.g. 60 timesteps
+                                                                   in Loihi) as well as the delay memory constraints (stride and
+                             N
+                            XX         (d) (d)
+                                                                   pruning level may be amortized so that the resulting spike
+                    Ik =             wi,k θi                 (3)   activity does not exceed the available memory).
+                           d∈D i=1                                    Another appealing consequence of the simplicity of this
+                                                                   strategy is that it is also compatible with on-device local
+where D = {0, s, 2s, ...dmax } is the set of delays chosen for     learning rules such as STDP [27], [28], as it reduces the goal
+a given task, which is defined with the maximum delay, dmax ,      of learning delays to one of adapting weights.
+and the stride, s. The set of weights {wi,j } in a classic SNN        We train our SNN synaptic delay capable models with
+                    (d)
+is replaced by {wi,j }, since the group of weights can take        spatio-temporal back-propagation (STBP) [29], a back-
+different values for each delay (see Fig.1(a)). This increases     propagation through time (BPTT) variant for SNNs. To ac-
+flexibility in the model by allowing to control the total number   count for the discontinuity of the membrane potential, we em-
+of parameters.                                                     ployed a surrogate gradient function [30] with a fast sigmoid
+                           TABLE I
+T HE MODELS TRAINED WITH SYNAPTIC DELAYS FOR THE EXPERIMENTS
+
+      Parameters           Model 1        Model 2        Model 3
+       Topology          700-48-48-20   700-32-32-20   700-24-24-20
+    Num timesteps             64             64             64
+   Max delay, stride         60,2           60,2           60,2
+  # Delays after prune        15             15             15
+     # Parameters           82.6K          47.4K          32.6K
+     Ref. Accuracy           87%            82%            83%
+
+function as in [31].
+C. Hardware Model Deployment and Experimental Setup
+   1) Network Models and Dataset - SHD: Using the delay
+model and training framework that was introduced in the
+previous sections, we trained three network models for the
+Spiking Heidelberg Digits (SHD) benchmark [32]: 700-48-
+48-20, 700-32-32-20, and 700-24-24-20. In each network,
+synaptic delays are employed between the hidden layers and
+between the second hidden and output layers. We did not
+consider synaptic delays from input to the first hidden layer,
+as the input layer usually has many neurons and is responsible
+for a large portion of the synaptic parameters. Table I details
+the trained network topologies, training configurations, initial
+delay configuration per hidden layer, as well as the final
+number of delay levels retained after the iterative synapse
+pruning, and the reference accuracy achieved for each model
+on the test-set. The initial delay configurations are provided
+as max delay level and stride, which for example (60, 2)
+would imply that we utilize synapses with delay levels {0,2,4
+.. 58}. Finally, for the 700-48-48-20 model, we also explored                         Fig. 2. Delay model training pipeline.
+a variation involving axonal-only delay pruning. This means
+that instead of removing individual synapses, we removed              shared queue model in [2] and incorporates the concept of
+entire groups of synapses per axon until only 15 delay axons          “double-buffering”. Instead of a linear chain of FIFOs (one per
+remained (700-48-48-20 Ax). The goal here was to understand           delay level), it simplifies the design to only two FIFOs: the pre-
+the trade-off in hardware resource savings between these two          processing queue (PRQ) and the post-processing queue (POQ).
+pruning strategies. Fig. 2 illustrates the steps in the training      These two FIFOs are interconnected in a circular arrangement
+pipeline.                                                             (see Figure 3), hence the name “Shared Circular Delay Queue”
+   2) Model deployment on Seneca and Loihi: We used Py-               (SCDQ).
+Torch to train the SNN models with synaptic delays. After                There is an SCDQ module at every compute core of a neural
+training, we perform hardware-aware fine-tuning with weight           network accelerator. Conceptually it is positioned between a
+quantization and type conversion to produce models that can           presynaptic and a postsynaptic layer, with the input of the
+execute on the neuromorphic accelerators that we used. In             SCDQ queue facing the presynaptic layer and the output of
+the case of Imec’s Seneca, we quantized the models to 16-bit          the SCDQ facing the postsynaptic layer, and is shared across
+Brain-float, and in the case of Intel’s Loihi to 8-bit integer        all synapses between neuron pairs. If multiple layers can be
+(see Fig.2).                                                          mapped in the same compute core, then an SCDQ can also be
+   On Seneca, we map the networks to 3 cores (one layer per           shared across layers. As a result, the memory complexity is
+core, and each core is served by one shared delay queue).             not a function of the number of layers in a model, but rather
+In Loihi, we could fit each model in one core, but we also            a function of the number of compute cores in use (and the
+considered a mapping on three cores for the comparison with           aggregate activation traffic as we will explain).
+Seneca, in terms of energy and latency (as this accounts also
+the overheads for inter-core routing).                                   When an event packet (AER) is received at the SCDQ input,
+   Loihi implements delays with a structure similar to ring-          a delay counter is added to it, which counts the maximum
+buffers, while Seneca uses a variation of shared delay queues,        number of algorithmic timesteps by which the event should
+which are introduced in the next section. Tests on Seneca were        be delayed. The event then traverses the PRQ and arrives at
+done with the acceleration of synaptic delays using the shared        the output if delivery to some postsynaptic neuron is expected
+delay queue as well as without, whereby delays were emulated          at the current algorithmic timestep. It will (also) be pushed
+in C within the RISC-V controller in each core. This way we           to the POQ if it is expected that a delayed copy will be
+can have a quantitative assessment of the cost of using hw-           delivered at a future timestep. At the POQ, the delay counter
+support for synaptic delays.                                          of events is decremented by one timestep. At some point,
+                                                                      a special event packet signaling the end of the algorithmic
+D. Memory Efficient Synaptic Delay Acceleration (Seneca)              timestep is intercepted at the output and will trigger a buffer-
+  1) Shared Circular Delay Queue Architecture: The pro-               swap between POQ and PRQ. When this happens, the events
+posed synaptic delay structure draws inspiration from the             previously held in POQ will be propagated through PRQ
+                                                                                                                     Delay IP
+                A                                 POQ   A0                    A,0
+                      A                                      B0               B,0
+                                                                                                                     Memory
+     t=0                   B       A              PRQ             B0 A0       A,1
+                                                                              B,1   C                                                            L i-1 spikes
+                      B
+                                                                              A,2        L i-1 spikes     Write                       Read       + delay
+                B                                                             B,2
+                                                                                                        controller                  controller
+                                                                                                                        POQ
+
+                A                      A1   B1    POQ   A1 B 1                A,0
+                                                                              B,0                                       PRQ         Pruning
+                       A                                     B0                                                                      filter
+     t=1                       B                  PRQ             B0 B1 A 1   A,1
+                                                                              B,1   C
+                       B
+                                                                              A,2
+                B                                                             B,2
+
+                                                                                        Fig. 4.  A mapping on the Seneca platform of a three-layer SNN
+                                                                                        with 700 wide input samples, 48 neurons in both hidden layers, 20
+                A                                                                       neurons in the output layer, and 60 delays between the hidden layers
+                                       A2
+                                         B 2 B1   POQ   B1                    A,0
+                                                                              B,0
+                       A
+
+     t=2                                          PRQ             B1 B2 A 2   A,1
+                                                                              B,1   C
+                       B
+                                                                              A,2       D, which we aim to accommodate. In practical scenarios,
+                B                                                             B,2
+                                                                                        weight training-quantization-pruning, and the potential use
+                                                                                        of suitable regularization removes a substantial number of
+                                                                                        synapses, keeping only those that effectively contribute to the
+Fig. 3. An example of the event flow over three timesteps in a two-                     model performance. This results in a much more compact
+layer SNN with synaptic delays. The maximum delay is 2, and the                         model for practical deployment on an accelerator.
+Shared Circular Delay Queue is positioned between the two layers.
+In timestep t = 0, neurons A and B spike, and neuron C receives                            In a zero-skipping capable accelerator, weights are typically
+spikes from neurons A and B with a delay value of 0. In timestep                        stored in sparse matrix format, and a zero weight will not
+t = 1, neuron B spikes, and neuron C receives a spike from neuron                       trigger memory IO. A zero activation will similarly skip fetch-
+A with a delay value of 0, from neuron B with a delay value of 0,                       ing weights from memory and computing the partial MAC,
+and from neuron B with a delay value of 1. In timestep t = 2, no
+neuron spikes, and neuron C receives a spike from neuron A with a                       thereby in both cases saving energy and likely improving
+delay value of 2, from neuron B with a delay value of 2, and from                       latency.
+neuron B with a delay value of 1.                                                          When accelerating synaptic delays with SCDQ this zero-
+                                                                                        skipping decision is not taken on event generation, but rather
+towards the output (if their delay counter has reached a due                            after an event exits the queue and is about to be broadcast
+delay value for delivery in this new timestep), and/or will                             to the postsynaptic neurons. This is because even if an event
+be pushed back again to the POQ for further delaying and                                activation is not useful at the current timestep, it may still be
+delivery at a future timestep. When the delay counter of an                             in future timesteps. This situation may unnecessarily occupy
+event expires, this event will no longer be pushed to the POQ                           FIFO memory, consume power for repeated lookups in weight-
+and will only be forwarded to the output. Figure 3 exemplifies                          memory, and affect latency in SCDQ, when some or all of the
+such a flow of events through the SCDQ across two layers of                             postsynaptic neuron connections have zero weights at certain
+an SNN network with delays of three timesteps.                                          timesteps.
+   It is important to note that by contrast to its ancestral                               To limit this overhead a zero-skiping delay-forwarding capa-
+architecture [2], SCDQ makes it possible for an event to “orbit                         bility is implemented by means of the pruning filter of SCDQ.
+around” and exit the queue at several timesteps. This way                               A binary matrix called W V U (which stands for “weight value
+it can support event delays not only per axon but also per                              useful”) is maintained locally, where every element repre-
+axon-dendrite pair (i.e. per individual synapse), which we will                         sents a delayed axon. W V U has two dimensions: dimension
+discuss further in section IV.                                                          I representing every presynaptic neuron, and dimension D
+   SCDC consists of six submodules shown in the Delay IP                                representing every delay level. If W V Ui,d = 1, this means
+block diagram of Figure 4: the write controller and read                                that for the current delay value d and the presynaptic neuron
+controller which get triggered by external transactions, the                            address i, at least one of the weights is a non-zero value. If
+PRQ and POQ, the pruning filter, and memory. The write                                  W V Ui,d = 0, this means that for all i and d, the weights
+controller is responsible for reading the events from the                               are 0 (which implies that event delivery can be skipped at
+input, writing them to the PRQ, and adding to them an                                   the current timestep). Using this method, the SCDQ can
+initialized delay counter value. Additionally, it is responsible                        determine for every event in the PRQ if it is useful for the
+for swapping the PRQ and POQ buffers when a special end-                                postsynaptic layer (or if it should be ignored). Figure 5 shows
+of-timestep (EOT) event is intercepted at the output. The read                          an example of a network with some pruned delayed axons and
+controller is responsible for reading events from the PRQ and                           the corresponding W V U matrix.
+writing them to the output and the POQ while decreasing the                                To determine when an event should be removed from the
+delay counter. It will also signal the write controller to start the                    delay queue (i.e. every next timestep of the event, W V Ui,d
+EOT sequence when there is an EOT event at the output. The                              will be 0), a row of W V U , which corresponds to some
+PRQ and POQ are FIFO abstractions around memory buffers                                 presynaptic neuron i, can be treated as a binary number.
+available in the memory module and thereby implement the                                If we count the number of leading zeros (clz(x)) of this
+actual data-path through the SCDQ.                                                      binary number, we know for which delay counter value d
+   2) Zero-Skipping Delay-Forwarding: One observes in Fig-                              the event does not have to move from the PRQ to the POQ
+ure 1 that the network topology with multiple delay synapses                            anymore. For example, in Figure 5, clz(W V UA ) = 1 and
+can become quite intricate. The number of synapses in-                                  clz(W V UB ) = 0, which means events from neuron A
+creases linearly with the maximum number of delay steps,                                have to stay for 2 timesteps (can be removed at delay counter
+1) and events from neuron B do not have to stay for 3                                               TABLE II
+timesteps (can be removed at delay counter 0).                          F IDELITY OF L OIHI /S ENECA RUN MODELS AGAINST THE P Y T ORCH
+                                                                                           TRAINED “ MOTHER - MODEL”
+
+                                                                           Model              Pytorch               Loihi              Seneca
+                                                                                                    Model accuracy
+   A                      A,0      C
+                          B,0                                         700-48-48-20            87%                 87%                 86%
+          A     Delay     A,1                        1      1   0
+                          B,1                WV U =                     700-32-32-20            82%                 83%                 81%
+          B      IP                                  0      0   1
+                          A,2
+                                  D                                     700-24-24-20            83%                 81%                 82%
+   B                      B,2
+                                                                      700-48-48-20 Ax           76%                 75%                 76%
+                                                                                         Prediction consistency against Pytorch
+Fig. 5. Example of W V U for a network where delayed axons A, 2,        700-48-48-20           100%                 97%                 93%
+B, 0 and B, 1 are skipped.                                              700-32-32-20           100%                 95%                 97%
+                                                                        700-24-24-20           100%                 93%                 98%
+                                                                      700-48-48-20 Ax          100%                 92%                 94%
+                         IV. R ESULTS                                                    Avg spike count per inference per layer
+                                                                                            h1        h2        h1        h2         h1       h2
+   For the tests on Loihi, we had available a Kapoho Bay USB            700-48-48-20      545.32    534.55    524.39    531.14     544.71   534.25
+stick with dual Loihi chip 128 cores each, and remote access            700-32-32-20      400.99    384.61    398.33    365.15     401.18   384.85
+to a Nahuku board (32 chips) via the Intel Neuromorphic                 700-24-24-20      273.86    311.19    272.48    300.75     271.99    307.9
+Research Community (INRC). For power measurements on
+Loihi, we used Intel’s cloud Loihi server farm, as it is
+currently the only way to perform power measurements of
+neurosynaptic cores. We repeated all the tests one hundred
+times and averaged the results to account for variance in power
+measurements.
+   Imec’s Seneca is not taped out in ASIC yet, which is
+what allowed us to integrate the delay acceleration circuit
+and evaluate it. We therefore provide results from circuit-
+                                                                     Fig. 6. Confusion matrices for PyTorch trained “mother-model” and
+level simulations and estimate power estimations based on a          Loihi/Seneca run models for the 700-48-48-20 network.
+netlist provided by Imec, in a 22 nm process from Global
+Foundry. Energy and area measurements are acquired using             and also visually in Fig 7 and 8 for one example data point.
+the Cadence Joules Xcelium at 500MHz and Genus tools,                It means that the software model can provide us with very
+respectively. The Joules tool provides accuracy within 15%           reliable information about the anticipated energy per inference
+of the sign-off power. The Genus tool is used to estimate the        and memory use on the neuromorphic platform without even
+area. Latency, memory, and fidelity measurements are obtained        running the hardware model (since these traces are a proxy
+from the hardware test bench simulations.                            for the number of synaptic operations).
+A. Fidelity of delay models on neuromorphic hardware                 B. Power, Energy, Latency, Memory measurements
+   The first aspect that we were concerned with verifying,
+                                                                        In Table III we report (average) hardware measurements per
+was the fidelity in terms of model performance, between
+                                                                     inference in Loihi, in Seneca with Delay IP, and in Seneca
+the PyTorch-trained model (“mother model”) and the fine-
+                                                                     without Delay IP (that is delays implemented in software on
+tuned models for the two neuromorphic accelerators. Table II
+                                                                     the RISC-V controller). The power consumption reported in
+summarises the rather positive observations. Both quantized
+                                                                     the table includes only the total power of the neurosynaptic
+models running on Loihi and Seneca were very close in behav-
+                                                                     cores, excluding the I/O and peripherals. Energy is calculated
+ior and final task performance to the “mother model”. There
+is about 1% deviation in task accuracy between inference in
+PyTorch and inference in the neuromorphic accelerators. Very
+importantly, the predictions made by the hardware models
+were very consistent with those of the “mother model”. This
+was well above 90% consistency across all classes, for all
+models. A more detailed breakdown per class for the 700-
+48-48-20 network is shown in Fig 6. The accuracy of
+48-48-20 Ax (axonal delay pruning) is decreased (not the
+fidelity between software and hardware though) because of
+the axon grouping constraint for pruning that penalizes axons
+containing the 15 smallest weights (but which could contain
+some large weights too. However, the goal is to show later
+the improvements in energy and latency, when pruning entire
+axons.
+   Last and even more important is the fact that the spike traces
+and membrane evolution traces inside the network are also
+very consistent between “mother model” and the hardware
+executing models. This can be verified both in the numbers           Fig. 7. Comparison of spike traces between pytorch “mother-model” and the
+reported Table II for the entire test-set and the three models,      one executed on Seneca and Loihi for SHD testset sample X.
+                                                                                                            TABLE III
+                                                                               AVERAGE HARDWARE MEASUREMENTS PER INFERENCE , DIP =
+                                                                                D ELAY IP, E NERGY CALCULATED USING DYNAMIC POWER
+                                                                                 CONSUMPTION ( ON L OIHI THIS DOES NOT INCLUDE THE
+                                                                                                  L AKEMONT CORES .)
+
+                                                                               Measurement     Loihi (1c)  Seneca (3c) w/ SCDQ      Seneca (3c) w/o SCDQ
+                                                                                                        Network: 700-48-48-20
+                                                                                  Energy       28.4 µJ           43.6 µJ                    152 µJ
+                                                                                 Latency        9.1 ms           4.25 ms                   18.3 ms
+                                                                                 Memory        1.96 M b          3.38 M b                  3.34 M b
+                                                                                DIP energy        NA             0.98 µJ                     0 µJ
+                                                                                                        Network: 700-32-32-20
+                                                                                  Energy       18.3 µJ           29.5 µJ                   92.4 µJ
+                                                                                 Latency        9.1 ms           3.34 ms                   13.6 ms
+                                                                                 Memory        1.48 M b          2.33 M b                  2.29 M b
+                                                                                DIP energy        NA             0.77 µJ                     0 µJ
+                                                                                                        Network: 700-24-24-20
+                                                                                  Energy       12.5 µJ           23.8 µJ                   73.3 µJ
+Fig. 8. Comparison of Vmem trace between pytorch “mother-model” and the          Latency        9.1 ms           2.81 ms                   9.81 ms
+one executed on Seneca and Loihi for SHD testset sample X.                       Memory        1.23 M b          2.07 M b                  2.05 M b
+                                                                                DIP energy        NA             0.62 µJ                     0 µJ
+                                                                                                       Network: 700-48-48-20 Ax
+                                                                                  Energy       25.2 µJ           31.4 µJ                     NA
+                                                                                 Latency       10.0 ms           3.03 ms                     NA
+                                                                                 Memory        1.96 M b          3.36 M b                    NA
+                                                                                DIP energy        NA             0.72 µJ                     NA
+
+                                                                                                        TABLE IV
+                                                                              H ARDWARE MEASUREMENTS FOR EXECUTING INFERENCE WITH MODEL
+Fig. 9. Effect of weight quantization on final accuracy. All test-set (2264          700-48-48-20 USING 3 CORES ON L OIHI AND S ENECA
+samples) are considered.
+                                                                                          HW measurement        Loihi (3c)   Seneca (3c)
+using dynamic power consumption, to exclude the high 74.4                                              model: 700-48-48-20
+mW static power consumption of the Lakemont x86 man-                                     Energy per inference    38.4 µJ      43.6 µJ
+                                                                                        Latency per inference     9.1 ms      4.25 ms
+agement cores of Loihi. The static power consumption of
+                                                                                        Memory consumption        4.2 M b     3.38 M b
+Seneca is 462 µW . Comparing the middle and right columns                               Synaptic Delay energy       NA        0.98 µJ
+justifies the circuit-based implementation of SCDQ in Seneca
+as it improves energy efficiency and latency by a signifi-
+cant amount. The energy efficiency increases between 3.5×                     ware accelerated implementation, it is consistently less than
+(700-48-48-20) and 3.1× (700-24-24-20). Similarly, latency                    0.5× that of Loihi, despite the larger number of cores used
+decreases between 4.3× (700-48-48-20) and 3.5× (700-24-                       and routing between them (i.e., longer data path).
+24-20). In other words, the benefits increase with the total                     To make the comparison more equitable we performed an
+activation volume (seen in larger networks). For the axonal                   additional experiment where the 700-48-48-20 network was
+pruned network (700-48-48-20 Ax), both energy efficiency                      distributed across three cores in Loihi too. In this case (Table
+and latency improve by approximately 1.4× compared to the                     IV) energy consumption increases by 35% and memory use
+per individual synapse pruned network (700-48-48-20). This                    by a factor of 1.15×.
+is because the activation sparsity is higher for 700-48-48-20                    In Seneca, the shared queues (SCDQs) contribute only 2% -
+Ax than for 700-48-48-20.                                                     3% to its energy consumption, with the remaining 97% - 98%
+   As a proxy comparison for the two different hardware                       coming from the cores processing (of which 67% - 82% of
+implementations of synaptic delays, namely Ring Buffer in                     this energy consumption is related to pre- and post-processing
+Loihi, versus SCDQ (improved shared queue) in Seneca, the                     events in the RISC-V controller of each core). Similarly, out of
+energy efficiency of Seneca (SCDQ) appears approximately                      the 3.3Mb memory consumption, RISC-V instructions take up
+1.2 − 1.9× lower, but note that this involves 1 core in Loihi                 0.5Mb, while neural processing operations use up 2.6Mb. It’s
+versus 3 cores on Seneca. But the gap is closing as the network               worth noting that the actual energy and memory consumption
+size increases, which reveals the better scalability of the SCDQ              of neural processing operations (14.6uJ/2.6Mb) are very close
+and/or the costly contribution of the RISC-V controller in                    to the estimates generated using the methodology introduced
+Seneca: the larger the network, the more compute work gets                    in [21] (14.48uJ/2.2Mb). Fig 10, provides a more detailed
+allocated to the vector-pipeline of neuro co-processors (NPEs),               breakdown of the energy boxplots for the per-class data points
+compared to the work the RISC-V controller has to do.                         in the test set for Seneca for the network 700-24-24-20.
+   What is also very interesting is the effect of the accelerated
+synaptic delays with SCDQs on the inference latency. On                       C. Final accuracy and effect of reduced bit precision
+Seneca, both with the hardware implementation and the RISC-                      We report the accuracy on the entire test set (2264 samples)
+V implementation of SCDQ, the latency decreases with the                      and the effect of quantizing with different bit precisions for the
+network size (due to fewer activations), while it, surprisingly,              three base models implemented on Loihi. As observed in Fig.
+remains constant on Loihi’s Ring Buffers. And for the hard-                   9 and consistent with the fidelity results, the degradation in
+                                                                                                                     Scaling number of delay levels (Neurons=8)                                                      Scaling number of neurons (Delay levels=8)
+                                                                                                                                                                                                               600
+                                                                                                                          Shared Delay Queue                                                                              Shared Delay Queue
+                                                                                                              1000        Shared Circular Delay Queue                                                                     Shared Circular Delay Queue
+
+
+
+
+                                                                           Required queue capacity [events]
+
+
+
+
+                                                                                                                                                                            Required queue capacity [events]
+                                                                                                                                                                                                               500
+                                                                                                              800
+                                                                                                                                                                                                               400
+                                                                                                              600                                                                                              300
+                                                                                                              400                                                                                              200
+                                                                                                              200                                                                                              100
+                                                                                                                0                                                                                               0
+                                                                                                                      2        4      6        8      10     12   14   16                                             2        4      6      8     10   12   14   16
+                                                                                                                                          Delay levels [#]                                                                                Neurons [#]
+
+
+
+                                                                      Fig. 11. Required memory for shared delay queue vs shared circular
+                                                                      delay queue
+
+     Fig. 10. Energy consumption per inference by class on Seneca.    delivery. At the end of a timestep, all events in every FIFO shift
+                                                                      to the next FIFO in the cascade belonging to the next relative
+accuracy of the mapping form Pytorch to Loihi is negligible.          timestep, and all events in the FIFO belonging to the current
+Interestingly, the effect of reducing the bit precision is, at most   timestep are transmitted to the postsynaptic neurons. The total
+less than 3% percent for up to 4 bits, leading (potentially) to a     memory usage depends on the minimum activation sparsity
+further reduction of the memory footprint with little cost. The       of the network (which can be biased through model training).
+maximum accuracy obtained in Loihi for the 700-48-48-20               Assuming a minimum activation sparsity of α, where α = 1
+model is 89.04%                                                       implies that every presynaptic neuron is activated and α = 0
+                                                                      implies that none are activated, the total memory overhead is
+                                                                                           PD
+                         V. D ISCUSSION                               calculated as α·I ·      d=1 (D − d)   = 21 ·α·I ·(D2 +D), where
+   Regarding the cost of supporting synaptic delays in a              I is the number of presynaptic neurons and D is the number
+neural accelerator, there are two sources of overhead. First          of delay levels. This memory overhead scales as O(α · I · D2 ).
+delay parameterization involves extending the weight matrix           In this synaptic delay model, only axonal delays are supported
+structure from 2D to 3D (2D weight matrix for each delay              and therefore an event enters and exits the Shared Delay Queue
+value). It has dimensions D × I × J, where D is the delay             only once.
+resolution (that is, the number of distinct discrete values), I          The SCDQ introduced in this paper and employed in [3] is
+is the number of pre-synaptic neurons, and J is the number            an evolution of the Shared Queue in [2]. SCDQ has memory
+of post-synaptic neurons. Pruning during training can serve to        overhead of α · I · (2 · D − 1), scaling with O(α · I · D).
+limit or reduce this overhead (particularly when the weight           By reference to TrueNorth’s [2] constraints of 16 timesteps
+matrix can be stored in compressed form). Pruning an axon             of delay, 256 neurons, and for sparsity α = 1 (no spasity),
+removes a set of delay synapses towards post-synaptic layer           TrueNorth’s Shared Delay Queue needs queue capacity for
+neurons (reducing the cardinality of one of the dimensions            34816 events, while SCDQ only requires storage for 7936
+of the weight matrix), and pruning a dendritic branch alone           events. In the implementation of the SCDQ we used, each
+removes an individual synaptic connection between a pre-post          event has a bit width of 16 bits. By comparison to a Ring
+neuron pair.                                                          Buffer structure using as a reference Loihi’s [5] constraints
+   Second, in most neuromorphic architectures, delays are             of 64 delay time steps, 48 neurons, and 8 bits per weight,
+implemented as FIFO queues or delay lines placed either               the additional memory overhead of Loihi is only 24576 bits,
+at every neuron or shared among synaptic connections. For             which is less than the 97536 bits of the Delay IP. However,
+example, in [5], [25], [33] a Ring Buffer places a circular FIFO      this comparison assumes no activation sparsity (α = 1), and
+queue placed at each postsynaptic neuron where dendritic              the memory overhead of Ring Buffers does not scale with
+weights accumulate. Each slot of the Ring Buffer accumulates          activation sparsity. If α ≤ 0.25, the SCDQ has a lower memory
+weights for a different timestep. At the end of a timestep,           overhead than Loihi’s Ring Buffers. SpiNNaker [33] also uses
+the slot corresponding to the current timestep is added to the        Ring Buffers and has a constraint of 16-time steps of delay,
+membrane potential of the corresponding postsynaptic neuron.          256 neurons, and 16-bit weights per neuron, resulting in a
+Subsequently, the Ring Buffer shifts to the next timestep, and        memory overhead of 65536 bits. Assuming α = 1, the SCDQ
+the slot from the current timestep becomes the slot for the           has a memory overhead of 126976 bits in this case and when
+maximum delay. The number of delay levels is constrained              α ≤ 0.5, SCDQ is more memory efficient than SpiNNaker
+by the size (number of slots) of the Ring Buffer. With only           too.
+one Ring Buffer per postynaptic neuron, the total memory                 To illustrate how SCDQ improves upon the vanilla Shared
+overhead is the product of the number of postynaptic neurons          Delay Queue structure [2], in Figure 11, we provide a worst-
+J and the number of delay levels D, scaling with O(J · D)             case estimate (assuming dense activations and no delay prun-
+[16].                                                                 ing) between two fully connected layers. The figure illustrates
+   On the other hand, a Shared Queue [2], of which SCQD               the buffer capacity required for both a Shared Delay Queue
+is an extension, shares a group of FIFOs in a linear cascade          and SCDQ, as the number of delay levels increases and as the
+arrangement across the synapses (presynaptic and postsynaptic         number of postsynaptic neurons increases.
+neuron pairs of two layers). The number of FIFOs in the                  Finally, considering area overhead, in the initial implemen-
+cascade equals the maximum number of discrete delay levels            tation of SCDQ we used flip-flops. To reduce the total area,
+D. Every event triggered at a presynaptic neuron from an axon         flip-flop memory was later replaced with a 2048-word 16-
+with a given delay, enters the Shared Queue at the FIFO cor-          bit SRAM memory, with enough capacity for the observed
+responding to the number of timesteps it needs to wait before         maximum of 1596 events in the queues. This resulted in an
+81% reduction in total area, with a total of 15463 µm2 for                       [8] A. Waibel, T. Hanazawa, G. Hinton, K. Shikano, and K. Lang, “Phoneme
+the Delay IP (see Table V). With this area improvement the                           recognition using time-delay neural networks,” IEEE Transactions on
+                                  81624                                              Acoustics, Speech, and Signal Processing, vol. 37, no. 3, 1989.
+area cost of SCDQ reduces from 472400    = 17% of the area                       [9] J. Santos and P. Fernandez, “Evolved synaptic delay based neural
+                                 15463
+one Seneca core down to a mere 472400 = 3% only.                                     controllers for walking patterns in hexapod robotic structures,” Natural
+                                                                                     Computing, vol. 16, 06 2017.
+                                                                                [10] S. Day and M. Davenport, “Continuous-time temporal back-propagation
+                                TABLE V                                              with adaptable time delays,” IEEE Transactions on Neural Networks,
+                    A REA S AVINGS WITH SRAM                                         vol. 4, no. 2, pp. 348–354, 1993.
+                                                                                [11] R. Duro and J. Reyes, “Discrete-time backpropagation for training
+Memory Combinational      Flip-Flop  SRAM       Total                                synaptic delay-based artificial neural networks,” IEEE Transactions on
+  FF   16885 µm2 21% 64739 µm2 79% 0 µm2  0% 81624 µm2                               Neural Networks, vol. 10, no. 4, pp. 779–789, 1999.
+ SRAM 2287 µm2 15% 4557 µm2 29% 8618 µm2 56% 15463 µm2                          [12] R. Boné and H. Cardot, “Time delay learning by gradient descent in
+                    Area saved                  81%                                  recurrent neural networks,” in Proceedings of the 15th International
+                                                                                     Conference on Artificial Neural Networks: Formal Models and Their
+                                                                                     Applications - Volume Part II, ser. ICANN’05. Berlin, Heidelberg:
+                                                                                     Springer-Verlag, 2005, p. 175–180.
+                         VI. C ONCLUSION                                        [13] S. B. Shrestha and Q. Song, “Adaptive delay learning in spikeprop based
+                                                                                     on delay convergence analysis,” in 2016 International Joint Conference
+   In this paper, we have proposed a framework for train-                            on Neural Networks (IJCNN), 2016, pp. 277–284.
+ing and deploying highly performing spiking neural network                      [14] C. Lea, M. D. Flynn, R. Vidal, A. Reiter, and G. D. Hager, “Temporal
+models (SNNs) with synaptic delays on digital neuromorphic                           convolutional networks for action segmentation and detection,” in 2017
+                                                                                     IEEE Conference on Computer Vision and Pattern Recognition (CVPR).
+hardware. The framework co-optimizes both synaptic weights                           Los Alamitos, CA, USA: IEEE Computer Society, July 2017.
+and delays and takes hardware platform constraints into ac-                     [15] A. van den Oord, S. Dieleman, H. Zen, K. Simonyan, O. Vinyals,
+count. We have also introduced a new hardware data structure,                        A. Graves, N. Kalchbrenner, A. Senior, and K. Kavukcuoglu, “WaveNet:
+                                                                                     A Generative Model for Raw Audio,” in Proc. 9th ISCA Workshop on
+SCDQ, for memory- and area-efficient acceleration of synaptic                        Speech Synthesis Workshop (SSW 9), 2016, p. 125.
+delays that combines the ideas of ring buffers and shared                       [16] A. Patiño-Saucedo, A. Yousefzadeh, G. Tang, F. Corradi, B. Linares-
+queues. We evaluated our contributions with two neuromorphic                         Barranco, and M. Sifalakis, “Empirical study on the efficiency of
+                                                                                     spiking neural networks with axonal delays, and algorithm-hardware
+digital hardware platforms: Intel’s Loihi and Imec’s Seneca                          benchmarking,” in 2023 IEEE International Symposium on Circuits and
+(in which SCDQ was integrated). Our evaluation with several                          Systems (ISCAS). IEEE, 2023, pp. 1–5.
+models of varying sizes trained for the SHD classification                      [17] M. Zhang, J. Wu, A. Belatreche, Z. Pan, X. Xie, Y. Chua, G. Li, H. Qu,
+                                                                                     and H. Li, “Supervised learning in spiking neural networks with synaptic
+task, affirms not only the efficacy and hardware efficiency                          delay-weight plasticity,” Neurocomputing, vol. 409, pp. 103–118, 2020.
+of synaptic delays but also our ability under the proposed                      [18] I. Hammouamri, I. Khalfaoui-Hassani, and T. Masquelier, “Learning
+training framework to produce hardware models that perform                           delays in spiking neural networks using dilated convolutions with
+                                                                                     learnable spacings,” arXiv preprint arXiv:2306.17670, 2023.
+on par with their software counterparts on digital hardware                     [19] X. Wang, X. Lin, and X. Dang, “A delay learning algorithm based
+accelerators.                                                                        on spike train kernels for spiking neurons,” Frontiers in Neuroscience,
+   This work demonstrates the first successful application of                        vol. 13, 2019.
+hardware-aware models parameterized with synaptic delays on                     [20] P. Sun, E. Eqlimi, Y. Chua, P. Devos, and D. Botteldooren, “Adaptive
+                                                                                     axonal delays in feedforward spiking neural networks for accurate
+multi-core neuromorphic hardware accelerators.                                       spoken word recognition,” in ICASSP 2023-2023 IEEE International
+                                                                                     Conference on Acoustics, Speech and Signal Processing (ICASSP).
+                       ACKNOWLEDGMENTS                                               IEEE, 2023, pp. 1–5.
+                                                                                [21] G. Tang, A. Safa, K. Shidqi, P. Detterer, S. Traferro, M. Konijnenburg,
+  This work was funded by EU Horizon grant 101070679                                 M. Sifalakis, G.-J. van Schaik, and A. Yousefzadeh, “Open the box of
+”NimbeAI” and EU H2020 grant 871501 ”Memscales”.                                     digital neuromorphic processor: Towards effective algorithm-hardware
+                                                                                     co-design,” in 2023 IEEE International Symposium on Circuits and
+                                                                                     Systems (ISCAS). IEEE, 2023, pp. 1–5.
+                             R EFERENCES                                        [22] S. B. Shrestha and G. Orchard, “Slayer: Spike layer error reassignment
+[1] C. Stoelzel, Y. Bereshpolova, J.-M. Alonso, and H. Swadlow, “Axonal              in time,” in Proceedings of the 32nd International Conference on Neural
+    conduction delays, brain state, and corticogeniculate communication,”            Information Processing Systems, ser. NIPS’18. Red Hook, NY, USA:
+    The Journal of Neuroscience, vol. 37, pp. 0444–17, 05 2017.                      Curran Associates Inc., 2018, p. 1419–1428.
+[2] F. Akopyan, J. Sawada, A. Cassidy, R. Alvarez-Icaza, J. Arthur,             [23] K. Gregor, I. Danihelka, A. Mnih, C. Blundell, and D. Wierstra,
+    P. Merolla, N. Imam, Y. Nakamura, P. Datta, G. Nam, B. Taba,                     “Deep autoregressive networks,” in Proceedings of the 31st International
+    M. Beakes, B. Brezzo, J. B. Kuang, R. Manohar, W. P. Risk, B. Jackson,           Conference on Machine Learning, ser. Proceedings of Machine Learning
+    and D. S. Modha, “Truenorth: Design and tool flow of a 65 mw 1                   Research, E. P. Xing and T. Jebara, Eds., vol. 32, no. 2. Bejing, China:
+    million neuron programmable neurosynaptic chip,” IEEE Transactions               PMLR, 22–24 Jun 2014, pp. 1242–1250.
+    on Computer-Aided Design of Integrated Circuits and Systems, vol. 34,       [24] V. Peddinti, D. Povey, and S. Khudanpur, “A time delay neural network
+    no. 10, pp. 1537–1557, 2015.                                                     architecture for efficient modeling of long temporal contexts,” in Proc.
+[3] G. Tang, K. Vadivel, Y. Xu, R. Bilgic, K. Shidqi, P. Detterer,                   Interspeech 2015, 2015, pp. 3214–3218.
+    S. Traferro, M. Konijnenburg, M. Sifalakis, G.-J. van Schaik, and           [25] A. Morrison, C. Mehring, T. Geisel, A. Aertsen, and M. Diesmann,
+    A. Yousefzadeh, “Seneca: building a fully digital neuromorphic                   “Advancing the boundaries of high-connectivity network simulation with
+    processor, design trade-offs and challenges,” Frontiers in Neuroscience,         distributed computing,” Neural computation, vol. 17, no. 8, 2005.
+    vol. 17, 2023. [Online]. Available: https://www.frontiersin.org/articles/   [26] P. Sun, L. Zhu, and D. Botteldooren, “Axonal delay as a short-term
+    10.3389/fnins.2023.1187252                                                       memory for feed forward deep spiking neural networks,” in ICASSP
+[4] S. B. Furber, F. Galluppi, S. Temple, and L. A. Plana, “The spinnaker            2022-2022 IEEE International Conference on Acoustics, Speech and
+    project,” Proceedings of the IEEE, vol. 102, no. 5, pp. 652–665, 2014.           Signal Processing (ICASSP). IEEE, 2022, pp. 8932–8936.
+[5] M. Davies, N. Srinivasa, T. Lin, G. Chinya, Y. Cao, S. H. Choday,           [27] B. Linares-Barranco, T. Serrano-Gotarredona, L. Camuñas-Mesa,
+    G. Dimou, P. Joshi, N. Imam, S. Jain, Y. Liao, C. Lin, A. Lines, R. Liu,         J. Perez-Carrasco, C. Zamarreño-Ramos, and T. Masquelier, “On spike-
+    D. Mathaikutty, S. McCoy, A. Paul, J. Tse, G. Venkataramanan, Y. Weng,           timing-dependent-plasticity, memristive devices, and building a self-
+    A. Wild, Y. Yang, and H. Wang, “Loihi: A neuromorphic manycore                   learning visual cortex,” Frontiers in Neuroscience, vol. 5, 2011.
+    processor with on-chip learning,” IEEE Micro, vol. 38, no. 1, 2018.         [28] P. Diehl and M. Cook, “Unsupervised learning of digit recognition
+[6] J. A. Starzyk, Ł. Maciura, and A. Horzyk, “Associative memories with             using spike-timing-dependent plasticity,” Frontiers in Computational
+    synaptic delays,” IEEE Transactions on Neural Networks and Learning              Neuroscience, vol. 9, 2015.
+    Systems, vol. 31, no. 1, pp. 331–344, 2019.                                 [29] Y. Wu, L. Deng, G. Li, J. Zhu, and L. Shi, “Spatio-temporal backpropa-
+[7] B. Cohen, D. Saad, and E. Marom, “Efficient training of recurrent neural         gation for training high-performance spiking neural networks,” Frontiers
+    network with time delays,” Neural Networks, vol. 10, no. 1, 1997.                in Neuroscience, vol. 12, 2018.
+[30] E. O. Neftci, H. Mostafa, and F. Zenke, “Surrogate gradient learning
+     in spiking neural networks: Bringing the power of gradient-based opti-
+     mization to spiking neural networks,” IEEE Signal Processing Magazine,
+     vol. 36, no. 6, pp. 51–63, 2019.
+[31] F. Zenke and T. P. Vogels, “The remarkable robustness of surrogate
+     gradient learning for instilling complex function in spiking neural
+     networks,” Neural computation, vol. 33, no. 4, pp. 899–925, 2021.
+[32] B. Cramer, Y. Stradmann, J. Schemmel, and F. Zenke, “The heidelberg
+     spiking data sets for the systematic evaluation of spiking neural net-
+     works,” IEEE Transactions on Neural Networks and Learning Systems,
+     vol. 33, no. 7, pp. 2744–2757, 2022.
+[33] M. M. Khan, D. R. Lester, L. A. Plana, A. Rast, X. Jin, E. Painkras, and
+     S. B. Furber, “Spinnaker: mapping neural networks onto a massively-
+     parallel chip multiprocessor,” in 2008 IEEE International Joint Con-
+     ference on Neural Networks (IEEE World Congress on Computational
+     Intelligence). Ieee, 2008, pp. 2849–2856.
+

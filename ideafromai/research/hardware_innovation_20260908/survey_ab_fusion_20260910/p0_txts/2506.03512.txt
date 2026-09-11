@@ -1,0 +1,915 @@
+                                             EDCFlow: Exploring Temporally Dense Difference Maps for Event-based
+                                                                  Optical Flow Estimation
+
+                                                                     Daikun Liu           Lei Cheng     Teng Wang*               Changyin Sun
+                                                                                              Southeast University
+                                                                                 {dkliu, leicheng, wangteng, cysun}@seu.edu.cn
+arXiv:2506.03512v1 [cs.CV] 4 Jun 2025
+
+
+
+
+                                                                     Abstract
+
+                                        Recent learning-based methods for event-based optical flow
+                                        estimation utilize cost volumes for pixel matching but suf-
+                                        fer from redundant computations and limited scalability
+                                                                                                                      (a) Reference image              (b) Event stream
+                                        to higher resolutions for flow refinement. In this work,
+                                        we take advantage of the complementarity between tempo-
+                                        rally dense feature differences of adjacent event frames and
+                                        cost volume and present a lightweight event-based optical
+                                        flow network (EDCFlow) to achieve high-quality flow es-
+                                        timation at a higher resolution. Specifically, an attention-              (c) Correlation motion feature (d) Difference motion feature
+                                        based multi-scale temporal feature difference layer is de-
+                                        veloped to capture diverse motion patterns at high reso-             Figure 1. Illustration of difference between correlation and differ-
+                                        lution in a computation-efficient manner. An adaptive fu-            ence motion features. (a) Reference image of DSEC [11] dataset.
+                                        sion of high-resolution difference motion features and low-          (b) Corresponding event stream. (c) Correlation motion feature.
+                                        resolution correlation motion features is performed to en-           (d) Difference motion feature.
+                                        hance motion representation and model generalization. No-
+                                        tably, EDCFlow can serve as a plug-and-play refinement
+                                        module for RAFT-like event-based methods to enhance flow             frame domain, several event-based methods [12, 13, 21, 37]
+                                        details. Extensive experiments demonstrate that EDCFlow              adopt analogous architectures by treating event streams as
+                                        achieves better performance with lower complexity com-               consecutive event frames. Specifically, DCEIFlow [37] and
+                                        pared to existing methods, offering superior generalization.         E-RAFT [12] focus on long-range correspondences, ne-
+                                                                                                             glecting intermediate motions in events; TMA [21] and
+                                                                                                             MultiFlow [13] mitigate this by building temporally dense
+                                        1. Introduction                                                      cost volumes, resulting in a complexity of O(T N 2 C) with
+                                                                                                             T , N , and C representing the number of event frames, pix-
+                                        Optical flow estimation calculates per-pixel displacement            els, and feature dimensions, respectively. However, event
+                                        vectors and is important for various applications like deblur-       streams typically provide small displacement in a short time
+                                        ring [20, 43], action recognition [9, 38], and object track-         window and performing global 2D searches within tempo-
+                                        ing [42]. Event streams offer fine-grained temporal detail,          rally dense cost volumes leads to information redundancy
+                                        high dynamic range, and no motion blur [8], making them              and unnecessary computations. Furthermore, this computa-
+                                        well-suited for motion capture in challenging scenarios.             tional burden limits the scalability of these RAFT-like meth-
+                                           Flow estimation essentially involves establishing cor-            ods to higher resolutions, which offer potential accuracy
+                                        respondences between the source and target pixels, com-              gains as evidenced by recent studies [4, 39].
+                                        monly achieved by modeling correlations in 4D cost vol-
+                                                                                                                 In this work, we attempt to perform flow estimation at
+                                        umes [6, 34, 35]. As a representative method, RAFT [35]
+                                                                                                             a higher resolution (i.e., 1/4) without resorting to computa-
+                                        constructs a single-resolution (i.e., 1/8) cost volume of all-
+                                                                                                             tionally expensive high-resolution cost volumes. Instead,
+                                        pairs for correlations retrieval and employs a GRU for iter-
+                                                                                                             we exploit the potential of temporally dense motion fea-
+                                        ative refinement. Inspired by the success of RAFT in the
+                                                                                                             tures derived from dense feature differences between ad-
+                                          * Corresponding   author: Teng Wang.                               jacent event frames. As illustrated in Fig. 1, cost vol-
+
+
+                                                                                                         1
+umes reflect global similarity and are robust to noise, but          with a feature pyramid, warping layers, and local correla-
+prone to matching ambiguities and expensive computations.            tion reaching high accuracy. Recently, RAFT [35] diverges
+In contrast, feature differences capture details with clear          from previous approaches by generating an all-pairs 4D cost
+motion boundaries and are computationally efficient (i.e.,           volume and using GRU for recurrent flow updates, obtain-
+O(T N C)), but are sensitive to noise, limiting their Gen-           ing high-quality flow. Extended methods [15, 17, 33] opti-
+eralizability. This complementarity motivates us to present          mize the cost volume to address matching ambiguities. We
+a joint difference and correlation network for event-based           leverage the excellent framework of RAFT to explore event-
+optical flow, dubbed EDCFlow, as shown in Fig. 2, that it-           based flow estimation.
+eratively integrates motion features from temporally dense           Event-based Optical Flow Estimation. In event-based vi-
+high-resolution (i.e., 1/4) feature difference maps and a low-       sion, early model-based works estimate flow by leverag-
+resolution (i.e., 1/8) cost volume to refine flows, thereby          ing the Lucas-Kanade algorithm [1, 27], variational meth-
+achieving better accuracy with lower complexity.                     ods [28, 32], and block-matching [22, 23]. Under the as-
+   To be specific, in each iteration, we look up the correla-        sumption of brightness constancy, some methods [7, 30]
+tion, upsample it to the higher resolution, and encode cor-          adopt contrast maximization frameworks to improve the
+relation motion features. To capture intermediate motions,           flow quality. Most learning-based methods [5, 29, 46, 47]
+we discretize moving trajectories and compute the feature            employ U-Net-like networks to output multi-level flow, but
+differences between adjacent frames. More precisely, we              low-resolution outputs lead to details loss. Recently, net-
+perform feature warping on consecutive frames, and intro-            works [12, 13, 19, 21, 37] introduce RAFT into the event
+duce a multi-scale temporal feature difference layer with            domain, delivering impressive performance, yet they are in-
+attention to capture various motion patterns, providing reli-        efficient in encoding intermediate motions and face chal-
+able motion details for both large and small displacements.          lenges in extending for refinement at higher resolutions.
+The correlation and difference motion features are finally           Although IDNet [39] achieves a lightweight network ca-
+adaptively fused to update the flow. Notably, our model can          pable of estimating at a higher resolution, it incurs signif-
+be cascaded into existing RAFT-like networks to enhance              icant computational overhead. In contrast, our approach
+flow quality, especially at motion boundaries, with marginal         utilizes dense feature differences to effectively encode con-
+additional parameters and computations. Extensive exper-             tinuous motion cues at a higher resolution, achieving better
+imental results on DSEC [11] and MVSEC [45] demon-                   accuracy/model-complexity balance.
+strate that EDCFlow achieves SOTA-comparable perfor-                 Event-based Motion Encoding in Flow Estimation.
+mance with higher efficiency, offering advantages for real-          Some methods [3, 5, 10, 46–48] tend to use CNNs or
+world deployment and adoption. Furthermore, we conduct               RNNs to implicitly learn correspondences. Recent ap-
+ablation studies to validate key design choices of EDCFlow.          proaches [12, 13, 19, 21, 37] leverage cost volumes to di-
+We summarize our contributions as follows:                           rectly construct correspondences, improving the accuracy
+• We introduce a lightweight event-based optical flow net-           and robustness. However, they either neglect intermedi-
+  work, which explores the temporally dense feature dif-             ate motion [12, 19, 37] or adopt computationally expen-
+  ferences between adjacent event frames, combined with              sive multi-cost volume [13, 21] to represent it. IDNet [39]
+  a low-resolution cost volume to enable high-quality flow           employs an RNN backbone to iteratively encode tempo-
+  estimation at a higher resolution.                                 ral dependencies, yet estimate flow at a higher resolution
+• We construct an attention-based feature difference layer           still requires substantial computations. Instead, we com-
+  to aggregate temporally multi-scale motion patterns and            pute feature differences, which effectively capture consis-
+  adaptively fuse complementary motion features from dif-            tent motion and boundaries [18], aiding intermediate mo-
+  ference maps and cost volume, enhancing both represen-             tion encoding in events. However, due to their sensitivity
+  tation power and generalization capability of our model.           to noise, we propose combining feature differences with a
+• The proposed methods can be flexibly integrated into               low-resolution cost volume to model representative motion
+  event-based RAFT-like networks to further refine flow.             features with greater robustness and efficiency.
+• Our method achieves state-of-the-art or comparable per-
+  formance on DSEC and MVSEC while striking a better                 3. Method
+  balance between accuracy, model size, and computations.
+                                                                     3.1. Overall Framework
+
+2. Related Work                                                      Event Representation and Problem Description. Event
+                                                                     camera produces an event encoded as (x, y, t, p) by mea-
+Optical Flow Estimation on Two-frame. Building on                    suring the brightness change, where (x, y), t, and p ∈
+the advancements in deep learning, some U-Net-like meth-             {−1, +1} denote the coordinate, timestamp, and polarity
+ods [24, 25, 34, 36, 41] employ similar core components,             of the brightness change, respectively. For an event stream
+
+                                                                 2
+                                                                                     𝐟𝐟 𝒌𝒌−𝟏𝟏                                                                                        Difference
+                                                                                     Multi-scale         𝐹𝐹𝐷𝐷                                                                        Multiplication
+                                            Feature                                                                         Concat Feature
+                                                                                     Difference
+                                            Encoder                                                                                                                                  Addition
+          Event Voxel Grid                                                             Layer
+
+
+
+
+                                                                                                                Attention
+                                                                                                                                          Flow          𝐟𝐟 𝒌𝒌
+                                                                                                                                                                             C       Concat
+                                                                                 Motion Encoding                                         Updates
+                                        Feature                                                                                                                                      Upsample
+                                       Extraction                                     Correlation                                                                Flows
+                                                                                                                            𝐹𝐹𝑀𝑀                                                     Downsample
+                                                                                       Encoder          𝐹𝐹𝐶𝐶                                  ∆𝐟𝐟
+         {𝒱𝒱0 , 𝒱𝒱1 , ⋯ 𝒱𝒱𝑔𝑔 }                         4D Cost volume
+                                            Context                                   𝐟𝐟 𝒌𝒌−𝟏𝟏                                                                            𝐟𝐟 𝒌𝒌−𝟏𝟏
+                                            Encoder                                                                                          k-th iteration
+
+                                                                                                                                                                                              Look Up
+                                                                             a. EDCFlow Network
+                                                                                                                                                                               Convs
+                                                      𝐹𝐹𝑙𝑙′                                                Multi-Scale Attention
+                                                                                                                                                                                       C
+
+
+                                                                   DWConvs
+                                                                                                                                                                                                Convs
+
+
+                                                                  DWConvs
+                                                                                                   GAP
+                                    Convs
+                            Warp
+
+
+
+
+                                                                                                                                                         Convs
+                                                                                                    +
+                                                                                                   FCs                                                                               Convs
+                                                      𝐹𝐹𝑓𝑓′                  [𝐷𝐷 𝑠𝑠𝑠 , 𝐷𝐷 𝑠𝑠2 ]                  Softmax                                           𝐹𝐹𝐷𝐷
+                                                                                                                                                                                       C           𝐹𝐹𝐶𝐶
+           𝐟𝐟 𝒌𝒌−𝟏𝟏
+                                                                  c. Multi-Scale Difference Layer                                                                         b. Correlation Encoder
+
+Figure 2. a. Overview of EDCFlow, including three main components: 1) Feature Extraction. Feature and context encoder extract features
+from input. 2) Motion Encoding. A correlation encoder and multi-scale temporal feature difference layer, along with an attention layer, are
+utilized to iteratively generate representative motion features. 3) Flow Updates. A GRU recurrently updates the flow by decoding the fused
+motion feature. b. Correlation Encoder. Search correlations at lower resolution, followed by upsampling and high-resolution correlation
+motion encoding. c. Multi-scale Difference Layer. Compute temporal multi-scale difference motion features at the higher resolution.
+
+
+                            e −1
+E = {(xi , yi , ti , pi )}N
+                          i=0    with Ne events, we represent it                                                   elaborate on the details of our EDCFlow in Sec. 3.2, Sec. 3.3
+as a voxel grid with B temporal bins [47], with each event                                                         and Sec. 3.4.
+contributing its polarity to the two closest temporal bins:
+                                                                                                                   3.2. Feature Extraction
+                                    e −1
+                                   NX
+        V (b, x, y) =                        pi max (0, 1 − |b − t∗i |) ,                         (1)              The fine-grained temporal detail of event streams provides
+                                   i=0                                                                             continuous motion information. To exploit the intermedi-
+                                    (ti − tmin )                                                                   ate motion cues, instead of treating the current event stream
+                          t∗i =                  × (B − 1),                                       (2)              Et→t+1 as a single frame as in E-RAFT [12], we divide
+                                   tmax − tmin
+                                                                                                                   it into g time windows of size dt, along with the refer-
+where b ∈ [0, B − 1] is the bin index, tmax and tmin are the                                                       ence event stream Et→t+1 , resulting in a total of g + 1
+maximum and minimum timestamps, respectively. In this                                                              time windows. Using Eq. (1) and Eq. (2), for each time
+work, we aim to estimate the dense flow ft→t+1 from t to                                                           window, we generate event representation vi ∈ RB×H×W ,
+t + 1 under the two consecutive event sequences Et−dt→t                                                            i = 0, 1, . . . , g , where H and W denote height and width,
+and Et→t+1 , with Et−dt→t as the reference.                                                                        respectively. We adopt a shared-weight encoder to extract
+Overview. We briefly review RFAT [35] in the supple-                                                               features for g + 1 voxel grids at 1/4 and 1/8 resolution:
+mentary material and present an overview of our EDCFlow                                                                          H     W              ¯ H W
+                                                                                                                   Fi ∈ Rd× 4 × 4 and F̄i ∈ Rd× 8 × 8 , i = 0, 1, . . . , g,
+in Fig. 2 (a). Our EDCFlow consists of three key com-                                                              where d and d¯ represent the channel of features. For sav-
+ponents: 1) Feature Extraction. The feature encoder ex-                                                            ing computation and storage, we build a long-range 4D cost
+tracts two-resolution features to encode feature differences                                                       volume C at 1/8 resolution using F¯0 and F¯g :
+at a higher resolution (i.e., 1/4) while constructing a low-
+resolution (i.e., 1/8) cost volume. The context encoder pro-                                                                                    F¯0 F¯g H W H W
+
+vides scene context for flow decoding. 2) Motion Encod-                                                                                      C = √ ∈R8×8×8×8 .                                            (3)
+                                                                                                                                                     ¯
+                                                                                                                                                     d
+ing. At the higher resolution, correlation features are en-
+coded through looking up, motion encoding, and upsam-                                                              This cost volume is constructed to provide crucial and ro-
+pling, while the temporally dense motion features are cap-                                                         bust correspondence information, facilitating the 2D search.
+tured by a multi-scale temporal difference layer. These two                                                        The context encoder follows the same architecture as the
+complementary motion features are adaptively fused by an                                                           feature encoder to capture scene contexts for flow updates.
+attention layer. 3) Flow Updates. A GRU decodes the resid-
+                                                                                                                   3.3. Motion Encoding and Flow Updates
+ual flow from the fused motion features and updates the cur-
+rent flow. We iteratively perform motion encoding and flow                                                         We take advantage of high-resolution difference maps and
+updates to refine the flow. In the following sections, we will                                                     low-resolution cost volume to encode motion features, thus
+
+
+                                                                                                           3
+estimating high-quality flow in an efficient manner. As                We reshape them into dr × ⌊ gs ⌋ × H4 × W 4 . Simply adding
+shown in Fig. 2, we employ an iterative scheme as in                   these temporal features can lead to the loss of details, while
+RAFT [35], to progressively narrow the flow search space.              using concatenation or GRU for aggregation introduces sig-
+Each iteration k ∈ {1, 2, · · · , K} involves correlation mo-          nificant computational overhead. Therefore, we use two
+tion encoding, multi-scale temporal difference motion en-              depth-wise separable 3D convolutions (DW-3DConvs) to
+coding, attention-based motion fusion, and flow updates.               capture spatio-temporal features while restoring the num-
+Correlation Encoder.            The difference maps encode             ber of channels, obtaining motion features Ds . We con-
+changes between adjacent frames but lack direct pixel-level            sider different values of s = [s1, s2, · · · ], and concate-
+correspondences, whereas the cost volume provides reliable             nate the produced multi-scale motion features denoted as
+matching cues to capture long-range dependencies. There-               D = [Ds1 ; Ds2 ; · · · ]. To accommodate different motion
+fore, integrating correlation motion features from a low               patterns across various scenarios, we design an attention-
+resolution offers crucial long-range correspondences effi-             based multi-scale fusion module, consisting of global pool-
+ciently. As shown in Fig. 2 (b), given the estimated flow              ing, fully connected layers, and softmax along the scale di-
+              k−1
+f k−1 (i.e., f0→g ) at 1/4 resolution, we first downsample it to       mension, to adaptively fuse them softly. Finally, a convolu-
+1/8 resolution to retrieve correlations from the cost volume           tion is applied to adjust the channel dimensions and output
+C. We then upsample the correlation map to 1/4 resolution              the difference motion feature FD . This difference motion
+and follow RAFT [35] to encode the correlation motion fea-             feature exhibits a stronger ability to handle details at the
+tures FC through convolutions.                                         higher resolution.
+Multi-scale Temporal Difference Layer. For each itera-                 Attention-based Motion Fusion. The difference motion
+tion, our difference layer strives to capture continuous mo-           features and correlation motion features hold distinct ad-
+tion features, providing fine details for inferring the residual       vantages and exhibit complementary properties. To effec-
+flow. We achieve this by warping the target feature maps to            tively handle the importance variations between these two
+the reference one using the current flow before calculating            features in an adaptive manner while maintaining computa-
+the dense difference maps. Specifically, in Fig. 2 (c), we             tional efficiency, we employ a simple yet effective channel
+warp the features Fi , i = 1, . . . , g, of consecutive frames,        attention [14] to fuse them:
+towards F0 through bilinear interpolation based on the cor-
+responding flow f0→i k−1
+                          . In small time windows, the motion                      FM = Attention(Concat(FD , FC )),              (6)
+is minimal, allowing us to assume linear movement. Under
+this assumption, the flow for each feature map Fi is given             where FM is the final motion feature for flow estimation.
+by:                                                                    Flow Updates. We feed the contextual characteristics and
+                  k−1       i                                          the fused motion features FM into the GRU unit to output
+                f0→i    = f k−1 , i = 1, 2, ..., g.          (4)       an updated residual flow ∆f , which is used to calculate the
+                           g
+                                                                       current estimate: f k = f k−1 + ∆f .
+The warped features F̃i , and the reference feature F0 , de-
+noted as F̃0 , are considered for motion encoding.                     3.4. Loss
+    To maintain high computational efficiency, we apply a              Following RAFT [35], we supervised our network with
+convolution to reduce the channel dimension of F̃i , pro-              L1 loss between ground truth f gt and the predictions
+                                      d  H   W
+ducing former features F̃if ∈ R r × 4 × 4 , i = 0, 1, ..., g,          {f 1 , ..., f K }, with exponentially increasing weights, which
+where r is the reduction ratio. To alleviate spatial misalign-         is given by:
+ment between adjacent feature maps, we perform channel-
+wise transformations on the former features to smooth                                      K
+                                                                                           X
+out the spatial boundaries while sharpening the motion                                L=         0.8K−i f gt − f k   1
+                                                                                                                         .        (7)
+boundaries, resulting in the latter features F̃il . Consid-                                k=1
+ering that fast-moving objects cause large displacements
+over short durations, while slower movements may exhibit
+                                                                       4. Experiments
+significant changes over longer durations, we introduce a              Datasets and Metrics. We conduct experiments on two
+multi-scale sampling strategy to capture multi-scale mo-               commonly used datasets: MVSEC [45], which has lower
+tion cues. Specifically, we introduce a sampling stride s,             resolution and sparser events, resulting in poorer data qual-
+s ∈ {1, 2, · · · , g}, to control the time interval between the        ity and ground truth, and DSEC [11], which provides
+latter and former features, with smaller and higher values             higher resolution and denser events. Following previous
+capturing fast and slower motions, respectively. A sequence            works [12, 21, 39], we train and test our network on the
+of feature difference maps under a given s is given by:                DSEC official training and test sets and report the re-
+                                                   g                   sults on the public benchmark. For MVSEC, we train on
+                          f
+      Djs = F̃(j+1)∗s
+              l
+                      − F̃j∗s , j = 0, 1, . . . , ⌊ ⌋ − 1.   (5)       two time windows lengths: dt = 1 (1 grayscale image
+                                                   s
+
+                                                                   4
+                                  Method         EPE    AE     1PE 2PE 3PE       Param (M)    MACs (G)    Runt. (ms)
+                   MB          MultiCM [30]      3.47 13.98 76.6 48.4 30.9            -           -            -
+                   USL        TamingCM [29]      2.33 10.56 68.3 33.5 17.8            -           -            -
+                             EV-FlowNet† [46]    2.32   7.9    55.4 29.8 18.6       14.0         62            7
+                                E-RAFT [12]      0.79 2.85 12.7 4.7        2.7       5.3        256          102
+                               E-RAFT-4 [12]       GPU out of memory (> 40GB)        5.3        750            -
+                               MultiFlow [13]    0.75 2.68 11.9 4.4        2.4       5.6          -            -
+                    SL
+                                 TMA [21]        0.74 2.68 10.9 4.0        2.7       6.9        344           58
+                                IDNet-8 [39]     0.77   3.0    12.1 4.0    2.2       1.4        222           75
+                                IDNet-4 [39]     0.72 2.72 10.1 3.5        2.0       2.5       1200          120
+                             E-FlowFormer [19]   0.76 2.68 11.2 4.1        2.5        -           -            -
+                                   Ours          0.72 2.65 10.0 3.6        2.1       2.5        247           39
+
+                                                                                                              †
+Table 1. Evaluation on DSEC [11]. The best results are in bold, while the second-best ones are underlined.        denote the result from
+E-RAFT [12]. E-RAFT-4 represents flow estimation at 1/4 resolution.
+
+           Reference image          Events             E-RAFT             TMA                IDNet-4                Ours
+
+
+
+
+Figure 3. Qualitative results of flow predictions on DSEC [11]. Notable areas are marked by bounding boxes. Please zoom in for details.
+
+
+frame apart) and dt = 4 (4 grayscale image frames apart),              ods [12, 21]. We assign downsampling ratio r = 1 and
+using the outdoor day2 sequence for training and testing               multiple scales s = [1, 2, 5] for the difference layer. The
+on indoor flying sequences and 800 samples of the out-                 iteration K and the hidden dimension of GRU are set to
+door day1. We evaluate flow accuracy using end-point-                  6 and 96, respectively, the channel for correlation motion
+error (EPE) on both datasets. For MVSEC, we additionally               feature is 64, and the feature extraction follows TMA [21].
+measure the percentage of pixels with an EPE greater than              Our method, implemented in PyTorch, is trained on DSEC
+3 pixels and 5% of ground-truth magnitude (% Outlier).                 and MVSEC using the AdamW optimizer [26] with a one-
+For DSEC, we compute the angular error in degrees (AE)                 cycle learning rate scheduler [31] (maximum learning rate
+and percentage of pixels with an EPE greater than n pixels             0.0002), for 100 and 10 epochs, respectively with a batch
+(nPE, n=1, 2, 3). To assess efficiency, we report multiply-            size of 3. During training, DSEC and MVSEC are ran-
+accumulate operations (MACs), model size in parameters                 domly cropped to 288 × 384 and 256 × 256 respectively,
+(Param), and runtime time (Runt.) of per-predicting on the             with 50% probability of horizontal flipping and 10% prob-
+DSEC dataset, using the NVIDIA GeForce RTX 4090.                       ability of vertical flipping applied to both datasets.
+Implementation Details. For event representation, we set
+                                                                       4.1. Results
+g = 5 for both datasets, with B = 3 for DSEC and MVSEC
+at dt = 4, and B = 1 when dt = 1, maintaining the same                 DSEC. Tab. 1 presents a quantitative comparison with exist-
+total number of time bins across all time windows as meth-             ing methods on DSEC [11]. Training manners are annotated
+
+
+                                                                   5
+                                                    outdoor day1          indoor flying1       indoor flying2       indoor flying3
+                         Method            Input
+                                                   EPE    % Outlier     EPE      % Outlier   EPE      % Outlier   EPE      % Outlier
+        dt = 1
+                   Brebion et al. [2]       E      0.53     0.20         0.52      0.10       0.98      5.50       0.71      2.10
+         MB
+                 MultiCM (Burgers’) [30]    E      0.30     0.10         0.42      0.10       0.60      0.59       0.50      0.28
+                     Zhu et al. [47]        E      0.32     0.00         0.58      0.00       1.02      4.00       0.87      3.00
+         USL
+                 EV-MGRFlowNet [48]         E      0.28     0.02         0.41      0.17       0.70      2.35       0.59      1.29
+                    EV-FlowNet [46]         E      0.49     0.20         1.03      2.20       1.72      15.1       1.53     11.90
+         SSL
+                    STE-FlowNet [5]         E      0.42     0.00         0.57      0.10       0.79       1.60      0.72      1.30
+                      E-RAFT [12]           E      0.24     0.00         1.10      5.72       1.94      30.79      1.66     25.20
+                     DCEIFlow [37]         E+I1    0.22     0.00         0.75      1.55       0.90       2.10      0.80      1.77
+          SL           TMA [21]             E      0.25     0.07         1.06      3.63       1.81      27.29      1.58     23.26
+                      IDNet-8 [39]          E      0.33    (0.01)       (1.13)    (2.94)     (1.67)    (13.64)    (1.59)   (10.05 )
+                      IDNet-4 [39]          E      0.31    (0.00)       (1.04)    (1.86)     (1.55)    (10.84)    (1.51)    (9.58)
+                         Ours               E      0.23     0.00         0.97      2.19       1.49      10.79      1.38      8.98
+                      Ours (+in1)           E      0.23     0.00           -         -        0.65      1.85       0.54      0.96
+          SL
+                      Ours (+in2)           E      0.23     0.00         0.44      0.02         -          -       0.49      0.34
+                      Ours (+in3)           E      0.23     0.00         0.42      0.01       0.54      0.34         -         -
+        dt = 4
+         MB      MultiCM (Burgers’) [30]    E      1.25     9.21         1.69      12.95      2.49      26.35      2.06      19.03
+                     Zhu et al. [47]        E      1.30     9.70         2.18       24.2      3.85      46.80      3.18      47.80
+         USL
+                 EV-MGRFlowNet [48]         E      1.10     6.22         1.50      8.67       2.39      23.70      2.06       18.0
+                    EV-FlowNet [46]         E      1.23     7.30         2.25      24.7       4.05      45.30      3.45      39.70
+         SSL
+                    STE-FlowNet [5]         E      0.99     3.90         1.77      14.70      2.52      26.10      2.23      22.10
+                      E-RAFT [12]           E      0.72     1.12         2.81      40.25      5.09      64.19      4.46      57.11
+                     DCEIFlow [37]         E+I1    0.89     3.19         2.08      21.47      3.48      42.05      2.51      29.73
+          SL           TMA [21]             E      0.70     1.08         2.43      29.91      4.32      52.74      3.60      42.02
+                      IDNet-8 [39]          E      1.26    (4.91)       (4.31)    (58.95)    (6.10)    (72.97)    (5.47)    (68.58)
+                      IDNet-4 [39]          E      1.30    (2.48)       (3.30)    (42.72)    (4.82)    (56.82)    (4.33)    (52.91)
+                         Ours               E      0.67     0.85         2.59      28.16      4.16      44.29      3.48      36.54
+                      Ours (+in1)           E      0.70     0.89           -          -       1.97      15.56      1.67      11.44
+          SL
+                      Ours (+in2)           E      0.67     0.83         1.28       5.24        -         -        1.47       7.97
+                      Ours (+in3)           E      0.72     1.29         1.30       5.56      1.61      11.19        -          -
+
+Table 2. Evaluation on MVSEC dataset [45]. E and I1 represent events and reference image, respectively. Results in ( ) are got by re-
+implementing the source code. ‘Ours (+in1, 2, 3)’ indicates the inclusion of indoor flying1, 2, or 3 sequences as training samples.
+
+
+as MB (model-based), USL (unsupervised learning), and                    ing IDNet-4. This improvement is due to our explicit use
+SL (supervised learning). E-FlowFormer is trained on both                of higher-resolution feature differences between adjacent
+DSEC and Blinkflow [19], while others use DSEC only.                     frames, which capture local motion details and boundaries
+Our method outperforms both model-based and unsuper-                     more accurately, whereas IDNet relies on an RNN backbone
+vised approaches in accuracy and surpasses the U-Net-like                to implicitly extract pixel correspondences. In addition, the
+EV-FlowNet. Among RAFT-like methods [12, 13, 19, 21],                    integration of correlation information enables long-range
+we achieve the best performance, improving EPE by 9%                     matching, further enhancing our motion representation.
+over E-RAFT and 3% over TMA, with better robustness                          Furthermore, our method demonstrates advantages in
+(lower nPE). Compared to IDNet, we perform accuracy                      model efficiency. It outperforms all RAFT-like models [12,
+comparable to IDNet-4 but with superior AE.                              13, 19, 21] in terms of model size, computational complex-
+    Fig. 3 illustrates the qualitative comparison of predicted           ity, and runtime, despite inference flow at twice their reso-
+flow, showcasing our predictions against other methods. E-               lution. Compared to IDNet-4, which has similar accuracy,
+RAFT and TMA estimate flow at the 1/8 resolution, while                  our model exhibits only 0.2 times the computation and a
+IDNet-4 and our method estimate directly at the 1/4 resolu-              68% faster runtime due to the repeated RNN backbone com-
+tion. Although TMA aggregates temporally dense motion                    putation in IDNet. Although EV-FlowNet achieves faster
+information to alleviate mismatches in cost volume, per-                 runtime and IDNet-8 is more lightweight, both sacrifice
+forming estimation at low resolution causes a loss of de-                accuracy. We attribute these advantages to utilizing fea-
+tails, leading to lower-quality flow, particularly with blurry           ture differences rather than multiple cost volumes to capture
+motion boundaries. In contrast, our method exhibits clearer              continuous motions, which not only reduces computational
+details, especially in complex textured scenes, outperform-              load but also enables flow estimation at higher resolutions.
+
+
+                                                                    6
+      Method              Train D.Set        EPE            AE      1PE    3PE                    Scale     EPE    AE     1PE    2PE    3PE
+                               D             0.80           2.76    12.5   2.9                       1      0.77   2.82   11.8   4.2    2.4
+    E-RAFT [12]
+                               B          1.41 (-0.61)      4.76    39.1   6.7                       2      0.74   2.72   10.7   3.9    2.2
+                               D             0.77           2.76    11.7   2.6                       5      0.79   2.80   12.1   4.4    2.7
+     TMA [21]
+                               B          1.49 (-0.72)      5.73    42.4   7.7                    1, 2, 5   0.72   2.65   10.0   3.6    2.1
+                               D             0.72           2.72    10.1   2.0
+    IDNet-4 [21]
+                               B          1.49 (-0.77)      5.68    40.7    8.3
+                             D+B             0.76           2.68    11.2   2.5                         Table 5. Multi-scale strategy.
+ E-FlowFormer [19]
+                               B          1.33 (-0.57)      4.65    36.4    6.1
+                               D             0.72           2.65    10.0   2.1
+        Ours
+                               B          1.25 (-0.53)      4.73    33.3    5.3       E-RAFT without warm-start. The results show that our
+                                                                                      method achieves the highest accuracy and best robustness
+Table 3. Generalization performance on DSEC [11]. D and B re-
+                                                                                      compared to other methods. Ours also shows the lowest ac-
+fer to the DSEC and Blinkflow [19] dataset, respectively. ‘Reduc.’
+                                                                                      curacy drop compared to results directly trained on DSEC,
+indicates the percentage reduction in EPE of generalization com-
+pared to training directly on DSEC.                                                   indicating strong generalization to unseen scenes. Further-
+                                                                                      more, our model exhibits better sim-to-real generalization,
+                                                                                      highlighting its transferability and potential to reduce the
+                  Model        EPE      AE     1PE    2PE     3PE
+                                                                                      reliance on large annotated datasets.
+                W/o Diff       0.82     2.88   13.6   5.2     2.9
+                W/o Corr       0.83     3.17   14.0   5.0     2.9
+                W/o SE         0.74     2.69   10.4   3.7     2.1                     4.2. Ablation Study
+               W/o MSAttn      0.74     2.68   10.6   3.8     2.2
+                  Ours         0.72     2.65   10.0   3.6     2.1                     In this section, we provide ablation studies on EDCFlow
+                                                                                      to show the relative importance of each component. All
+               Table 4. Main components in our model.                                 ablated versions are trained on the DSEC [11] dataset and
+                                                                                      evaluated on the public benchmark.
+                                                                                      Difference Motion Feature. In Tab. 4, we validate the
+MVSEC. Tab. 2 reports the results on MVSEC [45] for                                   contribution of feature difference (denoted as ‘W/o Diff’,
+dt = 1 and dt = 4. We annotate the input data types                                   meaning without difference motion encoding). The results
+(Input) used for inference in each method. The SSL refers                             show a 14% decrease in EPE, indicating that the upsampled
+to self-supervised learning methods using photometric er-                             correlation at 1/8 resolution is not only coarse but also lim-
+ror loss from grayscale frames. When trained on the out-                              ited in capturing temporally dense motion information. This
+door day2 sequence, our method achieves comparable ac-                                also validates that our proposed feature difference strategy
+curacy to DCEIFlow on the outdoor day1 at dt = 1 and                                  between adjacent frames effectively encodes intermediate
+SOTA results at dt = 4, demonstrating its effectiveness in                            motion information and better captures local detail.
+handling both short-term and long-term motion. Similar to                             Correlation Motion Feature. As shown in Tab. 4, remov-
+E-RAFT, TMA, and IDNet, our method experiences a slight                               ing correlation motion encoding (W/o Corr) results in a 15%
+performance drop on other sequences due to the dataset’s                              accuracy drop. This is because difference maps are sen-
+poor quality and large gap between outdoor and indoor se-                             sitive to noise and have lower generalization performance,
+quences. Despite the challenges posed by the training data,                           while correlation offers stronger robustness. Thus, combin-
+our approach demonstrates the best accuracy on nearly all                             ing both leads to improved accuracy.
+sequences compared to these methods, highlighting its ef-                             Attention Modules. We study the effects of removing the
+fectiveness and greater generalizability. The MultiCM and                             multi-scale attention mechanism in the feature difference
+unsupervised methods typically rely on event-based mo-                                layer (W/o MSAttn) and the channel attention mechanism
+tion compensation, which offers good generalization per-                              that fuses correlation and difference motion features (W/o
+formance but often entails considerable computational over-                           SE). The results in Tab. 4 indicate that dynamically fusing
+head. Moreover, STE and DCEIFlow require the integration                              multi-scale temporal feature difference maps and adaptively
+of image knowledge. Notably, after incorporating a few                                aggregating correlation and difference motion features both
+indoor samples, our method achieves SOTA performance                                  contribute to further accuracy improvements.
+across all sequences.                                                                 Multi-scale Strategy. In Tab. 5, we explore the effective-
+Sim-to-real Generalization. To avoid the influence of low-                            ness of our multi-scale in the difference layer. The scale
+quality data of MVSEC on the results, we further validate                             reflects the sampling interval between adjacent frames. The
+model generalization performance with training on Blink-                              too-small interval hinders the capturing of subtle motions,
+flow [19] and evaluating on DSEC, as shown in Tab. 3.                                 and amplifies the changes induced by noise or non-motion,
+We annotate the training dataset (Train D.Set) for each re-                           introducing pseudo-motion. Conversely, a large one fails
+sult. Notably, Blinkflow is a simulated dataset. To be                                to capture motion details, compromising boundary clarity,
+fair, we retrain TMA with a batch size of 3 and evaluate                              particularly in fast-moving or complex scenes. The incor-
+
+
+                                                                                  7
+                                                                                                                                                                Image / Events    E-RAFT           TMA            Ours
+                                                                                                                      (  5 $ ) 7  U H I L Q H
+
+
+
+
+                                                                                                                                                                                                                             iter = 6
+                                                                                                                      7 0 $  U H I L Q H
+            H Q G  S R L Q W  H U U R U   S [                                                                       2 X U V  U H I L Q H
+                                                         
+
+
+
+
+                                                                                                                                                                                                                             iter = 12
+                                                         
+                                                         
+                                                         
+
+
+
+
+                                                                                                                                                                                                                             iter = 6
+                                                         
+                                                         
+
+
+
+
+                                                                                                                                                                                                                            iter = 12
+                                                                                                                                           
+                                                                                                L W H U D W L R Q
+(a) EPE vs. iteration at inference. The addition of refinement stages (starting                                                                           (b) Qualitative results. For each sample, we present the results before re-
+from iteration=7) results in a notable improvement in accuracy.                                                                                           finement (iter=6) and the final flow after refinement (iter=12).
+
+                                                                                                         Figure 4. Refinement strategy in existing RAFT-like methods.
+
+
+      Method                                                   EPE         AE          1PE        3PE            MACs (G)                Param (M)               Method          EPE    AE      1PE    3PE   MACs (G)    Param (M)
+       Add.                                                    0.75        2.73        10.5       2.2              242                       2.5             E-RAFT ×6 [12]      0.82   2.83   13.1    3.0     161           5.3
+      Concat                                                   0.72        2.65         9.8       2.1              311                       3.1            E-RAFT ×12 [12]      0.80   2.76   12.5    2.9     256           5.3
+       GRU                                                     0.73        2.69         9.9       2.0              445                       2.7            E-RAFT-refine [12]   0.77   2.81   11.1    2.5     364          6.16
+     DWConv3d                                                  0.72        2.65        10.0       2.1              247                       2.5              TMA ×6 [21]        0.77   2.76   11.7    2.6     344           6.9
+                                                                                                                                                              TMA ×12 [21]       0.76   2.66   11.2    2.4     620           6.9
+                                                                                                                                                             TMA-refine [21]     0.72   2.66    9.2    2.0     478           7.9
+      Table 6. Difference motion feature encoding methods.                                                                                                      Ours-8 ×6        0.78   2.82    12.7   2.5     216           6.8
+                                                                                                                                                               Ours-8 ×12        0.79   2.89   13.89   2.6     367           6.8
+                                                                                                                                                               Ours-8-refine     0.71   2.72    9.8    1.9     352           8.0
+poration of multi-scale concepts can enhance robustness, al-
+lowing for adaptation to diverse motion patterns.                                                                                                           Table 7. Higher-resolution refinement in RAFT-like methods.
+Difference Motion Feature Encoding Methods. We ex-
+plore various methods to encode spatio-temporal difference
+motion features within each scale in Tab. 6. Directly adding                                                                                              size. Fig. 4a intuitively provides a depiction of the accuracy
+consecutive feature difference maps (i.e., Add.) fails to en-                                                                                             trajectory when incorporating higher-resolution refinement,
+code temporal context, limiting the model’s ability to cap-                                                                                               revealing a notable error reduction at iteration=7. Quali-
+ture continuous motion variations and potentially causing                                                                                                 tative results in Fig. 4b further highlight that refined flow
+detail degradation or blurring. Both GRU and channel con-                                                                                                 enhances details, especially along motion boundaries and
+catenation fused through 2D convolution can capture tem-                                                                                                  in regions with intricate textures.
+poral dependencies, but depthwise separable 3D convolu-
+tions provide a more efficient alternative.
+                                                                                                                                                          5. Conclusion
+4.3. Extending to RAFT-like methods                                                                                                                       In this paper, we explore the multi-scale temporally dense
+We integrate the proposed EDCFlow after existing RAFT-                                                                                                    feature differences to efficiently capture continuous mo-
+like networks as a refinement stage to obtain higher-quality                                                                                              tions. Leveraging the complementarity between these
+flow. We construct a 1/8 resolution version of EDCFlow                                                                                                    features and cost volume, we construct EDCFlow, a
+(i.e., Ours-8). ‘Methods-refine’ represents running the orig-                                                                                             lightweight network for event-based optical flow estima-
+inal flow computation process with 6 iterations at 1/8 res-                                                                                               tion. By adaptively fusing difference motion features with
+olution, followed by 6 iterations of our refinement at 1/4                                                                                                relatively low-resolution correlations, EDCFlow enables
+resolution with the hidden dimension of 64 for GRU. For                                                                                                   high-quality flow inference at a higher resolution. Compre-
+comparison, we evaluate all methods with results from 6                                                                                                   hensive experiments on DSEC and MVSEC validate the su-
+and 12 iterations (denoted as ×6 and ×12) at the 1/8 res-                                                                                                 perior performance and efficiency of our method, achieving
+olution. The results in Tab. 7 demonstrate that merely in-                                                                                                a balance between model accuracy and complexity. Particu-
+creasing iteration count at 1/8 resolutions offers limited ac-                                                                                            larly, our method can be flexibly integrated into RAFT-like
+curacy gains, as the estimation converges after several itera-                                                                                            networks for further refinement.
+tions, leaving the flow near a local optimum. Conversely, re-                                                                                             Acknowledgment. This work was supported by the Na-
+finement at higher resolutions leads to substantial accuracy                                                                                              tional Natural Science Foundation of China (Grant No.
+improvements without significantly increasing the model                                                                                                   62273093, 62236002).
+
+
+                                                                                                                                                      8
+References                                                                [13] Mathias Gehrig, Manasi Muglikar, and Davide Scaramuzza.
+                                                                               Dense continuous-time optical flow from event cameras.
+ [1] Ryad Benosman, Sio-Hoi Ieng, Charles Clercq, Chiara Bar-                  IEEE Transactions on Pattern Analysis and Machine Intel-
+     tolozzi, and Mandyam Srinivasan. Asynchronous frameless                   ligence, 2024. 1, 2, 5, 6
+     event-based optical flow. Neural Networks, 27:32–37, 2012.
+                                                                          [14] Jie Hu, Li Shen, and Gang Sun. Squeeze-and-excitation net-
+     2
+                                                                               works. In Proceedings of the IEEE conference on computer
+ [2] Vincent Brebion, Julien Moreau, and Franck Davoine. Real-
+                                                                               vision and pattern recognition, pages 7132–7141, 2018. 4
+     time optical flow for vehicular perception with low-and high-
+                                                                          [15] Zhaoyang Huang, Xiaoyu Shi, Chao Zhang, Qiang Wang,
+     resolution event cameras. IEEE Transactions on Intelligent
+                                                                               Ka Chun Cheung, Hongwei Qin, Jifeng Dai, and Hongsheng
+     Transportation Systems, 23(9):15066–15078, 2021. 6
+                                                                               Li. Flowformer: A transformer architecture for optical flow.
+ [3] Marco Cannici, Marco Ciccone, Andrea Romanoni, and
+                                                                               In European conference on computer vision, pages 668–685.
+     Matteo Matteucci. A differentiable recurrent surface for
+                                                                               Springer, 2022. 2
+     asynchronous event-based data. In ECCV, pages 136–152.
+                                                                          [16] Azin Jahedi, Maximilian Luz, Marc Rivinius, and Andrés
+     Springer, 2020. 2
+                                                                               Bruhn. Ccmr: high resolution optical flow estimation via
+ [4] Changxing Deng, Ao Luo, Haibin Huang, Shaodan Ma,
+                                                                               coarse-to-fine context-guided motion reasoning. In Proceed-
+     Jiangyu Liu, and Shuaicheng Liu. Explicit motion disen-
+                                                                               ings of the IEEE/CVF Winter Conference on Applications of
+     tangling for efficient optical flow estimation. In Proceedings
+                                                                               Computer Vision, pages 6899–6908, 2024. 1, 2
+     of the IEEE/CVF International Conference on Computer Vi-
+     sion, pages 9521–9530, 2023. 1                                       [17] Shihao Jiang, Dylan Campbell, Yao Lu, Hongdong Li, and
+                                                                               Richard Hartley. Learning to estimate hidden motions with
+ [5] Ziluo Ding, Rui Zhao, Jiyuan Zhang, Tianxiao Gao, Ruiqin
+                                                                               global motion aggregation. In Proceedings of the IEEE/CVF
+     Xiong, Zhaofei Yu, and Tiejun Huang. Spatio-temporal
+                                                                               international conference on computer vision, pages 9772–
+     recurrent networks for event-based optical flow estimation.
+                                                                               9781, 2021. 2
+     In Proceedings of the AAAI conference on artificial intelli-
+     gence, pages 525–533, 2022. 2, 6                                     [18] Yan Li, Bin Ji, Xintian Shi, Jianguo Zhang, Bin Kang, and
+ [6] Alexey Dosovitskiy, Philipp Fischer, Eddy Ilg, Philip                     Limin Wang. Tea: Temporal excitation and aggregation for
+     Hausser, Caner Hazirbas, Vladimir Golkov, Patrick Van                     action recognition. In Proceedings of the IEEE/CVF con-
+     Der Smagt, Daniel Cremers, and Thomas Brox. Flownet:                      ference on computer vision and pattern recognition, pages
+     Learning optical flow with convolutional networks. In Pro-                909–918, 2020. 2
+     ceedings of the IEEE international conference on computer            [19] Yijin Li, Zhaoyang Huang, Shuo Chen, Xiaoyu Shi, Hong-
+     vision, pages 2758–2766, 2015. 1                                          sheng Li, Hujun Bao, Zhaopeng Cui, and Guofeng Zhang.
+ [7] Guillermo Gallego, Henri Rebecq, and Davide Scaramuzza.                   Blinkflow: A dataset to push the limits of event-based optical
+     A unifying contrast maximization framework for event cam-                 flow estimation. In 2023 IEEE/RSJ International Conference
+     eras, with applications to motion, depth, and optical flow                on Intelligent Robots and Systems (IROS), pages 3881–3888.
+     estimation. In Proceedings of the IEEE conference on                      IEEE, 2023. 2, 5, 6, 7
+     computer vision and pattern recognition, pages 3867–3876,            [20] Jing Lin, Yuanhao Cai, Xiaowan Hu, Haoqian Wang, You-
+     2018. 2                                                                   liang Yan, Xueyi Zou, Henghui Ding, Yulun Zhang, Radu
+ [8] Guillermo Gallego, Tobi Delbrück, Garrick Orchard, Chiara                Timofte, and Luc Van Gool. Flow-guided sparse transformer
+     Bartolozzi, Brian Taba, Andrea Censi, Stefan Leutenegger,                 for video deblurring. arXiv preprint arXiv:2201.01893,
+     Andrew J. Davison, Jörg Conradt, Kostas Daniilidis, and                  2022. 1
+     Davide Scaramuzza. Event-based vision: A survey. IEEE                [21] Haotian Liu, Guang Chen, Sanqing Qu, Yanping Zhang, Zhi-
+     Transactions on Pattern Analysis and Machine Intelligence,                jun Li, Alois Knoll, and Changjun Jiang. Tma: Temporal
+     44(1):154–180, 2022. 1                                                    motion aggregation for event-based optical flow. In Proceed-
+ [9] Ruohan Gao, Bo Xiong, and Kristen Grauman. Im2flow:                       ings of the IEEE/CVF International Conference on Com-
+     Motion hallucination from static images for action recogni-               puter Vision, pages 9685–9694, 2023. 1, 2, 4, 5, 6, 7, 8
+     tion. In CVPR, pages 5937–5947, 2018. 1                              [22] Min Liu and Tobi Delbruck. Block-matching optical flow
+[10] Daniel Gehrig, Antonio Loquercio, Konstantinos G Derpa-                   for dynamic vision sensors: Algorithm and fpga implemen-
+     nis, and Davide Scaramuzza. End-to-end learning of repre-                 tation. In 2017 IEEE International Symposium on Circuits
+     sentations for asynchronous event-based data. In Proceed-                 and Systems (ISCAS), pages 1–4. IEEE, 2017. 2
+     ings of the IEEE/CVF International Conference on Com-                [23] Min Liu and Tobi Delbruck. Abmof: A novel optical
+     puter Vision, pages 5633–5643, 2019. 2                                    flow algorithm for dynamic vision sensors. arXiv preprint
+[11] Mathias Gehrig, Willem Aarents, Daniel Gehrig, and Davide                 arXiv:1805.03988, 2018. 2
+     Scaramuzza. Dsec: A stereo event camera dataset for driv-            [24] Pengpeng Liu, Michael R Lyu, Irwin King, and Jia Xu.
+     ing scenarios. IEEE Robotics and Automation Letters, 6(3):                Learning by distillation: a self-supervised learning frame-
+     4947–4954, 2021. 1, 2, 4, 5, 7                                            work for optical flow estimation. IEEE transactions on pat-
+[12] Mathias Gehrig, Mario Millhäusler, Daniel Gehrig, and Da-                tern analysis and machine intelligence, 44(9):5026–5041,
+     vide Scaramuzza. E-raft: Dense optical flow from event cam-               2021. 2
+     eras. In International Conference on 3D Vision (3DV), 2021.          [25] Shuaicheng Liu, Kunming Luo, Nianjin Ye, Chuan Wang,
+     1, 2, 3, 4, 5, 6, 7, 8                                                    Jue Wang, and Bing Zeng. Oiflow: Occlusion-inpainting op-
+
+
+                                                                      9
+       tical flow estimation by unsupervised learning. IEEE Trans-           [40] Haofei Xu, Jing Zhang, Jianfei Cai, Hamid Rezatofighi,
+       actions on Image Processing, 30:6420–6433, 2021. 2                         Fisher Yu, Dacheng Tao, and Andreas Geiger. Unifying
+[26]   I Loshchilov. Decoupled weight decay regularization. arXiv                 flow, stereo and depth estimation. IEEE Transactions on
+       preprint arXiv:1711.05101, 2017. 5                                         Pattern Analysis and Machine Intelligence, 45(11):13941–
+[27]   Bruce D Lucas and Takeo Kanade. An iterative image reg-                    13958, 2023. 1, 2
+       istration technique with an application to stereo vision. In          [41] Gengshan Yang and Deva Ramanan. Volumetric correspon-
+       IJCAI’81: 7th international joint conference on Artificial in-             dence networks for optical flow. Advances in neural infor-
+       telligence, pages 674–679, 1981. 2                                         mation processing systems, 32, 2019. 2
+[28]   Liyuan Pan, Miaomiao Liu, and Richard Hartley. Single                 [42] Mufeng Yao, Jiaqi Wang, Jinlong Peng, Mingmin Chi, and
+       image optical flow estimation with an event camera. In                     Chao Liu. Folt: Fast multiple object tracking from uav-
+       2020 IEEE/CVF Conference on Computer Vision and Pat-                       captured videos based on optical flow. In Proceedings of the
+       tern Recognition (CVPR), pages 1669–1678. IEEE, 2020. 2                    31st ACM International Conference on Multimedia, pages
+[29]   Federico Paredes-Vallés, Kirk YW Scheper, Christophe                      3375–3383, 2023. 1
+       De Wagter, and Guido CHE De Croon. Taming contrast max-               [43] Huicong Zhang, Haozhe Xie, and Hongxun Yao. Spatio-
+       imization for learning sequential, low-latency, event-based                temporal deformable attention network for video deblurring.
+       optical flow. In Proceedings of the IEEE/CVF International                 In ECCV, pages 581–596. Springer, 2022. 1
+       Conference on Computer Vision, pages 9695–9705, 2023. 2,              [44] Zihua Zheng, Ni Nie, Zhi Ling, Pengfei Xiong, Jiangyu
+       5                                                                          Liu, Hao Wang, and Jiankun Li. Dip: Deep inverse patch-
+[30]   Shintaro Shiba, Yoshimitsu Aoki, and Guillermo Gallego.                    match for high-resolution optical flow. In Proceedings of
+       Secrets of event-based optical flow. In European Conference                the IEEE/CVF Conference on Computer Vision and Pattern
+       on Computer Vision, pages 628–645. Springer, 2022. 2, 5, 6                 Recognition, pages 8925–8934, 2022. 1, 2
+[31]   Leslie N Smith and Nicholay Topin. Super-convergence:                 [45] Alex Zihao Zhu, Dinesh Thakur, Tolga Özaslan, Bernd
+       Very fast training of neural networks using large learn-                   Pfrommer, Vijay Kumar, and Kostas Daniilidis. The multi-
+       ing rates. In Artificial intelligence and machine learning                 vehicle stereo event camera dataset: An event camera dataset
+       for multi-domain operations applications, pages 369–386.                   for 3d perception. IEEE Robotics and Automation Letters, 3
+       SPIE, 2019. 5                                                              (3):2032–2039, 2018. 2, 4, 6, 7, 1, 3
+[32]   Timo Stoffregen and Lindsay Kleeman. Simultaneous opti-               [46] Alex Zihao Zhu, Liangzhe Yuan, Kenneth Chaney, and
+       cal flow and segmentation (sofas) using dynamic vision sen-                Kostas Daniilidis. Ev-flownet: Self-supervised optical
+       sor. arXiv preprint arXiv:1805.12326, 2018. 2                              flow estimation for event-based cameras. arXiv preprint
+[33]   Xiuchao Sui, Shaohua Li, Xue Geng, Yan Wu, Xinxing Xu,                     arXiv:1802.06898, 2018. 2, 5, 6
+       Yong Liu, Rick Goh, and Hongyuan Zhu. Craft: Cross-                   [47] Alex Zihao Zhu, Liangzhe Yuan, Kenneth Chaney, and
+       attentional flow transformer for robust optical flow. In Pro-              Kostas Daniilidis. Unsupervised event-based learning of
+       ceedings of the IEEE/CVF Conference on Computer Vision                     optical flow, depth, and egomotion. In Proceedings of
+       and Pattern Recognition, pages 17602–17611, 2022. 2                        the IEEE/CVF Conference on Computer Vision and Pattern
+[34]   Deqing Sun, Xiaodong Yang, Ming-Yu Liu, and Jan Kautz.                     Recognition, pages 989–997, 2019. 2, 3, 6
+       Pwc-net: Cnns for optical flow using pyramid, warping, and            [48] Hao Zhuang, Zheng Fang, Xinjie Huang, Kuanxu Hou, Delei
+       cost volume. In CVPR, pages 8934–8943, 2018. 1, 2                          Kong, and Chenming Hu. Ev-mgrflownet: Motion-guided
+[35]   Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field                 recurrent network for unsupervised event-based optical flow
+       transforms for optical flow. In ECCV, pages 402–419.                       with hybrid motion-compensation loss. IEEE Transactions
+       Springer, 2020. 1, 2, 3, 4                                                 on Instrumentation and Measurement, 2024. 2, 6
+[36]   Long Tian, Zhigang Tu, Dejun Zhang, Jun Liu, Baoxin Li,
+       and Junsong Yuan. Unsupervised learning of optical flow
+       with cnn-based non-local filtering. IEEE Transactions on
+       Image Processing, 29:8429–8442, 2020. 2
+[37]   Zhexiong Wan, Yuchao Dai, and Yuxin Mao. Learning dense
+       and continuous optical flow from an event camera. IEEE
+       Transactions on Image Processing, 31:7237–7251, 2022. 1,
+       2, 6
+[38]   Lei Wang and Piotr Koniusz. Flow dynamics correction for
+       action recognition. In ICASSP 2024-2024 IEEE Interna-
+       tional Conference on Acoustics, Speech and Signal Process-
+       ing (ICASSP), pages 3795–3799. IEEE, 2024. 1
+[39]   Yilun Wu, Federico Paredes-Vallés, and Guido CHE de
+       Croon. Lightweight event-based optical flow estimation via
+       iterative deblurring. In 2024 IEEE International Conference
+       on Robotics and Automation (ICRA), pages 14708–14715.
+       IEEE, 2024. 1, 2, 4, 5, 6
+
+
+                                                                        10
+     EDCFlow: Exploring Temporally Dense Difference Maps for Event-based
+                          Optical Flow Estimation
+                                                                                      Supplementary Material
+6. More comparison with SOTA methods
+Compared with frame-based methods. Several frame-
+based SOTA methods [16, 40, 44] focus on achieving high-
+resolution optical flow estimation. They primarily perform
+pixel matching or refinement across multiple spatial reso-
+lutions in frames. Unlike frames, event data provides high
+temporal resolution, necessitating efficient method to cap-
+ture continuous motion features. In this context, our multi-
+scale difference layer effectively handles temporal dynam-
+ics by leveraging temporal feature differences with low                                                    (a) Events             (b) Ground truth      (c) Output flow
+
+computations and can refine RAFT-like networks. Using
+publicly available source code under the same training set-
+tings, our method outperforms these methods in accuracy
+and efficiency on DSEC (in Tab. 8), highlighting its impor-
+tance in event-based flow estimation.
+Compared with event-based methods. We present accu-
+racy vs. complexity in Fig. 5 to facilitate comparison. Our
+EDCFlow achieves higher performance as well as signifi-
+cant reductions in computational overhead over the state-
+of-the-art methods.                                                                                    (d) Correlation motion   (e) MS-Difference     (f) Fused motion
+                                             EPE vs. Parameters and MACs on DSEC                            feature map         motion feature map       feature map
+
+                                                                         EV-FlowNet
+                                  2.30
+                                                                                                    Figure 6. Illustration of motion feature maps. (a) Event data.
+                                  0.79
+                                                                                                    (b) Optical flow ground truth. (c) Optical flow estimated by our
+                                                       E-RAFT                                       method. (d) Correlation motion feature map. (e) Multi-scale tem-
+           end-point-error (px)
+
+
+
+
+                                                                                                    poral difference motion feature map fused with multi-scale atten-
+                                  0.77
+                                         IDNet-8                                                    tion. (f) The final motion feature map is aggregated from the dif-
+                                                                                                    ference motion feature and correlation motion feature.
+                                  0.75
+                                                                                50 G
+                                                                               200 G
+                                                               TMA
+                                  0.73                                         500 G
+                                                                                                    and moving objects handling for its ground truth, making
+                                                   Ours
+                                            IDNet-4
+                                                                                1200 G              the data quality relatively poor. Despite this, compared to
+                                  0.71
+                                            2.0       4.0      6.0 8.0 10.0 12.0 14.0
+                                                                                                    other methods, our approach holds superior performance at
+                                                            Parameters (M)                          both dt = 1 and dt = 4, capturing clearer motion bound-
+                                                                                                    aries. This confirms that our method demonstrates greater
+Figure 5. End-point-error (px) on DSEC vs. computational com-
+plexity (MACs: G) and model size (Parameters: M). All models                                        adaptability across diverse data distributions and scenes.
+are trained on DSEC, and tested with one NVIDIA 4090 GPU. The                                       Motion Feature Maps. To better illustrate the complemen-
+computational complexity corresponding to the size of the circle                                    tarity between the difference maps and correlation maps,
+is shown in the legend in the lower right corner.                                                   we present in Fig. 6 the multi-scale temporal feature differ-
+                                                                                                    ences of adjacent feature maps and the motion features en-
+                                                                                                    coded from the cost volume on the DSEC dataset. The dif-
+                                                                                                    ference motion features exhibit strong responses in textured
+7. More Visualizations
+                                                                                                    areas but are noisy, while the correlation motion features
+Qualitative Results on MVSEC. Fig. 7 presents a qual-                                               may produce blurred boundaries due to matching ambigui-
+itative comparison of our method with other methods on                                              ties. By adaptively fusing these two features, the response
+outdoor day1 sequence of the MVSEC [45]. Compared                                                   at motion boundaries can be enhanced, resulting in high-
+to DSEC dataset [11], MVSEC has lower resolution and                                                quality optical flow.
+sparser events (especially at dt = 1), and it lacks occlusion                                       Flow Error Maps. To analyze the advantages and lim-
+
+
+                                                                                                1
+                             Method              EPE    AE     1PE 2PE 3PE        Param (M)        MACs (G)            Runt. (ms)
+                             DIP [44]            3.06 10.95 77.8 46.6 27.5            5.4            590                  92
+                           GMFlow+ [40]          6.55 7.40 94.1 77.9 63.6             4.6            223                  141
+                            CCMR [16]              GPU out of memory (> 40GB)        11.6           2255                   -
+                              Ours               0.72 2.65 10.0 3.6        2.1        2.5            247                  39
+
+                                                  Table 8. Compared with frame-based SOTA methods.
+
+
+itations of the model, we visualize the EPE distributions                    due to the loss of intermediate motion information. When
+in Fig. 8, where the error for each pixel is represented as the              the g is set to 5 and B to 3, sufficient continuous motion fea-
+square root error between the estimated and ground truth                     tures are captured, achieving good performance. Increasing
+flows, shown using heatmaps. Since the ground truth of                       the window count further achieves comparable performance
+the DSEC dataset’s test set is not publicly available, we use                but introduces additional computational overhead.
+zurich city 05 b and zurich city 11 c from the training set
+as the test set for error analysis, while the remaining train-                    g, B    EPE     AE     1PE      2PE    3PE     Param (M)    MACs (G)
+                                                                                  1, 15   0.79    2.80   11.9     4.4    2.9         2.2        182
+ing samples are used to train the model. Our model can                             3, 5   0.75    2.74   10.7     3.9    2.3         2.3        209
+estimate accurate flow in most scenarios, particularly for                         5, 3   0.72    2.65   10.0     3.6    2.1         2.5        247
+complex textured objects like trees. In failure cases, how-                       15, 1   0.72    2.68   10.0     3.5    2.0         2.5        322
+
+ever, our model encounters significant estimation errors in
+                                                                             Table 10. Event splitting. g represents the number of time win-
+the spatial edge regions. This may be due to two reasons:
+                                                                             dows. B denotes the number of time bins.
+first, the sparse events in these regions lack sufficient tex-
+ture information, making it difficult for feature differences
+                                                                             Optical flow estimation resolution. Different resolutions
+to encode motion boundaries and for the cost volume to re-
+                                                                             capture varying degrees of detail, offering distinct lev-
+solve matching ambiguities; second, pixels at the spatial
+                                                                             els of granularity in the information provided. As shown
+edges cannot aggregate enough contextual information to
+                                                                             in Tab. 11, flow estimation performs best at 1/4 resolution.
+encode accurate motion features. These issues could be ad-
+                                                                             We attribute this to the fact that the feature difference strat-
+dressed by fusing images and leveraging multiple preceding
+                                                                             egy is more effective in capturing local detail, making it
+and subsequent event streams.
+                                                                             more accurate at higher resolutions, while at 1/8 resolu-
+                                                                             tion, some detail is inevitably lost. Although the 1/2 res-
+8. More Ablation Studies
+                                                                             olution retains more detail, its tolerance to noise decreases,
+More ablation studies are also conducted on the DSEC                         and the correlation features upsampled by two times remain
+dataset [11].                                                                too coarse to robustly enhance the final motion feature rep-
+Iterations. Some existing methods [5, 35, 39] achieve bet-                   resentation. Additionally, this resolution struggles to handle
+ter optical flow results through iterative refinement strate-                large displacements effectively.
+gies, particularly for small objects with large displacements.
+The results in Tab. 9 show that as the number of iterations                       Resolution     EPE     AE     1PE      3PE    MACs (G)      Param (M)
+                                                                                      8          0.78    2.82   12.7     2.5      216             6.8
+increases, the flow results become stable and reach a con-                            4          0.72    2.65   10.0     2.1      247             2.5
+vergent state. The performance stabilizes when the num-                               2          0.77    2.89   10.8     2.5      288             1.1
+ber of iterations reaches 6. Moreover, excessive iterations
+may cause overfitting or oscillation around a local optimum,                 Table 11. Optical flow estimation resolution. The resolutions of 8,
+such as ours-8 6/12 in Tab. 7.                                               4, and 2 represent flow computed at 1/8, 1/4, and 1/2 resolution of
+                                                                             the input, respectively.
+              iterations    EPE    AE     1PE     2PE   3PE
+                   2        0.86   3.11   13.8    5.3   3.1
+                   4        0.77   2.85   11.5    4.2   2.4
+                   6        0.72   2.65   10.0    3.6   2.1
+                                                                                   r      EPE     AE       1PE      3PE        MACs (G)      Param (M)
+                   8        0.72   2.64   10.1    3.6   2.1                        1      0.72    2.65     10.0     2.1          247             2.5
+                                                                                   2      0.74    2.65     10.4     2.2          244             2.5
+                                                                                   8      0.75    2.73     11.0     2.2          241             2.5
+    Table 9. Iterations. The number of iterative refinements.
+                                                                                  w/o     0.73    2.67     10.2     2.2          244             2.5
+
+Event splitting. The time windows and temporal bins de-                      Table 12. Reduction ratio in the multi-scale temporal difference
+termine the input’s temporal resolution and the number of                    layer.
+input channels, respectively. The results in Tab. 10 show
+that a small value of g leads to performance degradation                     Feature dimension reduction ratio. In Tab. 12, we explore
+
+
+                                                                         2
+          Reference image         Events            Ground truth              E-RAFT                TMA            IDNet-4                    Ours
+                                                                       EPE: 0.17           EPE: 0.10         EPE: 0.11              EPE: 0.07
+ dt = 1
+
+
+
+
+                                                                       EPE: 0.22           EPE: 0.28         EPE: 0.28              EPE: 0.17
+
+
+
+
+                                                                       EPE: 0.21           EPE: 0.25         EPE: 0.29             EPE: 0.19
+ dt = 4
+
+
+
+
+                                                                       EPE: 0.34           EPE: 0.46         EPE: 0.40              EPE: 0.33
+
+
+
+
+                     Figure 7. Qualitative results on the outdoor day1 sequence on MVSEC [45]. Please zoom in for details.
+
+          Reference image                  Events                  Ground truth                Output flow           Error distribution map
+                                                                                         EPE=0.32
+
+
+
+
+                                                                                         EPE=0.30
+
+
+
+
+                                                                                         EPE=0.47
+
+
+
+
+                                                                                         EPE=3.32
+
+
+
+
+Figure 8. Visualization of error distribution maps. We present three high-quality flow estimation results with smaller EPE (the first three
+columns) and one failure case with larger EPE (the last column). The color bar indicates the per-pixel square root error magnitude, with
+darker colors representing larger errors.
+
+
+the impact of r in the multi-scale temporal difference layer,                      ance accuracy and computations. When compared to “w/o”,
+with “w/o” indicating conv1 removed. We set r = 1 to bal-                          setting r = 1 brings imporvements in accuracy by leverag-
+
+
+                                                                             3
+ing conv1 to enhance feature interaction. Since the channel
+number is 64 in our experiment, the effect of r on computa-
+tion is marginal. For larger channel numbers, r > 1 can be
+used to balance accuracy and computation.
+
+9. Future Work
+In our work, we assume linear motion within short time
+windows (20 ms for DSEC and 10/40 ms for MVSEC),
+which shows good empirical performance and lower com-
+putational complexity. However, investigating alternative
+motion models, such as estimating higher temporal reso-
+lution intermediate flows to capture complex trajectories,
+could be an interesting direction for future research. Fur-
+thermore, event-image fusion-based optical flow estima-
+tion represents a promising research direction. By effec-
+tively combining the high temporal resolution and motion-
+capturing capability of event streams with the rich appear-
+ance and texture information provided by images, the accu-
+racy and robustness of optical flow estimation can be signif-
+icantly enhanced.
+
+
+
+
+                                                                4
+

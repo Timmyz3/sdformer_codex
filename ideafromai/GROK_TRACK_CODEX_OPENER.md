@@ -9,8 +9,8 @@ Hard rules:
 Only Codex:
 - ID: 01a07507-891a-7b22-b4a9-64b715b5d988
 - jsonl: /home/zhumd/.codex/sessions/2026/09/06/rollout-2026-09-06T12-43-43-01a07507-891a-7b22-b4a9-64b715b5d988.jsonl
-- index: /home/zhumd/work/ideafromai/TRACKING_CODEX_SESSIONS.md
-- progress: /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/README.md
+- index: /home/zhumd/work/sdformer_codex/ideafromai/TRACKING_CODEX_SESSIONS.md
+- progress: /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/README.md
 - main: ideafromai/research/hardware_innovation_20260908/algorithm/patch_probe/residual_consumer_probe/projection_chain/ (esp. fast_temporal_recovery_lifting40/net_cost_one_page.md)
 
 Task:

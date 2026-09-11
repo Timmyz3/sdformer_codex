@@ -1,0 +1,1261 @@
+                                          2025 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+                                          Prosperity: Accelerating Spiking Neural Networks
+                                                        via Product Sparsity
+                                             Chiyue Wei†, Cong Guo†∗ , Feng Cheng†, Shiyu Li†, Hao (Frank) Yang‡, Hai (Helen) Li†, Yiran Chen†
+                                                                                 Duke University†, Johns Hopkins University‡
+                                                        {chiyue.wei, cong.guo, feng.cheng, shiyu.li, hai.li, yiran.chen}@duke.edu, haofrankyang@jhu.edu
+
+                                                                                                                      K=4 Input (Activation)                                    Output N=3
+                                           Abstract—Spiking Neural Networks (SNNs) are highly efficient               0.3   1.2   3.4   1.5
+                                                                                                                                                      N=3 Weight
+                                        due to their spike-based activation, which inherently produces                1.7   3.4   3.6   8.5
+                                        bit-sparse computation patterns. Existing hardware implemen-
+                                                                                                                      2.9   2.2   7.3   1.2
+                                        tations of SNNs leverage this sparsity pattern to avoid wasteful
+arXiv:2503.03379v2 [cs.AR] 2 Apr 2025
+
+
+
+
+                                                                                                                M=6                             K=4                ＝       M=6
+                                        zero-value computations, yet this approach fails to fully capitalize          4.5   7.9   5.4   7.7
+
+                                        on the potential efficiency of SNNs. This study introduces a                  3.7   2.0   6.6   1.0
+                                        novel sparsity paradigm called Product Sparsity, which leverages              2.0   1.5   4.8   1.7   (a) Original GeMM (DNN)
+                                        combinatorial similarities within matrix multiplication opera-
+                                        tions to reuse the inner product result and reduce redundant            Row Spike Input                1 / 0 Compute      0 Skip    1 Reuse and Skip
+                                        computations. Product Sparsity significantly enhances sparsity
+                                        in SNNs without compromising the original computation results            0     1    0     1     0       1     0   1   0             1    0   1   0
+                                        compared to traditional bit sparsity methods. For instance, in           1     1    0     0     1       1     0   0   1        2    1    0   0   1
+                                                                                                                                                                                             11
+                                        the SpikeBERT SNN model, Product Sparsity achieves a density             2     1    0     1     1       1     0   1   1             1    0   1   1
+                                        of only 1.23% and reduces computation by 11×, compared to bit                                                                  3
+                                                                                                                 3     0    0     1     0       0     0   1   0             0    0   1   0
+                                        sparsity, which has a density of 13.19%. To efficiently implement
+                                                                                                                 4     1    1     0     1       1     1   0   1             1    1   0   1
+                                        Product Sparsity, we propose Prosperity, an architecture that                                                                                        4
+                                        addresses the challenges of identifying and eliminating redundant        5     1    1     0     1       1     1   0   1             1    1   0   1
+                                        computations in real-time. Compared to prior SNN accelerator           (b) Dense Spiking GeMM (c) Bit Sparsity                 (d) Product Sparsity
+                                        PTB and the A100 GPU, Prosperity achieves an average speedup                    (SNN)                                                 (Ours)
+                                        of 7.4× and 1.8×, respectively, along with energy efficiency                   1x (24 OPs)             1.7x (14 OPs)           4x Speedup (6 OPs)
+                                        improvements of 8.0× and 193×, respectively. The code for
+                                        Prosperity is available at https://github.com/dubcyfor3/Prosperity.     Fig. 1. Comparison of DNN, SNN, Bit Sparsity, and Product Sparsity.
+
+                                          Index Terms—Spiking Neural Networks, Accelerator, Product            energy efficiency, establishing a paradigm for bit sparsity-
+                                        Sparsity                                                               based accelerators. Nevertheless, our study observed that bit
+                                                                                                               sparsity alone does not fully harness the potential sparsity
+                                                                 I. I NTRODUCTION                              within SNNs.
+                                           Spiking Neural Networks (SNNs) [27], [61] are brain-                   In this study, a novel sparsity paradigm, Product Spar-
+                                        inspired neural network models that have gained significant            sity (ProSparsity), is proposed, which can reveal additional
+                                        attention in recent years. Extensive research efforts in SNN           sparsity opportunities within SNN models, as illustrated in
+                                        algorithm design have yielded performance comparable to                Fig. 1 (d). ProSparsity is founded on the combinatorial simi-
+                                        Deep Neural Networks (DNNs) across various tasks, including            larity within the inner product operations of matrix multiplica-
+                                        computer vision [6], [19] and natural language processing [2],         tion. Specifically, in SNNs, multiple rows of the binary spike
+                                        [60]. Beyond traditional AI applications, SNNs show promise            matrix usually contain a common binary sub-combination,
+                                        in rapidly solving optimization problems [65] and heuristically        resulting in identical inner product results when multiplied by
+                                        approaching NP-hard problems [45], further underscoring their          the shared weight matrix. By computing the inner product of
+                                        versatility and potential impact across diverse computational          the sub-combination only once and reusing the result for all
+                                        domains.                                                               rows containing the same sub-combination, ProSparsity effec-
+                                           Compared to the traditional DNN models, as shown in                 tively eliminates the repeat computations of spikes within the
+                                        Fig. 1 (a), the SNN’s neurons only react to information                common sub-combination. Consequently, ProSparsity signifi-
+                                        encoded as binary spikes (1 for spike and 0 for non-spike),            cantly enhances sparsity and reduces redundant computations
+                                        as depicted Fig. 1 (b), leading to sparse activations (i.e.,           compared to traditional bit sparsity.
+                                        bit sparsity). This design leads to significant computational             For example, in Fig. 1 (d), Row 1 (1001) and Row 4
+                                        and energy efficiency gains [71], which arise from the spike-          (1101) share the common sub-combination 1001. Thus, the
+                                        driven sparse processing in SNNs, depicted in Fig. 1 (c).              inner product result of Row 1 (1001) can be reused for Row
+                                        Consequently, many SNN-specific architecture designs [52],             4, with additional computation needed only for the remaining
+                                        [66] leverage this bit sparsity to enhance performance and             sub-combination 0100, saving two operations. Moreover, since
+                                                                                                               Row 5 is identical to Row 4, all computations for Row 5 can
+                                          *Cong Guo is the corresponding author of this paper.                 be skipped, and the result of Row 4 can be directly applied to
+Row 5. Consequently, ProSparsity enables significant compu-            •   Finally, Prosperity architecture effectively accelerates a
+tation skipping and result reuse. Our experiments demonstrate              wide range of SNNs, achieving significant speedup and
+that, in the SpikeBERT SNN model [60], ProSparsity achieves                energy efficiency over baselines.
+a 11× reduction in computation. In comparison, while bit
+sparsity achieves a density of 13.19%, ProSparsity reduces                                 II. BACKGROUND
+the density to just 1.23%.                                           A. Spiking Neural Networks
+   To the best of our knowledge, this is the first work to
+accelerate SNNs with product sparsity, thereby leading to               Spiking Neural Networks (SNNs) [27], [72], said to be the
+several significant challenges in designing a ProSparsity-based      third generation of neural networks [61], mimic the behavior
+architecture. Identifying common sub-combinations presents           of biological brain neural networks. SNNs have a similar
+both spatial and temporal challenges. Firstly, for spatial re-       structure as traditional Deep Neural Networks (DNNs) [29],
+lationships, ProSparsity must identify the combinatorial simi-       [50] but differ in two aspects: 1) the information (activation)
+larity between multiple rows. The complexity for identifying         propagating in the network is a binary spike event in a
+spatial relations among n rows within an m-row scope is              time sequence instead of a floating point number. 2) the
+O(mn ), which is not feasible at runtime. Therefore, an ef-          activation function is replaced by the membrane potential
+ficient method is needed to identify ProSparsity relations with      (MP) update [26] and spike fire behavior of the spiking
+manageable overhead. Secondly, temporal relationships also           neuron. A single forward pass of SNN is accomplished in
+significantly impact the efficiency of ProSparsity. For instance,    a certain number of time steps. In each time step, a spiking
+in Fig. 1 (d), if Row 0 (1010) is processed first, it cannot         neuron receives spikes from neurons in the previous layer and
+reuse the result from Row 3 (0010). Improper execution orders        then integrates received spikes according to the corresponding
+will significantly undermine the effectiveness of ProSparsity.       weight to get input current; it then uses the input current to
+Thus, optimizing the execution order of spike rows is cru-           update its MP and send a spike to neurons in the next layer if
+cial for maximizing reusability and achieving high sparsity.         its MP exceeds a certain threshold. There are various spiking
+Moreover, since spike activations are generated dynamically,         neuron model [25], [26], [39], [43]. We consider the most
+the identification of sub-combinations and the elimination of        widely used leaky integrate and fire (LIF) model [26].
+redundant computations have to be done at runtime, which                SNNs are more energy efficient than DNNs due to their
+further complicates the design of ProSparsity.                       binary activation. In DNN, the major computation is the matrix
+   To address these challenges, we propose Prosperity, an            multiplication between floating point activation and weight
+architecture designed to efficiently process SNNs using prod-        matrix, i.e., general matrix multiplication (GeMM). In SNN,
+uct sparsity. Based on our analysis, we first introduce a            the activation of an SNN layer consists of a set of binary spike
+heuristic optimization to reduce the time and space complexity       matrices, each representing a time step of SNN and sharing
+of ProSparsity processing to a linear level, addressing both         the same weight. Therefore, we can unroll and concatenate all
+spatial and temporal challenges. We then design an efficient         spike matrices in different time steps to get a single binary
+architecture and pipeline scheduling mechanism that overlaps         spike matrix for an SNN layer. The major computation of
+the identification and elimination of ProSparsity with matrix        the SNN model is the matrix multiplication of the binary
+computation, resulting in overhead-free sparse processing. Fur-      spike matrix and floating point weight matrix [16], [71]. We
+thermore, since ProSparsity is algorithm-agnostic, Prosperity        define this unique operation in SNNs as Spiking GeMM. Our
+can support a wide range of SNNs, including emerging spiking         experiments show that more than 98% percent of operations
+networks such as spiking transformers [2], [94], which are not       in SNNs are spiking GeMM. In spiking GeMM, the binary
+supported by existing accelerators [52], [58], [62].                 spike matrix only consists of 0s and 1s, i.e., bit sparsity
+   Compared to state-of-the-art SNN accelerators like                (BitSparsity). Therefore, the computation becomes a sparse
+PTB [52] and the A100 GPU [67], Prosperity achieves                  addition. If an element is 1, then the corresponding weight is
+an average speedup of 7.4× and 1.8×, respectively, along             straightly accumulated to the result; if an element is 0, then
+with energy efficiency improvements of 8.0× and 193×,                the corresponding weight is skipped. Prior works [52], [57],
+respectively. Our contributions are summarized as follows:           [66], [70] leveraged the sparse and multiplication-free feature
+   • We propose a novel sparsity paradigm, Product Sparsity,         in spiking GeMM to accelerate SNN.
+      that utilizes the combinatorial similarity feature in SNN
+      activations to significantly enhance sparsity and reduce       B. Spiking CNNs and Spiking Transformers
+      computations in SNNs.                                             The most widely used network structure in SNNs is convo-
+   • To tackle high complexity and dependency challenges in          lutions, which is spiking CNNs [19], [74]. Besides, SNNs in
+      ProSparsity, we present a dedicated architecture, Pros-        transformer architecture have developed very recently while
+      perity, that efficiently identifies and utilizes ProSparsity   demonstrating superior performance than spiking CNNs on
+      within linear complexity.                                      various tasks [2], [60], [80], [84], [94].
+   • We design an efficient pipeline scheduling method to               The spiking CNNs and spiking transformers differ from
+      further overlap the ProSparsity processing with the matrix     their DNN counterparts in the two aspects mentioned in
+      computation, achieving overhead-free sparse processing.        Sec. II-A. The key operation in spiking CNNs and spiking
+                                                       ✖             ✖    ➕                 ➕                                                                         ✖
+                                                                                                                                                                      ✖                      ➕➕
+
+
+
+
+                               TABLE I
+             C OMPARSION WITH PREVIOUS WORK ON VGG-16.                                  K=4                                         N=3
+                                                                          Row   0   1   0       1   0       N=3              0.8 0.0 -1.0    Row1   1    0   0    1
+  Study           Dense   PTB [52]      Stellar [62]       Prosperity           1                       0.3 0.4 -0.8         0.2 0.2 0.0
+                                                                                    1   0       0   1                                                                     0.3   -0.1   0.2
+
+                            Long         Specific          Algorithm-           2   1   0       1   1   -0.1 0.6 0.9         0.7 -0.2 -0.2          0.3 -0.1 0.5 -0.1
+  Feature           -                                                     M=6                                            ＝
+                                                                                3   0   0       1   0   0.5 -0.4 -0.2        0.5 -0.4 -0.2
+                            Steps        Neuron             agnostic                                                                                                      0.2   -0.1   0.1
+                                                                                4   1   1       0   1   -0.1 -0.2 0.8        0.1 0.8 0.9
+                                                                                                                                             Row4   1    1   0    1
+  Sparsity                Structured    Structured     Unstructured             5   1   1       0   1                        0.1 0.8 0.9
+                  None
+  Pattern                 BitSparsity   BitSparsity    ProSparsity                           (a) Spiking GeMM                                (c) Partial Match ProSparsity
+  Bit Density     100%     34.21%         9.80%             34.21%         Row4     1    1      0   1                                        Row4    1   1    0   1
+
+                                                                                                         0.3      -0.1       -0.1     0.1                                 0.2   -0.1   0.1
+  Pro Density     100%         -             -               2.79%
+                                                                                    0.3 -0.1 0.5 -0.1                                               0.3 -0.1 0.5 -0.1
+  Speedup         1.00×     1.86×         5.97×             17.55×                                       0.3      -0.1       -0.1     0.1
+
+                                                                           Row5     1    1      0   1                                        Row5    1   1    0   1       0.1
+
+
+transformers is spiking GeMM. In spiking CNNs, the con-                       (b) Inner Product in Spiking GeMM                               (d) Exact Match ProSparsity
+
+volution is performed between a spike input feature map in                          Fig. 2. An example of spiking GeMM and product sparsity
+multiple time steps and a weighted kernel, generating an output
+feature map in multiple time steps. This operation can be
+                                                                         can be skipped during computation. However, there are more
+translated to spiking GeMM by im2col [7].
+                                                                         redundant computations beyond the zero-value operand. To
+   In spiking transformers, the linear projection layers (query,
+                                                                         demonstrate this redundancy, we illustrate a spiking GeMM
+key, value, output projection, and feed-forward layer) are natu-
+                                                                         in Fig. 2 (a). For a M × K spike matrix, a K × N weight
+rally spiking GeMM, where spike matrix of shape (T × L, di )
+                                                                         matrix, and a M × N output matrix, the spiking GeMM
+is multiplied with weight matrix of shape (di , do ) and get
+                                                                         can be computed by multiple BitSparsity-based inner product
+output matrix of shape (T × L, do ), where T, L, di , do denotes
+                                                                         operations, shown in Fig. 2 (b). Due to the binary value
+time steps, sequence length, input dimension, and output
+                                                                         of the spike matrix, the inner product is equivalent to the
+dimension. Different spiking transformer models incorporate
+                                                                         accumulation of multiple weight values, which are “selected”
+diverse spiking attention blocks that are distinct from linear
+                                                                         by the 1-values in the corresponding row of the spike matrix.
+layers. Consequently, operations in spiking attention are not
+                                                                         Based on the arithmetic rule of GeMM, the i-th column of
+efficiently supported by existing SNN ASICs [52], [62], [66]
+                                                                         the spike matrix will “select” the identical i-th row of the
+or neuromorphic chips [14], [15].
+                                                                         weight matrix in the inner product operations. Two rows in
+C. SNN Accelerators                                                      the spike matrix contain a common binary sub-combination
+                                                                         if they share identical 1-value positions, either partially or
+   Previous SNN accelerators have been exploring utilizing the
+                                                                         fully. Consequently, the common binary sub-combination will
+bit sparsity of SNNs for efficient inference, as summarized in
+                                                                         generate the same inner product result when computing the
+Tbl. I. PTB [52] is a systolic-array-based [49] architecture that
+                                                                         same column of the output matrix. For example, in Fig. 2 (b),
+parallelly processes spikes in a structured sparsity manner. It
+                                                                         Row 4 and Row 5 have the same result because they have
+employs time batching [66], and further group spike informa-
+                                                                         the identical binary combination (1101). Obviously, we can
+tion within a time window. If a spike occurs in a group, all time
+                                                                         compute the common binary sub-combination once and reuse
+steps within that window are processed, while groups without
+                                                                         its result for all rows containing this sub-combination, thereby
+spikes are squeezed out to enhance utilization of systolic array
+                                                                         significantly reducing computational redundancy in spiking
+for sparse input.
+                                                                         GeMM. We call this paradigm product sparsity (ProSparsity),
+   Stellar [62] is an algorithm-hardware co-design accelerator.
+                                                                         which can skip computation and reuse the result based on the
+It is also a systolic-array-based architecture that process spikes
+                                                                         combinatorial similarities of inner product operation.
+in a structured sparsity manner. Stellar proposes using FS
+neuron [77] model in the SNNs; this FS neuron is featured to                As shown in Tbl. I, ProSparsity completely differs from the
+have fewer spikes than the LIF neuron, achieving higher spike            previous approaches, which depend on the algorithm and may
+sparsity. The improvement of sparsity is caused by algorithmic           impact the accuracy. ProSparsity is an algorithm-agnostic and
+modification, which limits the application scenarios of the              lossless method for the spiking GeMM. Based on the potential
+accelerator.                                                             combinatorial similarities in the spike matrix, ProSparsity
+                                                                         can significantly reduce computations. For the VGG-16 SNN
+                    III. P RODUCT S PARSITY                              model, ProSparsity can save more than 18× computations and
+   In this section, we first introduce the product sparsity in           achieve 9.4× speedup over the BitSparsity of PTB [52].
+spiking GeMM. Then, we describe some basic definitions                     Despite ProSparsity providing a simple yet effective way
+and propose an efficient optimization for product sparsity,              to identify the redundancy in SNN, its implementation is a
+significantly reducing its complexity.                                   nontrivial task, as mentioned in Sec. I. There are two main
+                                                                         challenges in processing ProSparsity: Efficiently identifying
+A. Definition                                                            spatial and temporal relationships. We will introduce each
+  In the spiking GeMM, the binary nature of the spike matrix             challenge and provide an efficient heuristic solution to address
+inherently introduces bit sparsity, i.e., the zero-value operand         these challenges.
+B. Spatial Relationship                                                                                                                      Row Prefix   ProSparisity
+                                                                       0   1   0   1   0                                                      0   Row 3 1 0 0 0
+                                                                                                                                              1
+
+
+
+
+                                                                                                                                                                         Spatial Info.
+   For ProSparsity, it will cause significant complexity to                                        3       1                 3       1                    1 0 0 1
+                                                                       1   1   0   0   1
+                                                                                                                                              2   Row 1 0 0 1 0
+identify the combinatorial similarities. Assuming we have m            2   1   0   1   1                                                      3           0 0 1 0
+                                                                                               0       2       5             0   2       5
+                                                                       3   0   0   1   0                                                      4   Row 2 0 0 0 0
+rows and aim to identify the common sub-combination for n              4                                                                      5   Row 1 0 1 0 0
+                                                                           1   0   1   1                           Pruning
+rows, the resulting complexity will be O(mn ). For example, if         5   1   1   0   1               4                         4            3 0 1 2 4 5 Temporal
+                                                                                                                                                                   Info.
+we want to find the common sub-combination between only
+                                                                      (a) Spiking Matrix       (b) PS Graph             (c) PS Forest          (d) Meta Information
+two rows within m row, we need to match m×(m−1)      2     times
+                                                                                           Fig. 3. Efficient ProSparsity data structure.
+to finish all identification for every two rows. For a better
+illustration, we use a set to represent the spike row. We define
+                                                                       We first introduce the Prefix and Suffix for the temporal
+Si as the spike set of the spike row i; the spike set consists
+                                                                    relationship of ProSparsity. For the two rows with EM, we
+of the column index where a spike exists
+                                                                    can define the row with a smaller index as the Prefix, i.e.,
+           Si = {j|M [i, j] = 1, j ∈ Column IDs},                   Row i is the Prefix of Row j, when i < j, because the smaller
+                                                                    index is always accessed first. In contrast, PM relationships
+where M is the spike matrix. For example, Row 0 (1010) in           have a strict partial ordering, which leads to strict temporal
+Fig. 2 (a) can be represented by S0 = {0, 2}. The identification    ordering. The Prefix in the PM relationship is the spike row
+process is to inspect the set relationship among the n sets         with fewer elements (ones), which is the proper subset for the
+represented by n rows, called spatial relationship. Basically,      other row, i.e., Sj is the Prefix of Si , when A = Sj , A ̸= Si .
+when n ≥ 3, the complexity of the identification will be            Correspondingly, the Si is the Suffix.
+unacceptable. Therefore, in this study, we only consider the
+                                                                       After defining spatial and temporal relationships, we can
+two-row spatial relationship, which can achieve high enough
+                                                                    build a ProSparsity graph for the spiking matrix in the next
+sparsity for SNNs, with the complexity O(m2 ).
+                                                                    subsection.
+   Basically, we discover 3 types of ProSparsity relationship
+when two sets are intersected, A = Si ∩ Sj , A ̸= ϕ, i ̸= j. We     D. Efficient Design Space Exploration
+will define 3 relationships with the intersection set A.
+   Partial Match (PM). We define the Partial Match (PM)                Based on the spatial and temporal relationship, the ProSpar-
+relationship for two spike rows as follows:                         sity can be constructed as a directed graph, as shown in Fig. 3.
+                                                                    However, the graph structure is still too complicated for the
+                       A = Sj , A ̸= Si .                           ProSparsity architecture design. Thus, we propose a heuristic
+This indicates that Sj is the proper subset of Si . For example,    method, reducing the time and space complexity from O(m2 )
+in Fig. 2 (c), Row 1 (1001) is the proper subset of Row 4           to O(m).
+(1101). Consequently, the spike row S4 (Row 4) can reuse the           ProSparsity Graph. As shown in Fig. 3 (a) and (b), each
+inner product result (0.2) of S1 (Row 1). After that, for S4 ,      spike row in the graph is represented by a node, i.e., a spike
+we can skip the spikes in S1 and accumulate the rest weight         row. Each directed edge represents the Prefix-based partial
+values (-0.1) that correspond to spikes in S4 − S1 (0100).          ordering relationship, including the EM and PM edges. The
+   Exact Match (EM). Exact Match product sparsity means             direction of the edge represents a prefix node (spike row)
+two rows are identical, i.e.,                                       points to a suffix node. Graph-based ProSparsity has both the
+                                                                    space and time complexity with O(m2 ). However, because a
+                          A = Si = Sj .                             node may have multiple prefix nodes, we still need an extra
+As exemplified in Fig. 2 (d), we have computed the inner            operation to identify whether the various prefixes are available
+product result (0.1) of Row 4 (1101); we can reuse it as the        to reuse together, i.e., whether the multiple prefix nodes are
+result of Row 5 (1101) and skip all the spikes without any          disjoint. That will significantly complicate the ProSparsity
+computation.                                                        design. Fortunately, our preliminary results show we can
+   Intersection. Finally, when A ̸= Si and A ̸= Sj , that means     reduce the graph to a tree with a marginal sparsity drop.
+the two rows have an intersection relationship. However,               Heuristic Space Pruning. We conduct a characteristic
+leveraging this scenario requires creating a new row A and          study to explore more efficient design space for ProSparsity.
+compute the result of A first. This will significantly increase     There will be a large overhead if we try to utilize two or
+the complexity of the architecture design. Hence, this study        more prefix nodes. According to preliminary evaluation, our
+will only consider the former two relationships, EM and PM.         architecture will suffer a 30% performance drop and larger
+                                                                    area overhead to accommodate the second Prefix. Moreover,
+C. Temporal Relationship                                            Tbl. II shows the SNN density results after ProSparsity with
+   The temporal relationships can significantly impact effi-        only one prefix and two prefix nodes. Clearly, the first prefix
+ciency. For instance, in Fig. 2 (a), if Row 0 (1010) is processed   node contributes to the most computation reduction compared
+first, it cannot reuse the result from Row 3 (0010), which          to the second prefix nodes. Moreover, most nodes have only
+significantly undermines the effectiveness of product sparsity.     one Prefix, and due to the disjoint limitation of the prefix
+Therefore, optimizing the execution order of spike rows is          nodes, less than 6% of nodes can employ the second Prefix.
+crucial for maximizing sparsity.                                    This illustrates that using one Prefix for each node is capable of
+                             TABLE II
+      P RELIMINARY EXPERIMENTS ON O NE - PREFIX AND T WO - PREFIX .                                      DRAM                                           CTRL
+                                    SpikingBERT SST-2   VGG-16 CIFAR100
+                                                                                                                                        Spiking Neuron Array
+      Bit Sparsity   Density             20.49%             34.21%                     Spatial
+                                                                                      Relation       Pruner       Weight Buffer
+                     Pro Density         2.98%               2.79%                                                                                     Cmp
+      One-Prefix                                                                                       Spatial                               0
+                                                                                                        Info.                                MUX        +
+                     Prefix Ratio       56% × 1             26% × 1
+                                                                            Spike                                   Processor
+                                                                                     Detector
+                                                                                                                                                   Leak           32
+                     Pro Density         2.30%               1.97%          Buffer
+      Two-Prefix                                                                                       Temporal
+                     Prefix Ratio   53% × 1 + 3% × 2    20% × 1 + 6% × 2                                 Info.                                     SFU
+                                                                                                                                                 & x 128
+                                                                                      Temporal      Dispatcher
+                                                                                       Relation                   Output Buffer          X         X         X    X
+
+eliminating most of the redundancy. Therefore, in our method,                         ProSparsity Processing Unit (PPU)                 Exp        Exp           Div
+
+we opt to select only one Prefix for each row.                                           Fig. 4. Overview of Prosperity architecture.
+   Pruning Rules. Because of the spatial and temporal re-
+lationship definition, the ProSparsity graph is a strict partial           ProSparsity data structure and optimization for design space,
+ordering set. Based on previous analysis, we can make simple               the time and space complexity of ProSparsity is reduced to an
+pruning rules for the graph to ensure that each node has only              O(m) linear level.
+one Prefix.
+                                                                                                  IV. Prosperity OVERVIEW
+  •    First, for each current node, we will traverse all of its
+                                                                              Overview. Fig. 4 shows the overall design of Prosperity.
+       Prefix nodes. We retain only the edge(s) connected to
+                                                                           It mainly consists of the ProSparsity Processing Unit (PPU),
+       the Prefix node(s) that have the largest common sub-
+                                                                           Spiking Neuron Array, and special function unit (SFU). Pros-
+       combination (i.e., the largest subset) with the current
+                                                                           perity processes the inference of SNNs layer-by-layer. The
+       node, and remove all other edges. That can ensure that
+                                                                           PPU is our core design for processing ProSparsity and matrix
+       the kept Prefix node(s) is the most similar to this current
+                                                                           computation for each layer. After that, the results are sent
+       node.
+                                                                           to the Spiking Neuron Array to generate spikes for the next
+  •    Then, if the Prefix nodes with the largest subset are
+                                                                           layer, which is a general and necessary unit for SNNs. In
+       multiple, ProSparsity can select any of them. In practice,
+                                                                           this study, we mainly focus on our proposed PPU design.
+       we keep the edges from the node with largest index.
+                                                                           Based on the analysis of the prior section, we can divide
+After this pruning, the ProSparsity graph will become a                    the whole processing into four stages: relationship detection,
+directed forest called ProSparsity Forest.                                 spatial information pruning, meta-information generation, and
+   ProSparsity Forest. As shown in Fig. 3 (c), the ProSparsity             ProSparsity-based computation, which correspond to the De-
+Forest will be the fundamental data structure of our design.               tector, Pruner, Dispatcher, and Processor, respectively.
+After pruning, the ProSparsity Forest may contain multiple                    Detector. The input of the Detector is the spike matrix
+directed trees that are independent of each other. Each tree               stored in the spike buffer. The Detector can identify the prelim-
+maintains complete partial ordering information for a process-             inary spatial and temporal relationships for each combination
+ing order constraint of spiking GeMM. In spiking GeMM, if                  of two spike rows, which can be used to build the ProSparsity
+we process a spike matrix from the top to the bottom, we                   Graph. After that, the Detector will send the original spatial
+may not be able to reuse the result of the prefix row since                and temporal relationships to the Pruner and Dispatcher to
+the prefix result is not computed. The topology order of the               build the ProSparsity Forest.
+product sparsity tree from root to leaves guarantees that each                Pruner. The Pruner will prune the complex spatial rela-
+node comes after its prefix, promising high effectiveness for              tionship to generate a Prefix for each spike row. Pruner is also
+ProSparsity.                                                               responsible for generating the ProSparsity pattern. After that,
+   Meta Information. In practice, ProSparsity Forest is                    Pruner forms the two pieces of information into meta-spatial
+formed by meta information, which is the real data structure               information, as shown in Fig. 3 (d), and sends them to the
+in the processing of ProSparsity, Fig. 3 (d). Meta information             Dispatcher.
+has two types: spatial information and temporal information,                  Dispatcher. The Dispatcher gathers the spatial information
+which correspond to the spatial and temporal relationships.                of every spike row and extracts the temporal information
+First, the temporal information is a vector with a size of m,              according to the temporal relationship. The Dispatcher can
+which records the execution order of each spike row. The                   construct the ProSparsity Forest with meta information. The
+ProSparsity will follow the temporal vector to issue the index             ProSparsity Dispatcher leverages the meta information to
+of the spike row. After that, we can find the spatial information          dispatch the instructions and data to the Processor for the
+according to the issued index. The spatial information is a list           computation of ProSparsity-based spiking GeMM.
+ordered by the row index, and each element in the list contains               Processor. The Processor accesses the weight and output
+the Prefix index and ProSparsity pattern. We can use the spatial           buffer to fetch the corresponding data based on the Prefix
+information to complete ProSparsity-based computation. The                 and ProSparsity pattern. Based on the temporal information,
+meta information can ensure the ProSparsity can be processed               the Processor can finish inner product computation in the
+correctly and efficiently.                                                 topology order of ProSparsity Forest and store the result in
+   Finally, through the aforementioned development of the                  the output buffer. When the latter spike row needs the Prefix,
+the Processor can immediately access it from the output buffer.    in network routers [63], data mining [64], and various data-
+After finishing all computations of a spiking matrix, PPU will     intensive applications [22]. Specifically, we use Ternary CAM
+send the result to the SFU or Spiking Neuron Array.                (TCAM) [59] to reduce the time complexity to O(1) for
+   Support for Transformers. To support future SNN models,         each row and O(m) in total for a spike matrix, as shown
+we extend our PPU with an SFU. We reuse the PPU for                in Fig. 5 (a). TCAM can match bits with three states: 0, 1,
+spiking-GeMM-like operations in spiking attention [2], [94].       and “don’t care” (X), providing flexibility for fuzzy matching.
+With the assistance of the SFU for exponentiation and multi-       Therefore, we can use the TCAM unit to find all subset indices
+plication in softmax or layer normalization, we support various    of a spike row within a single clock cycle.
+spiking transformers [2], [60], [84], [94].                           Step 0 , when a spike sub-matrix (tile) is sent to PPU,
+                                                                   Detector will pre-load a m × k spike tile into the TCAM with
+            V. P RO S PARSITY P ROCESSING U NIT                    m entries, each entry with k bits. After initialization, Step 2
+  In this section, we design different parts of the ProSparsity    and 3 will read each spike row (e.g., Row 2) and mask the
+Processing Unit based on the insight of Sec. III.                  one value of the row as ’X’ (mask(1011) = X0XX). After
+                                                                   that, Step 4 , TCAM will return all matched entries’ indices
+A. Spiking GeMM Tiling                                             (i.e., Subset Index, SI). Finally, we realize efficient and parallel
+   Prosperity conducts the tiling method for processing each       spatial information detection with only one cycle.
+spiking GeMM in a layer. Tiling of matrix multiplication is           Temporal Detection. We use the number of spikes in
+a commonly used technique in DNN accelerators [10], [12],          each row as preliminary temporal information, as shown in
+[23] that decomposes a large GeMM into several smaller             Fig. 5 (a) 1 . To efficiently obtain the number of spikes,
+tiles. This approach allows the on-chip buffer to efficiently      we introduce the Popcount [41] operation, which counts the
+capture the data reuse and reduce the expensive global memory      number of ones (NO) in a binary sequence. We place multiple
+traffic during the computation of large GeMMs. As shown in         lightweight popcount units in the Detector to obtain this
+Fig. 5, we adopt a tiling size of m × n × k in Prosperity,         preliminary information.
+where the spike sub-matrix has m rows and k columns, the           C. ProSparsity Pruner
+weight sub-matrix has k rows and n columns, and the output
+                                                                      The Pruner prunes the spatial relationships to a single Prefix
+matrix has m rows and n columns. Therefore, we set the
+                                                                   for each row according to our pruning rules.
+corresponding buffer size for on-chip buffers and consider
+                                                                      Efficient Pruning. The Detector provides spatial informa-
+a double buffer mechanism to overlap memory access from
+                                                                   tion (Subset Index, SI) with only subset information without
+DRAM with computation.
+                                                                   considering the partial ordering underlying the temporal rela-
+   However, the tiling strategy for ProSparsity is much more
+                                                                   tionship (Number of One, NO). As we discussed in Sec. III-C,
+important than that in previous DNN/SNN accelerators be-
+                                                                   for two rows with Exact Match (EM), only the row with the
+cause the selection of tile sizes can significantly impact its
+                                                                   smaller index should be as the Prefix. Therefore, as shown in
+final sparsity and performance. For example, if we only set
+                                                                   Fig. 5 (b) 5 , we design a proper subset filter for the spike rows
+m = 1, apparently, ProSparsity will be invalid because there
+                                                                   with a larger index than the existing query row to eliminate
+is no opportunity to reuse a Prefix. Similarly, the selection of
+                                                                   violations according to the partial ordering. Combining SI and
+k can also influence the sparsity. However, we cannot select a
+                                                                   NO vectors, we can directly eliminate the EM row with a
+very large m or k, which will cause excessive area and energy
+                                                                   larger index. For instance, we remove Row 4 from the Prefix
+overhead and performance drops. Fortunately, the number of
+                                                                   candidates for Row 2, where Row 4 has a larger index and is
+n has no impact on ProSparsity.
+                                                                   EM to Row 2. After that, we employ an Argmax unit to select
+   Therefore, we build an end-to-end evaluation model to
+                                                                   only one Prefix (Row 1) for Row 2, based on the heuristic
+quantitatively discuss the influence of the tile size in detail
+                                                                   pruning rules in Sec. III-D.
+in Sec. VII-B, considering not only the sparsity but also
+                                                                      ProSparsity Sparsifying. Consequently, we can utilize the
+the hardware performance (speedup) based on our complete
+                                                                   selected Prefix row to generate the ProSparsity pattern, which
+Prosperity design. Here, we first present the PPU design in
+                                                                   contains the spike values to be calculated. We use only one
+the following sub-sections.
+                                                                   XOR (exclusive or) unit to get the ProSparsity for the query
+B. ProSparsity Detector                                            row by conducting a bit-wise XOR operation in Step 6 .
+                                                                   For example, the Row 2 with the Prefix Row 1 can get
+   Spatial Detection. As discussed in Sec. III-D, the detection
+                                                                   the ProSparsity pattern: 1011 ⊕ 1001 = 0010. Because the
+of the ProSparsity is to find the PM and EM relationship
+                                                                   Prefix row is a subset of the query row, the bit-wise XOR is
+for spike rows. Therefore, the ProSparsity graph requires
+                                                                   equivalent to the operation Sq − Sp .
+O(m2 ) complexity to finish detection, which introduces too           The spatial information for a query row is now completed
+much runtime overhead. To tackle this challenge, we employ         and will be sent to the Dispatcher for subsequent usage.
+the parallel search ability of Content Addressable Memory
+(CAM) [68], which is a specialized type of memory that             D. ProSparsity Dispatcher
+searches its entire stored contents in a single clock cycle to       The ProSparsity Dispatcher serves as a link between each
+find a match to input query data. CAM is commonly used             part of the unit in PPU, as shown in Fig. 5 (c). It gathers
+                                                   (a) Detector                                                      5            Prune               (b) Pruner
+                                                                                                     SI NO                                                                           6   Sparsify                Weight Value          Prefix Result Value
+                                                         TCAM
+                     0   Pre-load                                                                0 1      2                        2                     Row 2   1 0 1 1
+                                             0 1    0    1   0       1                           1 1      2                        2                                                         XOR                       +             Prefix/Partial Sum
+
+
+
+
+                                                                             Subset Index (SI)
+                                                                                                                                                 Row 1           1 0 0 1
+
+
+
+
+                                                                                                                                        ArgMax
+                                             1 1    0    0   1       1                           2 1      3                        0
+           0 1   0       1   0
+
+
+
+
+                                                                                                                  Proper Subset
+           1 1                               2 1    0    1   1       1                           3 1      1                        1                                                                                                  Output Result Value
+                 0       0   1
+                                 2   Read    3 0    0    1   0       1                           4 1      3                        0                             0   0       1       0
+           2 1   0       1   1
+                                                                                                                                                                                                     Load Weight
+       m                                     4 1    0    1   1       1                           5 0      3                        0                                                                                                                           k
+           3 0   0       1   0                                                                                                                              Product Sparsity                            10
+                                                                                                                                                                                                                                Weight Buffer
+                                     Row 2   5 1    1    0   1       0
+           4 1   0       1   1
+                                                                 4   Match                            Product Sparsity Table
+           5 1   1       0   1                 X    0    X   X                                                                                               Virtual ProSparsity                      0 0 1 0                                                 11
+                                                                 3   Mask                            Index, Prefix, ProSparsity                                    Forest
+                   k                                                                                                                                                                                                   PE       PE    ……      PE         PE
+                                               1    0    1   1                                       ……                                                                                                 Addr                                                  Add
+       Spike Buffer                                                                                                                                          1   3           3   1                     Decoder
+                                                                                                     Row 2, Row
+                                                                                                            Row 11, 0 0 1 0
+                                                                                                                                                                                                         2                              n           12    Store
+                                                        Popcount
+                     1   Popcount                                                                                                                            2   0   4   2               5   6
+
+
+
+
+                                                                                                 Stable
+                                                                                                                                                                                                       Row 1
+
+
+
+
+                                                                                                 Sorter
+                                               2    2    3   1   3       3                                    3              0      1     2      4   5                                                                          Output Buffer                  m
+                                                                                                                                                                     5   4                                   9
+                                              Number of One (NO)                                                         Sorted Index                                                                  Load Prefix
+                                                                                                 7    Sort                             (c) Dispatcher                                    8   Issue                      (d) Processor
+        Fig. 5. ProSparsity Processing Unit (PPU) is processing the Row 2 in the ProSparsity spiking GeMM with the tiling size of m × n × k.
+
+spatial information from the Pruner and stores it in the product                                                                                          NO. The Prefix has a smaller index than the Suffix.
+sparsity table. It also extracts temporal information according                                                                                      Therefore, we can use a stable sorting approach to generate
+to temporal relationships from the Detector. The Dispatcher                                                                                          the temporal information, as shown in Fig. 5 (c) 7 . After
+extracts the execution order and then dispatches tasks to                                                                                            sorting, we can ensure that the Prefix comes before the Suffix
+the Processor. However, there are still some difficulties in                                                                                         with the temporal information, which is easy to prove. We
+generating execution orders under the space and time trade-                                                                                          implement the parallel stable sorter, using a bitonic sorter [4]
+offs.                                                                                                                                                with O(log22 m) time complexity and O(m) space complexity,
+   Memory Space Issue. Generally, the spatial information                                                                                            which can concurrently conduct the sorting with the Detector
+contains the complete partial ordering for the ProSparsity                                                                                           and Pruner. In this way, the spatial and temporal informa-
+Forest. If we record the Prefix and Suffix for each row, we                                                                                          tion can be completed in the Dispatcher and form a virtual
+can traverse the Forest to generate an execution order using                                                                                         ProSparsity Tree, as shown in Fig. 5 (c).
+Breadth or Depth First Search. However, because one spike                                                                                               Then, the Dispatcher issues tasks ( 8 ) to the Processor
+row may have multiple Suffixes, we should use a matrix with                                                                                          according to the meta information.
+the shape of m × m to record the two-row spatial information
+                                                                                                                                                     E. Product Sparsity Processor
+of m rows. Furthermore, the Prefix-Suffix matrix has a large
+density, as shown in Tbl. II. Even if we adopt a sparse format                                                                                          The Processor conducts ProSparsity-based matrix computa-
+to store the matrix, the space complexity is still O(m2 ) and                                                                                        tion according to the guidance of the Dispatcher.
+will lead to irregular accesses. Therefore, the O(m2 ) memory                                                                                           ProSparsity Row-wise Dataflow. Prosperity employs a
+space will significantly enlarge the on-chip area more than 10                                                                                       row-wise dataflow, i.e., a spike row with the size of k is
+times compared to the existing design, which is unacceptable                                                                                         processed at a time, and a corresponding output row with the
+for our design. Fortunately, there is only one Prefix for each                                                                                       size of n is generated, involving n × k weight. The Processor
+row. We exploit this feature of ProSparsity Forest to store the                                                                                      processes spike rows in the order provided by the temporal
+spatial information in the product sparsity table with O(m),                                                                                         information in the Dispatcher. This order guarantees that the
+as shown in Fig. 5 (c). Therefore, we eliminate the suffix                                                                                           Prefix row in the output matrix is already generated when
+information in the tree to achieve space efficiency.                                                                                                 processing the Suffix row. For each spike row, the Prefix row
+   Search Time Issue. However, that will cause the search                                                                                            in the output matrix is fetched and serves as a starting point of
+time issue when we lack Suffix information, i.e., we cannot                                                                                          the partial sum. Then, we examine the position of the spikes.
+run Breadth or Depth First Search in a O(m) time. We need to                                                                                         For each spike, we fetch the corresponding row in the weight
+traverse the product sparsity table and then traverse the Forest                                                                                     matrix and accumulate it on the partial sum. The summed
+from the leaf to the root node with O(m × d) time, where d                                                                                           result is written to the corresponding row in the output matrix.
+is the depth of the Forest. In Sec. VII-D, our ablation study                                                                                           Efficient dataflow implementation. Our Processor design
+shows this way will slow down Prosperity by 32%.                                                                                                     realizes the aforementioned dataflow, as shown in Fig. 5 (d).
+                                                                                                                                                     It mainly consists of a PE array for vectorized accumulation
+   Efficient Generation. We propose an interesting and ef-
+                                                                                                                                                     and an address decoder to get data addresses for weight and
+ficient solution to obtain the execution order faster without
+                                                                                                                                                     output buffer. In the process of each row, the Prefix row result
+searching in the product sparsity table. This solution is based
+                                                                                                                                                     is loaded to the partial sum register in the PE array, as shown
+on two rules of our design:
+                                                                                                                                                     in Step 9 in Fig. 5. Step 10 is performed and controlled by the
+  •   For the Partial Match, the Prefix is the proper subset of                                                                                      address decoder. This weight address is decoded by bit scan
+      the Suffix, i.e., the number of one (NO) in the Prefix is                                                                                      forward [42] operation, which finds the index of the first 1 in
+      smaller than the Suffix.                                                                                                                       the ProSparsity pattern. The decoder then flips this found bit to
+  •   For the Exact Match, the Prefix and Suffix have the same                                                                                       0. Step 11 is performed by the PE array for accumulation. Step
+     Time (Clocks)
+
+          0                   Tile n                       0               Tile n+1                      0       the Processor runs on Tile n − 1 with the meta information
+              2      3   4    5    6 Row 0                     2   3   4   5   6 Row 0                           already gathered in the Dispatcher. Therefore, the product
+                 2       3    4    5 6 Row 1                      2 3      4   5    6   Row 1
+ProSparsity
+              Row 2   2       3    4   5     6                 Row 2 2     3   4    5   6
+                                                                                                             …   sparsity table for spatial information adopts a double-buffer
+ Pipeline
+                  Row 3       2    3   4     5    6                Row 3 2     3    4   5   6                    design to enable the two-phase overlapping. Based on intra-
+              1           7                                    1       7                                         phase pipeline designs, the cycle of the ProSparsity processing
+          8   b      b 12 Row 1                            8   b 12    Row 3                             8       phase is always less than the computing phase. Thus, the
+                     8   a 12 Row 2                            8   b   b   b 12 Row 1           10, 11
+Computation Row 3 8 a b 12
+                                                 9,10,11                                                     …   ProSparsity processing phase of a tile is perfectly overlapped
+                                                                   Row 0 8     a    b 12
+  Pipeline
+            12      Row 0 8 a                     b   b    b 12                Row 2 8      a     b      b 12
+                                                                                                                 by the computation phase of the previous tile. Since we
+                                  Tile n-1                                 Tile n                                conduct tiling and split a large spiking GeMM into multiple
+                         Fig. 6. ProSparsity pipeline scheduling.                                                tiles, the computation phase can cover almost all of the
+                                                                                                                 ProSparsity processing phases except for the first tile phase,
+10 and Step 11 are repeated until all the 1s in the spike row
+                                                                                                                 which has a minor impact.
+are consumed, and the result is written back ( 12 ) to the output                                                   Finally, Prosperity can realize an overhead-free ProSparsity
+buffer. Since the final result of a tile in the output matrix is the                                             processing and fully utilize the computation units with the
+summation of multiple results, this result will also accumulate                                                  pipeline scheduling.
+on the partial sum of the output tile. Our design efficiently
+bypasses all the zeros in the ProSparsity pattern, supporting                                                                         VII. E VALUATION
+unstructured sparsity.                                                                                           A. Methodology
+                             VI. P IPELINE S CHEDULING                                                              SNN models and dataset. We evaluate Prosperity on
+                                                                                                                 spiking CNNs that previous SNN ASICs design targets. We
+   We design a pipeline scheduling mechanism to maximize
+                                                                                                                 also evaluate Prosperity on different spiking transformers
+the utilization of our hardware in PPU. A mini example of
+                                                                                                                 that prior SNN accelerators do not efficiently support. For
+a pipeline with 4 rows is shown in Fig. 6. The whole PPU
+                                                                                                                 model architecture, we select VGG [75] and ResNet [38]
+can be divided into two phases: the ProSparsity processing
+                                                                                                                 for spiking CNNs and SpikeBERT [60], SpikingBERT [2],
+phase and the computation phase. The Detector, Pruner, and
+                                                                                                                 Spikformer [94], SDT [84] for spiking transformers. We use
+Dispatcher are responsible for ProSparsity processing, while
+                                                                                                                 the default configuration for a number of layers, dimensions,
+the Processor conducts the computation phase. These two
+                                                                                                                 and time steps in the paper. These SNN models run on NLP
+phases are conducted in a tile-by-tile and sequential manner.
+                                                                                                                 or CV datasets, including SST-2, SST-5, MR, QQP, MNLI,
+A. Intra-phase Pipeline                                                                                          CIFAR10, CIFAR100, CIFAR10-DVS [48], [53], [69], [76],
+   The Step 2 to 6 in Detector, Pruner, and Dispatcher is fully                                                  [78], [82]. To get the spike activation pattern in each layer,
+pipelined, as illustrated in Fig. 6. Therefore, this pipeline has                                                we run these models implemented in PyTorch. We extract the
+five stages, achieving the throughput of 1 instruction (spike                                                    runtime information and use it in our experiment. Prosperity
+row) per cycle. Therefore, when the tile has m rows, we                                                          yield iso-accuracy compared to the model in PyTorch as our
+only need m + 4 cycles for all the spatial information. The                                                      proposed ProSparsity is an algorithm-agnostic and lossless
+temporal information could be extracted (Step 1 and 7 )                                                          method.
+concurrently with Step 2 to 6 pipeline due to our observation                                                       Hardware Configuration. Prosperity configuration is
+that decouples the spatial and temporal information. The                                                         shown in Tbl. III. We implement our core architecture in
+Step 7 takes the parallel bitonic sorter with O(log22 m) time                                                    SystemVerilog [40], including PPU, spiking neuron array,
+complexity to get the sorted temporal information. Thus, the                                                     and SFU. The bitwidth of weights is set to 8 bits, which
+cycles of sorting are far less than m. The pre-load Step                                                         aligns with previous ASICs and neuromorphic chips. We use
+ 0 can perform concurrently through a double-buffer-based                                                        Synopsys Design Compiler to synthesize our RTL logic to
+TCAM design. Therefore, the overall cycle for a ProSparsity                                                      get area and power with ARM’s standard cell library under
+processing phase is m + 4.                                                                                       a commercial 28nm process. The spike, weight, and output
+   For the computation phase, our target is to maximize the                                                      buffer are evaluated by CACTI 7.0 [3] under a 28nm process
+utilization of the PE array. The Processor also has four stages                                                  to get area and power. The off-chip DRAM power is simulated
+in the pipeline: Step 8 : issue, Step 9 and 10 for decode                                                        by DRAMsim3 [54].
+and load, Step 11 is execute, and Step 12 : write back. For                                                         Architecture Modeling and Baselines. We build a cycle-
+simplicity, we present them into ‘a’ and ‘b’, as depicted in                                                     accurate simulator to emulate the behavior of Prosperity and
+Fig. 6. For each spike row, the computation phase may have                                                       evaluate the runtime performance. Prosperity is benchmarked
+different cycles due to the spike row having different sparsity.                                                 against dense DNN accelerator Eyeriss [12], SNN accelerators
+Therefore, for m rows, the overall cycle for a computation                                                       PTB [52], SATO [58], and MINT [87], [88], algorithm-
+processing phase is ≥ m + 4.                                                                                     modified SNN accelerator Stellar [62], and NVIDIA A100
+                                                                                                                 GPU. We compare their configuration and performance on
+B. Inter-phase Pipeline.                                                                                         VGG-16 with CIFAR100 in Tbl. IV. We maintain the same
+  We design an inter-phase pipeline to overlap these two                                                         frequency in every accelerator, while Eyeriss and Stellar have
+phases. The ProSparsity processing phase is in Tile n, while                                                     31% more PEs than SATO, PTB, MINT, and Prosperity in
+                   0.0                                                         0%
+                              32       64       128 256 512 1024 2048
+
+                        1.5                                              20%
+                                                                         15%
+                        1.0
+                                                                         10%
+                        0.5
+                                                                         5%
+                        0.0                                              0%
+                                   4        8     16     32   64   128
+
+                                                                                                                                                                 TABLE IV
+                  Latency                          (a)                   Density Latency               (b)              Density          C OMPARE Prosperity WITH PRIOR ACCELERATORS ON VGG-16.
+                  0.5                                                        10% 1.5                                      20%
+                  0.4                                                         8%                                                                  Eyeriss [12]   SATO [58]   PTB [52]   MINT [87]   Stellar [62]   Prosperity
+                                                                                                                           15%
+                                                                                    1.0
+                  0.3                                                         6%                                                   Frequency       500MHz        500MHz      500MHz      500MHz     500 MHz        500MHz
+                                                                                                                           10%
+                  0.2                                                         4%    0.5                                            Technology        28nm          28nm       28nm        28nm         28nm          28nm
+                  0.1                                                         2%                                           5%
+                                                                                                                                   PEs                168          128         128         128          168           128
+                   0                                                          0%    0.0                                    0%
+                          32       64       128 256 512 1024 2048                          4    8    16 32 64      128             ALU             8-b MAC        8-b Add    8-b Add     2-b Add     12b Add       8-b Add
+                                            Tile Size m                                             Tile Size k                    Area (mm2 )       1.068         1.13         -           -          0.768         0.529
+                              Norm. Power                 Density of ProSparsity          Density of BitSparsity
+                                                                                                                                   Throughputs       29.40         33.63      41.37       62.07       190.44        390.10
+                              Norm. Area                  Norm. latency                   Nom. latency of BitSparsity              (GOP/s)          (1.00×)       (1.14×)    (1.41×)     (2.11×)     (6.48×)       (13.27×)
+                         Fig. 7.            Performance change with tile size m (left) and k (right).                              Energy Effi.      16.67         49.70      34.15       75.61       142.98        299.80
+                                                                                                                                   (GOP/J)          (1.00×)       (2.98×)    (2.05×)     (4.53×)     (8.57×)       (17.98×)
+                                                                                                                                   Area Effi.        27.53         29.76                              247.97        737.17
+                  their design. We simulate Eyeriss, SATO, PTB, and MINT                                                           (GOP/s/mm2 )     (1.00×)       (1.08×)
+                                                                                                                                                                                -           -
+                                                                                                                                                                                                     (9.01×)       (26.78×)
+                  under our simulator framework. We also simulate the For the
+                  performance20%of Stellar [62], we use the statistics reported                                                   larger m generally reduces latency, it also increases hardware
+                               15% since its algorithm modification is not open-
+                  in their paper                                                                                                  overhead for on-chip buffers and TCAM. The pink/coral lines
+                  sourced, and10%we are not able to access its sparsity pattern.                                                  in Fig. 7 illustrates the relationship between area/power and
+                               5%
+                  Since previous   SNN accelerators only support the linear layer                                                 tile size in Prosperity. As m increases, hardware overhead
+                               0%
+4   8   16   32   (e.g., QKV
+                    64 128 256 projection,  output projection, feed-forward layer)                                                grows super-linearly. Therefore, we should carefully weigh the
+                  in spiking transformers but cannot deal with attention and                                                      diminishing returns on latency against the escalating hardware
+                  layer normalization, we run PTB, SATO, and MINT on the                                                          costs when selecting the tile size.
+                  linear layer of spiking transformers for a comparison. We                                                          On the M dimension, a larger m means more rows within
+                  further compare with NVIDIA A100 GPU [67] with 80 GB                                                            a tile, providing a larger scope for searching rows that can
+                  global memory, running SNN models using PyTorch and                                                             be used to exploit product sparsity. For each row in the spike
+                  SpikingJelly [18], measuring the end-to-end inference time and                                                  matrix, they can look up more rows for the prefix, maximizing
+                  power by averaging over the whole dataset. Additionally, we                                                     the product sparsity.
+                  include the state-of-the-art SNN accelerator LoAS [86] in our                                                      On the K dimension, a larger k means more columns within
+                  analysis, which focuses on weight pruning and induces dual-                                                     a tile, making the spike set of each row bigger and more
+                  side sparse computation. We implement LoAS’s algorithm to                                                       complicated and, therefore, harder to find a Prefix. When each
+                  provide a comprehensive sparsity analysis comparing LoAS                                                        spike set is small and simple, rows that satisfy equal or subset
+                  and Prosperity.                                                                                                 relationships are more likely to be found. However, as the tile
+                  B. Tiling Exploration                                                                                           size k gets extremely small, e.g., 4, more rows will appear
+                                                                                                                                  that have less than two spikes. Exploiting product sparsity for
+                     We observe that the appearance of product sparsity is related
+                                                                                                                                  rows that have zero or one spike is meaningless as it does not
+                  to the tile size of the spike matrix. Therefore, we conduct
+                                                                                                                                  need accumulation.
+                  design space exploration on tile sizes to maximize product
+                  sparsity while maintaining a reasonable on-chip buffer size.                                                       According to this exploration, we select a proper tile size
+                  Fig. 7 shows the relationship between latency/density and                                                       for the spike matrix: m = 256 and k = 16.
+                  the spike tile size in Prosperity. The latency is normalized                                                    C. End-to-End Performance Analysis
+                  to the latency of the bit sparsity baseline. The statistics are
+                  averaged across all spiking CNNs and spiking transformers.                                                         Fig. 8 shows the speedup and energy efficiency of Pros-
+                  We observe that larger m always leads to higher product                                                         perity compared with baselines running different models and
+                  sparsity, while a suitable k leads to the highest product                                                       datasets. We can also observe superior throughputs and area
+                  sparsity. In considering the optimal tile size m, we must                                                       efficiency of Prosperity from the statistics in Tbl. IV. We will
+                  balance latency improvements against hardware costs. While a                                                    compare with other baselines and elaborate on the reasons for
+                                                                                                                                  our superiority.
+                                                                   TABLE III                                                         Comparison with ASICs. Eyeriss serves as a baseline
+                                                       Prosperity A RCHITECTURE S ETUP.                                           accelerator that processes SNNs in a dense manner. Prosperity
+                          Tile Size                                  m = 256; n = 128; k = 16.                                    achieves a 14.2× speedup and a 21.4× energy efficiency
+                          Detector                                   1KB TCAM; 8 Popcounts.                                       compared with Eyeriss.
+                                                                                                                                     Prosperity achieves 7.4× and 4.8× speedup, 8.0× and 4.2×
+                          Pruner                                     256 Channel Subset Unit & Argmax.
+                                                                                                                                  energy efficiency over PTB and SATO for the following two
+                          Dispatcher                                 1.5KB Product Sparsity Table.
+                                                                                                                                  main reasons. These two accelerators trade the sparsity for
+                          Processor                                  128 PEs 8-bit Add, n = 128.                                  parallelism when processing spiking GeMM. PTB forces the
+                          Spiking Neuron Array                       32 Cells LIF Neuron.                                         spike matrix pattern into a structured sparsity during spiking
+                          Special Function Unit                      128AND/OR; 32MUL; 8EXP; 1DIV.                                GeMM computation. It processes every bit within a time
+                          On-chip Buffer size                        8KB Spike; 32KB Wgt; 96KB Out.
+                                                                                                                                  window as long as one spike exists in the window. This
+                                                                                                                                  indicates that some zeros are not skipped in PTB. SATO
+                          DDR4 DRAM                                  4Gb × 16 2133R 4 Channels 64GB/s.
+                                                                                                                                  distributes spike rows to multiple PE groups, thus suffering
+                                     21.02               23.11      23.38                                                                                            26.08
+                          20
+Norm. Speedup
+
+
+
+
+                               Spiking CNNs (Vision Tasks)                        Spiking Transformers (Vision and Language Tasks)
+                          16
+                                                                                                                                                                                                                       7.4x
+                          12
+
+                           8
+
+                           4
+
+                           0
+                               CIFAR10   CIFAR100    CIFAR10    CIFAR100    CIFAR10   CIFAR10DVS CIFAR100     CIFAR10   CIFAR10DVS CIFAR100           SST-2      MR          SST-5   SST-2      QQP        MNLI       Geometric
+                               VGG16         VGG16   ResNet18   ResNet18   Spikformer Spikformer Spikformer    SDT         SDT           SDT      SpikeBERT SpikeBERT SpikeBERT SpikingBERT SpikingBERT SpikingBERT        Mean
+                                                         30.19      30.31                                                      26.41
+Norm. Energy Efficiency
+
+
+
+
+                          25
+
+                          20
+
+                          15                                                                                                                                                                                           8.0x
+
+                          10
+
+                           5
+
+                           0
+                               CIFAR10   CIFAR100    CIFAR10    CIFAR100    CIFAR10   CIFAR10DVS CIFAR100     CIFAR10   CIFAR10DVS CIFAR100           SST-2      MR          SST-5   SST-2      QQP        MNLI       Geometric
+                               VGG16         VGG16   ResNet18   ResNet18   Spikformer Spikformer Spikformer    SDT         SDT           SDT      SpikeBERT SpikeBERT SpikeBERT SpikingBERT SpikingBERT SpikingBERT        Mean
+
+                                                                                           Eyeriss    PTB     SATO      MINT       Stellar     A100     Prosperity
+                           Fig. 8.     Speedup and energy efficiency (normalized by Eyeriss) of Prosperity. Prosperity support both spiking CNNs and spiking transformers.
+                                                                                                                               0                       5                     10               15                      20
+from workload imbalance problems. Prosperity has conquered
+                                                                                                                                     1.00      Eyeriss (Dense)
+these two problems through our dedicated Processor design.
+Prosperity’s row-wise dataflow with address decoder identi-                                                                             2.62 PTB (Structured Bit Sparsity)
+                                                                                                                               2.28x Speedup with unstructured Bit Sparsity
+fies the spikes and skips every zero, efficiently processing                                                                              Prosperity 5.97
+unstructured spike patterns in a single PE array. Significantly,                                                               2.16x Speedup with ProSparsity but high overhead temporal extract
+                                                                                                                                                                   Prosperity 12.87
+Prosperity further reuses the prefix result to skip a signifi-                                                                 1.49x Speedup with overhead-free temporal extract
+cant amount of computation through ProSparsity. Prosperity                                                                                                                               Prosperity 19.12
+achieves a 3.6× speedup and 3.1× energy efficiency over
+                                                                                                                                                           Fig. 9. Ablation study of Prosperity.
+MINT. While MINT leverages BitSparsity and quantization
+(weights and membrane potentials), ProSparsity approach pro-
+vides complementary benefits, enabling superior performance.                                                               requires only accumulation, resulting in the underutilization
+                                                                                                                           of computation units in the tensor core. Moreover, Prosperity
+   Compared with the algorithm-hardware co-design acceler-                                                                 efficiently skips the zeros in spiking GeMM through bit
+ator Stellar, Prosperity also achieves a 2.1× speedup and                                                                  sparsity and product sparsity, while GPU’s SIMT architecture
+2.2× energy efficiency on spiking CNNs even when Stellar                                                                   is rigid and unable to eliminate these redundancies.
+has 31% more PEs. The speedup mainly comes from our
+significant improvement in sparsity. Stellar improved sparsity
+                                                                                                                           D. Ablation Study: Speedup Analysis
+by modifying the SNN algorithm, while our proposed product
+sparsity improves the sparsity to a greater extent and in an                                                                  We conduct an ablation study of each part of our design.
+algorithm-agnostic manner.                                                                                                 This study is conducted on all evaluated models with average
+   Comparison with A100. We compared with A100 on                                                                          results. Prosperity efficiently handles the unstructured bit
+the end-to-end performance of various spiking transformers.                                                                sparsity in spiking GeMM through our row-wise dataflow
+Because of the distinctive and diverse operations of spiking                                                               and an efficient address decoder. This unstructured sparsity
+transformers, spiking transformers are not efficiently supported                                                           processing achieves a 2.28× speedup compared to PTB, which
+by previous ASICs [52], [62] and neuromorphic chips [14].                                                                  conducts structured sparsity processing.
+Therefore, GPU is currently the better hardware for spiking                                                                   We then introduce product sparsity in the accelerator but use
+transformers. Prosperity can achieve a 1.79× speedup even                                                                  the high-overhead Dispatcher method explained in Sec. V-D.
+though A100 has 312 TOPS peak throughput and 826 mm2                                                                       This implementation utilizes product sparsity to reduce the
+area that is far more than Prosperity with only 0.529 mm2 .                                                                number of accumulations but induces extra overhead to pro-
+Notice that Prosperity has no significant speedup over A100 on                                                             cess rows in the correct order. It further achieves a 2.16×
+SpikeBERT. This is because SpikeBERT is a relatively large                                                                 speedup compared to simply using bit sparsity. However, this
+model with 12 blocks of transformer encoder and 768 hidden                                                                 implementation does not fully unleash the potential of product
+dimension size. The minor speedup is caused by the better                                                                  sparsity.
+utilization of the computation core on A100. Nevertheless,                                                                    Our proposed overhead-free dispatch elegantly removes the
+Prosperity stands out in the competition for energy efficiency.                                                            overhead of finding the processing order through our keen
+Prosperity has 193× energy efficiency improvement over                                                                     observation. It further achieves a 1.49× speedup compared
+A100. The reasons for this huge lead are twofold. A100’s                                                                   to the high overhead dispatching. Finally, compared to bit
+tensor core is designed for GeMM in DNN, which performs                                                                    sparsity, Prosperity achieves an average of 3.2× speedup for
+highly parallel MACs. However, spiking GeMM in SNN                                                                         all models and up to 7.4× speedup on SpikeBERT on SST-5.
+         (a) Area: 0.529𝑚𝑚2                   (b) Power: 915mW                               25%             34%                                              25%                                                                    31% 48%
+                              0.020
+               0.021                                                                         20%
+                                                                                                                                                                                                                                                                        5.0x
+                                                                                Detector     15%                                                                                                                                      19.7x
+                                                               268.6            Pruner       10%
+                        0.088
+                                                                                Dispatcher    5%
+                                                                                Processor     0%
+                                      467.5
+
+
+
+
+                                                                                                                                   DVS
+
+
+
+
+                                                                                                                                                                                 DVS
+
+
+
+
+                                                                                                                                                                                                            DVS
+
+
+
+
+                                                                                                                                                                                                                                      MR
+                                                                                                   CIFAR10
+
+
+                                                                                                                         CIFAR10
+
+
+                                                                                                                                         CIFAR10
+
+
+
+
+                                                                                                                                                                       CIFAR10
+
+
+
+
+                                                                                                                                                                                                  CIFAR10
+                                                                                                                                                               MNIST
+
+
+
+
+                                                                                                                                                                                                                                                                         MEAN
+                                                                                                              CIFAR100
+
+
+
+
+                                                                                                                                                   CIFAR100
+
+
+
+
+                                                                                                                                                                                       CIFAR100
+
+
+
+
+                                                                                                                                                                                                                  CIFAR100
+
+
+
+
+                                                                                                                                                                                                                                                                 MNLI
+                                                                                                                                                                                                                             SST-2
+
+
+                                                                                                                                                                                                                                           SST-5
+                                                                                                                                                                                                                                                   SST-2
+                                                                                                                                                                                                                                                           QQP
+ 0.303                                                                    3.1   Other
+                         0.074
+                                                                         24.1   Buffer
+                                                                 55.0
+                                                                                DRAM
+                                                        80.4
+                                                                  16.3                             VGG-16 VGG-9 ResNet- LN5 Spikformer                                                                      SDT              SpikeBERT SpikingBERT
+                        0.022                                                                                     18
+                Fig. 10. Prosperity area and power breakdown.                                      Bit Density (PTB / SATO)                                       FS Neuron Density (Stellar*)                                       Product Density (Ours)
+                                                                                                                         Fig. 11. Density comparison of different methods.
+E. Area and Power Analysis
+   Area. The area and power overhead of different parts of                                   a novel, orthogonal direction for optimization. This comple-
+Prosperity is shown in Fig. 10. For the area, we notice that                                 mentary nature allows ProSparsity to be applied to LoAS-
+the Dispatcher is the dominant part in Prosperity, except for                                based accelerators, further reducing computation in dual-side
+the on-chip buffer. This is mainly attributed to the product                                 sparse SNNs. To evaluate this synergy, we tested ProSparsity
+sparsity table that maintains the product sparsity information                               on three spiking CNNs pruned by LoAS. We measured three
+for each row. The Processor with PE array also occupies the                                  key metrics: weight density, original activation density, and
+second largest part of the area.                                                             activation density after applying ProSparsity. The results are
+   Power. The power is evaluated on Spikformer with CI-                                      presented in Tbl. V. LoAS effectively pruned the weights of
+FAR10. DRAM power takes a large proportion of the total                                      these models to a density below 5% with minimum accuracy
+power. For on-chip power, we observe that the proportion of                                  loss. By applying ProSparsity to these pruned SNNs, we
+each part differs from the proportion of the area. The Detector                              achieved a significant reduction in activation density, reducing
+with TCAM consumes most of the on-chip power because                                         the activation density by 4.1× on average.
+every cell in TCAM is activated to perform a highly parallel
+search every cycle, while the product sparsity table with a                                  G. Cost Trade-off Analysis in Prosperity
+large area is only partially activated each cycle. The on-chip
+                                                                                                The overhead of SNN sparsity processing is generally
+buffer and Processor also consume considerable energy. PPU
+                                                                                             necessary for all DNN accelerators. For instance, Stellar’s
+(Detector, Pruner, Dispatcher, Processor) consumes most of the
+                                                                                             sparsity processing overhead is 47% of its total energy and the
+energy of Prosperity’s computation unit. This is reasonable
+                                                                                             computation is only 7% [62]. Prosperity architecture employs
+since spiking GeMM is the bottleneck of SNNs, and we
+                                                                                             ProSparsity processing to reduce floating-point computations
+allocate most of the resources to spiking GeMM.
+                                                                                             in spiking GeMM, introducing a trade-off between processing
+F. Sparsity Analysis                                                                         overhead and computational savings. Here, we provide a quan-
+   Activation-only Sparsity. Fig. 11 compares the density                                    titative analysis, demonstrating that the benefits of ProSparsity
+in bit sparsity, Stellar’s FS neuron sparsity, and our product                               outweigh its costs. The ProSparsity processing phase for a
+sparsity. Stellar introduced the use of FS neurons in SNNs                                   single tile involves:
+to enhance sparsity, but this method sacrifices some accu-                                     •    Bitwise operations in TCAM: m2 × k.
+racy of SNNs and has not been evaluated for applicability                                      •    Integer comparisons in the stable sorter: 2m × log(m).
+to emerging spiking transformers. In contrast, our product                                     •    Integer comparisons in the pruner: m + log(m).
+sparsity is algorithm-agnostic and can be applied to any SNN.                                   Consequently, TCAM bitwise operations have O(m2 ) com-
+Our product sparsity achieves up to a 19.7× and an average                                   plexity, dominating the ProSparsity processing overhead, so
+5.0× reduction in density compared to bit sparsity. Therefore,                               we can safely ignore the rest of the two terms. Using ProSpar-
+ProSparsity on Prosperity brings a 3.2× speedup compared                                     sity, we can reduce ∆S × m × k × n floating-point additions,
+to BitSparsity-only on Prosperity. There is a gap between                                    where ∆S denotes the increase in sparsity introduced by
+the theoretic limit of 5.0× speedup since EM ProSparsity                                     ProSparsity. Our experiments indicate that a floating-point
+has 100% sparsity but still takes one cycle to process. It                                   addition incurs 45× the hardware overhead of a single TCAM
+also achieves an average 3.2× density reduction compared
+to the algorithmic FS neuron method. Our product sparsity                                                                       TABLE V
+                                                                                                         D ENSITY OF WEIGHT AND ACTIVATION IN L OAS [86] WITH
+is effective for spike matrices with arbitrary density. Whether                                                              P RO S PARSITY.
+for relatively dense workloads (e.g., SpikeBERT) or relatively                                               Model                                 Tensor                        LoAS                  LoAS + Prosperity                           Ratio
+sparse workloads (ResNet18), we are able to reduce the density                                                                                     Weight                        1.8%                              1.8%                                -
+                                                                                                             AlexNet
+below 5%.                                                                                                                                     Activation                         29.32%                           9.12%                            3.21×
+   Dual-side Sparsity. We demonstrate the effectiveness of                                                                                         Weight                        1.8%                              1.8%                                -
+                                                                                                             VGG-16
+ProSparsity when applied to dual-side sparse SNN models                                                                                       Activation                         31.07%                           7.68%                            4.05×
+proposed in LoAS. While LoAS focuses on BitSparsity and                                                                                            Weight                        4.0%                              4.0%                                -
+                                                                                                               ResNet-19
+pruned sparse weights in SNNs, our ProSparsity introduces                                                                                     Activation                         35.68%                           6.96%                            5.13×
+bitwise operation. ProSparsity processing is more efficient than      enhance both computational and memory efficiency for DNN
+direct computation when the benefit-cost ratio exceeds one:           models. Similar to LoAS [86] or MINT [87], these methods
+                  ∆S × m × k × n × 45                                 leverage pruning or quantization to compress weight tensors,
+                                      > 1,                            thereby enabling further acceleration in SNN. Notably, Pros-
+                      m2 × k × 1
+                                                                      perity is fundamentally orthogonal to most quantization and
+where we can get the threshold as ∆S = 4.4%. That means               pruning (sparsity) techniques, allowing it to remain compatible
+that Prosperity can benefit when the sparsity increase is larger      with quantized and sparse weights for continued computational
+than 4.4%. Given our current tile size (m = 256, k =                  optimization. This synergy opens up new avenues for future
+16, n = 128) and average sparsity change in Sec. VII-F                research.
+(∆S = 13.35%), the benefit-cost ratio reach 3.0×. It confirms             Redundancy Removal. Redundancy removal methods have
+that our approach yields a favorable trade-off between pro-           been applied in Graph Neural Networks [21], [47] (GNNs)
+cessing overhead and computation reduction, thus validating           accelerators [8], [24], categorized into offline and online ap-
+the efficiency of our proposed method.                                proaches. Offline methods [44] perform global graph traversal
+                                                                      to optimize redundancy elimination but incur heavy overhead,
+         VIII. D ISCUSSION AND R ELATED W ORKS
+                                                                      which is acceptable for static GNN graphs as it is a one-time
+A. Architecture Scalability                                           process. In contrast, online methods [11], [24] use heuristic
+   Prosperity has the potential for good scalability. Both intra-     graph reordering to identify and eliminate redundancy locally,
+PPU and inter-PPU parallelism could be leveraged to scale up          achieving efficiency in hardware but with less redundancy
+the Prosperity architecture.                                          removed than offline methods.
+   Intra-PPU. Intra-PPU parallelism could be achieved by si-              However, these methods are GNN-specific and unsuitable
+multaneously issuing multiple tasks (i.e., nodes in the ProSpar-      for SNNs due to two main reasons. First, GNN methods
+sity tree) to the processor. There are no dependency for nodes        leverage the presence of communities [28] in real-world
+in the same level. Therefore, we can scale to parallel process        graphs [5], [73], [92], which SNN sparsity patterns lack,
+multiple nodes simultaneously.                                        exhibiting random distributions due to dynamic input acti-
+   Inter-PPU. Furthermore, Prosperity’s scalability can be ex-        vation. Second, GNNs typically handle highly sparse graphs
+tended by exploring inter-PPU parallelism through deploying           (≥99.99% sparsity) [1], [13], [24], whereas SNNs have lower
+multiple PPUs within the system. Each PPU can process one             sparsity (60%–90%) [55], [60], [94], making redundancy iden-
+tile of the spiking GeMM at a time, and large models can be           tification fundamentally different.
+divided into multiple tiles.
+                                                                                            IX. C ONCLUSION
+B. SNN Accelerators                                                      In conclusion, this study introduces ProSparsity, a ground-
+   Besides the work discussed in Sec. II-C, there have been           breaking sparsity paradigm for SNNs that significantly en-
+extensive work utilizing the bit sparsity to efficiently accelerate   hances computational efficiency beyond traditional bit sparsity.
+SNNs [46], [58], [66], [86], [88]. SpinalFlow [66] is the             By leveraging combinatorial similarities within spike matrices,
+first architecture designed for SNNs. It target on temporal           ProSparsity enables substantial reductions in computations and
+coded SNNs to utilize BitSparsity and proposes time batching          energy consumption. Our proposed architecture, Prosperity,
+to reduce data movement. SATO [58] utilize bucket-sort to             effectively addresses the spatial and temporal challenges of
+evenly distribute the task of sparse addition to multiple PEs.        implementing ProSparsity, achieving linear time complexity
+SATA [88] is a sparsity aware SNN accelerator that build upon         and overhead-free sparse processing. The results demonstrate
+systolic array, with a special support for SNN training.              Prosperity’s superiority over state-of-the-art SNN accelerators,
+   Recent works have introduced DNN techniques like quan-             with average speedups of 7.4× and 1.8× compared to PTB
+tization and pruning to SNNs for more efficient accelerators.         and A100 GPU, respectively. Moreover, Prosperity achieves
+MINT [87], built upon SATA [88], incorporates weight and              remarkable energy efficiency improvements of 8.0× and 193×
+membrane potential quantization to reduce memory footprint.           over these benchmarks. These advancements not only push the
+LoAS [86], the accelerator considering both spike bit sparsity        boundaries of SNN acceleration but also open new avenues for
+and pruned weight sparsity, proposes a parallel dataflow for          efficient AI processing across diverse applications.
+dual-side sparsity processing. Our ProSparsity introduces a                              ACKNOWLEDGEMENTS
+novel sparsity paradigm in SNN activation, orthogonal to
+weight quantization and pruning, indicating potential for future         This work was supported in part by NSF grants 2328805
+integration with these techniques.                                    and 2112562, as well as Duke University’s internal grant,
+                                                                      the Beyond the Horizon Initiative. The authors thank the
+C. Efficient DNN                                                      anonymous reviewers for their constructive feedback, which
+   Quantitation and Sparsity. Compression techniques such             helped improve this work. We also extend our gratitude to
+as quantization [17], [20], [30], [32], [37], [56], [85] and spar-    Bowen Duan, Tergel Molom-Ochir, Jonathan Ku, Dr. Ziru Li,
+sity [31], [34], [37], [51], [81], [93] are widely employed in        and Dr. Yangjie Zhou for their technical support and insightful
+DNN accelerators [9], [33], [35], [36], [79], [83], [89]–[91] to      discussions.
+                             A PPENDIX                                      •  CUDA 12.1
+A. Abstract                                                                 •  CACTI 7.0
+   Our artifact is the simulator for Prosperity, which evaluates             4) Data sets and models: The computer vision model
+the runtime performance and energy.                                       including spiking VGG-16, ResNet-18, and Spikformer, Spike-
+   We evaluate Prosperity on SNN models based on CNN                      Driven-Transformer models are run on image classification
+model architecture or transformer architecture for image                  dataset CIFAR10, CIFAR100, CIFAR10-DVS. NLP models
+recognition and natural language processing tasks. For spiking            including SpikeBERT, SpikingBERT are run on NLP dataset
+CNN models, we have VGG16 and ResNet18. For spiking                       GLUE (SST-2, MNLI, QQP), SST-5, MR.
+transformers, they include Spikformer, SDT, SpikeBERT, and
+                                                                          D. Installation
+SpikingBERT. These models are tested on eight dataset from
+NLP to image recognition, including SST-2, SST-5, MR, QQL,                   We have well-documented README file to detail the
+MNLI, CIFAR10, CIFAR100, CIFAR10-DVS. We provide                          installation instruction for each experiment at https://github.
+the sparse activation matrix of models on these datasets, it              com/dubcyfor3/Prosperity.
+would be used for architecture performance simulation. Our
+                                                                          E. Experiment workflow
+simulator evaluates the performance of Prosperity and baseline
+accelerators according to the provided sparse matrices. We run              The README file also specifies the detailed experiment
+all the experiments on a Ubuntu server with an NVIDIA A100                workflow to get the results reported in paper.
+GPU.
+                                                                          F. Evaluation and expected results
+B. Artifact check-list (meta-information)                                   Our artifact evaluate the runtime performance of our pro-
+  •   Compilation: NVCC 12.1, GCC/G++ 11.3.0.                             posed Prosperity and baselines. It also include the design
+  •   Model: Spiking VGG, Spiking ResNet, Spikformer, Spike-
+                                                                          space exploration experiment, sparsity analysis, and buffer area
+      Driven-Transformer, SpikeBERT, SpikingBERT.
+  •   Data set: GLUE dataset, SST-5, MR, CIFAR10, CIFAR100,               evaluation.
+      CIFAR10-DVS.
+  •   Run-time environment: Ubuntu 22.04.2 LTS, CUDA 12.1,                G. Methodology
+      PyTorch 2.3.0.                                                        Submission, reviewing and badging methodology:
+  •   Hardware: A server with an x86 64 processor, an NVIDIA
+      A100 GPU.                                                             • https://www.acm.org/publications/policies/artifact-
+  •   Output: Architecture runtime performance, energy, matrix den-           review-and-badging-current
+      sity.                                                                 • https://cTuning.org/ae
+  •   How much disk space required (approximately)?: 8GB.
+  •   How much time is needed to prepare workflow (approxi-                                            R EFERENCES
+      mately)?: It takes about 30 minutes to prepare the environment.
+  •   How much time is needed to complete experiments (approx-             [1] L. Backstrom, D. Huttenlocher, J. Kleinberg, and X. Lan, “Group
+      imately)?: It takes about 2 hours to run all of the experiments          formation in large social networks: membership, growth, and evolution,”
+      including architecture simulation, design space analysis, matrix         in Proceedings of the 12th ACM SIGKDD international conference on
+                                                                               Knowledge discovery and data mining, 2006, pp. 44–54.
+      sparsity analysis.
+                                                                           [2] M. Bal and A. Sengupta, “Spikingbert: Distilling bert to train spiking
+  •   Publicly available?: Our framework is publicly available on              language models using implicit differentiation,” in Proceedings of the
+      GitHub https://github.com/dubcyfor3/Prosperity                           AAAI conference on artificial intelligence, vol. 38, no. 10, 2024, pp.
+  •   Code licenses (if publicly available)?: MIT license.                     10 998–11 006.
+  •   Data licenses (if publicly available)?: The datasets are publicly    [3] R. Balasubramonian, A. B. Kahng, N. Muralimanohar, A. Shafiee,
+      available through their original licensing terms.                        and V. Srinivas, “Cacti 7: New tools for interconnect exploration in
+  •   Archived (provide DOI)?: https://doi.org/10.5281/zenodo.                 innovative off-chip memories,” ACM Transactions on Architecture and
+      14350604                                                                 Code Optimization (TACO), vol. 14, no. 2, pp. 1–25, 2017.
+                                                                           [4] K. E. Batcher, “Sorting networks and their applications,” in Proceedings
+C. Description                                                                 of the April 30–May 2, 1968, spring joint computer conference, 1968,
+                                                                               pp. 307–314.
+   1) How to access: We archive the source code at https:                  [5] A. Broder, R. Kumar, F. Maghoul, P. Raghavan, S. Rajagopalan, R. Stata,
+//doi.org/10.5281/zenodo.14350759. We recommend you ac-                        A. Tomkins, and J. Wiener, “Graph structure in the web,” Computer
+                                                                               networks, vol. 33, no. 1-6, pp. 309–320, 2000.
+cess our GitHub repository: https://github.com/dubcyfor3/                  [6] Y. Cao, Y. Chen, and D. Khosla, “Spiking deep convolutional neural
+Prosperity for the latest version.                                             networks for energy-efficient object recognition,” International Journal
+   2) Hardware dependencies: A server equipped with an                         of Computer Vision, vol. 113, pp. 54–66, 2015.
+                                                                           [7] K. Chellapilla, S. Puri, and P. Simard, “High performance convolutional
+NVIDIA GPU.                                                                    neural networks for document processing,” in Tenth international work-
+   3) Software dependencies: The experiments rely on the                       shop on frontiers in handwriting recognition. Suvisoft, 2006.
+following software components.                                             [8] C. Chen, K. Li, Y. Li, and X. Zou, “Regnn: A redundancy-eliminated
+                                                                               graph neural networks accelerator,” in 2022 IEEE International Sym-
+   • Ubuntu 22.04.2 LTS                                                        posium on High-Performance Computer Architecture (HPCA). IEEE,
+   • Python 3.10                                                               2022, pp. 429–443.
+   • PyTorch 2.3.0                                                         [9] F. Chen, L. Song, and Y. Chen, “Regan: A pipelined reram-based
+                                                                               accelerator for generative adversarial networks,” in 2018 23rd Asia and
+   • Anaconda 24.1.2                                                           South Pacific Design Automation Conference (ASP-DAC). IEEE, 2018,
+   • G++ 11.3.0                                                                pp. 178–183.
+[10] T. Chen, Z. Du, N. Sun, J. Wang, C. Wu, Y. Chen, and O. Temam,                        and software design in the era of large language models,” arXiv preprint
+     “Diannao: A small-footprint high-throughput accelerator for ubiqui-                   arXiv:2410.07265, 2024.
+     tous machine-learning,” ACM SIGARCH Computer Architecture News,                [31]   C. Guo, B. Y. Hsueh, J. Leng, Y. Qiu, Y. Guan, Z. Wang, X. Jia,
+     vol. 42, no. 1, pp. 269–284, 2014.                                                    X. Li, M. Guo, and Y. Zhu, “Accelerating sparse dnn models without
+[11] X. Chen, Y. Wang, X. Xie, X. Hu, A. Basak, L. Liang, M. Yan, L. Deng,                 hardware-support via tile-wise sparsity,” in SC20: International Con-
+     Y. Ding, Z. Du et al., “Rubik: A hierarchical architecture for efficient              ference for High Performance Computing, Networking, Storage and
+     graph neural network training,” IEEE Transactions on Computer-Aided                   Analysis. IEEE, 2020, pp. 1–15.
+     Design of Integrated Circuits and Systems, vol. 41, no. 4, pp. 936–949,        [32]   C. Guo, Y. Qiu, J. Leng, X. Gao, C. Zhang, Y. Liu, F. Yang,
+     2021.                                                                                 Y. Zhu, and M. Guo, “SQuant: On-the-fly data-free quantization
+[12] Y.-H. Chen, T. Krishna, J. S. Emer, and V. Sze, “Eyeriss: An energy-                  via diagonal hessian approximation,” in International Conference
+     efficient reconfigurable accelerator for deep convolutional neural net-               on Learning Representations, 2022. [Online]. Available: https:
+     works,” IEEE journal of solid-state circuits, vol. 52, no. 1, pp. 127–138,            //openreview.net/forum?id=JXhROKNZzOc
+     2016.                                                                          [33]   C. Guo, J. Tang, W. Hu, J. Leng, C. Zhang, F. Yang, Y. Liu, M. Guo,
+[13] G. Dai, Z. Zhu, T. Fu, C. Wei, B. Wang, X. Li, Y. Xie, H. Yang, and                   and Y. Zhu, “Olive: Accelerating large language models via hardware-
+     Y. Wang, “Dimmining: pruning-efficient and parallel graph mining on                   friendly outlier-victim pair quantization,” in Proceedings of the 50th
+     near-memory-computing,” in Proceedings of the 49th Annual Interna-                    Annual International Symposium on Computer Architecture, New York,
+     tional Symposium on Computer Architecture, 2022, pp. 130–145.                         NY, USA, 2023, pp. 1–15.
+[14] M. Davies, N. Srinivasa, T.-H. Lin, G. Chinya, Y. Cao, S. H. Choday,           [34]   C. Guo, F. Xue, J. Leng, Y. Qiu, Y. Guan, W. Cui, Q. Chen, and M. Guo,
+     G. Dimou, P. Joshi, N. Imam, S. Jain et al., “Loihi: A neuromorphic                   “Accelerating sparse dnns based on tiled gemm,” IEEE Transactions on
+     manycore processor with on-chip learning,” Ieee Micro, vol. 38, no. 1,                Computers, 2024.
+     pp. 82–99, 2018.                                                               [35]   C. Guo, C. Zhang, J. Leng, Z. Liu, F. Yang, Y. Liu, M. Guo, and
+[15] L. Deng, G. Wang, G. Li, S. Li, L. Liang, M. Zhu, Y. Wu, Z. Yang,                     Y. Zhu, “Ant: Exploiting adaptive numerical data type for low-bit deep
+     Z. Zou, J. Pei et al., “Tianjic: A unified and scalable chip bridging spike-          neural network quantization,” in 2022 55th IEEE/ACM International
+     based and continuous neural computation,” IEEE Journal of Solid-State                 Symposium on Microarchitecture (MICRO). IEEE, 2022, pp. 1414–
+     Circuits, vol. 55, no. 8, pp. 2228–2246, 2020.                                        1433.
+[16] L. Deng, Y. Wu, X. Hu, L. Liang, Y. Ding, G. Li, G. Zhao, P. Li,               [36]   S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. A. Horowitz, and
+     and Y. Xie, “Rethinking the performance comparison between snns and                   W. J. Dally, “Eie: Efficient inference engine on compressed deep neural
+     anns,” Neural networks, vol. 121, pp. 294–307, 2020.                                  network,” ACM SIGARCH Computer Architecture News, vol. 44, no. 3,
+[17] T. Dettmers, M. Lewis, Y. Belkada, and L. Zettlemoyer, “Llm. int8                     pp. 243–254, 2016.
+     (): 8-bit matrix multiplication for transformers at scale,” arXiv preprint     [37]   S. Han, H. Mao, and W. J. Dally, “Deep compression: Compressing
+     arXiv:2208.07339, 2022.                                                               deep neural networks with pruning, trained quantization and huffman
+[18] W. Fang, Y. Chen, J. Ding, Z. Yu, T. Masquelier, D. Chen, L. Huang,                   coding,” arXiv preprint arXiv:1510.00149, 2015.
+     H. Zhou, G. Li, and Y. Tian, “Spikingjelly: An open-source machine             [38]   K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image
+     learning infrastructure platform for spike-based intelligence,” Science               recognition,” in Proceedings of the IEEE conference on computer vision
+     Advances, vol. 9, no. 40, p. eadi1480, 2023. [Online]. Available:                     and pattern recognition, 2016, pp. 770–778.
+     https://www.science.org/doi/abs/10.1126/sciadv.adi1480                         [39]   A. L. Hodgkin and A. F. Huxley, “A quantitative description of mem-
+                                                                                           brane current and its application to conduction and excitation in nerve,”
+[19] W. Fang, Z. Yu, Y. Chen, T. Huang, T. Masquelier, and Y. Tian,
+                                                                                           The Journal of physiology, vol. 117, no. 4, p. 500, 1952.
+     “Deep residual learning in spiking neural networks,” Advances in Neural
+                                                                                    [40]   IEEE, “IEEE standard for SystemVerilog–unified hardware design,
+     Information Processing Systems, vol. 34, pp. 21 056–21 069, 2021.
+                                                                                           specification, and verification language,” IEEE, New York, NY, USA,
+[20] E. Frantar, S. Ashkboos, T. Hoefler, and D. Alistarh, “Gptq: Accurate
+                                                                                           Standard 1800-2017, 2017.
+     post-training quantization for generative pre-trained transformers,” 2023.
+                                                                                    [41]   Intel Corporation, “Intel® sse4 programming reference,” Intel Corpora-
+[21] T. Fu, C. Wei, Y. Wang, and R. Ying, “Desco: Towards generalizable                    tion, White Paper, 2007.
+     and scalable deep subgraph counting,” in Proceedings of the 17th ACM
+                                                                                    [42]   Intel Corporation, Intel® 64 and IA-32 Architectures Software
+     International Conference on Web Search and Data Mining, 2024, pp.
+                                                                                           Developer’s Manual, 2023. [Online]. Available: https://www.intel.com/
+     218–227.
+                                                                                           content/www/us/en/developer/articles/technical/intel-sdm.html
+[22] T. Fu, C. Wei, Z. Zhu, S. Yang, Z. Yu, G. Dai, H. Yang, and                    [43]   E. M. Izhikevich, “Simple model of spiking neurons,” IEEE Transactions
+     Y. Wang, “Clap: Locality aware and parallel triangle counting with                    on neural networks, vol. 14, no. 6, pp. 1569–1572, 2003.
+     content addressable memory,” in 2023 Design, Automation & Test in              [44]   Z. Jia, S. Lin, R. Ying, J. You, J. Leskovec, and A. Aiken, “Redundancy-
+     Europe Conference & Exhibition (DATE). IEEE, 2023, pp. 1–6.                           free computation for graph neural networks,” in Proceedings of the 26th
+[23] M. Gao, X. Yang, J. Pu, M. Horowitz, and C. Kozyrakis, “Tangram:                      ACM SIGKDD International Conference on Knowledge Discovery &
+     Optimized coarse-grained dataflow for scalable nn accelerators,” in Pro-              Data Mining, 2020, pp. 997–1005.
+     ceedings of the Twenty-Fourth International Conference on Architectural        [45]   Z. Jonke, S. Habenschuss, and W. Maass, “Solving constraint satisfaction
+     Support for Programming Languages and Operating Systems, 2019, pp.                    problems with networks of spiking neurons,” Frontiers in neuroscience,
+     807–820.                                                                              vol. 10, p. 118, 2016.
+[24] T. Geng, C. Wu, Y. Zhang, C. Tan, C. Xie, H. You, M. Herbordt,                 [46]   A. Khodamoradi, K. Denolf, and R. Kastner, “S2n2: A fpga accelerator
+     Y. Lin, and A. Li, “I-gcn: A graph convolutional network accelerator                  for streaming spiking neural networks,” in The 2021 ACM/SIGDA
+     with runtime locality enhancement through islandization,” in MICRO-54:                International Symposium on Field-Programmable Gate Arrays, 2021,
+     54th annual IEEE/ACM international symposium on microarchitecture,                    pp. 194–205.
+     2021, pp. 1051–1063.                                                           [47]   T. N. Kipf and M. Welling, “Semi-supervised classification with graph
+[25] W. Gerstner, “Time structure of the activity in neural network models,”               convolutional networks,” arXiv preprint arXiv:1609.02907, 2016.
+     Physical review E, vol. 51, no. 1, p. 738, 1995.                               [48]   A. Krizhevsky, G. Hinton et al., “Learning multiple layers of features
+[26] W. Gerstner, W. M. Kistler, R. Naud, and L. Paninski, Neuronal                        from tiny images,” 2009.
+     dynamics: From single neurons to networks and models of cognition.             [49]   H.-T. Kung, Why systolic architecture?          Design Research Center,
+     Cambridge University Press, 2014.                                                     Carnegie-Mellon University, 1982.
+[27] S. Ghosh-Dastidar and H. Adeli, “Spiking neural networks,” Interna-            [50]   Y. LeCun, Y. Bengio, and G. Hinton, “Deep learning,” nature, vol. 521,
+     tional journal of neural systems, vol. 19, no. 04, pp. 295–308, 2009.                 no. 7553, pp. 436–444, 2015.
+[28] M. Girvan and M. E. Newman, “Community structure in social and                 [51]   Y. LeCun, J. Denker, and S. Solla, “Optimal brain damage,” in Advances
+     biological networks,” Proceedings of the national academy of sciences,                in Neural Information Processing Systems, D. Touretzky, Ed., vol. 2.
+     vol. 99, no. 12, pp. 7821–7826, 2002.                                                 Morgan-Kaufmann, 1989.
+[29] I. Goodfellow, Y. Bengio, and A. Courville, Deep learning. MIT press,          [52]   J.-J. Lee, W. Zhang, and P. Li, “Parallel time batching: Systolic-
+     2016.                                                                                 array acceleration of sparse spiking neural computation,” in 2022 IEEE
+[30] C. Guo, F. Cheng, Z. Du, J. Kiessling, J. Ku, S. Li, Z. Li, M. Ma,                    International Symposium on High-Performance Computer Architecture
+     T. Molom-Ochir, B. Morris et al., “A survey: Collaborative hardware                   (HPCA). IEEE, 2022, pp. 317–330.
+[53] H. Li, H. Liu, X. Ji, G. Li, and L. Shi, “Cifar10-dvs: an event-stream       [76] R. Socher, A. Perelygin, J. Wu, J. Chuang, C. D. Manning, A. Y. Ng, and
+     dataset for object classification,” Frontiers in neuroscience, vol. 11, p.        C. Potts, “Recursive deep models for semantic compositionality over a
+     309, 2017.                                                                        sentiment treebank,” in Proceedings of the 2013 conference on empirical
+[54] S. Li, Z. Yang, D. Reddy, A. Srivastava, and B. Jacob, “Dramsim3:                 methods in natural language processing, 2013, pp. 1631–1642.
+     A cycle-accurate, thermal-capable dram simulator,” IEEE Computer             [77] C. Stöckl and W. Maass, “Optimized spiking neurons can classify images
+     Architecture Letters, vol. 19, no. 2, pp. 106–109, 2020.                          with high accuracy through temporal coding with two spikes,” Nature
+[55] Y. Li, Y. Guo, S. Zhang, S. Deng, Y. Hai, and S. Gu, “Differen-                   Machine Intelligence, vol. 3, no. 3, pp. 230–238, 2021.
+     tiable spike: Rethinking gradient-descent for training spiking neural        [78] A. Wang, A. Singh, J. Michael, F. Hill, O. Levy, and S. R. Bowman,
+     networks,” Advances in Neural Information Processing Systems, vol. 34,            “Glue: A multi-task benchmark and analysis platform for natural lan-
+     pp. 23 426–23 439, 2021.                                                          guage understanding,” arXiv preprint arXiv:1804.07461, 2018.
+[56] J. Lin, J. Tang, H. Tang, S. Yang, X. Dang, C. Gan, and S. Han,              [79] Y. Wang, C. Zhang, Z. Xie, C. Guo, Y. Liu, and J. Leng, “Dual-
+     “Awq: Activation-aware weight quantization for llm compression and                side sparse tensor core,” in 2021 ACM/IEEE 48th Annual International
+     acceleration,” 2023.                                                              Symposium on Computer Architecture (ISCA). IEEE, 2021, pp. 1083–
+[57] F. Liu, Z. Wang, W. Zhao, Y. Chen, T. Yang, X. Yang, and L. Jiang,                1095.
+     “Randomize and match: Exploiting irregular sparsity for energy efficient     [80] Z. Wang, Y. Fang, J. Cao, Q. Zhang, Z. Wang, and R. Xu, “Masked
+     processing in snns,” in 2022 IEEE 40th International Conference on                spiking transformer,” in Proceedings of the IEEE/CVF International
+     Computer Design (ICCD). IEEE, 2022, pp. 451–454.                                  Conference on Computer Vision, 2023, pp. 1761–1771.
+[58] F. Liu, W. Zhao, Z. Wang, Y. Chen, T. Yang, Z. He, X. Yang, and              [81] W. Wen, C. Wu, Y. Wang, Y. Chen, and H. Li, “Learning structured
+     L. Jiang, “Sato: spiking neural network acceleration via temporal-                sparsity in deep neural networks,” Advances in neural information
+     oriented dataflow and architecture,” in Proceedings of the 59th                   processing systems, vol. 29, 2016.
+     ACM/IEEE Design Automation Conference, 2022, pp. 1105–1110.                  [82] A. Williams, N. Nangia, and S. R. Bowman, “A broad-coverage
+[59] H. Liu, “Routing table compaction in ternary cam,” IEEE Micro, vol. 22,           challenge corpus for sentence understanding through inference,” arXiv
+     no. 1, pp. 58–64, 2002.                                                           preprint arXiv:1704.05426, 2017.
+[60] C. Lv, T. Li, J. Xu, C. Gu, Z. Ling, C. Zhang, X. Zheng, and X. Huang,       [83] B. Yan, Q. Yang, W.-H. Chen, K.-T. Chang, J.-W. Su, C.-H. Hsu, S.-
+     “Spikebert: A language spikformer trained with two-stage knowledge                H. Li, H.-Y. Lee, S.-S. Sheu, M.-S. Ho et al., “Rram-based spiking
+     distillation from bert,” arXiv preprint arXiv:2308.15122, 2023.                   nonvolatile computing-in-memory processing engine with precision-
+                                                                                       configurable in situ nonlinear activation,” in 2019 Symposium on VLSI
+[61] W. Maass, “Networks of spiking neurons: the third generation of neural
+                                                                                       Technology. IEEE, 2019, pp. T86–T87.
+     network models,” Neural networks, vol. 10, no. 9, pp. 1659–1671, 1997.
+                                                                                  [84] M. Yao, J. Hu, Z. Zhou, L. Yuan, Y. Tian, B. Xu, and G. Li,
+[62] R. Mao, L. Tang, X. Yuan, Y. Liu, and J. Zhou, “Stellar: Energy-
+                                                                                       “Spike-driven transformer,” Advances in Neural Information Processing
+     efficient and low-latency snn algorithm and hardware co-design with
+                                                                                       Systems, vol. 36, 2024.
+     spatiotemporal computation,” in 2024 IEEE International Symposium
+                                                                                  [85] Z. Yao, R. Yazdani Aminabadi, M. Zhang, X. Wu, C. Li, and Y. He,
+     on High-Performance Computer Architecture (HPCA). IEEE, 2024,
+                                                                                       “Zeroquant: Efficient and affordable post-training quantization for large-
+     pp. 172–185.
+                                                                                       scale transformers,” in Advances in Neural Information Processing
+[63] S. K. Maurya and L. T. Clark, “A dynamic longest prefix matching                  Systems, S. Koyejo, S. Mohamed, A. Agarwal, D. Belgrave, K. Cho, and
+     content addressable memory for ip routing,” IEEE Transactions on Very             A. Oh, Eds., vol. 35. Curran Associates, Inc., 2022, pp. 27 168–27 183.
+     Large Scale Integration (VLSI) Systems, vol. 19, no. 6, pp. 963–972,              [Online]. Available: https://proceedings.neurips.cc/paper files/paper/
+     2010.                                                                             2022/file/adf7fa39d65e2983d724ff7da57f00ac-Paper-Conference.pdf
+[64] W. I. D. Mining, Introduction to data mining. Springer, 2006.                [86] R. Yin, Y. Kim, D. Wu, and P. Panda, “Loas: Fully temporal-parallel
+[65] S. M. Mniszewski, “Graph partitioning as quadratic unconstrained binary           datatflow for dual-sparse spiking neural networks,” arXiv preprint
+     optimization (qubo) on spiking neuromorphic hardware,” in Proceedings             arXiv:2407.14073, 2024.
+     of the International Conference on Neuromorphic Systems, 2019, pp. 1–        [87] R. Yin, Y. Li, A. Moitra, and P. Panda, “Mint: Multiplier-less integer
+     5.                                                                                quantization for energy efficient spiking neural networks,” in 2024 29th
+[66] S. Narayanan, K. Taht, R. Balasubramonian, E. Giacomin, and P.-                   Asia and South Pacific Design Automation Conference (ASP-DAC).
+     E. Gaillardon, “Spinalflow: An architecture and dataflow tailored for             IEEE, 2024, pp. 830–835.
+     spiking neural networks,” in 2020 ACM/IEEE 47th Annual International         [88] R. Yin, A. Moitra, A. Bhattacharjee, Y. Kim, and P. Panda, “Sata:
+     Symposium on Computer Architecture (ISCA). IEEE, 2020, pp. 349–                   Sparsity-aware training accelerator for spiking neural networks,” IEEE
+     362.                                                                              Transactions on Computer-Aided Design of Integrated Circuits and
+[67] NVIDIA, “Nvidia a100 tensor core gpu architecture,” NVIDIA                        Systems, vol. 42, no. 6, pp. 1926–1938, 2022.
+     Corporation, Tech. Rep., 2020. [Online]. Available: https://www.nvidia.      [89] A. H. Zadeh, I. Edo, O. M. Awad, and A. Moshovos, “Gobo: Quan-
+     com/en-us/data-center/a100/                                                       tizing attention-based nlp models for low latency and energy efficient
+[68] K. Pagiamtzis and A. Sheikholeslami, “Content-addressable memory                  inference,” in 2020 53rd Annual IEEE/ACM International Symposium
+     (cam) circuits and architectures: A tutorial and survey,” IEEE journal            on Microarchitecture (MICRO). IEEE, 2020, pp. 811–824.
+     of solid-state circuits, vol. 41, no. 3, pp. 712–727, 2006.                  [90] A. H. Zadeh, M. Mahmoud, A. Abdelhadi, and A. Moshovos, “Mokey:
+[69] B. Pang and L. Lee, “Seeing stars: Exploiting class relationships for             enabling narrow fixed-point inference for out-of-the-box floating-point
+     sentiment categorization with respect to rating scales,” arXiv preprint           transformer models,” in Proceedings of the 49th Annual International
+     cs/0506075, 2005.                                                                 Symposium on Computer Architecture, New York, NY, USA, 2022, pp.
+[70] S. Park, S. Kim, B. Na, and S. Yoon, “T2fsnn: deep spiking neural                 888–901.
+     networks with time-to-first-spike coding, in 2020 57th acm/ieee design       [91] C. Zhang, Y. Wang, Z. Xie, C. Guo, Y. Liu, J. Leng, G. Sun, Z. Ji,
+     automation conference (dac),” 2020.                                               R. Wang, Y. Xie et al., “Dstc: Dual-side sparsity tensor core for
+[71] M. Pfeiffer and T. Pfeil, “Deep learning with spiking neurons: oppor-             dnns acceleration on modern gpu architectures,” IEEE Transactions on
+     tunities and challenges,” Frontiers in neuroscience, vol. 12, p. 409662,          Computers, 2024.
+     2018.                                                                        [92] J. Zhang, H. Wang, Q. Ding, J. Gu, R. Assouly, W. D. Oliver, S. Han,
+[72] F. Ponulak and A. Kasinski, “Introduction to spiking neural networks:             K. R. Brown, H. Li, Y. Chen et al., “Qplacer: Frequency-aware compo-
+     Information processing, learning and applications,” Acta neurobiologiae           nent placement for superconducting quantum computers,” arXiv preprint
+     experimentalis, vol. 71, no. 4, pp. 409–433, 2011.                                arXiv:2401.17450, 2024.
+[73] S. Redner, “How popular is your paper? an empirical study of the citation    [93] Z. Zhang, Y. Sheng, T. Zhou, T. Chen, L. Zheng, R. Cai, Z. Song,
+     distribution,” The European Physical Journal B-Condensed Matter and               Y. Tian, C. Ré, C. Barrett, Z. Wang, and B. Chen, “H$ 2$o:
+     Complex Systems, vol. 4, no. 2, pp. 131–134, 1998.                                Heavy-hitter oracle for efficient generative inference of large language
+[74] A. Sengupta, Y. Ye, R. Wang, C. Liu, and K. Roy, “Going deeper in                 models.” [Online]. Available: http://arxiv.org/abs/2306.14048
+     spiking neural networks: Vgg and residual architectures,” Frontiers in       [94] Z. Zhou, Y. Zhu, C. He, Y. Wang, S. Yan, Y. Tian, and L. Yuan,
+     neuroscience, vol. 13, p. 95, 2019.                                               “Spikformer: When spiking neural network meets transformer,” arXiv
+[75] K. Simonyan and A. Zisserman, “Very deep convolutional networks for               preprint arXiv:2209.15425, 2022.
+     large-scale image recognition,” arXiv preprint arXiv:1409.1556, 2014.
+

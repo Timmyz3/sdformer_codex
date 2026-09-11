@@ -1,0 +1,258 @@
+                                                 VQ4SNN: Vector Quantization for
+                                           Memory-Efficient FPGA Spiking Neural Networks
+                                                                               Dimitrios Sekertzis and Giorgos Dimitrakopoulos
+                                               Integrated Circuits Lab, Electrical and Computer Engineering, Democritus University of Thrace (DUTH), Greece
+
+
+                                            Abstract—Spiking Neural Networks (SNNs) offer an energy-           overlook the hardware-aware design considerations required
+                                         efficient paradigm for edge AI, making them attractive for hard-      for efficient FPGA deployment.
+                                         ware acceleration. However, deploying dense SNNs on FPGAs
+                                         is constrained by limited on-chip memory for synaptic weight
+                                                                                                                  This work presents VQ4SNN, an FPGA architecture for
+                                         storage. To address this bottleneck, we propose VQ4SNN, a             vector-quantized SNN inference targeting highly pipelined
+                                         hardware-aware architecture that reduces memory requirements          spatial-dataflow accelerators. VQ4SNN reduces the memory
+arXiv:2606.20675v1 [cs.NE] 12 Jun 2026
+
+
+
+
+                                         through Vector Quantization (VQ)-based weight sharing. To the         footprint of synaptic weights by replacing conventional weight
+                                         best of our knowledge, this is the first application of VQ to         storage with a compact vector-quantized representation based
+                                         pipelined spatial-dataflow SNN accelerators on FPGAs. VQ4SNN
+                                         replaces conventional weight storage with a two-level memory
+                                                                                                               on shared codebooks. The proposed approach enables sub-
+                                         organization consisting of compact pointers and a shared code-        stantial on-chip memory savings while maintaining inference
+                                         book of quantized weight vectors. The proposed design integrates      accuracy, thereby improving the scalability of FPGA-based
+                                         FPGA-aware memory mapping with analytical VQ parameter                SNNs. The main contributions of this work are as follows:
+                                         selection, enabling efficient deployment on such accelerators
+                                         while preserving inference accuracy. The experimental results           •   To the best of our knowledge, this is the first FPGA
+                                         show a reduction of 52–61% in the total number of BRAMs                     architecture that applies VQ to pipelined spatial-dataflow
+                                         compared to the state-of-the-art uncompressed FPGA SNNs                     SNN accelerators, enabling substantial weight compres-
+                                         without increasing overall logic utilization.                               sion while preserving inference accuracy.
+                                                                                                                 •   We propose a compressed weight-memory organization
+                                                                I. I NTRODUCTION                                     and an interleaved neuron-layer execution scheme re-
+                                                                                                                     moves the multi-port memory requirements typically as-
+                                            The growing energy demands of conventional Machine                       sociated with shared codebook accesses.
+                                         Learning (ML) have renewed interest in Spiking Neural Net-              •   Comprehensive FPGA evaluation against state-of-the-art
+                                         works (SNNs), whose sparse, event-driven computation offers                 spatial-dataflow FPGA SNNs demonstrates a 52–61%
+                                         a more energy-efficient paradigm for AI inference. Realizing                reduction in BRAM utilization, without increasing logic
+                                         these benefits, however, requires specialized hardware, as                  utilization and preserving inference accuracy.
+                                         general-purpose processors largely negate the intrinsic effi-
+                                         ciency of SNNs. While programmable neuromorphic multi-
+                                                                                                                II. SNN M ODEL AND FPGA A RCHITECTURE T EMPLATE
+                                         cores provide flexibility [1], they incur significant architectural
+                                         overhead. FPGAs offer an attractive alternative by enabling              SNNs process spatiotemporal data using biologically in-
+                                         model-specific SNN accelerators [2] tailored at design time.          spired neuron models. Among the models proposed in the liter-
+                                            The scalability of FPGA-based SNNs is fundamentally                ature, the Leaky Integrate-and-Fire (LIF) neuron is commonly
+                                         constrained by limited on-chip memory resources [3]. In addi-         adopted in FPGA accelerators due to its favorable balance
+                                         tion to storing neuronal state, accelerators must accommodate         between computational complexity and temporal modeling
+                                         large numbers of synaptic weights, ideally keeping the entire         capability. More biologically detailed models, such as Izhike-
+                                         network on-chip. When memory capacity is exceeded, weights            vich and Hodgkin–Huxley, incur higher arithmetic and area
+                                         must be placed in off-chip memory, significantly increasing           overheads because of their reliance on non-linear differential
+                                         energy consumption and reducing performance. Consequently,            equations [2].
+                                         minimizing synaptic-weight storage is a key challenge in                 Accordingly, we use the LIF model as the baseline neuron
+                                         efficient FPGA-based SNN inference.                                   implementation throughout this work. Since VQ4SNN targets
+                                            To address this issue, prior work has adapted compression          synaptic-weight storage and access, the proposed compression
+                                         techniques originally developed for Deep Neural Networks              framework is largely orthogonal to the underlying neuron
+                                         (DNNs), including pruning, quantization, and weight shar-             model and can be integrated into alternative SNN architectures
+                                         ing [4]. Pruning removes less significant weights, quantization       with minimal modification.
+                                         reduces numerical precision, and weight sharing replaces
+                                         groups of similar weights with common representative values.
+                                                                                                               A. LIF Neuron Model
+                                         Extending the latter concept, Vector Quantization (VQ) com-
+                                         presses multi-dimensional weight blocks using a shared code-             To implement continuous-time LIF dynamics on FPGAs, the
+                                         book of representative vectors [5]. Although VQ has recently          governing differential equations are discretized into fixed time
+                                         gained attention in DNNs [6] and has been explored for SNNs           steps. A time step represents the minimum unit of time during
+                                         from an algorithmic in-training perspective [7], existing studies     which a neuron evaluates its inputs, updates its membrane
+Fig. 1. Fully Connected (FC) SNNs with (a) feedforward (FF) connections
+and (b) with feedforward and intra-layer recurrent (R) synapses (in red).
+
+
+
+
+                                                                            Fig. 3. Weight compression: (a) Quantization reduces weight precision. (b)
+                                                                            Scalar weight sharing replaces individual weights with codebook indices. (c)
+                                                                            VQ4SNN applies VQ to pairs of consecutive synaptic weights.
+
+                                                                               Spiker is characterized by clock-driven state update and
+Fig. 2. The organization of Spiker spatial dataflow FPGA SNN accelerator    a sequential spike-processing model. Within each time step,
+with arbitrated active spike selection.
+                                                                            input spikes are arbitrated and processed individually. Whereas
+potential, and potentially emits an output spike. The resulting             the original design employed static spike multiplexing, our
+neuron state update is given by                                             implementation uses spike arbitration as an equivalent lower-
+                            X                                               latency alternative. For each selected spike, the corresponding
+        V (t) = V (t − 1) +      Wi Si (t) − αV (t − 1),    (1)             synaptic-weight row is fetched from weight memory and
+                                                                            broadcast to all neurons in the target layer, enabling parallel
+where V (t) denotes the membrane potential at time step t,                  membrane-potential updates within a single clock cycle.
+Wi are the synaptic weights, and Si (t) are incoming binary                    Neurons first process excitatory spikes received from the
+spikes. The leakage factor α, derived from the membrane                     preceding layer and subsequently process intra-layer inhibitory
+time constant, controls the exponential decay of the membrane               spikes using the same mechanism. This execution model
+potential between consecutive time steps.                                   ensures that each neuron performs exactly one arithmetic op-
+   A neuron emits an output spike whenever its membrane                     eration per active cycle: either a weight addition for excitation
+potential exceeds a threshold Vth . Following a spike, the                  or a weight subtraction for inhibition.
+membrane potential is reset either through a hard reset, which                 After processing all spikes of the current time step, the
+restores the resting potential, or a soft reset, which subtracts            layer enters a state-evaluation phase. Membrane potentials are
+the threshold while preserving residual charge.                             compared with the threshold to generate output spikes. Neu-
+   Fig. 1 illustrates fully connected SNN topologies. The                   rons that fire are reset to a predefined value. Then membrane
+most common organization consists of layers of neurons                      leakage is applied using binary right shifts. In [8] it was
+connected through feedforward synapses (Fig. 1(a)). Some                    shown that approximating decay factors by negative powers
+architectures further incorporate intra-layer inhibitory connec-            of two has negligible impact on inference accuracy. Execution
+tions (Fig. 1(b)), whereby neurons suppress the activity of                 advances to the next time step only after all layers have
+neighboring neurons through negative synaptic weights.                      completed processing of the current one.
+B. Input Encoding
+                                                                            III. W EIGHT COMPRESSION WITH VECTOR QUANTIZATION
+   Static numerical inputs are commonly converted into spike
+trains using firing-rate encoding [2]. Unlike temporal encoding                Neural-network weight compression is commonly achieved
+schemes that rely on precise spike timing, rate encoding                    through quantization [10] and weight sharing, which are often
+represents an input value as the probability of generating a                applied jointly to maximize memory efficiency. Quantization
+spike at each time step. Consequently, larger input values                  reduces storage by mapping weights to low-bit numerical rep-
+produce denser spike trains over the observation window. This               resentations (e.g., INT4 or INT8) using predefined arithmetic
+simple and hardware-efficient encoding mechanism integrates                 transformations, as illustrated in Fig. 3(a). Weight sharing
+naturally with discrete-time SNN inference.                                 further compresses the model by representing similar weights
+                                                                            with a common value selected from a shared codebook and
+C. Spatial-Dataflow FPGA SNN Accelerator                                    replacing individual weights with compact codebook indices
+  Numerous FPGA architectures have been proposed for                        (Fig. 3(b)). In practice, the codebook is typically generated
+SNN inference [2], [3], [8], [9]. However, this work focuses                post-training using clustering algorithms such as K-means.
+on spatial-dataflow accelerators, in which the entire network
+topology is instantiated directly in hardware. A representative             A. Vector Quantization in VQ4SNN
+and resource-efficient example is the Spiker architecture [8]                  VQ4SNN builds on these principles by employing VQ as its
+shown in Fig. 2, which serves as the baseline platform for the              primary compression mechanism. Instead of sharing individual
+proposed VQ4SNN framework.                                                  weights, VQ4SNN groups consecutive synaptic weights into
+                                                                              multi-ported memory. For dense SNN layers, such a design is
+                                                                              impractical on FPGAs due to its area and routing overhead.
+                                                                                 To address this challenge, VQ4SNN adopts an interleaved
+                                                                              execution strategy. Rather than updating all N neurons si-
+                                                                              multaneously, neurons are partitioned into groups of d. Upon
+                                                                              receiving an input spike, a counter iterates through the N/d
+                                                                              pointers associated with the corresponding synaptic row. Each
+                                                                              pointer accesses the shared codebook and retrieves a d-
+                                                                              dimensional weight vector, which is accumulated into the
+                                                                              membrane potentials of the corresponding neuron group. Con-
+                                                                              sequently, the update of all N neurons is distributed across
+                                                                              N/d cycles, or N/(2d) cycles when the codebook can exploit
+                                                                              the native dual-port capability of FPGA BRAMs. All neurons
+                                                                              remain physically instantiated in hardware, but only the cur-
+Fig. 4. Two-level memory organization: Original weights are replaced by       rently addressed group is active, while the remaining neurons
+pointers to vector-quantized codebook entries. Weight vectors are retrieved
+and applied to groups of d neurons in successive phases.
+                                                                              are clock-gated. This organization preserves the deterministic
+                                                                              dataflow execution model of the original architecture while
+                                                                              replacing the prohibitive requirement for N/d simultaneous
+d-dimensional vectors and replaces each vector with a compact
+                                                                              codebook accesses with time-interleaved accesses. The result-
+codebook index. The codebook entries themselves remain
+                                                                              ing latency overhead depends on spike activity density and is
+quantized and are stored using the target weight precision,
+                                                                              evaluated experimentally in Section IV.
+making VQ complementary to conventional low-bit quantiza-
+tion. By sharing entire weight vectors rather than individual                                       IV. E VALUATION
+weights, VQ4SNN exploits correlations among neighboring
+synapses and achieves higher compression ratios than scalar                      To evaluate VQ4SNN, we compare it against Spiker+ [8]
+weight sharing. As shown in Fig. 3(c), VQ is applied to                       on MNIST [11], SHD [12], and Audio MNIST [13], and
+consecutive synapses within each weight row, such that each                   against ModNef [3] on two MNIST configurations of different
+codebook entry corresponds to a d-dimensional weight vector.                  sizes. Spiker+ and ModNef were selected because they rep-
+The codebook is generated offline and post-training using K-                  resent highly resource-efficient spatial-dataflow FPGA SNN
+means clustering on the original weight vectors.                              accelerators, making them strong baselines for assessing the
+   A key design choice in VQ4SNN is the application of VQ                     effectiveness of the proposed approach. All designs target a
+on a per-layer basis rather than across the entire network.                   Xilinx Artix-7 (xc7v020) FPGA operating at 100 MHz.
+The effectiveness of vector quantization varies considerably                     For VQ4SNN, all models were trained using SNNTorch [14]
+between layers, and small layers often contain insufficient                   and implemented in SystemVerilog RTL. Input encoding
+redundancy to justify the reconstruction error introduced by                  follows [8] for MNIST and Audio MNIST, and [12]
+compression. Consequently, VQ4SNN selectively applies VQ                      for SHD. The complete training flow, RTL implemen-
+only to layers that provide meaningful memory savings while                   tation, and experimental framework are open-sourced at
+preserving inference accuracy.                                                https://github.com/ic-lab-duth, while results for Spiker+
+                                                                              and ModNef are taken directly from their published works.
+                                                                                 Table I summarizes the network configurations and imple-
+B. Two-level memory microarchitecture
+                                                                              mentation results. The same network sizes, reported in the first
+   VQ4SNN targets the spatial-dataflow SNN architecture of                    row, are used for each dataset with the only architectural vari-
+Fig. 2, where each incoming spike triggers a wide memory                      ation being the presence of recurrent inhibitory connections
+access that retrieves the synaptic weights for all N neurons in               following network types of Fig. 1. The table reports both the
+the target layer, enabling parallel membrane-potential updates                full-precision reference accuracy and the accuracy achieved in
+within a single cycle. Neuron state, including membrane                       hardware by the implemented FPGA SNNs. For VQ4SNN,
+potentials and firing thresholds, is stored locally in flip-                  the selected compression settings, including the compressed
+flops, whereas synaptic weights reside in BRAM-based weight                   layers and corresponding (d, k) parameters, are also reported.
+memories. The storage and parallel access requirements of                        Across all benchmarks, VQ4SNN preserves inference ac-
+these weights incur a substantial memory footprint. To address                curacy while maintaining LUT, FF, and power consumption
+this challenge, VQ4SNN replaces the conventional BRAM-                        comparable to or lower than the baseline architectures. For
+based weight memory with a two-level hierarchy comprising                     Spiker+, only the combined LUT+FF utilization is available
+a compact pointer memory and a shared vector-quantization                     for SHD and Audio MNIST.
+codebook, depicted in Fig. 4.                                                    The primary benefit is the substantial reduction in BRAM
+   Applying VQ to blocks of d consecutive weights com-                        usage, reaching 52%, 61%, and 53% for MNIST, SHD,
+presses each synaptic row from N weights to N/d point-                        and Audio MNIST, respectively, when compared to Spiker+.
+ers. However, preserving the original fully parallel update                   These savings can be explained using MNIST as an example,
+mechanism would require the shared codebook to service                        where VQ is applied to the 5-bit weights of Layer 1 with
+N/d accesses simultaneously, effectively requiring a highly                   (d, k) = (8, 2048). This layer contains 912 synaptic rows
+                                                              TABLE I
+                       P ERFORMANCE AND RESOURCE COMPARISON OF VQ4SNN, S PIKER + [8], AND M OD N EF [3] FPGA SNN S .
+        Dataset                       MNIST Base                            SHD                     AudioMNIST                  MNIST Large
+     (SNN Structure)                  (784-128-10)                      (700-200-20)                 (40-150-10)               (784-392-196-10)
+                                                  Proposed                     Proposed                    Proposed                     Proposed
+         Design            Spiker+   ModNEF L1:d=8 k=211          Spiker+ L1:d=4 k=211         Spiker+ L1:d=4 k=210         ModNEF L1:d=8 k=211
+                                                                                                                                      L2:d=8 k=211
+     Network Type          FC-FF     FC-FF        FC-FF-R        FC-FF-R        FC-FF-R        FC-FF        FC-FF-R          FC-FF         FC-FF-R
+     Ref. Accuracy         96.83%    95.51%        96.35%         75.44%         73.00%        95.23%        93.12%          93.20%         94.38%
+     HW Accuracy           93.85%    95.76%        95.29%         72.99%         72.00%        89.82%        90.60%          96.96%         92.70%
+      Weight bits             4        10             5          F(6)/R(5)          7             5             6               8              8
+   Memb. Potential bits       6       N.R.a          11              8             14             8            12              16             15
+         LUTs               4314      5947          7055                         13628                        7562           20321          33081
+                                                                   18268                        10124
+          FFs               3298      3060          3606                          5686                        3375           28284          14809
+         DSPs                 -         -             -              -              -             -             -              3              -
+        BRAMs               18.0      42.5           8.5            51.0          19.5           16.0          7.5           113.5           47.5
+      Power (mW)             180       141           158            430           250            290          185             336            364
+   Latency/inputb (ms)     0.780     0.115          0.246          0.540         2.412         0.080          0.632          0.904           1.093
+    Spikes time-steps       100        100           25             100           100             73           100            100             25
+                  a N.R.: Not Reported     b Input refers to one complete inference sample (e.g., a single image or audio recording)
+
+
+(784 feedforward and 128 inhibitory), each compressed into                   substantial reductions in overall memory footprint and BRAM
+N/d = 16 pointers of log2 2048 = 11 bits. Assuming standard                  utilization while preserving baseline inference accuracy.
+1024×36-bit BRAMs, the 912 pointer rows (16 × 11 = 176                          As future work, we plan to co-optimize SNN training and
+bits/row) map to 5 BRAMs. The shared codebook (2048                          compression by encouraging similarity among neighboring
+vectors of 8 × 5 = 40 bits/vector) requires 2.5 BRAMs                        synaptic weights, and also to improve neuron microarchitec-
+to support dual-porting (two 36Kbit and one 18Kb BRAM),                      ture to further optimize FPGA resource utilization.
+with 1 additional BRAM for the uncompressed output layer.
+Overall, VQ4SNN consumes just 8.5 BRAMs, while Spiker+                                                     R EFERENCES
+with smaller 4-bit weights spends 18 BRAMs for an SNN with                    [1] M. Davies et al., “Loihi: A neuromorphic manycore processor with on-
+                                                                                  chip learning,” IEEE micro, vol. 38, no. 1, pp. 82–99, 2018.
+the same size and without any inhibitory weights.                             [2] M. Karamimanesh et al., “Spiking neural networks on FPGA: A survey
+   VQ4SNN exhibits a latency tradeoff dependent on spike                          of methodologies and recent advancements,” Neural Networks, vol. 186,
+activity density. VQ4SNN achieves lower latency for MNIST,                        p. 107256, 2025.
+                                                                              [3] A. Saulquin et al., “Modnef: An open source modular neuromorphic
+but exhibits higher latency for SHD and Audio MNIST. The                          emulator for FPGA for low-power in-edge artificial intelligence,” ACM
+increase originates from the time-shared use of the vector                        TACO, vol. 22, no. 2, pp. 1–24, 2025.
+codebook, which distributes the evaluation of a layer across                  [4] T. Liang et al., “Pruning and quantization for deep neural network
+                                                                                  acceleration: A survey,” Neurocomputing, vol. 461, pp. 370–403, 2021.
+multiple cycles. Although this overhead is partially miti-                    [5] Y. Liu et al., “Vptq: Extreme low-bit vector post-training quantization
+gated by arbitrating active spikes, it becomes noticeable for                     for large language models,” in Proc. of Conf. on Empirical Methods in
+workloads with high spike activity. Importantly, this latency                     Natural Language Processing, 2024, pp. 8181–8196.
+                                                                              [6] B. Duan et al., “EVA: Accelerating LLM Decoding via an Efficient
+increase is not an inherent limitation of the proposed approach.                  Vector Quantization Architecture,” in IEEE ISCA, 2026.
+The substantial BRAM savings achieved by VQ4SNN leave                         [7] I. Kartashov, M. Pushkareva, and I. Karandashev, “Spikefit: Towards
+ample room for codebook replication, enabling additional                          optimal deployment of spiking networks on neuromorphic hardware,”
+                                                                                  in arXiv 2510.15542, 2025.
+parallel accesses that reduce latency while still retaining most              [8] A. Carpegna, A. Savino, and S. Di Carlo, “Spiker+: a framework for
+of the memory savings.                                                            the generation of efficient spiking neural networks fpga accelerators for
+   The final two columns of Table I compare VQ4SNN against                        inference at the edge,” IEEE Trans. on Emerging Topics in Computing,
+                                                                                  vol. 13, no. 3, pp. 784–798, 2024.
+ModNef on a larger MNIST network. By applying VQ inde-                        [9] J. Li et al., “FireFly v2: Advancing hardware support for high-
+pendently to two layers with different (d, k) configurations,                     performance spiking neural network with a spatiotemporal FPGA ac-
+VQ4SNN reduces BRAM usage by 58% while maintaining                                celerator,” IEEE Trans. on CAD, vol. 43, no. 9, pp. 2647–2660, 2024.
+                                                                             [10] F. Asim, S. Aung, and J. Lee, “FlowQ: fixed-point low-precision post-
+model accuracy and logic utilization comparable to ModNef                         training quantization framework for efficient and accurate snn inference,”
+under the same weight bitwidth.                                                   in ASP-DAC, 2026, pp. 119–125.
+                                                                             [11] Y. LeCun et al., “Gradient-based learning applied to document recogni-
+                                                                                  tion,” Proc. of the IEEE, vol. 86, no. 11, pp. 2278–2324, 1998.
+                          V. C ONCLUSIONS                                    [12] B. Cramer et al., “The heidelberg spiking data sets for the systematic
+                                                                                  evaluation of spiking neural networks,” IEEE Trans. on Neural Networks
+                                                                                  and Learning Systems, vol. 33, no. 7, pp. 2744–2757, 2020.
+   In this paper, we presented VQ4SNN, an FPGA SNN                           [13] S. Becker et al., “Audiomnist: Exploring explainable artificial intelli-
+architecture that addresses the memory bottlenecks of SNN                         gence for audio analysis on a simple benchmark,” Journal of the Franklin
+inference through weight VQ. By combining a compressed                            Institute, vol. 361, no. 1, pp. 418–428, 2024.
+                                                                             [14] J. K. Eshraghian et al., “Training spiking neural networks using lessons
+two-level memory organization with a time-shared codebook                         from deep learning,” Proc. of the IEEE, vol. 111, no. 9, pp. 1016–1054,
+access scheme VQ4SNN significantly reduces on-chip storage                        2023.
+requirements with the need for heavy multiporting. Hardware
+evaluations on representative SNN workloads demonstrate
+

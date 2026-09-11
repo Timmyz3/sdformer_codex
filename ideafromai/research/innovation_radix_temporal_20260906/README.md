@@ -13,6 +13,6 @@
 | `screen_source_moments.py` / `source_moments_r1/result.json` | 旧 V2 的完整源矩与输出矩、最终判位对照；在线权重二次式成本 |
 | `report.md` | 强基线、去留理由、独立评审与一手文献 |
 
-命令在 `/home/zhumd/work/ideafromai/` 下使用 `/opt/anaconda3/bin/python3.12`；每个脚本接受 `--output-dir` 指向新目录。已有结果无需重跑。脚本复用此前二层 sample0 的源加载器和 checkpoint NumPy 读取器。
+命令在 `/home/zhumd/work/sdformer_codex/ideafromai/` 下使用 `/opt/anaconda3/bin/python3.12`；每个脚本接受 `--output-dir` 指向新目录。已有结果无需重跑。脚本复用此前二层 sample0 的源加载器和 checkpoint NumPy 读取器。
 
 这些是研究数值与运算量实验，无新增生产 RTL、VCS 周期、PPA、全网 AEE 或投稿贡献句。现有 `hardware_mechanisms_20260906/rtl/` 的三个区间接口模块属于另一份已有工作，本轮未修改，也不借其验证支持这里的点值算术。

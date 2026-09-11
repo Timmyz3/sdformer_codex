@@ -18,7 +18,7 @@
 | V4 · 共享投影阈值区间执行 | 对共享投影的可达二值模式，直接选择 FC2 聚合向量 | 3/0/5/4 | 原 ep34 不可直接用；DT-SCNN 已覆盖共享投影与多阈值核心。只有区间到下层聚合的增量待证 |
 | V5 · C1 位移相关统计与边缘修正 | 用卷积核相关式形成统计，以精确边缘修正恢复零填充语义 | 5/3/1/2 | 淘汰当前 C1 挂载。真实卷积为 768 通道，计数和宽收缩过大；迁往高分辨率 patch 是另一工作负载 |
 
-完整原卡见 [candidate_cards_v1.md](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/candidate_cards_v1.md)。该文件保留送审快照，后续位宽和先验纠正以下文及独立评审为准。独立评审：[V1/V3](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/review_v1_v3_by_c2.json)、[V2 评审一](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/review_v2_by_c1.json)、[V2/V4 评审二](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/review_v4_v2_by_new.json)、[V5](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/review_v5_c1_spatial_moments.json)。
+完整原卡见 [candidate_cards_v1.md](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/candidate_cards_v1.md)。该文件保留送审快照，后续位宽和先验纠正以下文及独立评审为准。独立评审：[V1/V3](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/review_v1_v3_by_c2.json)、[V2 评审一](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/review_v2_by_c1.json)、[V2/V4 评审二](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/review_v4_v2_by_new.json)、[V5](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/review_v5_c1_spatial_moments.json)。
 
 ## 原始 idea 包哪些可以借，哪些不能直接迁
 
@@ -82,7 +82,7 @@ sumsq_h = Σ_i w_ih² k_i + 2 Σ_(i<j) w_ih w_jh G_ij
 
 浅层一份二值源裸位图为 2.304 MB，一份 Acc24 隐层为 221.184 MB；这些是张量载荷，不能写成需要这么大片上 SRAM，也不能直接写成减少的外存流量。若预存所有上三角 `w_i*w_j`，仅 signed16 系数表就需 3.576 MB，不能当免费常量。若把交叉项因子 2 预折进去，极值 32768 需要 signed17；也可保留 16 位乘积，在宽累加端左移。
 
-完整统计脚本与结果：[screen_source_moments.py](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/scripts/screen_source_moments.py)、[v2_sample0_moments.json](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/v2_sample0_moments.json)、[元数据推导](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/v2_existing_geometry.json)。校验包含原载荷 SHA、选中帧 CRC／顺序／形状／二值性、对角计数、总二阶矩恒等式及固定子矩阵独立整数参考；另一代理复核了脚本和直方图恒等式，没有假称第二次独立捕获。
+完整统计脚本与结果：[screen_source_moments.py](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/scripts/screen_source_moments.py)、[v2_sample0_moments.json](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/v2_sample0_moments.json)、[元数据推导](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/v2_existing_geometry.json)。校验包含原载荷 SHA、选中帧 CRC／顺序／形状／二值性、对角计数、总二阶矩恒等式及固定子矩阵独立整数参考；另一代理复核了脚本和直方图恒等式，没有假称第二次独立捕获。
 
 ### 电路必须真正解决的问题
 
@@ -91,7 +91,7 @@ sumsq_h = Σ_i w_ih² k_i + 2 Σ_(i<j) w_ih w_jh G_ij
 3. **同资源对照：** 取“FC1＋统计融合＋保存 raw”与“FC1＋统计融合＋丢弃后重算”两者较优。逻辑输出块宽度不能代替物理执行 lane 数；生产 C2 前端的真实 slice／bank 接口要单独核。
 4. **整数与冻结 FP 分开：** 实数恒等式不保证 cuDNN／TF32 归约逐位等价。最小统计组件可以采用共同精确整数合同；完整网络采用它需要明确的新部署与 AEE。Acc24 不缩位，sum/sumsq 另扩宽。
 
-送审后的定向排雷又核了 9 篇主要来源，其中 6 篇取得相关原文。**二值 Gram 的核心也不是新原语**：[BISMO](https://arxiv.org/html/1806.08862) 已有位打包 AND-popcount 和局部累积，[Bishop，ISCA 2025](https://arxiv.org/html/2505.12281) 已有二值对积与多位结果驻留。将它们用于 `SᵀS` 是本轮迁移推断，不能把应用名称当发明。V2 的余项是完整“源统计替换输出统计遍”的电路及其同资源收益。OPN、ACBN、FlexAcc 的全文缺口仍未关闭；8 次定向检索未发现已核直接命中，不证明首创。详见 [定向先验审阅](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/v2_targeted_prior_audit.json)。
+送审后的定向排雷又核了 9 篇主要来源，其中 6 篇取得相关原文。**二值 Gram 的核心也不是新原语**：[BISMO](https://arxiv.org/html/1806.08862) 已有位打包 AND-popcount 和局部累积，[Bishop，ISCA 2025](https://arxiv.org/html/2505.12281) 已有二值对积与多位结果驻留。将它们用于 `SᵀS` 是本轮迁移推断，不能把应用名称当发明。V2 的余项是完整“源统计替换输出统计遍”的电路及其同资源收益。OPN、ACBN、FlexAcc 的全文缺口仍未关闭；8 次定向检索未发现已核直接命中，不证明首创。详见 [定向先验审阅](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/v2_targeted_prior_audit.json)。
 
 ### 已具体化的计数微结构草案
 
@@ -101,9 +101,9 @@ sumsq_h = Σ_i w_ih² k_i + 2 Σ_(i<j) w_ih w_jh G_ij
 
 比较时要给稀疏计数基线同样的宏字打包／更新合并能力，并纳入 BISMO/Bishop 类局部累积，而非拿每个源对单独访问宏的弱基线。七个 popcount、转置缓冲与后续宽收缩均是新增资源。生产 C2 的 16-lane slice、八源 bank 和逻辑输出块也不能混成“一拍 96 个物理输出 lane”。这些约束使草案可被反驳和核算，但打包与 bank 交错本身仍不足以提高创新评分。
 
-[这条微结构的独立评审](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/review_v2_packed_counter_by_c1.json) 给打包／交错本身 T2，整体 V2 仍维持 T6。评审针对明确给出的结构消息，未冒称审过尚未完成的 RTL 或全部设计。
+[这条微结构的独立评审](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/review_v2_packed_counter_by_c1.json) 给打包／交错本身 T2，整体 V2 仍维持 T6。评审针对明确给出的结构消息，未冒称审过尚未完成的 RTL 或全部设计。
 
-另已归档 [设计者的微结构草案](/home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/records/v2_circuit_refinement.json)，含稠密／稀疏计数、运行时权重对生成、宽收缩及输出统计强基线的参数公式。设计者未给自己独立评分；宽乘法器复用和完整端口排程仍为未闭合项。协调者补正了输入传输公式：连续位流可跨 token 打包时按总位数收费，不能直接套逐 token 对齐的拍数。
+另已归档 [设计者的微结构草案](/home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/records/v2_circuit_refinement.json)，含稠密／稀疏计数、运行时权重对生成、宽收缩及输出统计强基线的参数公式。设计者未给自己独立评分；宽乘法器复用和完整端口排程仍为未闭合项。协调者补正了输入传输公式：连续位流可跨 token 打包时按总位数收费，不能直接套逐 token 对齐的拍数。
 
 ## C1 这轮为什么仍未过关
 
@@ -173,7 +173,7 @@ V4 也没有保住最初较高的作者预期。[DT-SCNN，2024](https://www.fro
 
 精读完成；SHA256 `e0d5f6d3c525237496579295b525d40a7962f9b5770fd6ceff19067468a2c761`。
 
-全文；/workspace为历史打包路径，规范根始终/home/zhumd/work/ideafromai。
+全文；/workspace为历史打包路径，规范根始终/home/zhumd/work/sdformer_codex/ideafromai。
 
 
 ### README.md

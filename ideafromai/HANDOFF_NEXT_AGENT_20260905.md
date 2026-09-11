@@ -10,15 +10,15 @@
 
 # 0. 你必须先读的路径（按顺序）
 
-1. 本接手说明（若在仓库里）：`/home/zhumd/work/ideafromai/HANDOFF_NEXT_AGENT_20260905.md`
-2. 多 AI 想法总入口：`/home/zhumd/work/ideafromai/README.md`、`INDEX.json`、`MANIFEST.txt`
+1. 本接手说明（若在仓库里）：`/home/zhumd/work/sdformer_codex/ideafromai/HANDOFF_NEXT_AGENT_20260905.md`
+2. 多 AI 想法总入口：`/home/zhumd/work/sdformer_codex/ideafromai/README.md`、`INDEX.json`、`MANIFEST.txt`
 3. Grok 4.6 新机制调研（**冻结身份是二值 ATLIF**）：  
-   `/home/zhumd/work/ideafromai/research/grok46_20260905/`  
+   `/home/zhumd/work/sdformer_codex/ideafromai/research/grok46_20260905/`  
    必读：`00_READ_THIS_FIRST.md`、`01_kill_list.md`、`02_ranked_mechanisms.md`、`03_algorithm_native_motionxor_atlif.md`、`06_two_workflow_conflict.md`、`07_next_stats_rtl_gates.md`
 4. Codex 独立假说（**研究记录，未授权开实验**）：  
-   `/home/zhumd/work/ideafromai/codex_independent_20260905/`
+   `/home/zhumd/work/sdformer_codex/ideafromai/codex_independent_20260905/`
 5. Grok Bot C1*/C2* 包（**假设 int8 ATLIF 载荷，与冻结捕获冲突**）：  
-   `/home/zhumd/work/ideafromai/research/04_SYNTHESIS_C1_C2_REMAKE.md`  
+   `/home/zhumd/work/sdformer_codex/ideafromai/research/04_SYNTHESIS_C1_C2_REMAKE.md`  
    `codex_cards/CARD_A_OP_STW.md`、`CARD_B_HBG_RP.md`  
    `contracts/ATLIF_contract_r1_grokbot.md`
 6. 现有 TCAS-II 稿（读，且默认**故事已过时**：仍在卖 C1+C2，用户已判定创新不足）：  
@@ -27,7 +27,7 @@
 7. 算法/硬件叙事（当前最完整中文）：`/home/zhumd/work/KAITI_report/技术工程报告_脉冲Transformer软硬件协同_20260903.md`  
 8. 算法源码索引（**数字过期，只用来找文件**）：`sdformer_codex/SDformer/docs/H67_MOTION_ALGORITHM_FILE_INDEX.md`
 
-想法目录的**唯一规范路径**是 `/home/zhumd/work/ideafromai/`。  
+想法目录的**唯一规范路径**是 `/home/zhumd/work/sdformer_codex/ideafromai/`。  
 过期副本：`/home/zhumd/work/hw_autoresearch_nts07/ideasfromai/` 以及 git 树里 `SDformer/hw_autoresearch_nts07/ideasfromai/`（README 已写 MOVED）。  
 Grok Bot 隔离 RTL 骨架：`/home/zhumd/work/sdformer_c1c2star_grokbot/`，用户没点头不要合并进主硬件树。
 
@@ -42,7 +42,7 @@ Grok Bot 隔离 RTL 骨架：`/home/zhumd/work/sdformer_c1c2star_grokbot/`，用
 | 额外硬件工作副本 | `/home/zhumd/work/hw_autoresearch_nts07/` |
 | Synopsys/轨迹/DATE 史料 | `/home/zhumd/work/synopsys_date_dual/` |
 | 开题/组会 | `/home/zhumd/work/KAITI_report/` |
-| 多 AI 想法 | `/home/zhumd/work/ideafromai/` |
+| 多 AI 想法 | `/home/zhumd/work/sdformer_codex/ideafromai/` |
 
 接手时 HEAD：**`7e3d3030`**  
 说明：`Measure C1 dispatch opportunities and compression tradeoffs; close cofill mapped checks`  
@@ -309,7 +309,7 @@ ATLIF 训练（自适应阈值、homeostatic、发放正则）把网训成稀疏
 | `A/neuron_experiments/H9_bipolar_self_attention/docs/`、`entrypoints/`、`configs/` | 训练与配置 |
 | `A/neuron_autoresearch/` | 算法身份、AAE、注意力设计空间 |
 | `A/paper_artifacts/`、`A/docs/` | 更早的论文草稿/矩阵 |
-| `/home/zhumd/work/ideafromai/` | 多 AI 创新调研（第 8 节） |
+| `/home/zhumd/work/sdformer_codex/ideafromai/` | 多 AI 创新调研（第 8 节） |
 | `/home/zhumd/work/synopsys_date_dual/` | 另一份 EDA/轨迹工作区；ep35 profile CSV 等 |
 
 ### 查证顺序建议
@@ -341,7 +341,7 @@ TCAS-II 只有四页半：不能堆四个组件。要么 **一个新机制 + 组
 
 # 8. 磁盘上三套 idea（禁止合成一座岛）
 
-全部在 `/home/zhumd/work/ideafromai/`。
+全部在 `/home/zhumd/work/sdformer_codex/ideafromai/`。
 
 **A. Grok Bot（iscas_ssh）**  
 `research/00–04、07–14`，Card A OP-STW（光流方向预测唤醒 tile），Card B HBG-RP（`{门控, int8 载荷}`）。假设 ATLIF 幅值**不能**折进 W。  
@@ -368,7 +368,7 @@ TCAS-II 只有四页半：不能堆四个组件。要么 **一个新机制 + 组
 # 10. 接手后先做什么
 
 1. `git status` / `git log -1`，确认没有 resume 554 MB 会话。  
-2. 通读 `/home/zhumd/work/ideafromai/`（第 0 节清单）。  
+2. 通读 `/home/zhumd/work/sdformer_codex/ideafromai/`（第 0 节清单）。  
 3. ATLIF 只使用 105 / 12 sn2_q / 93 / 12 attn_sn / **81**，永远不要 85。  
 4. 默认**不要**继续给旧 C1/C2 综合出「更亮的 1.69×」。用户要的是新机制。  
 5. 等用户在下列里点一项再开生产 RTL：  

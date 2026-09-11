@@ -1,0 +1,1036 @@
+                                                                                                                    This paper has been accepted for publication at Robotics: Science and Systems, 2026.
+
+
+
+
+                                                                                              Motion-aware Event Suppression for Event Cameras
+                                                                                   Roberto Pellerito, Nico Messikommer, Giovanni Cioffi, Marco Cannici, Davide Scaramuzza
+                                                                                               Robotics and Perception Group, University of Zurich, Switzerland
+
+
+                                                                                 Events at 𝑡
+                                                                                                                            𝑡𝑖𝑚𝑒 →          𝑡            𝑡 + Δ𝑡           𝑡 + Δ𝑡          Token pruning for real-time vision transformers
+
+
+
+                                                                                   Segmentation mask
+                                                          Collect
+
+
+                                                                                                                                                                                               Pruned tokens                 ViT segmentation
+                                                                                                       Optical flow
+                                                                      Detect
+
+
+                                                                                                                                                                                         Dynamic events suppression for Visual Odometry
+                                                                                                               Events at 𝑡 + Δ𝑡
+                                                                                        Predict
+
+
+
+
+                                                                                                                                          𝐸𝑣𝑒𝑛𝑡𝑠        𝐵𝑎𝑠𝑒𝑙𝑖𝑛𝑒          𝑂𝑢𝑟𝑠           Original extracted features         Pruned features
+                                                                                                    Suppress
+              arXiv:2602.23204v4 [cs.CV] 18 Jul 2026
+
+
+
+
+                                                                                              (a)                                                         (b)                                                          (c)
+
+
+
+
+                                                       Fig. 1. Our method disentangles ego-motion events from events triggered by independently moving objects (IMOs). (a) We jointly learn to segment IMOs and
+                                                       predict dense optical flow for the next ∆t. Warping the mask forward yields an anticipated future mask, enabling suppression of future events. (b) Compared
+                                                       to baselines like EVIMO (baseline), our approach produces tighter masks with higher IoU and fewer false positives. (c) Event Suppression can be used for
+                                                       downstream tasks: (top) accelerating segmentation via motion-guided token pruning, and (bottom) improving visual odometry by filtering out dynamic IMO
+                                                       edges.
+
+                                                           Abstract—Event cameras report asynchronously per-pixel                                                                    M ULTIMEDIA M ATERIAL
+                                                       brightness changes with microsecond latency, encoding dynamic
+                                                       visual information as a sparse stream of events. However, their                                               Project Page: https://rpg.ifi.uzh.ch/event suppression/
+                                                       extreme temporal resolution floods perception systems with                                                  Code: https://github.com/uzh-rpg/event suppression.git
+                                                       entangled events from ego-motion and independently moving
+                                                       objects (IMOs), which existing solutions fail to efficiently de-                                                                  I. I NTRODUCTION
+University of Zurich                                          Robotics and Perception Group                           Roberto Pellerito
+                                                       couple, relying instead on prohibitive dense 3D reconstructions                                                Under constant illumination, events arise from two sources:
+                                                       or limited hand-tuned filters. In this work, we introduce the first                                         background edges triggered by camera ego-motion and edges
+                                                       framework for Motion-aware Event Suppression, which learns to
+                                                       filter events triggered by IMOs and ego-motion in real time. Our                                            from independently moving objects. Because the sensor is
+                                                       model jointly segments IMOs in the current event stream while                                               uncapable of distinguishing natively between them, irrelevant
+                                                       predicting their future motion, enabling anticipatory suppression                                           events flood downstream perception pipelines, overloading
+                                                       of dynamic events before they occur. Our lightweight architecture                                           computation and degrading accuracy. Our objective is to
+                                                       achieves 173 Hz inference on consumer-grade GPUs with less                                                  selectively suppress non-informative events while preserving
+                                                       than 1 GB of memory usage, outperforming previous state-of-the-
+                                                       art methods on the challenging EVIMO benchmark by 67% in                                                    those that matter for the task, an objective we term motion-
+                                                       segmentation accuracy while operating at a 53% higher inference                                             aware event suppression.
+                                                       rate. Moreover, we demonstrate significant benefits for down-                                                  Solving this problem is critical for emerging applications
+                                                       stream applications: our method accelerates Vision Transformer                                              in AR/VR [1] and autonomous driving [2]. For example,
+                                                       inference by 83% via token pruning and improves event-based
+                                                                                                                                                                   AR/VR systems require stable visual odometry (VO) to anchor
+                                                       visual odometry accuracy, reducing Absolute Trajectory Error
+                                                       (ATE) by 13%.                                                                                               virtual content while remaining responsive to gestures, while
+                                                                                                                                                                   autonomous vehicles must track their own motion and react
+                                                                                                                                                                   instantly to pedestrians. A reliable suppression mechanism is
+                                                                                                                                                                   essential to ensure these systems can run at low latency while
+                                                                                                                                                                   robustly perceiving relevant scene dynamics.
+                                                          This work was supported by the European Union’s Horizon Europe                                              The challenge stems from an extreme data imbalance:
+                                                       Research and Innovation Programme under grant agreement No. 101120732                                       as the camera moves, nearly every static object edge fires
+                                                       (AUTOASSESS), the European Research Council (ERC) under grant agree-                                        events, vastly outnumbering the few critical events triggered
+                                                       ment No. 864042 (AGILEFLIGHT), and the Swiss AI Initiative by a grant
+                                                       from the Swiss National Supercomputing Centre (CSCS) under project ID                                       by moving objects. In realistic scenarios like [3], dynamic
+                                                       a03 on Alps.                                                                                                cues may constitute less than 5% of the total event rate.
+This imbalance creates a chicken-and-egg dilemma: segment-         Specifically:
+ing static background events requires knowing their motion           • By leveraging a multi-task architecture and training for
+context, yet observing this context comes only after those             predicting the future, our method establishes a new state
+events have already flooded the system and introduced latency.         of the art for both instantaneous and future IMO pre-
+Compounding this, each event carries minimal information (a            diction (Fig. 1a). Using only event data, we outperform
+pixel coordinate, timestamp, and polarity), making meaningful          existing methods by 67% in segmentation accuracy on
+classification from single events impossible without additional        classical IMOs segmentation benchmarks (Fig. 1b).
+context.                                                             • We introduce a lightweight recurrent encoder-decoder
+    Previous approaches have largely focused on recovering in-         featuring a novel cross-attention module (ATC). This
+termediate representations such as camera poses, depth maps,           design supports multi-horizon forecasting (Fig. 6) and
+or dense optical flow, which then feed into standard segmenta-         achieves an inference rate of 173 Hz, surpassing the
+tion networks [4]–[7]. Although these pipelines achieve solid          current state of the art by 53% in inference frequency
+benchmark performance, they suffer from high latency and               while maintaining a low memory footprint (Tab. VIII).
+inherit the fragility of complex SLAM systems, such as drift         • We demonstrate that anticipatory motion decoupling pro-
+and depth estimation errors. Other methods using bio-inspired          vides significant benefits to robotic perception (Fig. 1c),
+filtering [8], [9] achieve low latency, but rely on manually           yielding an 11% improvement in event-based visual
+tuned thresholds and have so far only been demonstrated                odometry accuracy (Sec. IV-H) and an 83% acceleration
+indoors. Therefore the next frontier is a framework that can           in Vision Transformer (ViT) inference via motion-guided
+directly and adaptively anticipate and suppress motion in a            token pruning (Sec. IV-I).
+task-driven, generalizable, and real-time manner.
+    The fundamental stumbling block is that existing methods                           II. R ELATED W ORKS
+either oversimplify by using static thresholds or overcompli-         To the best of our knowledge, this is the first work to
+cate by solving dense 3D scene reconstruction, which is unnec-     introduce the task of event suppression, which aims to se-
+essary for suppression. They do not directly address the motion    lectively ignore events triggered by dynamic or static objects
+suppression challenge but instead attempt to solve auxiliary       based on their relevance to a given task. While prior research
+sub-problems, resulting in either brittle or computationally       has extensively explored how to segment or track motion
+heavy pipelines. A principled, unified solution to separate        from event data, suppressing events themselves, either as a
+ego-motion-induced events from independently moving object         preprocessing step or as part of a downstream perception
+events, in real time, has been missing.                            pipeline, has not been formally addressed. The most closely
+    We introduce the first learning-based framework that unifies   related line of research is event-based motion segmentation,
+motion perception and prediction to address Motion-aware           where the goal is to identify and separate regions of the
+Event Suppression directly (Fig. 1). Our method is designed        scene associated with independent motion. These methods
+for practical deployment, achieving 173 Hz on a consumer-          typically aim to assign motion labels to pixels or regions
+grade GPU while consuming less than 1 GB of memory,                rather than deciding whether events should be retained or
+making it viable for latency-critical applications such as au-     discarded. Below, we review key developments in learning-
+tonomous driving and AR/VR.                                        based approaches to event-based motion segmentation.
+    Our key idea is to predict future IMO and ego-motion
+events over a short horizon (up to 100 ms) by unifying instan-     A. Learning-based motion segmentation using event cameras
+taneous motion segmentation with motion flow forecasting.             Deep neural networks have been widely applied to event-
+The segmentation head provides the necessary spatial context       based motion segmentation. One of the earliest learning-based
+for reliable detection, while the flow prediction establishes      systems, Ev-DodgeNet [11], was developed for detecting and
+a temporally grounded prior. This multi-task approach, com-        tracking moving objects in the context of dynamic obstacle
+bined with our time-conditioning module that learns a non-         avoidance. EV-IMO [10] introduced a structure-from-motion
+linear flow forecasting function from dense future supervision,    CNN adapted to event data for joint estimation of motion
+enables precise anticipation of scene dynamics, facilitating       masks, depth, and camera motion, along with a dataset of
+real-time, low-latency event filtering.                            indoor scenes featuring up to three independently moving
+    Our framework sets a new state of the art on the challenging   objects.
+EVIMO [10] dataset, outperforming the previous best method            While EV-IMO remains overall the state of art, subsequent
+by 67% in segmentation accuracy while running 53% faster.          methods improved different aspects of event-based motion
+Furthermore we demonstrate practical benefits for downstream       segmentation. For instance, MSRNN [6] proposed a multi-
+tasks: boosting Vision Transformer inference by 83% FPS            scale architecture to improve long-range temporal dependen-
+through motion-guided token pruning, and improving event-          cies. GConv [7] introduces a Graph Neural Network, avoiding
+based VO accuracy by 13% thanks to a high-signal event             to construct frames and allowing for higher frequency of
+stream.                                                            predictions. Unsupervised methods have also emerged, such as
+    In summary, we introduce the first method to anticipate        Un-EVIMO [5], which learns from pseudo-labels generated as
+and decouple events from camera ego-motion and IMOs.               difference between estimated rigid and perceived optical flow.
+   These neural approaches often run in real-time and handle        anticipates future IMO motion, which we formalize in Section
+multiple moving objects, but early benchmarks focused on            III-B, and we implement it through a dedicated multi-task
+simplified indoor scenes. Recent work, such as [4], extends         prediction network described in Section III-C. To generate
+motion segmentation to more complex indoor and outdoor              temporally-conditioned optical flow, our method employs a
+settings using transformer-based spatial and temporal modules.      transformer-based architecture that incorporates future times-
+However, such architectures typically demand high computa-          tamps into its predictions, as detailed in Section III-C1.
+tional and memory resources, limiting their suitability for low-    Finally, the training process relies on multiple loss functions,
+latency, real-time applications.                                    which are discussed in Section III-D.
+
+B. Classical and Bio-Inspired Methods                               A. Anticipatory Motion Suppression
+   Early optimization-based methods leveraged event recency            We frame Anticipatory Motion Suppression as two coupled
+[12] and energy minimization via spatio-temporal graph cuts         steps. First, event suppression: every incoming event is labeled
+[13] to segment moving objects. High-frequency estimates            as coming either from an independently moving object or from
+from these approaches were notably applied to autonomous            camera ego-motion. This labeling relies on a binary mask that
+flight for obstacle avoidance [14]. Other works advanced per-       partitions the events into “retain” and “suppress” since we
+event segmentation by clustering events based on motion             convert the event stream into an image-like grid.
+hypotheses [15] or utilizing iterative contrast maximization to        Second, motion anticipation: we predict how the scene
+align events and enhance sharpness [16], [17]. While these          will evolve over the next short time window. Concretely, we
+methods do not require training data, they often struggle under     estimate a per-pixel motion field and warp the binary mask
+strong ego-motion and rely on iterative steps that limit real-      forward so that it aligns with the future events. Anticipatory
+time applicability in complex environments.                         Motion Suppression is the composition of motion segmentation
+   Alternatively, bio-inspired approaches employ neuromor-          and successive motion prediction.
+phic principles for efficiency. SpikeMS [8] uses Spiking Neural        To formally introduce the task, we first define an event
+Networks (SNNs) to handle temporal dynamics in continuous           stream for a time interval of size ∆t as the set E:
+time. Other retina-inspired methods mimic biological Object                                              N
+                                                                            E = ei = (xi , yi , ti , pi ) i=1 , pi ∈ {−1, +1}    (1)
+Motion Sensitivity (OMS) through center-surround filtering
+[9], [18]. Although computationally lightweight, these meth-           Where xi , yi represent the pixel location at which the event
+ods remain less accurate than deep learning models and require      ei with polarity pi was triggered at timestep ti .
+extensive parameter tuning.                                            To simplify the notation, we define the set of events in the
+                                                                    interval [t − ∆t, t] as E[t−∆t,t] ≡ E.
+C. Low-latency Optical Flow Estimation from Event Data
+                                                                       Let ℓ(ei ) ∈ {0, 1} denote an oracle label that is 1 for events
+   Optical flow estimation from event data is a closely related     generated by independently moving objects (IMOs) and 0 for
+task to motion segmentation, as both aim to capture scene           events caused solely by camera ego-motion.
+dynamics and object motion at high temporal resolution. A              Our goal is to find a mapping S defined for every event
+foundational work in this area, EV-FlowNet [19], introduced         ei ∈ E such that S maps all the ei whose true label ℓ(ei ) = 1
+the first neural network to learn optical flow from events in an    to the partition of E, which corresponds the set E ′ of all events
+unsupervised manner by warping event data and minimizing a          associated with IMOs.
+reconstruction loss. Building on this idea, [20] proposed a joint   Such mapping S is described in Eq.2:
+framework to estimate dense optical flow, depth, and camera
+pose from event streams.                                                                      S : E −→ E ′                        (2)
+   The release of larger datasets, such as DSEC [3], enabled
+the development and training of more powerful models like             is called a motion-suppression operator if and only if
+E-RAFT [21], which achieved state-of-the-art performance in                       ∀ e ∈ E | e ∈ S(E) ⇐⇒ ℓ(e) = 1.                 (3)
+dense optical flow estimation for real-world driving scenarios.
+More recent works, including [22] and [23], have revisited un-      The mapped set of event E ′ corresponds to the set of all IMO
+supervised training from a contrast maximization perspective,       events S(E) ≡ E ′ .
+leveraging the alignment of warped events to improve flow              The motion-suppression operator is defined continuously
+accuracy without ground-truth supervision.                          in time and can be applied asynchronously to each event.
+                                                                    Note that S operates on a spatio-temporal window E and,
+                     III. M ETHODOLOGY                              in general, may itself be time-dependent within that window,
+   In this work, we address the task of Event Suppression by        since the IMO support at each instant t′ ∈ [t − ∆t, t) can vary
+distinguishing between events caused by ego-motion and those        significantly.
+originating from independently moving objects (IMOs). We               For tractability, we assume S is time-independent over
+begin by introducing the concept of Motion-Oriented Event           [t − ∆t, t). Under this assumption, it suffices to determine
+Suppression and analyzing the impact of temporal latency            the spatial support once (at a single reference time) and apply
+on the estimation process in Section III-A. Our approach            the same selection rule throughout the window.
+   Operationally, this corresponds to collapsing the time di-           C. Multi-Task Prediction
+mension of events into an image-like representation, estimating            Inspired by [19], [25], we adopt an n-stage conv-GRU
+a mask Mt with S, and then using Mt to retain the (x, y)                encoder [26], selected for its efficiency and suitability for real-
+locations associated with IMOs when gating events.                      time embedded applications. The features from this encoder
+   Let Mt ∈ {0, 1}H×W denote the Pixel-wise instantaneous               are fed into two parallel branches. In the first branch, the
+IMO mask for time interval (t − ∆t, t):                                 raw features are passed to a mask-specific decoder to predict
+            (                                                           the current motion segmentation mask Mt . In the second, the
+              1 if the pixel (x, y) belongs to an IMO at t ,
+Mt (x, y) =                                                             features are processed by the ATC module (Fig. 2) to generate
+              0 otherwise.                                              time-conditioned features, which are then fed to the optical
+                                                                        flow decoder to predict future flow ψt→t+∆tp . Both decoders
+Under this view, the motion-suppression operator introduced
+                                                                        consist of n transposed convolutional layers.
+in (3) can be rewritten as
+                                                                           Overall, this framework relies on two key components:
+                                                                        Attention-based Time Conditioning and Flow Warping.
+                          n                o
+             SMt E = ei Mt (xi , yi ) = 1 ,             (4)
+                                                                           1) Attention-based Time Conditioning (ATC): To forecast
+i.e. every event is retained iff it is triggered by a pixel currently   optical flow at an arbitrary future time t + ∆tp , we introduce
+marked dynamic.                                                         an ATC module that modulates the current spatial feature
+   Naturally, each algorithm predicting dynamic object masks            embedding E ∈ RB×C×H×W based on the target time delta.
+from an event slice E features a processing time ∆td , which            As illustrated in Fig. 3, we employ a multi-head cross-attention
+leads to a lagging estimate M ct−∆t of the pixel-wise dynamic-          mechanism where the Query Q is derived from the temporal
+                                        d
+object mask. Using this lagging estimate introduces falsely             positional encoding tenc = PE(∆t) broadcasted across all
+predicted dynamic masks                                                 spatial positions. The Key K and Value V are obtained
+                                                                      by flattening the spatial dimensions of E into a sequence.
+                     SMct−∆t E      ̸= SMt E ,                    (5)   The cross-attention operation produces a modulated sequence
+                                                                        E′ that is reshaped back to the original spatial dimensions,
+whenever moving objects have translated by more than one                yielding the time-conditioned embedding Et+∆t for the optical
+pixel during ∆t. This temporal latency is the root cause of             flow decoder. Further details on the attention input preparation,
+the misalignment between real and predicted dynamic-events.             sequence formatting and positional encoding are provided in
+   To solve this misalingment, we propose to warp the pre-              the Appendix (Sec. A-B).
+dicted mask into the future using a dense flow field ψt+∆t ∈               2) Mask and Flow Decoding : The features coming from
+R2×H×W that predicts the pixel motion for ∆t ms into the                the ATC module Et+∆t and the event encoder Et are further
+future. Using the future flow field and the lagging estimate            decoded to obtain an optical flow of the scene and a binary
+M
+c, we obtain an estimate M f of the pixel-wise instantaneous            mask of the IMOs. The decoders for optical flow Dψ and
+dynamic object mask                                                     binary mask prediction DM , depicted in Fig. 2, consist of
+        ft (x) = Mct−∆t x − ψt (x) ,
+                                                                       a series of transposed convolutional layers. Since each data
+       M                                   x = (x, y),   (6)
+                                                                        modality requires a specific feature representation, the two
+                                                                        decoders have two distinct sets of weights. To retain spatial
+  Because M ft is spatially aligned with the current scene, the
+                                                                        information for both the encoded flow Et+∆t and the mask
+operator in (4) with Mt = M    ft realizes anticipatory motion
+                                                                        E, we add skip connections from the encoding blocks of the
+suppression even though it relies only on past observations.
+                                                                        encoder to the decoders.
+B. Method Overview                                                         3) Mask flow warping : We combine the outputs of the
+                                                                        Mask and Flow decoders to predict the future dynamic-object
+   As depicted in Fig. 2, our model operates on events E                segmentation. Concretely, we warp the mask logits from time
+from a ∆t temporal interval, which are first converted into             t to t+1 using backward warping with the forward flow
+a dense B × H × W stack representation [24] with a temporal             ψtp as expressed in Equation 6, which is implemented via
+discretization of 2 bins. To achieve a unified understanding            differentiable sampling with bilinear interpolation. We propa-
+of scene dynamics, the network then performs two tasks                  gate soft (logit) masks rather than hard labels and train with
+simultaneously. First, it generates a binary mask Mt at spatial         robust losses e.g. Charbonnier [27], which naturally down-
+resolution H ×W , segmenting events caused by independently             weights residual outliers near independently moving object
+moving objects from the events triggered by the static back-            (IMO) boundaries and near occluded regions.
+ground.
+   This binary mask Mt ∈ {0, 1}H×W classifies pixels as 0               D. Training Losses
+if they are associated with events generated by static objects             Our model is trained end-to-end using a hybrid loss Ltotal =
+and as 1 if the corresponding events are triggered by an IMO.           wsup Lsup + wunsup Lunsup . The supervised term Lsup combines a
+As a second task, guided by an input forecast time tp , the             Binary Cross-Entropy and Dice loss [28] for IMO segmenta-
+network predicts the future dense optical flow ψt→t+tp to               tion at current (Mt ) and future (Mt+∆t ) timestamps, alongside
+forecast scene motion                                                   an L1 and Charbonnier smoothness loss for optical flow [27].
+                                                                                 Conv-GRU encoders
+                                                                                                                                                           Transpose-conv decoders
+                                                                                   Events
+
+                                                                                                                                                          prediction time               Mask:
+
+
+
+                                                                                                                                                              ATC
+
+                                                                                                                                                                                         Flow:
+
+
+
+                                                                                                                                                                                 Flow warping (FW)
+                                                                                          Suppressed events
+                                                                                                                                                  Mask:
+
+Fig. 2. Overview of the Anticipatory Motion Suppression pipeline A stack of input events E is processed by a network featuring a series of recurrent blocks
+Ee followed by our proposed attention-based time conditioning (ATC). Raw features from events are fed to the transposed convolutional decoders DM for
+IMO mask prediction. Time conditioned features are used by a second transposed convolutional decoder Dψ for flow forecast prediction. The network finally
+predicts a binary dynamic-object mask Mt and a future dense optical flow ψt→t+∆tp . The predicted flow is used in a flow warping module (FW) to forecast
+the motion of dynamic regions. By propagating the mask forward in time, the system anticipates and suppresses future events E[t,t+∆tp ) corresponding to
+either independently moving objects or the static background, yielding a simplified event stream focused on just one specific type of motion.
+
+
+
+                                                                                                                                                      demonstrate our model’s robustness to low illumination and
+                                                                            𝐻1𝑊 ×𝐶
+                  1                                      𝐶                                                                                            severe sensor noise by benchmarking on the challenging EED
+  𝑇𝑖𝑚𝑒 𝑡𝑜 𝑝𝑟𝑒𝑑𝑖𝑐𝑡: 𝑡!                                                            𝑄𝑢𝑒𝑟𝑦
+                                                                                                𝐻 1 𝑊 × (𝐻 1 𝑊)                   𝐶×𝐻×𝑊               dataset (Sec. B-A). Furthermore, we analyze the system’s
+                                               𝑃𝑜𝑠𝑖𝑡𝑖𝑜𝑛𝑎𝑙                                                                        𝐶𝑜𝑛𝑑𝑖𝑡𝑖𝑜𝑛𝑒𝑑
+                                               𝑒𝑛𝑐𝑜𝑑𝑖𝑛𝑔                     𝐶 × (𝐻 1 𝑊)     ⊗       𝑊𝑒𝑖𝑔ℎ𝑡𝑠       ⊗     𝑅       𝑠𝑝𝑎𝑡𝑖𝑎𝑙 𝑓𝑒𝑎𝑡𝑢𝑟𝑒       computational efficiency, highlighting favorable trade-offs be-
+                                                                                                                                       𝐸′
+                                                                                                                      𝑅𝑒𝑠ℎ𝑎𝑝𝑒                         tween runtime, prediction age, and GFLOPS (Sec. IV-E). The
+                                                                                  𝐾𝑒𝑦                                             𝐻: ℎ𝑒𝑖𝑔ℎ𝑡
+          𝐶×𝑊×𝐻
+                                                                                                                                  𝑊: 𝑤𝑖𝑑𝑡ℎ            necessity of our core architectural components, model capacity
+  𝑆𝑝𝑎𝑡𝑖𝑎𝑙 𝑓𝑒𝑎𝑡𝑢𝑟𝑒s: E                              𝐹                        𝐶 × (𝐻 1 𝑊)                                          𝐶: 𝑐ℎ𝑎𝑛𝑛𝑒𝑙𝑠
+
+                                             𝐹𝑙𝑎𝑡𝑡𝑒𝑛
+                                                                                                                                 ⊗: 𝑀𝑎𝑡𝑟𝑖𝑥            scaling, and performance sensitivity across varying predic-
+                                                                                                                                 𝑑𝑜𝑡 𝑝𝑟𝑜𝑑𝑢𝑐𝑡
+                                                                                 𝑉𝑎𝑙𝑢𝑒                                                                tion horizons are systematically validated through extensive
+                                                  𝑨𝒕𝒕𝒆𝒏𝒕𝒊𝒐𝒏 − 𝒃𝒂𝒔𝒆𝒅 𝒕𝒊𝒎𝒆 𝒄𝒐𝒏𝒅𝒊𝒕𝒊𝒐𝒏𝒊𝒏𝒈 (𝑨𝑻𝑪)
+                                                                                                                                                      ablation studies (Sec. IV-F, IV-G). Finally, we showcase the
+                                                                                                                                                      practical utility of our anticipatory suppression mechanism in
+  University of Zurich   Robotics and Perception Group       Roberto Pellerito
+                                                                                                                                                      two downstream robotic tasks: improving event-based visual
+Fig. 3. Overview of Attention-based Time Conditioning (ATC). Target
+                                                                                                                                                      odometry accuracy (Sec. IV-H) and accelerating Vision Trans-
+time ∆tp is mapped via Positional Encoding (PE) to an embedding of size C,                                                                            former inference via motion-guided token pruning (Sec. IV-I).
+matching the spatial feature channels. These temporal features are broadcasted
+to form a Query, while flattened spatial features serve as the Key and Value.                                                                         A. Training Setup
+Cross-attention modulates the spatial features based on the temporal query,
+yielding the time-conditioned embedding E ′ .                                                                                                            We train our model on the EVIMO [10] and DSEC [3]
+                                                                                                                                                      training splits, aggregating events into 50 ms windows encoded
+                                                                                                                                                      as two-bin voxel grids. Since ground truth is provided at 10 Hz,
+To leverage raw event data without labels, Lunsup employs a                                                                                           we supervise the mask loss Lmask at 100 ms intervals and
+contrast maximization objective insipired by [25], [29] . This                                                                                        compute Lunsup from the corresponding event windows. For
+focus metric encourages flow fields that ”deblur” the event                                                                                           EVIMO, which lacks ground-truth flow, we disable Lflow sup .
+stream by iteratively warping events to a reference time tref                                                                                         On DSEC, we apply Lflow sup only to static regions, as the
+to maximize sharpness. Further details on loss formulations,                                                                                          provided flow doesn’t take in account IMOs. Detailed loss
+weighting factors, and hyperparameter values are provided in                                                                                          weights, optimization parameters, and implementation details
+the Appendix (Sec. A-C).                                                                                                                              are provided in the Appendix (Sec. A-D).
+                                                                          IV. E XPERIMENTS                                                            B. Future Motion Segmentation on EVIMO
+   We evaluate our framework on the EVIMO [10], DSEC [3],                                                                                                We evaluate 100 ms motion forecasting against EVIMO [10]
+and EED [30] datasets, with qualitative results shown in Fig. 4.                                                                                      and OMS [9] (Tab. I). We retrain EVIMO for future prediction
+We first establish state-of-the-art performance in future motion                                                                                      using future depth supervision. Since the default EVIMO
+forecasting (Sec. IV-B) and instantaneous motion segmentation                                                                                         architecture processes a symmetric window (accessing 50 ms
+on EVIMO against a comprehensive suite of supervised,                                                                                                 of future data), we report results for both the standard non-
+unsupervised, and frame-based baselines (Sec. IV-C). We then                                                                                          causal version (namely EVIMO∗ ) using past and future frames
+                                                                                                             TABLE II
+                                                                                   P OINT- BASED I NTERSECTION OVER U NION % ( P I O U) FOR MASK
+                                                                                   PREDICTION AT THE CURRENT INSTANT ON EVIMO DATASET. E
+                                                                                INDICATES METHODS USING EVENTS WHILE I INDICATES THE METHOD
+                                                                                                        USING RGB FRAMES .
+
+
+                                                                               Algorithm              Input   Boxes   Floor   Wall   Table   Fast
+
+                                                                               Baseline CNN [5]         E      50      74     60      66     52
+                                                                               EV-IMO [10]              E      70      59     78      79     67
+                                                                               EVDodgeNet [11]          E      67      61     72      70     60
+                                                                               SpikeMS [8]              E      65      53     63      50     38
+                                                                               GConv [7]                E      60      55     80      51     39
+                                                                               EMSGC [13] Top 30%       E      24      18     24      55     43
+                                                                               EMSGC [13] Top 50%       E      14      11     15      36     26
+                                                                               Un-EVIMO [5]             E      45      56     53      50     44
+                                                                               FlowSAM [31]              I     12      10     14      11     13
+
+                                                                               Ours                     E      72      86     80      80     67
+
+Fig. 4. Anticipatory motion suppression on EVIMO (a) and DSEC (b). Top
+row: Events accumulated over ∆tp = 100 ms with ground-truth IMO masks.
+Bottom row: Predicted separation of ego-motion (white) and IMO (green)         on the motion segmentation performance of our method on
+events for the future 100 ms window based on the previous 50 ms of data. Our
+pipeline demonstrates: (a) robustness under extreme ego-motion with complex
+                                                                               DSEC [3] are available in the attached supplementary video.
+IMO shapes and (b) accurate motion anticipation for both distant and nearby
+vehicles in driving scenes.                                                    C. Motion Segmentation on EVIMO
+                                                                                  We further assess our method by comparing it against state-
+                           TABLE I                                             of-the-art approaches on the EVIMO dataset, as summarized
+    M EAN I NTERSECTION OVER U NION % ( M I O U) AND RATIO OF                  in Tab. II. Evaluation follows the protocol established by Un-
+CORRECTLY SEGMENTED OBJECTS % (R@0.5) FOR FUTURE PREDICTION                    EVIMO [5], using point-based Intersection over Union (pIoU
+                      ON EVIMO DATASET.
+                                                                               %) the same metric adopted in the original EVIMO benchmark
+               OMS [9]      EV-IMO† [10] EV-IMO∗ [10]              Ours
+                                                                               [10].
+                                                                                  We compare different baselines including supervised CNN-
+Sequence mIoU R@0.5 mIoU R@0.5 mIoU R@0.5 mIoU R@0.5
+                                                                               based methods like EVIMO [12], EVDodgeNet [11], spiking
+Boxes       49.15    2.21    69.74   53.73    73.53   61.05    76.24   75.38   neural network based approaches like SpikeMS [8], graph-
+Floor       48.23      0     77.06   55.95    75.47   66.93    80.10   95.51   based approaches like GConv [7], unsupervised optimization-
+Wall        48.63    0.27    75.45   40.02    75.78   68.06    79.63   88.09   based EMSGC [13], Un-EVIMO [5] and frame-based ap-
+Table       48.73    0.79    78.41   48.37    75.26   61.23    79.71   90.95   proaches like FlowSAM [31].
+Fast        45.97    0.69    63.96   33.03    64.66   38.94    68.07   67.26
+                                                                                  Tab. II demonstrates that our approach outperforms unsu-
+Tabletop    50.77    0.90    78.51   73.44    72.51   54.46    84.57   91.48
+                                                                               pervised approaches by 55% and spiking-based approaches
+                                                                               by 40%, as well as the state-of-the-art represented by convo-
+                                                                               lutional methods by 10%.
+and a strict causal variant (namely EVIMO† ) restricted to                        Furthermore, frame-based methods such as FlowSAM strug-
+past frames. OMS is evaluated using optimal parameters as a                    gle to disentangle complex motion patterns, resulting in low
+lightweight baseline. Performance is measured via mIoU and                     scores on the EVIMO benchmark. We argue that motion
+R@0.5 against ground-truth masks shifted 100 ms forward.                       segmentation inherently benefits from sensors that measure
+Detailed metric definitions are provided in Appendix B-B.                      motion directly; traditional cameras are ill-equipped for this
+   As shown in Tab. I, our simple pipeline consistently out-                   task, as they only capture absolute scene intensity at dis-
+performs EVIMO∗ and EVIMO† on the instance-level met-                          crete intervals. Consequently, the results in Tab. II show that
+ric R@0.5 by 45% and 67%, respectively, despite requiring                      FlowSAM suffers a 5.5× drop in accuracy compared to our
+neither future frames at run time nor ground-truth depths                      method, which relies entirely on a single event camera.
+during training. On mIoU, our method also surpasses EVIMO∗
+and EVIMO† by 7% and 6%, respectively, demonstrating                           D. Motion Segmentation on EED
+strong segmentation of both IMO and ego-motion events.                            To evaluate the robustness of our approach to varying
+In contrast, OMS struggles to capture true IMOs, producing                     illumination conditions and severe sensor noise, we addition-
+many false positives and achieving an average R@0.5 of about                   ally benchmark our method on the Event-based Ego-motion
+1%, markedly below our method and EVIMO. Overall, our                          and Dynamic-object (EED) dataset [30]. Unlike standard
+approach improves mIoU over OMS by 61%. Further videos                         indoor scenes, EED features highly challenging sequences
+            TABLE III                            TABLE IV
+ RUN TIME [ MS ], AGE , & GFLOPS         IMO PRED . ( M I O U%) ON EED
+
+ Alg.     Time (µ/σ)    Age     GFLOPS   Alg.   FD OC WIB LV MO
+
+ EV-IMO    8.82/0.54    -8.8     1.80    EBMS 27.2 69.7 68.4 31.0 41.6
+ OMS       112.7/3.5   -112.7    0.12    PMS    53.9 83.2 93.3 48.3 51.1
+ Ours      5.76/0.64   94.2      32.15   Ours   72.6 78.5 79.6 63.3 55.4
+
+
+
+
+characterized by low illumination and complex, unconstrained
+trajectories of multiple independently moving objects.
+   We compare our method against two recent event-based
+motion segmentation approaches: EBMS [16] and Progressive-
+MotionSeg (PMS) [32]. As shown in Tab. IX, performance is
+measured using the mean Intersection over Union (mIoU %)
+across five distinct sequence categories: Fast Drone (FD), OC,
+WIB, Light Variation (LV), and Multiple Objects (MO).
+   Our model demonstrates highly competitive performance,
+achieving state-of-the-art results in the FD, LV, and MO
+categories. Specifically, our approach outperforms the recent
+PMS baseline by a significant margin in low-light conditions
+(LV: 15.0%) and scenes with multiple dynamic agents (MO:
+4.3%). This underscores the efficacy of our anticipatory sup-                            SViT-0                                SViT-16
+pression mechanism, which successfully isolates IMOs even
+when standard brightness constancy assumptions fail or event
+                                                                           Fig. 5. Dynamic object masks for SViT token pruning. Left to right: SViT-0
+generation is sparse due to darkness.                                      and SViT-16 show increasing mask dilation. Larger dilation factors cover more
+   While PMS achieves higher accuracy in the OC and WIB se-                area, including more background tokens and increasing system latency. This
+quences, our method maintains strong, consistent performance               mask expansion introduces redundancy that significantly reduces inference
+                                                                           frequency while capturing the same dynamic content of the scene.
+across the board (outperforming EBMS in all categories).
+Ultimately, these results prove that our framework generalizes
+well beyond standard DSEC driving scenarios and EVIMO                                                 TABLE V
+                                                                            M EAN I NTERSECTION OVER U NION % ( M I O U) C OMPARISON OF C ORE
+tabletop scenes, remaining robust in noisy, real-world dynamic                   C OMPONENTS OF O UR F RAMEWORK ON EVIMO DATASET
+environments.
+                                                                                    FW       ATC     Boxes    Floor    Wall    Table    Fast
+E. Run time, Prediction Age and GFLOPS Evaluations
+   We evaluate the time complexity of our approach by                               ×          ×     72.25    73.08   68.62    78.71   65.06
+comparing wall-clock inference time, prediction ”age,” and                          Linear     ×     73.88    75.41   71.01    78.02   61.77
+GFLOPS against baselines on a GeForce RTX 2080 Ti and 1                             ✓          ×     74.03    78.02   75.14    77.70   67.49
+core of a consumer CPU. As detailed in Tab. VIII, our method                        ✓         ✓      76.24    80.10   79.63    79.71   68.07
+achieves the fastest processing time of 5.8ms (≈ 173 Hz),
+which is ≈ 53% faster than EV-IMO [10] and two orders
+of magnitude faster than the open-source implementation of
+OMS [9].                                                                   F. Ablations
+   Crucially, the baseline methods predict masks that lag
+behind the target timestep due to their respective runtime                   Unlike driving scenarios, indoor EVIMO scenes feature
+(negative prediction age). Instead, our method sets forecasts by           highly non-linear object motion, causing segmentation masks
+100 ms, reaching a prediction age of 94.2 ms. This successfully            to lag behind the true object position within milliseconds.
+compensates for the computation time of 5.8ms, delivering                  We quantify the necessity of our non-linear forecasting by
+zero-latency masks effectively. Interestingly, although our                comparing our full model (ATC + Flow Warping) against three
+model incurs higher theoretical complexity (32 GFLOPS)                     baselines: (1) no forecasting, (2) linear motion extrapolation,
+compared to EV-IMO (1.8) and OMS (0.12), it yields the                     and (3) basic temporal summation without ATC.
+lowest latency. This disparity highlights the efficiency of GPU-             As shown in Tab. V, linear extrapolation improves upon
+optimized architectures over CPU-bound, hand-tuned algo-                   the static baseline but fails in sequences with chaotic motion,
+rithms like OMS, where low flop counts do not translate to                 such as Floor and Fast. Our learned flow warping significantly
+real-time performance. Details of the experiment are available             outperforms these simpler alternatives, confirming that fore-
+in the Appendix (Sec. B-C).                                                casting curved pixel paths is essential for robust anticipatory
+                             TABLE VI
+  M EAN I NTERSECTION OVER U NION % ( M I O U) FOR O UR M ODEL AT                    70
+              D IFFERENT S CALES O N EVIMO DATASET
+                                                                                                                                                       floor
+           Model Boxes         Floor     Wall     Table   Fast                       65
+
+
+           XS       47.12      47.82     46.26    47.57   50.74                                                                                        tabletop
+
+
+
+
+                                                                              mIoU
+                                                                                     60                                                                table
+           S        68.72      80.07     75.96    73.93   58.52                                                                                        total
+
+           M        72.68      80.00     75.04    79.02   64.59                                                                                        wall
+                                                                                     55                                                                box
+
+           L        76.24      80.10     79.63    79.71   68.07
+
+                                                                                     50
+                             TABLE VII                                                                                                                 fast
+ATE [ M ] (A BSOLUTE T RAJECTORY E RROR ) C OMPARISON OF RAMP-VO
+                         ON EVIMO DATASET                                                 0   10   20   30      40    50    60    70       80   90   100
+                                                                                                             Prediction Horizon ∆tp (ms)
+     Algorithm          Boxes Floor        Wall   Table   Fast    Tabletop
+
+     RAMP-VO [33]       0.33      0.17     0.34    0.15   0.25    0.14
+                                                                             Fig. 6. Mean IoU (mIoU) versus prediction horizon ∆tp (0–100 ms) on the
+     RAMP-VO∗    [33]   0.29      0.15     0.33    0.15   0.22    0.12       EVIMO dataset for six sequences (box, fast, floor, table, tabletop, wall) and the
+     RAMP-VO† [33]      0.28      0.15     0.30    0.15   0.22    0.11       macro-average total. Performance declines with increasing horizon, indicating
+                                                                             that longer look-ahead yields less accurate segmentation. Faster scenes such
+                                                                             as wall and fast degrade more rapidly than slower ones like box and tabletop,
+                                                                             due to stronger non-smooth motion and occlusions that increase the effective
+                                                                             prediction age.
+segmentation.
+   We further analyze the impact of model capacity in Tab. VI                H. Application on Visual Odometry
+by scaling the architecture from 25% (XS) to 100% (L)
+of the total parameters. Results demonstrate that increasing                    We evaluate the impact of anticipatory event suppression on
+model size yields consistent mIoU gains, particularly in highly              state estimation by integrating our method into an open-source
+dynamic scenes. Although the improvement from Small to                       event- and frame based VO pipeline RAMP-VO [33]. Experi-
+Large and from Medium to Large is marginal, the Large                        ments on EVIMO [10] compare three configurations: standard
+model achieves peak accuracy while maintaining the real-time                 RAMP-VO, RAMP-VO∗ (using our suppressor), and RAMP-
+performance established in Sec. IV-E.                                        VO† (using ground-truth masks as an upper bound). Our
+                                                                             method enhances robustness in dynamic scenes by lowering
+   Further experiments on the system sensitivity to the event
+                                                                             the mean Absolute Trajectory Error (ATE) to 0.21 m (−8.7%),
+rate are available in the appendix (Sec. B-E1).
+                                                                             effectively bridging the gap toward the maximum achievable
+G. Accuracy vs. Prediction Horizon Ablation                                  gain of −13% demonstrated by RAMP-VO† . The improve-
+                                                                             ment is most pronounced on dynamic sequences (Boxes, Wall,
+   We study how segmentation accuracy varies with the predic-                Fast) where IMO features typically corrupt pose estimation,
+tion horizon by training the small model ”S” while randomiz-                 while performance remains stable on static scenes, confirming
+ing the prediction time during training. Given a set of horizons,            that filtering does not degrade valid ego-motion data.
+we uniformly sample a ∆tp ∈ [0, 100]ms and supervise the
+model using events from a fixed window of length ∆t such that                I. Application on Token pruning for Transformers Efficiency
+the supervision time is ∆t + ∆tp and aligns with the ground-                    Vision Transformers process an image as a flat sequence of
+truth timestamp. This avoids any ground-truth interpolation.                 patch tokens, which makes the inference cost grow quadrat-
+   We report mean IoU (mIoU) for each fixed horizon on six                   ically with the number of tokens. Earlier work focused on
+EVIMO sequences (box, fast, floor, table, tabletop, wall) and                pruning tokens uniformly at random or using simplified gating
+the performance averaged over all scenes (total). Results in                 mechanisms, as in [34]. We propose using event-based antici-
+Fig. 6 show a consistent, monotonic drop in mIoU as ∆tp                      patory masks to selectively prune static-scene tokens, focusing
+increases, reflecting the growing difficulty of extrapolating fine           computation on dynamic agents (e.g., pedestrians, vehicles).
+object boundaries further into the future. The decay rate is                 By substituting the gating mechanism in SViT [34] with our
+scene-dependent: rapid, non-smooth sequences like fast and                   dynamic masks on the DSEC dataset, we achieve a superior
+wall degrade more steeply, due to occlusions and larger relative             efficiency-accuracy balance without incurring extra time costs,
+pose changes, whereas slower scenes like box and tabletop                    given that the masks are forecasted in advance. We simulate
+degrade more gradually. Thus, while horizon randomization                    the impact of increasingly coarser IMO segmentations by di-
+improves robustness across time offsets, performance remains,                lating the original mask estimated by our model (SVIT-0). As
+as expected, limited by the prediction horizon; in latency-                  shown in Fig. 5, coarser masks incur higher token utilization.
+sensitive applications, shorter ∆tp should be preferred to                   As shown in Fig. 7, using our original mask (SViT-0) increases
+mitigate such errors.                                                        inference speed by approximately 10 FPS compared to the
+               SViT-full
+                                                                                                        VI. C ONCLUSION
+          42                      SViT-256
+                                                                                      In this work, we introduced a novel framework for real-
+          41                                          SViT-128                     time Anticipatory Motion Suppression, directly addressing the
+                                                         SViT-64                   critical challenge of filtering irrelevant motion activity from
+          40
+                                                             SViT-32
+                                                                                   event streams to enable more efficient downstream perception.
+                                                                                   Our key innovation is a unified, end-to-end architecture that
+ Seg AP
+
+
+
+
+          39                                                 SViT-16
+
+                                                                                   breaks the traditional trade-off between accuracy and latency
+          38
+                                                                                   by jointly learning to segment independently moving objects
+          37                                                  SViT-8
+                                                                                   and predict their future motion.
+                                                                                      We have validated our approach on the challenging EVIMO
+          36                                                      SViT-4           benchmark, where it establishes a new state of the art, outper-
+                                                                       SViT-2
+          35                                                              SViT-0   forming prior methods by a significant margin of 67% while
+                                                                                   operating 60 Hz faster. Our model’s efficiency running at 173
+               12          14         16         18          20            22
+                                Inference speed (images/s)                         Hz on a consumer GPU demonstrate its suitability for real-
+                                                                                   world, resource constrained applications. Moreover, we show
+                                                                                   the profound practical impact of our method. By supplying
+Fig. 7. Trade-off between segmentation accuracy (Seg AP) and inference             a clean stream of ego-motion only events, we improved
+frequency for different pruning ratios of the SViT model. As the pruning ratio     the accuracy of a state-of-the-art visual odometry system by
+increases (e.g., from SViT-full to SViT-0), the inference frequency improves,      13%. Furthermore, by using the IMOs masks to guide token
+but the segmentation performance degrades.
+                                                                                   pruning, we accelerated Vision Transformer’s inference speed
+                                                                                   by 10 FPS with only a negligible drop in accuracy. Our
+full-token baseline (SViT-full) [34], with a negligible drop of                    work represents a significant step towards making event-based
+less than 7 points in Segmentation Average Precision (SegAP).                      perception more robust, efficient, and practical for latency-
+Further videos on token pruning performance are available in                       critical robotic systems like autonomous vehicles and AR/VR
+the attached supplementary video.                                                  devices.
+
+                                V. L IMITATIONS
+   Despite its effectiveness, our approach has several lim-
+itations. While the method generalizes well across varied
+camera resolutions and low-light conditions, our anticipatory
+suppression relies on accurate flow forecasting and mask warp-
+ing. Although it successfully handles small ego-motion (1-2
+px/frame), under larger ego-motion, abrupt non-linear motion,
+fast occlusions, or depth-layer changes, the warped mask can
+misalign and blur boundaries, reducing IoU. Moreover, the
+“anticipation” effect depends on runtime being small relative
+to the chosen forecast horizon; therefore, if compute budgets
+shrink or horizons grow, the effective prediction age advantage
+narrows. Performance also degrades as the prediction horizon
+increases, with steeper drops in highly dynamic scenes, which
+limits long motion forecasting settings. Critically, accuracy
+is sensitive to event density. Our method is most robust
+when processing between 2 × 103 and 106 events; outside
+this regime, the method struggles. IMOs that generate very
+few events (e.g., distant cars or pedestrians) do not provide
+enough context to be distinguished from the background, while
+excessively dense windows integrating over long spans can
+blur object boundaries. Finally, while our approach natively
+predicts an arbitrary number of IMOs without periodic re-
+initialization, our evaluation currently emphasizes EVIMO
+(indoor) and DSEC (driving). Broader validation on egocentric
+manipulation, legged platforms, and aerial viewpoints remains
+open. Future works should include uncertainty-aware warping
+and evaluation across a wider range of robotic platforms and
+environments.
+                              R EFERENCES                                         [20] C. Ye, A. Mitrokhin, C. Fermüller, J. A. Yorke, and Y. Aloimonos,
+                                                                                       “Unsupervised learning of dense optical flow, depth and egomotion from
+                                                                                       sparse event data,” arXiv preprint arXiv:1809.08625, 2018.
+ [1] T. Stoffregen, H. Daraei, C. Robinson, and A. Fix, “Event-based              [21] M. Gehrig, M. Millhäusler, D. Gehrig, and D. Scaramuzza, “E-raft:
+     kilohertz eye tracking using coded differential lighting,” in Proceedings         Dense optical flow from event cameras,” in 2021 International Con-
+     of the IEEE/CVF Winter Conference on Applications of Computer Vision,             ference on 3D Vision (3DV). IEEE, 2021, pp. 197–206.
+     2022, pp. 2515–2523.                                                         [22] F. Paredes-Vallés, K. Y. Scheper, C. De Wagter, and G. C. De Croon,
+ [2] D. Gehrig and D. Scaramuzza, “Low-latency automotive vision with                  “Taming contrast maximization for learning sequential, low-latency,
+     event cameras,” Nature, vol. 629, no. 8014, pp. 1034–1040, 2024.                  event-based optical flow,” in Proceedings of the IEEE/CVF International
+ [3] M. Gehrig, W. Aarents, D. Gehrig, and D. Scaramuzza, “Dsec: A                     Conference on Computer Vision, 2023, pp. 9695–9705.
+     stereo event camera dataset for driving scenarios,” IEEE Robotics and        [23] S. Shiba, Y. Aoki, and G. Gallego, “Secrets of event-based optical flow,”
+     Automation Letters, vol. 6, no. 3, pp. 4947–4954, 2021.                           in European Conference on Computer Vision. Springer, 2022, pp. 628–
+ [4] S. Georgoulis, W. Ren, A. Bochicchio, D. Eckert, Y. Li, and A. Gawel,             645.
+     “Out of the room: Generalizing event-based dynamic motion segmen-            [24] M. Mostafavi, L. Wang, and K.-J. Yoon, “Learning to reconstruct hdr
+     tation for complex scenes,” in 2024 International Conference on 3D                images from events, with applications to depth and flow prediction,”
+     Vision (3DV). IEEE, 2024, pp. 442–452.                                            International Journal of Computer Vision, vol. 129, no. 4, pp. 900–920,
+ [5] Z. Wang, J. Guo, and K. Daniilidis, “Un-evimo: Unsupervised event-                2021.
+     based independent motion segmentation,” in European Conference on            [25] F. Paredes-Vallés, K. Y. W. Scheper, C. De Wagter, and G. C. H. E.
+     Computer Vision. Springer, 2024, pp. 228–245.                                     de Croon, “Taming contrast maximization for learning sequential, low-
+ [6] S. Zhang, L. Sun, and K. Wang, “A multi-scale recurrent framework                 latency, event-based optical flow,” in Proceedings of the IEEE/CVF
+     for motion segmentation with event camera,” IEEE Access, vol. 11, pp.             International Conference on Computer Vision (ICCV), October 2023,
+     80 105–80 114, 2023.                                                              pp. 9695–9705.
+ [7] A. Mitrokhin, Z. Hua, C. Fermuller, and Y. Aloimonos, “Learning              [26] N. Ballas, L. Yao, C. Pal, and A. Courville, “Delving deeper into con-
+     visual motion segmentation using event surfaces,” in Proceedings of the           volutional networks for learning video representations,” arXiv preprint
+     IEEE/CVF Conference on Computer Vision and Pattern Recognition,                   arXiv:1511.06432, 2015.
+     2020, pp. 14 414–14 423.                                                     [27] P. Charbonnier, L. Blanc-Féraud, G. Aubert, and M. Barlaud, “De-
+ [8] C. M. Parameshwara, S. Li, C. Fermüller, N. J. Sanket, M. S. Evanusa,            terministic edge-preserving regularization in computed imaging,” IEEE
+     and Y. Aloimonos, “Spikems: Deep spiking neural network for motion                Transactions on image processing, vol. 6, no. 2, pp. 298–311, 1997.
+     segmentation,” in 2021 IEEE/RSJ International Conference on Intelli-         [28] X. Li, X. Sun, Y. Meng, J. Liang, F. Wu, and J. Li, “Dice loss for
+     gent Robots and Systems (IROS). IEEE, 2021, pp. 3414–3420.                        data-imbalanced nlp tasks,” arXiv preprint arXiv:1911.02855, 2019.
+ [9] V. Clerico, S. Snyder, A. Lohia, M. Abdullah-Al Kaiser, G. Schwartz,         [29] G. Gallego, M. Gehrig, and D. Scaramuzza, “Focus is all you need:
+     A. Jaiswal, and M. Parsa, “Retina-inspired object motion segmentation             Loss functions for event-based vision,” in Proceedings of the IEEE/CVF
+     for event-cameras,” arXiv preprint arXiv:2408.09454.                              Conference on Computer Vision and Pattern Recognition (CVPR), June
+                                                                                       2019.
+[10] A. Mitrokhin, C. Ye, C. Fermüller, Y. Aloimonos, and T. Delbruck,
+                                                                                  [30] A. Mitrokhin, C. Fermüller, C. Parameshwara, and Y. Aloimonos,
+     “Ev-imo: Motion segmentation dataset and learning pipeline for event
+                                                                                       “Event-based moving object detection and tracking,” in 2018 IEEE/RSJ
+     cameras,” in 2019 IEEE/RSJ International Conference on Intelligent
+                                                                                       International Conference on Intelligent Robots and Systems (IROS).
+     Robots and Systems (IROS). IEEE, 2019, pp. 6105–6112.
+                                                                                       IEEE, 2018, pp. 1–9.
+[11] N. J. Sanket, C. M. Parameshwara, C. D. Singh, A. V. Kuruttukulam,           [31] J. Xie, C. Yang, W. Xie, and A. Zisserman, “Moving object segmenta-
+     C. Fermüller, D. Scaramuzza, and Y. Aloimonos, “Evdodgenet: Deep                 tion: All you need is sam (and flow),” in ACCV, 2024.
+     dynamic obstacle dodging with event cameras,” in 2020 IEEE Interna-          [32] J. Chen, Y. Wang, Y. Cao, F. Wu, and Z.-J. Zha, “Progressivemotionseg:
+     tional Conference on Robotics and Automation (ICRA). IEEE, 2020,                  Mutually reinforced framework for event-based motion segmentation,”
+     pp. 10 651–10 657.                                                                in Proceedings of the AAAI Conference on Artificial Intelligence, vol. 36,
+[12] A. Mitrokhin, C. Fermüller, C. Parameshwara, and Y. Aloimonos,                   no. 1, 2022, pp. 303–311.
+     “Event-based moving object detection and tracking,” in 2018 IEEE/RSJ         [33] R. Pellerito, M. Cannici, D. Gehrig, J. Belhadj, O. Dubois-Matra,
+     International Conference on Intelligent Robots and Systems (IROS).                M. Casasco, and D. Scaramuzza, “Deep visual odometry with events
+     IEEE, 2018, pp. 1–9.                                                              and frames,” in IEEE/RSJ International Conference on Intelligent Robots
+[13] Y. Zhou, G. Gallego, X. Lu, S. Liu, and S. Shen, “Event-based motion              (IROS), June 2024.
+     segmentation with spatio-temporal graph cuts,” IEEE transactions on          [34] Y. Liu, M. Gehrig, N. Messikommer, M. Cannici, and D. Scara-
+     neural networks and learning systems, vol. 34, no. 8, pp. 4868–4880,              muzza, “Revisiting token pruning for object detection and instance
+     2021.                                                                             segmentation,” in Proceedings of the IEEE/CVF Winter Conference on
+[14] D. Falanga, K. Kleber, and D. Scaramuzza, “Dynamic obstacle avoid-                Applications of Computer Vision, 2024, pp. 2658–2668.
+     ance for quadrotors with event cameras,” Science Robotics, vol. 5, no. 40,   [35] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+     p. eaaz9712, 2020.                                                                Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” Advances in
+[15] C. M. Parameshwara, N. J. Sanket, C. D. Singh, C. Fermüller, and                 neural information processing systems, vol. 30, 2017.
+     Y. Aloimonos, “0-mms: Zero-shot multi-motion segmentation with a
+     monocular event camera,” in 2021 IEEE International Conference on
+     Robotics and Automation (ICRA). IEEE, 2021, pp. 9594–9600.
+[16] T. Stoffregen, G. Gallego, T. Drummond, L. Kleeman, and D. Scara-
+     muzza, “Event-based motion segmentation by motion compensation,” in
+     Proceedings of the IEEE/CVF International Conference on Computer
+     Vision, 2019, pp. 7244–7253.
+[17] G. Gallego, H. Rebecq, and D. Scaramuzza, “A unifying contrast
+     maximization framework for event cameras, with applications to mo-
+     tion, depth, and optical flow estimation,” in Proceedings of the IEEE
+     Conference on Computer Vision and Pattern Recognition (CVPR), June
+     2018.
+[18] G. D’Angelo, V. Clerico, C. Bartolozzi, M. Hoffmann, P. M. Furlong,
+     and A. Hadjiivanov, “Wandering around: A bioinspired approach to
+     visual attention through object motion sensitivity,” Neuromorphic Com-
+     puting and Engineering, vol. 5, no. 2, p. 024019, 2025.
+[19] A. Z. Zhu, L. Yuan, K. Chaney, and K. Daniilidis, “Ev-flownet: Self-
+     supervised optical flow estimation for event-based cameras,” arXiv
+     preprint arXiv:1802.06898, 2018.
+                                                    Appendix for:
+                Motion-aware Event Suppression for Event Cameras
+       Roberto Pellerito, Nico Messikommer, Giovanni Cioffi, Marco Cannici, Davide Scaramuzza
+                   Robotics and Perception Group, University of Zurich, Switzerland
+
+                        A PPENDIX A                                B. Temporal Positional Encoding
+                      M ETHOD D ETAILS                                To provide the model with a continuous notion of time, we
+A. Attention-based Time Conditioning (ATC)                         inject a temporal encoding for each time scalar ∆t. We adapt
+                                                                   the sinusoidal positional encoding scheme from the original
+   To enable the forecasting of optical flow at a future time      Transformer architecture [35]. However, instead of encoding
+step t + ∆tp we introduce a temporal attention module. This        discrete integer positions, our method encodes the continuous
+module’s purpose is to dynamically modulate the current            time value ∆t into a high-dimensional vector.
+spatial feature embedding, E ∈ RB×C×H×W , based on the                Given an embedding dimension d, the temporal encoding
+target time delta. It achieves this using a multi-head cross-      PE(∆t) ∈ Rd is computed as follows:
+attention mechanism, depicted in Fig. 3 where the Query is                                (
+derived from the time information, while the Key and Value                                  sin(ωk · ∆t) if i = 2k
+are derived from the spatial features. This process is composed              PE(∆t, i) =                                     (8)
+                                                                                            cos(ωk · ∆t) if i = 2k + 1
+of three main steps:
+     a) Preparation of Attention Inputs: First, the temporal       where i is the dimension index, and the frequencies ωk are
+and spatial inputs must be transformed into the sequence           defined as:
+format required by the attention mechanism, which is ‘[Batch,                          1
+                                                                            ωk =                for k ∈ [0, . . . , d/2 − 1].  (9)
+Sequence-Length, Embedding-Dim]‘.                                                 100002k/d
+   • Query Tensor (Q): The scalar time delta, ∆t, is first         This function maps the single time value ∆t into a d-
+     encoded into a C-dimensional vector using the sinusoidal      dimensional vector using a bank of sinusoids with geomet-
+     positional encoding function, yielding tenc = PE(∆t) ∈        rically spaced frequencies. This technique provides a rich,
+     RB×C . More details on the positional encoding can be         continuous, and unambiguous representation of time, allowing
+     found in A-B. This single vector is then broadcast across     the model to easily reason about and generalize to different
+     all H × W spatial positions to form the Query tensor          temporal intervals, a capability not afforded by feeding in the
+     Q ∈ RB×(H·W )×C . This implies that every spatial loca-       raw scalar value directly.
+     tion is being queried with the same temporal information.
+   • Key and Value Tensors (K, V): The spatial feature map
+                                                                   C. Training Losses
+     E is unrolled into a sequence of per-pixel feature vectors.      Our network is trained end-to-end using a hybrid, multi-
+     This is achieved by flattening the spatial dimensions,        task loss function, which is a weighted sum of a supervised
+     transforming the tensor from shape (B, C, H, W ) to           component, Lsup , and an unsupervised component, Lunsup . This
+     (B, H · W, C). This resulting sequence serves as both         hybrid approach leverages available ground truth data while
+     the Key, K, and the Value, V.                                 also benefiting from a dense, self-supervised signal derived
+                                                                   directly from the raw event data. The total loss is formulated
+                      K, V ∈ RB×(H·W )×C                     (7)   as:
+                                                                                   Ltotal = wsup Lsup + wunsup Lunsup        (10)
+      b) Multi-Head Cross-Attention: The operation computes
+a weighted sum of the Value vectors, where the weights are de-     where wsup and wunsup are scalar weights balancing the two
+termined by the compatibility between the time-derived Query       components.
+and the space-derived Key. The output is a new sequence               1) Supervised Loss Component (Lsup ): The supervised loss
+of feature vectors, E′ ∈ RB×(H·W )×C , which represents            term is a combination of losses for the dynamic object seg-
+a version of the original spatial features modulated by the        mentation and optical flow prediction tasks, applied wherever
+temporal query.                                                    ground truth is available.
+      c) Output Reshaping: The output sequence E′ is re-                a) Segmentation Loss (Lmask ): For the segmentation task,
+shaped back into its original spatial tensor format. This ”un-     we use a combined Binary Cross-Entropy (BCE) and Dice
+flattening” operation transforms the tensor from (B, H · W, C)     loss [28], which is effective for handling class imbalance in
+back to (B, C, H, W ). The resulting tensor, Et+∆t , is the        segmentation problems. The loss is computed for the predicted
+time-conditioned embedding, which is to be processed by the        masks at the current time, Mt , and optionally for the future
+optical flow decoder.                                              predicted masks, Mt+∆t :
+                                                                                       TABLE VIII                            TABLE IX
+                                                                              RUN TIME [ MS ], AGE , & GFLOPS        IMO PRED . ( M I O U%) ON EED
+  Lmask = LBCE-Dice (Mt , Mt′ )+
+                                                            ′                Alg.     Time (µ/σ)    Age     GFLOPS   Alg.   FD OC WIB LV MO
+                       + λfuture   mask LBCE-Dice (Mt+∆t , Mt+∆t )   (11)
+                                                                             EV-IMO    8.82/0.54    -8.8     1.80    EBMS 27.2 69.7 68.4 31.0 41.6
+   where M ′ denotes the ground truth mask and λfuture mask is
+                                                                             OMS       112.7/3.5   -112.7    0.12    PMS    53.9 83.2 93.3 48.3 51.1
+a weighting factor for the future prediction. The LBCE-Dice is
+                                                                             Ours      5.76/0.64   94.2      32.15   Ours   72.6 78.5 79.6 63.3 55.4
+a weighted sum of the two individual losses.
+     b) Supervised Flow Loss (Lflow sup ): When ground truth
+                 ′
+optical flow, ψt+∆t     , is available, we apply a supervised loss
+                      p
+                                                                            ∆t = 100 ms), we supervise the binary-mask loss Lmask at
+to the predicted flow field ψt+∆t . Furthermore, to introduce an
+                                                                            these timestamps and compute the unsupervised term Lunsup
+auxiliary task, we also predict the current flow field ψt with an
+                                                                            from the events within the corresponding intervals.
+additional flow decoder, which is supervised with the ground
+                                                                               The loss weights are set to λfuture mask = 1.0, λflow = 0.1,
+truth flows ψt′ . For each flow, the corresponding loss consists
+                                                                            λsmooth = 0.05, wsup = 1.0, and wunsup = 1.0. We did
+of two parts: an L1-norm data term computed only on valid
+                                                                            not observe significant performance variations when adjusting
+pixels, and a spatial smoothness term to encourage locally
+                                                                            these parameters, suggesting that the model is relatively robust
+consistent flow fields. The smoothness is enforced using the
+                                                                            to their specific values.
+Charbonnier loss [27], a robust L1-like penalty, on the first-
+                                                                               As EVIMO does not provide ground-truth optical flow, the
+order spatial gradients of the flow field:
+                                               q                            supervised component of the flow loss is disabled. In contrast,
+                  X p
+Lsmooth (ψ) =              ∥∇x ψ(p)∥2 + ϵ2 + ∥∇y ψ(p)∥2 + ϵ2                DSEC dataset includes optical flow supervision, but it is only
+                    p∈pixels                                                valid in static regions of the scene; therefore, it does not offer a
+                                                                     (12)   reliable supervisory signal for Independently Moving Objects
+The total supervised flow loss is:                                          (IMOs). For this reason the supervised part of the optical flow
+                                                                            loss is masked and only the optical flow outside of the IMOs
+      Lflow   sup   = λflow ∥ψ − ψ ′ ∥1 + λsmooth Lsmooth (ψ)        (13)   is supervised.
+where λflow and λsmooth are hyperparameters.                                                                 A PPENDIX B
+   2) Unsupervised Flow Loss (Lunsup ): For the optical flow                                                E XPERIMENTS
+forecasting task, we incorporate a powerful, unsupervised loss
+based on the principle of contrast maximization [29] and                      In this section, we provide a deeper breakdown of the
+inspired by [25]. The core idea is that a correct optical flow              experimental setup.
+field, when used to warp events over a time interval, will                  A. Motion Segmentation on EED
+”deblur” the event stream by mapping moving points back to
+                                                                               To evaluate the robustness of our approach to varying
+their origin. In practice, the events are transported to a given
+                                                                            illumination conditions and severe sensor noise, we addition-
+reference time tref applying iteratively the following equation
+                                                                            ally benchmark our method on the Event-based Ego-motion
+for every event.
+                                                                            and Dynamic-object (EED) dataset [30]. Unlike standard
+                                                                            indoor scenes, EED features highly challenging sequences
+                       x′i = xi + (tref − ti )u(xi )                 (14)
+                                                                            characterized by low illumination and complex, unconstrained
+   Here, x′i represent the x′i , yi′ coordinates of the transported         trajectories of multiple independently moving objects.
+events and xi the original coordinates. The optimal optical                    We compare our method against two recent event-based
+flow u(xi ) will warp each event to a location x′i , such that              motion segmentation approaches: EBMS [16] and Progressive-
+the resulting Image of Warped Events (IWE) reaches the                      MotionSeg (PMS) [32]. As shown in Tab. IX, performance is
+maximum contrast, as described in [17].                                     measured using the mean Intersection over Union (mIoU %)
+   The loss function itself is a focus metric (e.g., variance of            across five distinct sequence categories: Fast Drone (FD), OC,
+the IWE pixel intensities) that quantifies the sharpness of the             WIB, Light Variation (LV), and Multiple Objects (MO).
+IWE. The network is trained to maximize this focus metric,                     Our model demonstrates highly competitive performance,
+thereby learning to produce flow fields that best align the                 achieving state-of-the-art results in the FD, LV, and MO
+events in time. This provides a dense and physically grounded               categories. Specifically, our approach outperforms the recent
+training signal that does not require any ground truth flow                 PMS baseline by a significant margin in low-light conditions
+labels.                                                                     (LV: 15.0%) and scenes with multiple dynamic agents (MO:
+                                                                            4.3%). This underscores the efficacy of our anticipatory sup-
+D. Training Setup                                                           pression mechanism, which successfully isolates IMOs even
+  We train our model on the EVIMO training split [10]                       when standard brightness constancy assumptions fail or event
+and DSEC training split [3], aggregating events into 50 ms                  generation is sparse due to darkness.
+windows and encoding them as a two-bin voxel grid. Since                       While PMS achieves higher accuracy in the OC and WIB se-
+EVIMO and DSEC provide Ground Truth at 10 Hz (i.e.,                         quences, our method maintains strong, consistent performance
+across the board (outperforming EBMS in all categories).                  b) Definition of Prediction Age: Standard latency metrics
+Ultimately, these results prove that our framework generalizes      often overlook the ”freshness” of the output in robotic con-
+well beyond standard DSEC driving scenarios and EVIMO               trol loops. We define Prediction Age (Tage ) as the temporal
+tabletop scenes, remaining robust in noisy, real-world dynamic      offset between the moment a mask becomes available to
+environments.                                                       the system and the timestamp it describes. It is calculated
+                                                                    as: Tage = ∆tf orecast − Truntime where ∆tf orecast is the
+B. Used Metrics                                                     prediction horizon (0 for baselines, 100 ms for our method)
+                                                                    and Truntime is the wall-clock inference time.
+   In Sec. IV-B we compute two different metrics to evaluate
+                                                                       • Negative Age (Tage < 0): Indicates system lag. The
+the models performances: the mean Intersection over Union
+(mIoU) and the ratio of correctly segmented objects (R). The              mask describes a scene that happened Tage milliseconds
+mIoU is computed as the average of the IoU over ego-motion                ago. Both EV-IMO (Tage ≈ −9 ms) and OMS (Tage ≈
+pixels and over independently moving objects (IMOs). Since                −113 ms) fall into this category.
+                                                                       • Positive Age (Tage > 0): Indicates anticipation. The
+our model outputs a binary mask (IMO=1, ego-motion=0)
+rather than per-instance labels, we derive instance matches               mask describes a future scene state, remaining valid even
+by computing a one-to-one assignment between predicted and                after the computation time elapses. Our method achieves
+ground-truth instances using the Hungarian algorithm on the               Tage = 100 − 5.8 = 94.2 ms, providing a ”zero-latency”
+IoU cost. An instance is deemed correct if, for its matched               output effectively.
+pair (M̂i , Mi ), IoU(M̂i , Mi ) > 0.5. The ratio of correctly      D. Qualitative Results
+segmented objects with an overlap of more than 50% (R@0.5)
+                                                                       1) Motion Segmentation on EVIMO and DSEC: In addition
+is computed as follows:
+                                                                    to the primary qualitative results presented in the main text,
+                #{matched GT with IoU > 0.5}                        we provide further visualizations in Fig. 8 demonstrating
+      R@0.5 =                                × 100%.                our method’s robustness across diverse indoor and outdoor
+                      #{GT instances}
+                                                                    scenarios.
+C. Time Comparison Details                                             Complex Geometries and Clutter (EVIMO): Panel (b) of
+   All timing experiments were conducted on a workstation           Fig. 8 illustrates the performance on a cluttered indoor scene
+equipped with a single NVIDIA GeForce RTX 2080 Ti GPU               featuring multiple arbitrary objects. Unlike standard bounding-
+and an Intel Core i9 CPU. To ensure fair comparisons and            box approaches, our pixel-wise segmentation accurately cap-
+minimize the impact of multi-threading optimizations in base-       tures the non-convex geometry of the mug (e.g., the handle
+line implementations, we restricted the number of usable CPU        hole) and the complex contours of the toy figure. The bottom
+threads to 1 for all CPU-bound operations.                          row shows that even with significant background clutter, the
+   We measured the wall-clock inference time by processing          anticipatory mask successfully isolates the exact pixels of the
+a randomized, constant-sized input event tensor. The input          independently moving objects (green) while suppressing the
+randomization prevents caching mechanisms from artificially         dense background ego-motion events (white).
+accelerating repeated inference passes. For each method, we            Scale Variance in Driving Scenes (DSEC): Panels (c-
+report the mean µ and standard deviation σ over 1000 trials.        d) highlight the system’s capability in dynamic automotive
+      a) GFLOPS Measurement: To quantify theoretical com-           environments. The scene contains multiple vehicles moving at
+plexity, we adopted two distinct strategies based on the nature     different relative speeds and distances. Our method correctly
+of the algorithm:                                                   anticipates and segments both the nearby vehicle (c) and the
+                                                                    smaller, distant vehicles further down the road (d). Our model
+  •   Deep Learning Models (Ours, EV-IMO): For our                  leverages strong motion priors from EVIMO and DSEC to
+      method and EV-IMO [10], which are implemented as              segment dynamic objects not explicitly labeled in the ground
+      standard PyTorch modules, we calculated the floating-         truth, such as pedestrians. In panel (c), for example, the system
+      point operations using the FlopCountAnalysis tool             correctly identifies a pedestrian (third from left) as an IMO,
+      from the fvcore.nn library. This provides a precise           highlighting its capacity for motion segmentation beyond the
+      count of the multiply-accumulate operations in the con-       ground-truth labeled classes.
+      volutional layers.                                               2) Motion Segmentation in Challenging Scenarios: Event
+  •   Algorithmic Baselines (OMS): Since OMS [9] relies on          cameras natively possess a high dynamic range, allowing
+      custom bio-inspired filtering logic rather than standard      them to capture scene dynamics even in visually degraded
+      neural network layers, standard profilers are inapplica-      conditions where standard frame-based cameras often fail. We
+      ble. We therefore estimated its complexity theoretically,     demonstrate our method’s robustness on the DSEC dataset
+      following the algorithmic complexity analysis provided        under challenging lighting conditions reporting qualitative
+      in the original paper, summing the per-event operations       results in Fig. 9.
+      required for the retina-inspired center-surround filtering.      Night-time and Low-Light Driving: In the night scenes
+For all the algorithms we consider the same input size of 480×      shown in Fig. 9a and 9b, standard brightness constancy as-
+640 × 2.                                                            sumptions frequently break down, leading to event streams that
+Fig. 8. Visualization of anticipatory motion suppression on EVIMO (a-b) and DSEC (c-d). Top row: overlaid events accumulated over ∆tp = 100 ms with
+ground-truth masks for independently moving objects (IMO). Bottom row: events attributed to ego-motion (white) and to IMO (green), obtained by applying a
+motion mask to future ∆tp = 100 ms events, with motion predicted from the previous ∆t = 50 ms events using our Anticipatory Motion Suppression pipeline.
+Panels: (a) Robustness under fast ego-motion and non-convex masks, recovering IMO events from a large stream of ego-motion events. (b) Performance in
+indoor, multi-object scenes, with arbitrary shaped non-convex objects. (c-d) Autonomous driving results, anticipating the motion of small moving objects, both
+far-away vehicles and nearby objects.
+
+
+
+
+Fig. 9. Qualitative results on DSEC under challenging lighting conditions. (a, b) In night scenes, our method isolates dynamic objects despite sparse events
+and sensor noise, though flickering headlights can slightly inflate pedestrian boundaries. (c, d) In low-contrast cloudy scenarios, vehicles are reliably segmented
+across various distances. However, objects generating minimal temporal contrast (e.g., the missing pedestrian on the far left) may lack sufficient motion cues
+for detection. Yellow masks indicate ground truth; green indicates our predictions.
+
+
+
+are either sparse or degraded by sensor noise. Despite these                       instance, a pedestrian on the left side of the scene is missing
+extreme conditions, our anticipatory suppression mechanism                         from our prediction; because this target generates an extremely
+successfully isolates vehicles and pedestrians in profound                         sparse event stream, it fails to provide sufficient motion cues
+darkness. While the predicted dynamic masks (green) closely                        to be successfully disentangled from the background.
+align with the ground truth (yellow), we note a minor limita-
+tion: the high event rate triggered by flickering car headlights                     3) Qualitative Comparison with Frame-Based Methods
+causes the model to overpredict the pedestrian boundaries.                         (FlowSAM): To further illustrate the fundamental advantages
+Consequently, the predicted mask becomes larger than the                           of event-based motion segmentation over traditional frame-
+ground truth, introducing localized false positives.                               based methods, we present a qualitative comparison against
+                                                                                   FlowSAM in Fig. 10. To ensure a strong baseline, we im-
+   Cloudy and Flat-Light Conditions: Similarly, in cloudy or                       plement FlowSAM by supplying it with dense, high-quality
+flat-lighting scenarios where visual contrast is low, our method                   optical flow estimates generated by RAFT, which serve as
+reliably segments multiple moving vehicles from the back-                          motion prompts to guide its Segment Anything (SAM) back-
+ground ego-motion at various scales and distances. While the                       bone. However, standard RGB cameras are inherently limited
+network generally groups sparse events into cohesive instance                      by their dynamic range and exposure times, making them
+masks despite the lack of distinct visual edges, it can struggle                   highly susceptible to motion blur and overexposure in dynamic
+with objects that produce minimal temporal contrast. For                           environments. As seen in Fig. 10.c, rapid movement and com-
+Fig. 10. (a) EVIMO events. (b) Our IMO prediction (green) vs. ground truth (purple). (c) Overexposed frame. (d) FlowSAM prediction from (c), green:
+prediction, purple: ground truth.
+
+
+
+                                                                                    1) Sensitivity to Input Event Rate: Event cameras emit
+           64                                                                    asynchronous brightness changes at a rate that depends on
+                                                                                 scene texture, ego-motion, lighting, and independently moving
+           62
+                                                                                 objects (IMOs). As a consequence, a fixed wall-clock integra-
+           60                                                                    tion window ∆t does not correspond to a fixed number of
+                                                                                 events across different operating conditions. Fast motion, rich
+           58
+                                                                                 texture, or high contrast may yield tens of thousands of events
+ mIoU(%)
+
+
+
+
+           56
+                                                                                 in tens of milliseconds, whereas slow motion in low-texture
+                                                                                 regions may produce only a few hundred events over the same
+           54                                                                    ∆t. In other words, the effective input density seen by the
+                                                                                 network is governed primarily by the number of events N ,
+           52
+                                                                                 not by elapsed time. For this reason, we study segmentation
+           50                                                                    accuracy as a function of N rather than as a function of ∆t.
+                                                                                    For this analysis, we used the model trained on the EVIMO
+                101      102         103              104   105         106      dataset [10]. Training follows our standard setup as described
+                                   Number of Events
+                                                                                 in Sec.IV-A. At evaluation time, however, we depart from the
+                                                                                 fixed ∆t input: instead of always feeding the last 100 ms of
+                                                                                 events, we construct inputs by taking a fixed event budget of
+Fig. 11. Segmentation accuracy (mIoU) as a function of the number of input
+events N used to form the network input. The x-axis is logarithmic. At test      N events immediately preceding each ground-truth timestamp
+time, instead of fixing a temporal window ∆t, we fix an event budget N and       and discarding the rest.
+measure performance. Accuracy is poor for very sparse inputs (N < 103 ),
+improves steadily, and reaches its maximum around N ≈ 6 × 104 . Beyond
+                                                                                    We evaluate this procedure on a subset of the EVIMO test
+this point, performance gradually declines as overly long temporal integration   set. For each value of N , we compute the mean Intersection
+blurs object boundaries. The steady region (104 − 105 events) indicates a        over Union (mIoU) averaged across all samples in all trajec-
+broad operating plateau in which the method is both accurate and stable across
+different scene dynamics.
+                                                                                 tories.
+                                                                                    Figure 11 reports mIoU versus N (log scale on the x-axis).
+                                                                                 The curve is non-monotonic and reveals three distinct regimes:
+plex lighting conditions cause the object to become severely                       •   Sparse regime (N < 103 events). With fewer than ∼ 103
+overexposed, stripping away vital visual features and distinct                         events, segmentation accuracy is low (mIoU ≈ 49–50%).
+spatial edges. Consequently, even when aided by RAFT-                                  In this regime, the network receives too little contrast
+estimated optical flow, state-of-the-art image-based models                            to reliably segment ego-motion from IMO motion. On
+like FlowSAM fail to accurately segment the independently                              EVIMO, the camera is almost always moving, and IMOs
+moving object, as shown in Fig. 10.d where the predicted mask                          typically occupy only a small fraction of the field of
+(green) drastically deviates from the ground truth (purple).                           view. When so few events are available, most activity
+   Conversely, event cameras respond strictly to asynchronous                          in the aggregated event frame appears dominated by
+brightness changes, natively bypassing sensor saturation and                           ego-motion, and the model tends to over-label events as
+motion blur. As demonstrated in Fig. 10.a, the event stream                            background. The result is that the static background is
+preserves the precise, high-speed contours of the moving                               often segmented consistently, but independently moving
+object. By leveraging this high-fidelity temporal data, our                            objects are systematically under-segmented.
+anticipatory suppression pipeline successfully isolates the IMO                    •   Plateau / optimal regime (104 –105 events). As N
+mask (Fig. 10.b), tightly aligning our prediction (green) with                         increases, performance improves fast and peaks around
+the ground truth (purple) even when traditional visual data is                         N ≈ 6 × 104 events. Importantly, there is a broad plateau
+entirely corrupted.                                                                    between roughly 104 and 105 events in which mIoU
+                                                                                       remains high and stable. This shows that the method
+                                                                                       does not need a finely tuned event budget: once there
+E. Sensitivity Study                                                                   are enough events to capture both ego-motion and IMO
+                             TABLE X
+                EVIMO ( M I O U%) BY S PEED ( PX / S )
+
+
+              Alg.            ≤90      90-120    ≥120
+
+              EV-IMO [10]      77.8     76.9      66.9
+              Ours             82.3     79.7      72.2
+
+
+
+      motion, it works reliably across a wide range of scene
+      dynamics and event rates. At deployment, this plateau
+      defines a practical operating range for asynchronous pro-
+      cessing: triggering inference whenever ∼ 104 –105 new
+      events have accumulated yields near-optimal segmenta-
+      tion quality.
+                                 5
+   • Dense regime (N ≳ 10 events). Beyond the optimal
+      plateau, adding more events decreases mIoU. Very large
+      N implicitly integrates over a much longer temporal
+      span ∆t. Over such long horizons, independently moving
+      objects drift noticeably, so their boundaries appear blurry
+      in the accumulated representation, which reduces the IoU.
+   Overall, this experiment shows that the model’s accuracy
+depends on event density in a predictable way: too few events
+hurt because there is not enough motion evidence, too many
+hurt because boundaries blur. Between 104 and 105 events
+there is a broad, stable high-performance plateau, showing
+robustness to changing scene dynamics.
+   2) Sensitivity to Object Velocity: To further analyze how
+scene dynamics influence segmentation performance, we eval-
+uate our method across different object velocity regimes. We
+partition the EVIMO dataset into three categories based on the
+relative speed of the independently moving objects (IMOs) on
+the image plane, measured in pixels per second (px/s): slow
+(≤ 90), medium (90 − 120), and fast (≥ 120).
+   The mean Intersection over Union (mIoU %) for each
+partition is presented in Table X. As expected, there is a
+general monotonic decrease in accuracy for both our approach
+and the baseline EV-IMO [10] as object speed increases. Faster
+motion inherently increases the difficulty of the segmentation
+task due to larger inter-frame displacements, more severe
+occlusions, and the exacerbation of prediction-age latency
+(where even a few milliseconds of delay translates to several
+pixels of spatial misalignment).
+   Despite these challenges, our proposed anticipatory mo-
+tion suppression framework consistently outperforms EV-IMO
+across all velocity profiles. Notably, even in the most chal-
+lenging highly dynamic regime (≥ 120 px/s), our method
+maintains a strong mIoU of 72.2% (a +5.3 point improvement
+over EV-IMO). This demonstrates that our learned flow fore-
+casting effectively mitigates the latency and spatial misalign-
+ment issues that typically degrade performance in fast-moving
+scenarios, confirming the robustness of our architecture to
+diverse motion regimes.
+

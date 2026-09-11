@@ -1,0 +1,1224 @@
+                                         VENOM: A Vectorized N:M Format for Unleashing the Power of
+                                                            Sparse Tensor Cores
+                                                       Roberto L. Castro∗                                           Andrei Ivanov                                Diego Andrade
+                                                   roberto.lopez.castro@udc.es                                anivanov@inf.ethz.ch                             diego.andrade@udc.es
+                                                              CITIC                                      Department of Computer Science                                CITIC
+                                                     Universidade da Coruña                                        ETH Zürich                                 Universidade da Coruña
+                                                         A Coruña, Spain                                       Zürich, Switzerland                                A Coruña, Spain
+
+                                                            Tal Ben-Nun                                          Basilio B. Fraguela                             Torsten Hoefler
+                                                      talbn@inf.ethz.ch                                        basilio.fraguela@udc.es                          htor@inf.ethz.ch
+arXiv:2310.02065v1 [cs.DC] 3 Oct 2023
+
+
+
+
+                                               Department of Computer Science                                            CITIC                           Department of Computer Science
+                                                         ETH Zürich                                            Universidade da Coruña                             ETH Zürich
+                                                     Zürich, Switzerland                                          A Coruña, Spain                              Zürich, Switzerland
+
+                                        ABSTRACT                                                                                multiplications (MMMs) by means of specialized hardware like Ten-
+                                        The increasing success and scaling of Deep Learning models de-                          sor Core Units (TCUs) [37]. While these algorithms and formats
+                                        mands higher computational efficiency and power. Sparsification                         reduce the number of arithmetic operations and memory usage com-
+                                        can lead to both smaller models as well as higher compute effi-                         pared to their dense counterparts, achieving significant speedup
+                                        ciency, and accelerated hardware is becoming available. However,                        on these accelerators while maintaining model accuracy is chal-
+                                        exploiting it efficiently requires kernel implementations, pruning                      lenging [16]. Semi-structured pruning can yield practical speedups
+                                        algorithms, and storage formats, to utilize hardware support of spe-                    at moderate sparsity levels (e.g., 80 − 90%) [4, 5, 25]. However, the
+                                        cialized sparse vector units. An example of those are the NVIDIA’s                      irregularity of the sparse input matrices still limits performance
+                                        Sparse Tensor Cores (SPTCs), which promise a 2× speedup. How-                           and makes difficult to reach the theoretical peak considering the
+                                        ever, SPTCs only support the 2:4 format, limiting achievable sparsity                   reduction of the number of arithmetic operations [11].
+                                        ratios to 50%. We present the V:N:M format, which enables the exe-                         Last generations of NVIDIA GPUs include Sparse Tensor Cores
+                                        cution of arbitrary N:M ratios on SPTCs. To efficiently exploit the                     (SPTCs) that are specifically designed for sparse computation [27].
+                                        resulting format, we propose Spatha, a high-performance sparse-                         SPTCs promise to accelerate math operations by up to 2× at 50%
+                                        library for DL routines. We show that Spatha achieves up to 37×                         sparsity. The data layout proposed to use SPTCs imposes strict con-
+                                        speedup over cuBLAS. We also demonstrate a second-order pruning                         straints (i.e., 2:4 format, where every consecutive 4 elements have 2
+                                        technique that enables sparsification to high sparsity ratios with                      nonzero values), but it reduces the irregularity of the sparse input
+                                        V:N:M and little to no loss in accuracy in modern transformers.                         w.r.t. other performance-aware sparse formats (e.g., vector-wise,
+                                                                                                                                block-wise). This makes the N:M format very suitable to execute
+                                        KEYWORDS                                                                                on GPUs since it favors key aspects of the execution of tensor oper-
+                                                                                                                                ations such as inter- and intra-warp load balance. However, there
+                                        Sparse Tensor Cores, GPU, Pruning, Sparsification, CUDA
+                                                                                                                                is an important limitation related to the usage of SPTCs and the
+                                                                                                                                2:4 format: recent models like LLMs commonly have hundreds of
+                                        1    INTRODUCTION                                                                       millions to trillions of parameters, making it feasible to prune them
+                                        The rapid progress of Deep Learning (DL) is revolutionizing Artifi-                     to higher sparsity ratios with little or no loss in accuracy [21]. Un-
+                                        cial Intelligence (AI) in areas such as Natural Language Processing                     fortunately, there is currently no hardware support for executing
+                                        (NLP). Large Language Models (LLMs) are at the forefront of mod-                        arbitrary N:M formats with higher compression ratios, which limits
+                                        ern NLP systems [7, 34]; however, their massive growth has led                          the total achievable speedup.
+                                        to unprecedented computational requirements [1, 2, 14, 18]. As a                           Recent research has explored the N:M format [6, 8]. However,
+                                        result, training transformers has become a dominant task in DL,                         these investigations have been limited to a theoretical perspective,
+                                        with costs reaching millions of dollars and significant energy and                      such as network pruning, or have relied on CPU implementations
+                                        carbon emissions [32]. Therefore, it is critical to improve their in-                   due to a lack of hardware support for alternative N:M patterns on
+                                        ference and training performance. One of the most widely used                           GPUs. To address these limitations, we propose the Vectorized N:M
+                                        techniques for this purpose is network pruning [15], which removes                      format, which we refer to as V:N:M1 . This format introduces an
+                                        the less significant weights to produce simpler and compressed, yet                     abstraction layer over SPTCs, enabling the execution of alternative
+                                        accurate models.                                                                        N:M formats and arbitrary sparsity ratios. The vectorization aspect
+                                           There is a plethora of pruning algorithms and sparse formats                         is derived from the selection of vertical vectors of elements that
+                                        focused on accelerating tensor operations such as matrix-matrix                         are stacked together to provide the row-wise N:M pattern. This
+                                                                                                                                approach enables the conversion from generic N:M formats to the
+                                        ∗ Corresponding author: Roberto L. Castro (roberto.lopez.castro@udc.es), Universidade
+                                        da Coruña, CITIC, Computer Architecture Group, 15071 A Coruña, Spain                    1 Pronounced   “venom”
+                                                                                                                                                                                      Castro R.L., et al.
+
+
+2:4 that is accepted by SPTCs. To efficiently exploit the benefits of                    networks in the past, but they have recently been optimized for
+the V:N:M format, we propose Spatha2 , a template-based library                          Large Language Models (LLMs) [21].
+dedicated to general matrix-matrix multiplication on half precision                         As for the granularity of the pruning, unstructured methods [13]
+where one of the operands is sparse (SpMM). Spatha serves as                             remove weights individually, with gradual magnitude pruning
+an open-source alternative to cuSparseLt [28] and removes its 2:4                        (GMP) being the most commonly used variant [10]. On the other
+restriction. The main contributions of this paper are:                                   end of the granularity spectrum, structured methods [26, 35] prune
+ • A new sparse matrix format V:N:M which enables arbitrary N:M                          complete components like layers, or heads, in the case of trans-
+   patterns on SPTCs.                                                                    formers networks[36]. In between, semi-structured methods prune
+ • Highly optimized SpMM kernels to efficiently exploit the V:N:M                        groups of weights. These latter methods aim to balance perfor-
+   format. Specifically, we propose a template-based implementa-                         mance and accuracy by defining specific formats that promote the
+   tion that can be tuned depending on the input dynamics, such                          exploitation of the underlying hardware more efficiently. These
+   as GEMM size or the V:N:M format configuration.                                       methods often imply the usage of tailored compressed storage for-
+ • A second-order pruning technique tailored for the V:N:M format                        mats and custom kernels [11, 22]. The N:M format, which enables
+   and scalable to the dimensionality of LLMs. This technique                            the use of Sparse Tensor Cores (SPTCs) in NVIDIA GPUs, can be
+   allows the sparsification to high sparsity ratios with little to                      classified in this last group.
+   no loss in accuracy (e.g., ∼ 2% drop in BERT F1 score on the
+   SQuAD dataset with 2:16 sparsity), which is required for the                          2.2           Sparse Tensor Cores of NVIDIA GPUs
+   full exploitation of the V:N:M format.                                                The CUDA programming model organizes GPU kernels into three
+ • Spatha achieves unprecedented speedups w.r.t. its dense coun-                         granularity levels: thread-blocks, warps, and threads. A thread block
+   terpart versions (e.g., cuBLAS) yielding up to 37× faster MMMs                        is composed of a set of warps, with warps being the basic scheduling
+   on matrices extracted from real-world DL models. Furthermore,                         unit in CUDA. Each warp consists of 32 threads.
+   Spatha implementation provides speedups of up to 1.38× over                               NVIDIA GPUs consist of an array of Streaming Multiprocessors
+   the vendor library for 2:4 sparsity, cuSparseLt.                                      (SMs), with all SMs sharing the L2 cache, and a DRAM memory, also
+ • For end-to-end sparse LLMs inference, Spatha shows a GEMM                             called Global Memory (GMEM). Each SM is divided in processing
+   time reduction of 11× at 2:32 sparsity on real-world models                           blocks, each one having a Register File (RF), a warp scheduler, and
+   such as GPT-3.                                                                        an L0 instruction cache. All the processing blocks within an SM
+  The source code of VENOM is available at https://github.com/                           share a L1 cache, which is partially used as Shared Memory (SMEM).
+UDC-GAC/venom.                                                                           Each processing block is also equipped with four types of units:
+                                                                                         Floating-Point Units (FPU), Tensor-Core Units (TCU), Int Units
+                                                                                         (ALU) and Special Function Units (SFU).
+2     BACKGROUND
+This section presents the technical background of the paper, cov-
+                                                                                                                              Non-zero    metadata
+                                                                                                                                                         B (Dense)
+ering network pruning techniques and the Sparse Tensor Cores of                                   A (Sparse)                   values      indices
+
+NVIDIA GPUs.                                                                                 0
+                                                                                                 4 5
+                                                                                                       1     2 3
+                                                                                                           6 7
+                                                                                                                              0 1 2 3
+                                                                                                                              4 5 6 7
+                                                                                                                                          0312
+                                                                                                                                          1201
+                                                                                                                                                         0
+                                                                                                                                                         1
+                                                                                                                                                                         Sparse Tensor   0 1 2 3 4 5 6 7
+                                                                                                                                                                             Core
+                                                                                                                                                         2                   Select          2:4 Mux   2:4 Mux
+                                                                                                                                                         3
+2.1        Network pruning                                                               R
+                                                                                                                                                     x   4           K
+                                                                                                                   Compress                                              0 123 0312              0 3 5 6
+                                                                                                                                                         5
+In DL, pruning is a technique used to reduce memory usage, which                                                                                         6
+                                                                                                                                                                                         x              result
+can also reduce the computational load when combined with com-                                                                                           7
+                                                                                                       K                        K/2          K/2             C
+pressed storage formats and efficient sparse kernels. Pruning tech-                                                                      2-bit indices
+
+niques can be categorized based on various criteria, such as the
+pruning strategy employed, or the granularity of the pruning.                                      Figure 1: The 2:4 format and its mapping to SPTCs
+   Pruning schemes are often based on weight saliency metrics,
+which directly correlate with the expected impact on accuracy when
+those weights are removed from the network. Various methods exist                           Last generations of NVIDIA GPUs have extended their TCUs
+to select the candidate weights for removal, including magnitude                         to also handle row-wise 2:4 sparsity. These updated TCUs include
+pruning [20], which selects weights with lower absolute values, and                      hardware support for sparse computation, and are referred to as
+gradient-based methods that use the gradient applied to each weight                      Sparse Tensor Cores (SPTCs). To exploit SPTCs, the first argument
+to identify those that are trending towards to zero faster. Within the                   in tensor operations must be stored in NVIDIA’s N:M sparse format,
+gradient-based methods, we can find first-order techniques based on                      where 𝑁 represents the maximum number of non-zero elements in
+the first-derivative information [31, 38], and second-order ones [9,                     a block of 𝑀 values. Figure 1 illustrates this format. The left side
+21, 23], which pursue to find the set of weights whose removal                           of the figure shows an uncompressed sparse matrix following the
+will generate a minimum loss increase in the network. Second-                            row-wise 2:4 pattern. The compression of that 𝑅 ×𝐾 matrix requires
+order methods have proven to be effective in pruning convolutional                       two structures: (1) a 𝑅 × 𝐾/2 matrix representing the values of the
+                                                                                         non-zero elements, and (2) a metadata structure which contains the
+2 SParse
+                                                                                         position of each nonzero value within each group of 4 values. Finally,
+         linear Algebra rouTines for High-performance Applications. The name is mo-
+tivated by the analogy with the Cutlass library, with the accent on sparse computation   Figure 1, right side, illustrates the mapping of a 2:4 sparse operation
+- a sharp and efficient tool to cut through the complexity of sparse routines            onto SPTCs. Notice that the metadata structure is also used by the
+VENOM: A Vectorized N:M Format for Unleashing the Power of Sparse Tensor Cores
+
+
+hardware to select the corresponding elements in the dense matrix                                                                                                            or 1D groups of length 𝑣, either row-wise or column-wise 2 . The
+𝐵 and perform the Matrix Multiply-Accumulate (MMA) operation.                                                                                                                aim is to create sparse matrices that are more regular, making them
+                                                                                                                                                                             more suitable for efficient execution on GPUs. Block-based pruning
+                           Precision                  Format                      Supported shapes                                                                           techniques ( 1 and 2 ) are particularly useful on improving data
+                                                                                                                                                                             reuse on L1 cache or registers during the multiplication of sparse
+                            fp32                            1:2                                  𝑘8, 𝑘16                                                                     matrices. Furthermore, optimized sparse formats, which compress
+                         half (fp16)                        2:4                                 k32, k16                                                                     their data, can be designed to facilitate traversal for the access
+                           uint8                            2:4                                 𝑘32, 𝑘64                                                                     patterns that arise during matrix multiplication [25, 30].
+                           uint4                            2:4                                 𝑘64, 𝑘128                                                                       On the one hand, 1 can be overly aggressive in dropping blocks
+Table 1: Matrix Shapes for mma.sp on SPTCs. 𝑀 and 𝑁 di-                                                                                                                      of elements, leading to a significant reduction in accuracy as the
+mensions are fixed to 16 and 8, respectively (𝑚16𝑛8)                                                                                                                         sparsity level increases. On the other hand, 2 offers more flexibility
+                                                                                                                                                                             and enables higher sparsification ratios. However, using small vec-
+                                                                                                                                                                             tor lengths is a limiting factor to prevent accuracy loss (e.g., 𝑣 ≤ 8).
+                                                                                                                                                                             Furthermore, in these approaches, the different number of elements
+   SPTCs can be accessed in CUDA using the NVPTX API which
+                                                                                                                                                                             per row can generate load imbalance and inherent negative effects
+includes the mma.sp instruction. SPTCs support various shapes of
+                                                                                                                                                                             such as thread divergence, inefficient memory transactions and low
+this instruction depending on the data precision (Table 1). This in-
+                                                                                                                                                                             occupancy ratios.
+struction multiplies a 𝑚 × 𝑘 matrix by a 𝑘 × 𝑛 matrix, where 𝑚 = 16,
+                                                                                                                                                                                The N:M format 3 provides an alternative that overcomes most
+𝑛 = 8 are fixed dimensions, and 𝑘 represents the sparsified dimen-
+                                                                                                                                                                             of the weaknesses of other performance-aware methods. Moreover,
+sion which can vary in size. This paper focuses on half precision
+                                                                                                                                                                             NVIDIA GPUs recently included hardware support for this format,
+kernels. Instruction shapes define the sizes of the left-hand-side
+                                                                                                                                                                             but it is limited to 2:4. This paper introduces the new V:N:M for-
+(LHS) and the right-hand-side (RHS) operands as inputs to TCUs.
+                                                                                                                                                                             mat 4 which combines block-wise storage, and vector-wise and
+For example, 𝑘 = 32 implies that the LHS operand has a shape of
+                                                                                                                                                                             N:M pruning to enable the exploitation of SPTCs for arbitrary N:M
+𝑚 × 𝑘 = 16 × 32 while the RHS is 𝑘 × 𝑛 = 32 × 8. It is important to
+                                                                                                                                                                             patterns, leveraging higher compression ratios and reducing further
+note that the LHS is 50% sparse, meaning that its real size will be
+                                                                                                                                                                             the number of arithmetic operations required in MMMs.
+16 × 16(32/2). NVIDIA’s notation for this instruction is 𝑚16𝑛8𝑘32.
+                                                                                                                                                                                                                      column-loc
+3        THE V:N:M FORMAT                                                                                                                                                                                               K/M*4
+                                                                                                                                                                                                    0       2     5     7       1         2    5         7
+                                                                                                                                                                                             R/V
+This section presents the new V:N:M format, which enables prun-                                                                                                                                     0       3     6     7       1         2    3         6
+                                                                                                                                                                                                                                                                              m-indices
+                                                                                                                                                                                                                                                               Non-zero
+ing to arbitrary N:M ratios retaining the use of SPTCs, which are                                                                                                                                       N:M=2:8                                                 values        2bits/elem
+
+                                                                                                                                                                                                   0              1             2 3                           0 1 2       3   0 2 0 1
+designed to support only 2:4 patterns natively.                                                                                                                                                         4                   5        6         7              4 5 6       7   1 3 1 2
+                                                                                                                                                                                           V=4
+                                                                                                                                                                                                   8              9                            10        11   8 9 10 11       0 2 2 3
+                                                                                                                             2:4                                                                                                                              12 13 14 15     1 2 1 2
+                                                                                                                                                                                                        12        13                 14        15
+                                                                                                                                                                                             R
+                                                                                                                         1 0 2 0                                                                             16        17       18        19                  16 17 18 19     1 2 0 2
+                                                                                                                         0 5 0 6
+                                                                                                                                                                                                   20        21                      22             23        20 21 22 23     0 1 1 3
+                                                                                                                         9 0 10 0
+        1     Block-wise           2   Vector-wise                               3         N:M
+                                                                                                                                                 V:N:M    4                                                            2425     26                  27        24 25 26 27     2 3 0 3
+     1 2 3 4 5 6                   1   4        7           10   13   1               2         3         4                                                                                        28        29                 30        31                  28 29 30 31     0 1 0 2
+                                                                                                                                   1         2           3 4
+ V   7 8 9 10 11 12            V   2   5        8           11   14        5 6                                 7 8
+                                                                                                                                                                                                                                                                K/M*2          K/M*2
+                                                                                                                           V            5            6        7    8                                                   K
+     13 14 15 16 17 18             3   6        9           12   15              9         10        11         12                                                                                                Sparse Matrix
+                                                                                                                                   9         10                    11 12
+                                           16       19 22                   13        14        15              16
+                                                                                                                                        13   14               15   16
+                                           17       20 23                   17             18   19        20
+
+                                           18       21 24             21         22             23              24
+                                                                                                                                   21
+                                                                                                                                             17 18
+
+                                                                                                                                             22
+                                                                                                                                                         19
+
+                                                                                                                                                              23   24
+                                                                                                                                                                        20
+                                                                                                                                                                                        Figure 3: The V:N:M compression format
+                                                                            2:6
+
+                                                                                                               1         2             3
+                                                                                                                     +         +             +                                  Figure 2, illustrates how this approach starts by partitioning the
+                                                                                                                                                                             original dense matrix in blocks of 𝑉 × 𝑀 elements (block-wise).
+                         Figure 2: The V:N:M pruning procedure                                                                                                               Then, the four most significant columns of each block are selected
+                                                                                                                                                                             (vector-wise pruning), and for each row of four elements in a block,
+   Sparse compression formats are of great significance in many                                                                                                              the two most meaningful weights are kept (2:4 pruning). These two
+HPC areas other than DL. However, the characteristics of the sparse                                                                                                          levels of pruning (vector-wise and N:M) enable the exploitation of
+matrices in DL workloads differ from those in other areas in several                                                                                                         SPTCs for matrices with arbitrary levels of sparsity, as the vector-
+aspects [11]: (1) the sparsity level is generally much lower, (2) the                                                                                                        wise pruning stage diversifies the sparsity level, and N:M pruning
+number of non-zeros per row is higher and (3) the load imbalance                                                                                                             imposes the restrictions required later by SPTCs. That is, in 4 ,
+is more pronounced. To address these challenges, ad-hoc solutions                                                                                                            the SPTC vector is 2:4, but it belongs to a 6-columns row, where 2
+for DL workloads have been developed in two different planes:                                                                                                                columns were fully pruned. It is actually an implementation of a
+compression formats and pruning techniques, often interlinked.                                                                                                               2:6 sparsity pattern that it is mapped onto SPTCs as the required
+They seek the efficient exploitation of the hardware during the                                                                                                              2:4.
+execution of tensor operations in DL workloads.                                                                                                                                 Finally, the data is represented using a new block-wise com-
+   A new area of research is focused on enhancing control over the                                                                                                           pression format shown in Figure 3. As for the NVIDIA 2:4 layout
+distribution of non-zero elements in sparse matrices. This involves,                                                                                                         (Figure 1), the format requires an array with the non-zero values,
+for example, selecting 2D dense groups with size 𝑣 × 𝑣 (Figure 2, 1 )                                                                                                        and a 2-bit metadata index per non-zero (m-indices). Notice that
+                                                                                                                                                                                                                  Castro R.L., et al.
+
+
+now, each 2-bit metadata index refers to one of the 4 columns                                         computation, and (3) the storage of the results (i.e. RF->SMEM-
+that we have selected in each block and not to each column of the                                     >GMEM). Figure 5 covers stage 1, particularly the data movement
+original dense input matrix (see 4 in Figure 2). Furthermore, the                                     from GMEM to RF, which is divided into 3 steps ( 11 - 13 ). Figure 6
+size of these two structures depends on the M value, more specifi-                                    focuses on stage 2, and shows how the data in the RF is mapped
+cally their shape now is 𝑅 × 𝐾/𝑀 × 2. This format requires a third                                    onto SPTCs in three steps ( 21 - 23 ). Finally, Figure 8 illustrates how
+structure column-loc of size 𝑅/𝑉 × 𝐾/𝑀 × 4, that indicates which 4                                    stage 3 is performed (steps 31 - 32 ).
+columns (out of 𝑀) of each block were selected in the vector-wise
+pruning stage.                                                                                                                      row 0
+                                                                                                                                                  C
+                                                                                                                                                  <
+
+
+
+
+                                                                                                                                                             Pipelining (async)        BSc
+                                                                                                                                                                                        <
+
+
+                                                                                                                                    row 2
+                                                                                                                                                                   12                               13                     WSc  <
+
+
+                                                                                                                                    row 5
+                                                                                                                                    row 7                                                                          WSk
+                                                                                                                                                                            BSk                           Non-zero
+4       SPATHA: A HIGH-PERFORMANCE SPARSE
+                                                                                                                                                                              <
+
+                                                                                                                             column-loc                                                                    values m-indices
+                                                                                                              0 2 5 7                                         11
+                                                                                                                                               B (Dense)
+
+        LIBRARY FOR SPARSE MMM                                                                            V
+                                                                                                                                                           BSr=V   <                   Warp 0
+                                                                                                                                                                                                    WSr
+                                                                                                                                                                                                      <
+
+
+
+
+This section provides an in-depth description of the sparse kernel                                    R V
+                                                                                                      <
+                                                                                                                                   ...
+
+
+implementation associated to the V:N:M format, Spatha. The Sparse                                         V             A (Sparse)             C (Dense)                                                    WSk
+                                                                                                                                                                                                              <
+
+
+
+
+Matrix-Matrix multiplication (SpMM) is an important workload in                                                          K
+                                                                                                                         <
+                                                                                                                                                      batchSize         BSk
+                                                                                                                                                                        <
+
+
+
+
+DL that serves as the sparse counterpart to Matrix-Matrix Multipli-                                                          Blocked SpMM                                     Thread Block Tile                     Warp Tile
+                                                                                                                             (Global Memory)                                      (Shared Memory)                 (Register File)
+cation (MMM). This routine is widely used in various components
+of modern DL models. For instance, in the forward pass of a pruned                                        Figure 5: Thread-Block Tile and Warp tile view (stage 1)
+model, the sparse weight matrix is multiplied by a dense activation
+matrix. Similarly, in transformers, the self-attention operation is
+                                                                                                         Spatha is designed as a template-based library, where several
+performed by multiplying a sparse attention weight matrix by a
+                                                                                                      parameters can be tuned depending on the input properties. Consid-
+dense one. Thus, optimizing this routine is crucial to improve the
+                                                                                                      ering a 𝑅 × 𝐾 ×𝐶 GEMM problem, these parameters are: the thread-
+efficiency and the performance of our models.
+                                                                                                      block tile size (𝐵𝑆𝑟 ×𝐵𝑆𝑘 ×𝐵𝑆𝑐 ), the warp tile size (𝑊 𝑆𝑟 ×𝑊 𝑆𝑘 ×𝑊 𝑆𝑐 ),
+                                                                                                      the mma instruction shape (𝑀𝑀𝐴𝑟 ×𝑀𝑀𝐴𝑘 ×𝑀𝑀𝐴𝑐 ) and the level
+                                                                  ...                                 of memory pipelining (batchSize).
+                                                                                      B (Dense)
+                                                     Select matching K/M*4 elements
+                                                                 out of K
+                                            Select                                        C
+                                                                                                      4.1.1 Stage 1-Data loading. Figure 5 shows the Spatha procedure to
+                             Sparse Tensor
+                                 Core                                                                 load the operands from GMEM onto RF. There are two dimensions
+                                      Select
+                                                                                                      to be taken into account: the data location (i.e., GMEM, SMEM,
+        column-loc                                                                                K   and RF), and the scope of this data from the NVIDIA programming
+                                                                                                      model perspective (i.e., thread-block, and warp). Step 11 loads the
+                                                       x                result
+
+                     K
+                                                                                                      column-loc structure from GMEM to SMEM with a two-level pre-
+                                                                                                      fetching strategy. Note that the column-loc information is used to
+    v                                                                                                 select the rows of B to be loaded from GMEM (Figure 5, left side)
+                                 Compress
+                                                                                                      to SMEM (step 12 ). Pre-fetching this information breaks the data
+                             R
+                             4:2:8 sparsity
+                                                                                                      dependency with the activation matrix. Furthermore, column-loc is
+                             (2 non-zeros                                                             small, so it is convenient to load the information of multiple tiles
+                                out of 8)
+                A (Sparse)                    Non-zero m-indices
+                                                                                                      together to maximize memory bandwidth. Next, step 12 loads the
+                                                                                      C (Dense)
+                                               values
+                                                                                                      corresponding A and B tiles from GMEM to SMEM. Each thread-
+                                                                                                      block is responsible for an output block of size 𝐵𝑆𝑟 × 𝐵𝑆𝑐 . More
+Figure 4: Mapping a 4:2:8 format onto Sparse Tensor Core                                              specifically, 𝐵𝑆𝑟 = 𝑉 , so each thread-block will load only the rows
+(only native support to 2:4 format)                                                                   of B selected by the column-loc structure. In order to avoid memory
+                                                                                                      stalls due to data dependencies with the next steps, we pipelined
+   Figure 4 shows an example of how the new V:N:M format (4:2:8                                       step 12 with step 13 and stage 2 (computation) taking advantage
+in the figure) is mapped onto SPTCs, which natively only support                                      of CUDA asynchronous copies. The pipelining degree depends on
+the 2:4 format. It shows how the SPTC is fed with the appropriate                                     the batchSize variable previously mentioned. Finally, in 13 , each
+values from a row of the sparse matrix and a column of the dense                                      warp is responsible for an output block of size 𝑊 𝑆𝑟 × 𝑊 𝑆𝑐 , so
+matrix. The LHS operand is a 𝑅 × 𝐾/4 dense matrix after having                                        the corresponding tiles are loaded from SMEM to RF. Emphasize
+been pruned with sparsity of 75% (2:8). This pruning reduces the                                      that all the previously mentioned memory transactions have been
+required multiply-and-add operations by 4 (from 16 to 4), but also                                    optimized to use 128-bit instructions. At this point, we also load
+halves the rows loaded from the dense matrix B (selected by the                                       directly to the RF the m-indices information.
+values contained in column-loc).                                                                      4.1.2 Stage 2-Computation. . When all the data is loaded in the RF,
+                                                                                                      stage 2 starts, which performs the Matrix Multiply-Accumulate
+4.1       Kernel design                                                                               (mma.sp) on this data using SPTCs. Figure 6 shows a detailed view
+The design of an efficient CUDA kernel mostly depends on three                                        of stage 2 , depicting how the data in the RF is mapped onto SPTCs
+main stages: (1) the efficient loading of the data to the top lev-                                    to be executed. Each warp has to break down the warp tile into
+els of the memory hierarchy (i.e., GMEM->SMEM->RF), (2) the                                           instruction tiles, which depends on the instruction shapes available
+VENOM: A Vectorized N:M Format for Unleashing the Power of Sparse Tensor Cores
+
+
+on SPTCs, in this example m16n8k32. The first step 21 , selects                                                                                                                               4.1.3 Stage 3-Result storage. Once the product is calculated, we
+𝑀𝑀𝐴𝑘 = 16 elements from the warp tile and maps this data to                                                                                                                                   have to write the output tiles back to GMEM (stage 3 ). This requires
+SPTCs following step 22 layout. This layout represents the LHS                                                                                                                                storing the intermediate partial results in SMEM. On NVIDIA GPUs,
+fragment to the mma.sp instruction. That means that, if 𝑊 𝑆𝑟 =                                                                                                                                shared memory is partitioned into banks, each one of 32 bits. Each
+32, we will need to iterate twice over the rows of A’s warp tile.                                                                                                                             bank can only address one position at a time, so if a quarter-warp
+Similarly, the next step maps the B’s warp tile information into                                                                                                                              (128-bit instructions) tries to access the same bank, the instruction
+SPTCs following step 23 layout, which represents the RHS fragment                                                                                                                             will be serialized. This effect is known as bank conflict. An example
+to the mma.sp instruction. At this point, the mma.sp instruction is                                                                                                                           of thread mapping to SMEM with 𝐵𝑆𝑐 = 64 is shown in Figure 8.
+executed.                                                                                                                                                                                     The left side of the figure shows how the threads in a warp are
+                                                                                                                                                                                              mapped to SMEM banks during the storage of their partial results
+                                                                                                                            x4 times
+                                                                                                                                            B      0        1        ..    6        7         (step 31 ). These stores are performed with 128-bit instructions.
+                                                                                                                                            0 b0          b0              b0      b0
+                                                                                                        WSc
+                                                                                                                           23               1 b1          b1              b1      b1
+                                                                                                                                                                                              Padding elements have been added to avoid bank conflicts. In this
+               Tx = Thread x                                                                                                                             T0     T4               T24    T28
+                                                                                           WSk                      MMAk=32                 ...    ...      ...            ...      ...       specific example, each thread has accumulated 8 partial results
+                                                                              MMAk=16 (32/2)                                                6 b0          b0              b0      b0
+                                                  21
+                                                                                                                    MMAr=16                 7 b1 b1            b1 b1
+                                                                                                                                                                                              (𝐵𝑆𝑐 /𝑀𝑀𝐴𝑐 = 64/8), so the thread mapping is repeated 8 times,
+                                                                                                                                                                          T31
+                                                                                                                                            8 ... T3 ... T7...
+               0 1 ... 6 7                     8 9 ... 15 16
+                                                                            WSr
+
+                                                                                                                                            ...
+                                                                                                                                                                   T
+                                                                                                                                                                ... 27...                     meaning that each thread needs 8 iterations to store its partial
+         0    a0 a1    a0 a1                  a8 a9    a8 a9
+
+         1
+              a2 a3               a2 a3 a10 a11              a10 a11   22             WSk        MMAc=8                                     31                                                results. Each color represents a quarter-warp, so we can see that
+              a4 a5 ... a4 a5 a12 a13 ... a12 a13
+         2    a6 a7               a6 a7 a14 a15              a14 a15
+                                                                       A
+                                                                       0
+                                                                               0-1
+                                                                            T0{a0,a1}
+                                                                                       ...    6-7
+                                                                                           T3{a0,a1}
+                                                                                                           8-9
+                                                                                                        T0{a8,a9}
+                                                                                                                    ...     14-15
+                                                                                                                           T3{a8,a9}
+                                                                                                                                            C   0-1
+                                                                                                                                            0 T0{c0,c1}
+                                                                                                                                                        ...                  6-7
+                                                                                                                                                                          T3{c0,c1}           each group of 8 consecutive threads accesses a different memory
+         3                                                                                                                                  1 T4{c0,c1}                   T7{c0,c1}
+WSr=32   4
+                  T0 T1,T2 T3                     T0 T1,T2 T3          1
+                                                                       2
+                                                                            T4{a0,a1}
+                                                                            T8{a0,a1}
+                                                                                           T7{a0,a1}
+                                                                                           T11{a0,a1}
+                                                                                                        T4{a8,a9}
+                                                                                                        T8{a8,a9}
+                                                                                                                          T7{a8,a9}
+                                                                                                                          T11{a8,a9}        2 T8{c0,c1} ... T11{c0,c1}                        bank in the same iteration.
+              0       1     ...   6   7       8     9     ... 15 16
+                                                                       3    T12{a0,a1} ... T15{a0,a1}
+                                                                                                   T12{a8,a9} ... T15{a8,a9}                3 T12{c0,c1}     T15{c0,c1}
+         5    a0 a1               a0 a1       a8 a9           a8 a9
+                                                                       4    T16{a0,a1}     T19{a0,a1}
+                                                                                                   T16{a8,a9}     T19{a8,a9}                4 T16{c0,c1}     T19{c0,c1}
+         6    a2 a3               a2 a3 a10 a11              a10 a11
+                                                                       5    T20{a0,a1}     T23{a0,a1}
+                                                                                                   T20{a8,a9}     T23{a8,a9}                5 T20{c0,c1} ... T23{c0,c1}
+              a4 a5 ... a4 a5 a12 a13 ... a12 a13                                                                                                                                                 Bank 0~3
+         7                                                               T  {a
+                                                                       6 24 0, 1a } ... T  {a  a }
+                                                                                         27 0, 1 T24{a8,a9} ... T27{a8,a9}                  6 T24{c0,c1}                  T27{c0,c1}
+              a6 a7               a6 a7 a14 a15              a14 a15
+         8                                                             7 T28{a0,a1}     T31{a0,a1} T {a a }
+                                                                                                    28 8, 9       T31{a8,a9}                7 T28{c0,c1}                  T31{c0,c1}                                        31                                                          32
+               T16                  T19           T16        T19        8 T0{a2,a3}      T3{a2,a3} T0{a8,a9}       T3{a8,a9}                8 T0{c2,c3}       T3{c2,c3}
+                          T17,T18                      T17,T18                                                                                                                                          0      1      4     5      8      9     12     13      0      0      8     8          16     16     24     24
+         16                                                            ...    ...    ...     ...                                            ...    ...    ...     ...
+                                                                       15 T28{a2,a3}
+                                                                                                        ...
+                                                                                         T31{a2,a3} T28{a8,a9}
+                                                                                                               ...    ...
+                                                                                                                                            15 T28{c2,c3}     T31{c2,c3}
+                                                                                                                                                                                                x8     16     17     20    21     24     25     28     29      0      0      8     8          16     16     24     24
+                                                                                                                   T31{a8,a9
+                                                                                                                                                                                              times   PAD    PAD    PAD   PAD      2      3      6      7    PAD    PAD    PAD   PAD           0      0      8      8
+                                                                                                                                                                                                       10     11     14    15     18     19     22     23     16     16     24    24           0      0      8      8
+                                                                                                                                                                                                       26     27     30    31    PAD      0      1      4     16     16     24    24         PAD      1      1      9
+                                                                                                                                                                                                        5      8      9    12     13     16     17     20      9     17     17    25          25      1      1      9
+                                                             Figure 6: SPTCs view                                                                                                                      21
+                                                                                                                                                                                                      PAD
+                                                                                                                                                                                                              24
+                                                                                                                                                                                                               2
+                                                                                                                                                                                                                     25
+                                                                                                                                                                                                                      3
+                                                                                                                                                                                                                           28
+                                                                                                                                                                                                                            6
+                                                                                                                                                                                                                                  29
+                                                                                                                                                                                                                                   7
+                                                                                                                                                                                                                                        PAD
+                                                                                                                                                                                                                                         10
+                                                                                                                                                                                                                                               PAD
+                                                                                                                                                                                                                                                11
+                                                                                                                                                                                                                                                      PAD
+                                                                                                                                                                                                                                                       14
+                                                                                                                                                                                                                                                               9
+                                                                                                                                                                                                                                                             PAD
+                                                                                                                                                                                                                                                                     17
+                                                                                                                                                                                                                                                                      1
+                                                                                                                                                                                                                                                                            17
+                                                                                                                                                                                                                                                                             1
+                                                                                                                                                                                                                                                                                  25
+                                                                                                                                                                                                                                                                                   9
+                                                                                                                                                                                                                                                                                              25
+                                                                                                                                                                                                                                                                                               9
+                                                                                                                                                                                                                                                                                                    PAD
+                                                                                                                                                                                                                                                                                                     17
+                                                                                                                                                                                                                                                                                                           PAD
+                                                                                                                                                                                                                                                                                                            17
+                                                                                                                                                                                                                                                                                                                  PAD
+                                                                                                                                                                                                                                                                                                                   25
+                                                                                                                                                                                                       15     18     19    22     23     26     27     30     25      1      1     9           9     17     17     25
+                                                                                                                                                                                                       31    PAD                                              25    PAD
+                                                                                                                                                                                                       ...    ...   ...    ...    ...    ...    ...    ...    ...    ...   ...    ...         ...    ...    ...    ...
+                                                                                                                                                                                                                            0      1      4      5      8                          7           7     15     15     23
+                                                                                                                                                                                                       9     12     13     16     17     20     21     24    23     31     31      7           7     15     15     23
+                                                                                                                                                                                                      25     28     29    PAD    PAD    PAD    PAD      2    23     31     31    PAD         PAD    PAD    PAD      7
+
+   Storage order. Related to stage 1 and 2 , we propose a specific                                                                                                                                     3
+                                                                                                                                                                                                      19
+                                                                                                                                                                                                              6
+                                                                                                                                                                                                             22
+                                                                                                                                                                                                                     7
+                                                                                                                                                                                                                    23
+                                                                                                                                                                                                                           10
+                                                                                                                                                                                                                           26
+                                                                                                                                                                                                                                  11
+                                                                                                                                                                                                                                  27
+                                                                                                                                                                                                                                         14
+                                                                                                                                                                                                                                         30
+                                                                                                                                                                                                                                                15
+                                                                                                                                                                                                                                                31
+                                                                                                                                                                                                                                                       18
+                                                                                                                                                                                                                                                      PAD
+                                                                                                                                                                                                                                                              7
+                                                                                                                                                                                                                                                              7
+                                                                                                                                                                                                                                                                    15
+                                                                                                                                                                                                                                                                    15
+                                                                                                                                                                                                                                                                           15
+                                                                                                                                                                                                                                                                           15
+                                                                                                                                                                                                                                                                                  23
+                                                                                                                                                                                                                                                                                  23
+                                                                                                                                                                                                                                                                                              23
+                                                                                                                                                                                                                                                                                              23
+                                                                                                                                                                                                                                                                                                     31
+                                                                                                                                                                                                                                                                                                     31
+                                                                                                                                                                                                                                                                                                            31
+                                                                                                                                                                                                                                                                                                            31
+                                                                                                                                                                                                                                                                                                                    7
+                                                                                                                                                                                                                                                                                                                  PAD
+
+order to store the non-zero values and the m-indices structure of                                                                                                                                                         128 bytes                                              128 bytes
+
+the V:N:M format, which merges, once again, the block-wise and
+the N:M principles. This order is represented in Figure 7, and it                                                                                                                              Figure 8: Conflict-free accesses for output tiles on SMEM
+seeks to optimize the data traversal during the data loading and
+computation. In this representation, half of the non-zero structure
+                                                                                                                                                                                                 The right side of Figure 8 shows step 32 , that is, the SMEM thread
+shows the access pattern followed to store the data, while the other
+                                                                                                                                                                                              mapping designed to read the previously stored intermediate results,
+half shows how the second half-warp is mapped into this structure.
+                                                                                                                                                                                              and finally, write them back to GMEM. The loads from SMEM and
+This storage order enables 128-bit memory transactions, ensures
+                                                                                                                                                                                              the stores to GMEM are performed with 128-bit instructions. Once
+memory coalescence, and can dispense with the ldmatrix instruc-
+                                                                                                                                                                                              again, each thread will need to access SMEM 8 times to read all the
+tion, which is known to cause bank conflicts and can require more
+                                                                                                                                                                                              data. We have colored the accesses related to the first quarter-warp,
+Shared Memory transactions to sequentially serve the memory
+                                                                                                                                                                                              what depicts a conflict-free layout.
+access [33].
+                                                                                                                                                                                                 Ablation study - Spatha performance and column-loc over-
+                                                                                                                                                   32 bits                                    head. In Figure 9, we present the results of a microbenchmark
+                                                                                                         MMAk=32                                                                              study on matrices of fixed outer dimensions (corresponding to the
+                             Non-zero                                                                                     T16   T17   T18    T19
+                                                                                                                                                                                              size of one BERT𝑙𝑎𝑟𝑔𝑒 weight linear layer), but varying the inner
+                              values                               m-indices
+                                                                                                                          T16   T17   T18    T19
+
+                                                                                                                          T16
+
+                                                                                                                          T16
+                                                                                                                                T17
+
+                                                                                                                                T17
+                                                                                                                                      T18
+
+                                                                                                                                      T18
+                                                                                                                                             T19
+
+                                                                                                                                             T19
+                                                                                                                                                                                              (sparsified) one, 𝐾 (1024 × 𝐾 × 4096). The study was conducted
+                                                                                                                          T20
+
+                                                                                                                          T20
+                                                                                                                                T21
+
+                                                                                                                                T21
+                                                                                                                                      T22
+
+                                                                                                                                      T22
+                                                                                                                                             T23
+
+                                                                                                                                             T23
+                                                                                                                                                                                              using different sparsity levels, specified by different N:M combina-
+                                                                                                                          T20   T21   T22    T23                                              tions (from 2:10 to 2:100), while the vector size 𝑉 was kept constant
+                                                                       MMAm=16                                            T20   T21   T22    T23
+
+
+
+    WSm=32        <
+                                                                                                                          T24   T25   T26    T27                                              at 128. Furthermore, to measure the effect of using the column-
+                                                                                                                          T24   T25   T26    T27
+
+                                                                                                                          T24   T25   T26    T27                                              loc mechanism, we tested the performance with and without this
+                                                                                                                          T24   T25   T26    T27
+
+                                                                                                                          T28   T29   T30    T31
+                                                                                                                                                                                              structure. In the latter we used fixed indexes to simulate an ideal
+                                                                                                                          T28
+
+                                                                                                                          T28
+                                                                                                                                T29
+
+                                                                                                                                T29
+                                                                                                                                      T30
+
+                                                                                                                                      T30
+                                                                                                                                             T31
+
+                                                                                                                                             T31
+                                                                                                                                                                                              situation with no memory accesses. These experiments are per-
+                                      WSk <
+                                                                                                                          T28   T29   T30    T31
+                                                                                                                                                                                              formed on an NVIDIA RTX 3090 GPU, equipped with SPTCs. The
+                                                                                               128 bits                                                    16 bits                            results show that Spatha achieves speedups for sparse computation,
+                                                                                                                                                                                              approaching theoretical peak performance for a given sparsity level
+                                                           Figure 7: Storage order                                                                                                            considering the operation count reduction w.r.t. the dense counter-
+                                                                                                                                                                                              part version. This effect becomes more pronounced as the GEMM
+                                                                                                                                                                                              problem size increases, as it tend to have higher arithmetic intensity.
+                                                                                                                                                                                                                                                                                                                    Castro R.L., et al.
+
+
+                                                                                                                                                                                                    w/ column-loc                  w/o column-loc
+
+                                                                                                                                                                                17.5                                                                             40
+                         4                                                                             8                                                                                                                                                         35
+                                                                                                                                                                                15.0
+ SpeedUp w.r.t. cuBLAS
+
+
+
+
+                                                                                                                                                                                                                                                                 30
+                                                                                                                                                                                12.5
+                         3                                                                             6                                                                                                                                                         25
+                                                                                                                                                                                10.0
+                                                                                                                                                                                                                                                                 20
+                         2                                                                             4                                                                         7.5
+                                                                                                                                                                                                                                                                 15
+                                                                                                                                                                                 5.0                                                                             10
+                         1                                                                             2
+                                                                                                                                                                                 2.5                                                                              5
+                         0                                                                             0                                                                         0.0                                                                              0
+                                768153623043072384046085376614469127680844892169981407512152102288         768153623043072384046085376614469127680844892169981407512152102288          768153623043072384046085376614469127680844892169981407512152102288             768153623043072384046085376614469127680844892169981407512152102288
+                                                             K                                                                          K                                                                           K                                                                             K
+                                                       80% [128:2:10]                                                             90% [128:2:20]                                                              95% [128:2:40]                                                                98% [128:2:100]
+                                                                                                                                                                   Sparsity [%] (V:N:M)
+
+  Figure 9: Ablation study of column-loc with different sizes of the inner 𝐾 dimension and different V:N:M formats (𝐵𝐸𝑅𝑇𝑙𝑎𝑟𝑔𝑒 )
+
+
+                         20.0                                                                                                                                                                                                  BERT-base encoder.layer.8.attention.self.query.weight: 768x768
+                                                                                                                                                         32-bit
+                         17.5                                                                                                                            128-bit                                    0.8                                                                                                                        ideal
+                                                                                                                                                                                                    0.7                                                                                                                        1:N:M
+                         15.0                                                                                                                                                                                                                                                                                                  16:N:M
+                                                                                                                                                                                                                                                                                                                               32:N:M
+Speedup w.r.t. cuBLAS
+
+
+
+
+                         12.5                                                                                                                                                                       0.6
+                                                                                                                                                                                                                                                                                                                               64:N:M
+                         10.0                                                                                                                                                                       0.5                                                                                                                        128:N:M
+
+
+
+                                                                                                                                                                                           Energy
+                                                                                                                                                                                                    0.4                                                                                                                        vw_4
+                          7.5                                                                                                                                                                                                                                                                                                  vw_8
+                                                                                                                                                                                                    0.3                                                                                                                        vw_16
+                          5.0                                                                                                                                                                                                                                                                                                  vw_32
+                          2.5                                                                                                                                                                       0.2
+
+                          0.0                                                                                                                                                                       0.1
+                                 32
+                                        64
+                                                128
+
+                                                         32
+                                                                64
+                                                                        128
+
+                                                                                 32
+                                                                                        64
+                                                                                                128
+
+                                                                                                      32
+                                                                                                           64
+                                                                                                                128
+
+                                                                                                                         32
+                                                                                                                                64
+                                                                                                                                        128
+
+                                                                                                                                                 32
+                                                                                                                                                        64
+                                                                                                                                                                128
+
+
+
+
+                                                                                                                                                                                                    0.0
+                                       V                       V                       V                 V                     V                       V                                                   50% (2:4)              60% (2:5)                 75% (2:8)      80% (2:10)              90% (2:20)             95% (2:40)
+                                    71% [V:2:7]             75% [V:2:8]            80% [V:2:10] 90% [V:2:20]               95% [V:2:40]           98% [V:2:100]                                                                                                sparsity [%] (N:M)
+                                                                                    Sparsity [%] (V:N:M)
+
+
+Figure 10: Scaling study of wide shared memory stores for                                                                                                                                  Figure 11: Energy evaluation study on the V:N:M format
+different V:N:M configurations
+
+                                                                                                                                                                                       instead of 32-bit ones is noticeable in this problem size, bringing
+For instance, at a sparsity level of 80% (2:10 format), the speedup                                                                                                                    up to a 2× difference in the final speedup. We performed a similar
+is approximately 4.5×, where 5× is the ideal scenario. Then, the                                                                                                                       ablation test for a matrix of a GPT-3 model (size 36864×12288×4096)
+speedups reported are 8.5×, 17.5×, and 37× for sparsity levels of                                                                                                                      and the effect of using 128-bit stores was attenuated, as the weight
+90% (2:20), 95% (2:40) and 98% (2:100), whose theoretical caps are                                                                                                                     of the output phase in the total execution time is smaller.
+10×, 20× and 50×, respectively. It can be observed that, for every
+sparsity ratio, the column-loc structure’s overhead has a negligible                                                                                                                   5            ENERGY EVALUATION OF V:N:M
+effect on the overall time, despite being a software approach to                                                                                                                       DL pruning techniques aim to achieve the highest possible spar-
+support arbitrary N:M ratios. However, the impact of column-loc                                                                                                                        sity levels in the pruned models while ensuring little to no loss
+becomes slightly more noticeable when dealing with 2:100 sparsity,                                                                                                                     in accuracy. This becomes especially challenging when the target
+which is not practical for DL applications in real-world scenarios.                                                                                                                    sparse format requires a specific pruning scheme, and when high
+                                                                                                                                                                                       sparsity levels are targeted. In these scenarios, the percentage of
+   Scaling study - Impact of V and output layout format. The
+                                                                                                                                                                                       non-zero values is low, and their location is heavily influenced by
+𝑉 variable in our V:N:M format can be used to define trade-offs
+                                                                                                                                                                                       the format. Therefore, it is crucial to demonstrate the effectiveness
+between performance and accuracy in the same way that the block-
+                                                                                                                                                                                       of new sparse formats, to ensure its applicability with minimal or
+size in block-wise pruning, for example. To study this, we performed
+                                                                                                                                                                                       no impact on accuracy.
+a second ablation study on one matrix from 𝐵𝐸𝑅𝑇𝑙𝑎𝑟𝑔𝑒 (size 1024 ×
+                                                                                                                                                                                           The energy evaluation metric is employed to measure the flexi-
+4096 × 4096). Figure 10 shows the performance results of Spatha on
+                                                                                                                                                                                       bility of a format by comparing the total magnitude of the model
+this matrix using three different vector lengths: 32, 64 and 128. This
+                                                                                                                                                                                       (sum of the individual weights) before and after pruning to a spe-
+test is conducted for different sparsity levels, in practice, the test
+                                                                                                                                                                                       cific format. Let us assume a well-optimized dense model 𝑤 ∗ ∈ R𝑑 ,
+explores different configurations of the V:N:M values. Furthermore,
+                                                                                                                                                                                       where 𝑑 is the total number of weights. We wish to prune 𝑤 ∗ to a
+in order to study the impact of the previously proposed layout for
+                                                                                                                                                                                       target sparsity 𝑠 ∈ (0, 1] by zeroing out 𝑠 × 𝑑 weights. The result is
+writing back results (Figure 8), it is compared the effect of using
+                                                                                                                                                                                       a sparse model 𝑤 ∈ R𝑠 ×𝑑 . The energy metric is defined as follows:
+such layout, enabling 128-bit SMEM stores instead of 32-bit ones. As
+we can see in Figure 10, the difference in terms of speedups between                                                                                                                                                                                                  Í𝑠 ×𝑑
+the three selected vector lengths is noticeable, the value of 𝑉 being                                                                                                                                                                                                             |𝑤𝑖 |
+                                                                                                                                                                                                                                              𝑒𝑛𝑒𝑟𝑔𝑦 = Í𝑖=0
+conditioned by the accuracy loss. The effect of using 128-bit stores                                                                                                                                                                                    𝑑                     ∗
+                                                                                                                                                                                                                                                                        𝑖=0 |𝑤𝑖 |
+VENOM: A Vectorized N:M Format for Unleashing the Power of Sparse Tensor Cores
+
+
+   This metric yields a normalized score between 0 ∼ 1, the higher               yields state-of-the-art results in LLMs for unstructured and semi-
+the better.                                                                      structured (block) compression.
+   Figure 11 presents the energy evaluation study for a weight ten-                 Let us assume we have a well-optimized dense model 𝑤 ∗ ∈ R𝑑 ,
+sor extracted from an encoder layer of BERT𝑏𝑎𝑠𝑒 . This figure com-               where 𝑑 is the total number of weights. Our target is to identify a
+pares three weight selection policies: unstructured (ideal), V:N:M               set of weights 𝑄 that we can prune with a minimum loss increase.
+with different 𝑉 values, and vector-wise pruning with several vec-               Te following saliency score function is defined to rank groups of
+tor lengths 𝑙 (𝑣𝑤_𝑙). The evaluation is done for different sparsity              weights [21]:
+levels, whose value in the V:N:M format is controlled by the N:M
+ratio.                                                                                               1
+                                                                                             𝜌𝑄 =      (𝐸𝑄 𝑤 ∗ )𝑇 (𝐸𝑄 𝐹b−1 (𝑤 ∗ )𝐸𝑇𝑄 ) −1 𝐸𝑄 𝑤 ∗
+   Unstructured pruning represents the ideal non-zero selection                                      2
+policy, as it does not impose any restrictions on the location of non-              where,
+zero values. Vector-wise pruning can accelerate sparse routines                       • 𝐹b−1 (𝑤) ∈ R𝑑 ×𝑑 is the Fisher matrix.
+on GPUs. However, if the vector length is greater than 8, it can                      • 𝐸𝑄 ∈ R |𝑄 | ×𝑑 is a matrix composed of the corresponding
+significantly reduce the accuracy [4, 5, 25]. The results demonstrate                   canonical basis vectors for a set of 𝑄 weights.
+that the V:N:M format occupies an intermediate position between                     Thus, the set of canonical basis vectors 𝐸𝑄 depends on the spe-
+unstructured and vector-wise pruning. Moreover, it is highly robust              cific sparse format we are using. For instance, in 2:4 sparsity, the
+to changes in the vector length, allowing the usage of 𝑉 = 128                   canonical vectors are:
+while consistently preserving more energy than 𝑣𝑤_8 and 𝑣𝑤_4.
+   Additionally to the previous conclusions, independently of the                  𝐸𝑄 = [[1,1,0,0], [1,0,1,0], [1,0,0,1], [0,1,1,0], [0,1,0,1], [0,0,1,1]]
+selected pruning method, we can also see the tremendous impact                      As observed, 𝐸𝑄 encompasses all possible correlations between
+on the energy of magnitude-based weight selection policies. At 50%               2 weights, in a set of 4 elements. In general, for an N:M format, this
+of sparsity, unstructured pruning already lost 20% of the original                                                   
+                                                                                 approach requires evaluating 𝑀   𝑁 combinations to determine the
+dense matrix energy. At the other side, at 95% only 20% of the
+                                                                                 best one, which can turn into an intractable combinatorial problem.
+original energy remain in the pruned dense matrix. Thus, we can
+                                                                                 Furthermore, in the V:N:M format, the addition of a new dimension
+conclude that, in order to achieve moderate to high sparsity ratios
+                                                                                 𝑉 amplifies the complexity as it requires finding the optimal set of
+in models with the dimensionality of BERT, more sophisticated
+                                                                                 𝑉 × 𝑁 weights, leading to a combinatorial explosion.
+pruning methods must be used. Second-order pruning offers an
+                                                                                    To address these challenges, we adopt a similar approach as [21]
+alternative to these problems.
+                                                                                 between sets of 𝑄 elements, which involves disregarding correla-
+                                                                                 tions between rows within 𝑉 × 𝑀 blocks. This simplification drops
+6     SECOND-ORDER PRUNING                                                       the number of combinations to evaluate. Additionally, to mitigate
+                                                                                 combinatorial issues that may still arise within 1 × 𝑀 groups, we
+Magnitude-based pruning techniques provide a straightforward
+                                                                                 propose a pair-wise approach where correlations are calculated
+approach to reducing the size of our models without requiring
+                                                                                 between pairs of elements, that is:
+model evaluation for weight selection. However, while magnitude
+pruning can be effective at moderate sparsity levels, it becomes                                       𝐸𝑄 = [[1, 0], [0, 1], [1, 1]]
+more challenging to select the "least significant" weights to remove
+                                                                                    Depending on the 𝑁 and 𝑀 values, we can modulate the com-
+when aiming for high sparsity ratios, and this can significantly
+                                                                                 plexity of the problem to be solved by dynamically selecting the
+impact network accuracy.
+                                                                                 m-combinatorial or the pair-wise approach.
+   In contrast, second-order pruning methods offer a more sophis-
+ticated approach to select weight candidates for removal, by con-                6.1.1 Gradual pruning definition. The N:M format prunes a model
+sidering the difference in loss relative to the current model. Hence,            to a target sparsity 𝑠 ∈ (0, 1]. Typically, the 𝑠 × 𝑑 weights are
+they target to find the set of weights whose removal will generate               removed in one step (one-shot pruning). For 50% (2:4) sparsity,
+a minimum loss increase. In this context, the Hessian matrix is                  this approach can be applied in most cases and the models still
+a key component of second-order pruning methods which repre-                     recover the original accuracy. However, for higher sparsity ratios,
+sents the matrix of second-order derivatives of the loss function                one-shot pruning reduces severely the model performance and
+w.r.t. the weights, mathematically expressed as 𝐻 = ∇𝑤      2 𝐿, for a           makes hard to recover the original accuracy using additional fine-
+twice-differentiable loss 𝐿. The Fisher matrix is very similar to the            tuning steps. This negative effect on accuracy also happens in
+Hessian matrix but in the probabilistic setting, used to estimate the            second-order methods, where one-shot pruning can result in worse
+curvature of the loss function around the current value. As a result,            Taylor approximations of the function. We propose a structure
+this approximation allows to identify the weight parameters that                 decay scheduler for the V:N:M format, which performs N:M pruning
+have less impact in the loss function, and therefore are candidates              across different 𝛽 steps, for increasing sparsity levels. This scheduler
+to be pruned [15].                                                               starts with a high initial value of 𝑁 0 >> 𝑁 𝛽 (lower sparsity), where
+                                                                                 𝑁 𝛽 is our target 𝑁 value, and gradually decreases 𝑁 (conversely
+                                                                                 increasing sparsity) until it reaches the 𝑁 target value. This gradual
+6.1     The V:N:M format in 2nd order methods                                    pruning approach mitigates the adverse effects on network accuracy
+This section introduces a new second-order pruning method based                  and improves the recovery of the accuracy in subsequent fine-
+on [21] and tailored for the V:N:M format. This type of approach                 tuning processes.
+                                                                                                                                                                                                                                                                                       Castro R.L., et al.
+
+
+7                EVALUATION                                                                                                                                                                                                    are built using sparse matrices from weight-pruned linear layers
+We evaluate the performance on an NVIDIA RTX 3090 GPU of the                                                                                                                                                                   extracted from BERT with different sparsity levels ranging from
+Ampere architecture equipped with SPTCs. We compare the perfor-                                                                                                                                                                50 ∼ 98%. In this context, cuSparseLt SpMM implementation is
+mance of Spatha with different sparse libraries (cuSparseLt, CLASP,                                                                                                                                                            the reference library to exploit the 2:4 format on SPTCs. Since
+Sputnik) and also with a dense counterpart version (cuBLAS). We                                                                                                                                                                there are no SpMM GPU implementations for arbitrary N:M spar-
+build our benchmarks on matrices from real-world LLMs. Addition-                                                                                                                                                               sity levels, we have considered in the evaluation the following
+ally to these micro benchmarks, we also conduct a case study on                                                                                                                                                                third-party libraries that support half-precision: Sputnik [11], and
+real-world applications. At this point, we demonstrate the proposed                                                                                                                                                            CLASP [4] which extends vectorSparse [5] to the latest generations
+second-order pruning technique, and we benchmark the end-to-end                                                                                                                                                                of NVIDIA GPU architectures. While [11] has been designed for
+performance of Spatha on different LLM models (BERT, GPT-2, and                                                                                                                                                                non-structured sparse matrices, [4] is focused on semi-structured
+GPT-3).                                                                                                                                                                                                                        sparse input matrices following the column-vector sparse format,
+                                                                                                                                                                                                                               which supports vector lengths 𝑙 = 2, 4 and 8. This configurations
+7.1                    Comparison with existing dense and sparse                                                                                                                                                               has been referenced in the columns of Figure 13 with the notation
+                                                                                                                                                                                                                               𝑣𝑤_𝑙.
+                       libraries
+                                                                                                                                                                                                                                  The first row of Figure 13 shows the speedup results on sparse
+Firstly, we evaluate our baseline implementation for 1:2:4 spar-                                                                                                                                                               matrices extracted from BERT𝑏𝑎𝑠𝑒 while the second one reports
+sity (50%). Since higher N:M ratios will depend on this baseline’s                                                                                                                                                             that performance on BERT𝑙𝑎𝑟𝑔𝑒 . The y-axis is represented in a loga-
+performance, it is crucial to have good speedup results in this con-                                                                                                                                                           rithmic scale to make the results more readable. First of all, existing
+figuration. We selected cuBLAS GEMM as our dense counterpart,                                                                                                                                                                  implementations for sparse computation are usually able to outper-
+and for exploiting the 2:4 format on SPTCs, we used the cuSparseLt                                                                                                                                                             form the dense counterpart version (e.g., cuBLAS) at sparsity levels
+SpMM implementation, which represents the reference library on                                                                                                                                                                 above 80%. However, the speedup they can achieve is usually up
+this format. Our experiments involve varying sizes of a 𝑅 × 𝐾 × 𝐶                                                                                                                                                              to ∼ 3×. Furthermore, these implementations are usually designed
+GEMM problem, where 𝑅 and 𝐶 are predetermined values from two                                                                                                                                                                  considering as a reference sparse matrices extracted from small
+BERT’s weight linear layers (768 and 4096 for BERT𝑏𝑎𝑠𝑒 , 1024 and                                                                                                                                                              models (e.g., ResNet) where the left operand can be a tiny matrix
+4096 for BERT𝑙𝑎𝑟𝑔𝑒 ). The inner dimension 𝐾 of the product, which                                                                                                                                                              (e.g., 64 × 64) [12]. That influences the SpMM design, since they
+is the sparsified one, is variable in these experiments. Note that the                                                                                                                                                         can afford to load the data directly into registers, for example. But
+inner dimension is usually scaled up to enhance the network accu-                                                                                                                                                              when we evaluate these implementations on medium or big matri-
+racy. For instance, GPT-3 uses a hidden size of 12288 [3]. Figure 12                                                                                                                                                           ces extracted from larger models (e.g., LLMs), the performance is
+reports the performance of the three contending implementations                                                                                                                                                                even worse, and they only outperform cuBLAS at sparsity levels
+(cuBLAS, cuSparseLt and Spatha) and the speedups of the selected                                                                                                                                                               above 90%.
+sparse libraries w.r.t. cuBLAS. The results show that the perfor-                                                                                                                                                                 The fact that Spatha reaches 2× speedup at 50% sparsity enables
+mance of the sparse implementation improves with the GEMM                                                                                                                                                                      the achievement of high speedups as the sparsity increases, yielding
+size, as larger GEMMs tend to have larger arithmetic intensity. In                                                                                                                                                             up to 27× in BERT-like matrices. We can also appreciate that the
+these microbenchmarks, BERT𝑙𝑎𝑟𝑔𝑒 matrices (right side) increase                                                                                                                                                                best performance in our implementation is reached as the arithmetic
+the computation intensity w.r.t. BERT𝑏𝑎𝑠𝑒 (left). Notably, for larger                                                                                                                                                          intensity increases, peaking for BERT_𝑙𝑎𝑟𝑔𝑒 with batch size 16.
+GEMM sizes, the performance of cuSparseLt and Spatha is similar,
+while our implementation shows better performance on smaller
+sizes, which constitutes an interesting feature, since Spatha can
+probably cover a more variety of network architectures. Overall,                                                                                                                                                               7.2    Case study: sparse LLMs
+Spatha achieves up to 1.38× speedup over the vendor library for                                                                                                                                                                LLMs have revolutioned the NLP field with their unrivaled per-
+2:4 sparsity, cuSparseLt.                                                                                                                                                                                                      formance in various domains. Nowadays, these models are widely
+                                                                                                                                                                                                                               used in everyday technologies, such as ChatGPT. Transformer LLMs
+                         Spatha
+                         cuBLAS
+                                              cuSparseLt                 Spatha
+                                                                         cuSparseLt
+                                                                                                                                        Spatha
+                                                                                                                                        cuBLAS
+                                                                                                                                                             cuSparseLt                 Spatha
+                                                                                                                                                                                        cuSparseLt
+                                                                                                                                                                                                                               typically consist of multiple transformer layers with self-attention.
+                                                                                      2.0                                                                                                            2.0                           There are two major sub-components inside a transformer archi-
+            80                                                                                                             80
+                                                                                      1.8                                                                                                            1.8                       tecture: the multi head attention (MHA), and the fully connected
+                                                                                                                                                                                                       SpeedUp w.r.t. cuBLAS
+                                                                                        SpeedUp w.r.t. cuBLAS
+
+
+
+
+            60                                                                                                             60
+                                                                                      1.6                                                                                                            1.6                       feed forward network (FFN). At a higher level, the model size is
+ TFLOPS/s
+
+
+
+
+                                                                                                                TFLOPS/s
+
+
+
+
+            40                                                                                                             40
+                                                                                      1.4                                                                                                            1.4                       determined by different configurable components, such as the head
+            20                                                                        1.2                                  20                                                                        1.2                       dimension, the number of heads and the number of layers, depend-
+             0                                                                        1.0                                   0                                                                        1.0                       ing on the specific architecture used.
+                 768153623043072384046085376614469127680844892169981407512152102288                                             768153623043072384046085376614469127680844892169981407512152102288
+                                                   K                                                                                                              K
+                                                                                                                                                                                                                                   This case study focuses on weight pruning, and explores the on
+                                                                                                                                                                                                                               computational speedups achievable with Spatha. In LLMs weight
+                         (a) M=768, N=4096                                                                                            (b) M=1024, N=4096
+                                                                                                                                                                                                                               tensors are present in Linear Layers, which can be found in both the
+                                                                                                                                                                                                                               MHA and the MLP sub-components. Figure 14 illustrates a pruned
+Figure 12: Baseline performance at 50% sparsity (2:4 format)
+                       GEMM-M=1024, GEMM-N=4096 (BERT-large)                                                                          GEMM-M=1024, GEMM-N=4096 (BERT-large)
+                                                                                                                                                                                                                               MHA where four GEMM instructions are converted to SpMMs
+                                                                                                                                                                                                                               by sparsifying the corresponding weight tensors. In this study we
+  Figure 13 compares the performance of Spatha to other dense                                                                                                                                                                  demonstrate the efficiency of Spatha on different LLMs. However, it
+and sparse libraries for higher levels of sparsity. The benchmarks                                                                                                                                                             is important to note that without an efficient implementations of the
+VENOM: A Vectorized N:M Format for Unleashing the Power of Sparse Tensor Cores
+
+
+                                                                         cuBLAS            Spatha        cuSparseLt           Sputnik        CLASP
+                                            batch size=8                            batch size=16                           batch size=8                          batch size=16
+                                           64:N:M , vw_4                            64:N:M , vw_4                          128:N:M , vw_8                        128:N:M , vw_8
+                      25.0
+                      15.0
+SpeedUp (log scale)
+
+
+
+
+                      10.0
+                       6.0
+    BERT-base
+
+
+
+
+                       4.0
+                       2.0
+                       1.0
+                       0.5
+                       0.3
+                       0.1
+                      28.0
+                      15.0
+SpeedUp (log scale)
+
+
+
+
+                      10.0
+                       6.0
+   BERT-large
+
+
+
+
+                       4.0
+                       2.0
+                       1.0
+                       0.5
+                       0.3
+                       0.1
+                               50    70     75   80    90   95    98    50     70    75   80    90   95 98 50         70    75    80    90   95   98   50   70    75    80     90   95   98
+                                                                                                      Sparsity [%]
+
+Figure 13: Speedup results on BERT𝑏𝑎𝑠𝑒 and BERT𝑙𝑎𝑟𝑔𝑒 with sequence length=512. The notation 𝑉 :N:M represents the vector
+length 𝑉 used on Spatha, while vw𝑙 represents the vector length 𝑙 used on CLASP. The N:M pattern related to each of the
+considered sparsity levels are in ascending order of sparsity: 2:4, 2:7, 2:8, 2:10, 2:20, 2:40 and 2:100
+
+                                                                                           MHA                 experiments we considered 75% and 87.5% sparsity levels, repre-
+                        WV           V                WK      K    WQ          Q
+                                                                                                               sented by 2:8 and 2:16 ratios, respectively, to demonstrate that our
+                             SpMM                      SpMM             SpMM                                   pruning approach produce robust results on this kind of networks.
+
+                                          Dropout
+                                                                                                                             Sparsity        1:N:M     64:N:M       128:N:M         vw_8
+                       WO           GEMM                      GEMM
+                                                                                    Sparse matrix
+                                                                                                                            75% (2:8)         88.61     88.47          87.94        88.55
+                                                                                                                           87.5% (2:16)       87.73     86.50          85.01        86.90
+                             SpMM                             Softmax               Dense matrix               Table 2: F1 score of BERT𝑏𝑎𝑠𝑒 on the SQuADv1.1. Dense model
+                                                                                                               F1=88.43
+                             Figure 14: Simplified view of a pruned MHA
+
+                                                                                                                  As we can see, 1:N:M, 64:N:M and 𝑣𝑤_8 slightly improve the
+                                                                                                               original model accuracy at 2:8 sparsity, while the 128:N:M format
+                                                                                                               presents a 0.005% accuracy loss. For 2:16 sparsity, the four methods
+SpMM instruction, the final performance of the pruned model can
+                                                                                                               suffer a slight accuracy loss. Specifically, the plain 2:16 format is
+significantly decrease compared to the dense counterpart version.
+                                                                                                               able to recover 99% of the original accuracy, while 64:2:16 and
+                                                                                                               𝑣𝑤_8 pruning recover 98%. In these terms, the 128:2:16 approach
+7.2.1 Second-order pruning at LLMs scale. We used our 2nd order
+                                                                                                               is slightly more restrictive, but is still able to recover 96% of the
+pruning approach following the V:N:M format to demonstrate its
+                                                                                                               original accuracy.
+applicability to the size of LLM models. Specifically, we focused on
+BERT𝑏𝑎𝑠𝑒 , one of the most commonly used LLMs, which comprises                                                 7.2.2 Integration with Pytorch. In order to perform the end-to-end
+12 transformer layers with 110M parameters. As per community                                                   evaluations, we have streamlined the adoption of Spatha into the
+standards [21], we pruned the encoder’s weights of the model (85M).                                            PyTorch training pipeline by integrating it with the STen library
+We evaluate the performance on the SQuAD v.1.1 task, which is                                                  [17]. This integration allows for easy addition of sparsity to existing
+a widely-used benchmark to measure model compression. Table 2                                                  models such as BERT and GPT with just a few lines of code. Users
+shows the F1 score metric for different pruning techniques includ-                                             can specify a list of weights to be made sparse in their custom
+ing: traditional N:M format (1:N:M), V:N:M format with 𝑉 size of                                               models, making the process straightforward. To facilitate this, we
+64 and 128, and vector-wise pruning with dense vertical vectors of                                             have defined a VNMSparsifier class that performs pruning while
+size 8 (𝑣𝑤_8).                                                                                                 adhering to the V:N:M format constraints. Additionally, we have
+   LLMs have been shown to be susceptible to minor model per-                                                  introduced a VNMTensor class that serves as a container for tensors
+turbations that can cause model collapse [19]. However, in these                                               in the V:N:M format. When using SpMM with VNMTensor, STen
+                                                                                                                                                                              Castro R.L., et al.
+
+
+                                                                                                                         others          softmax           matmul          GEMMs
+automatically dispatches it to the efficient implementation in Spatha.
+A pseudocode example of this integration is shown in Listing 1.                                        BERT, bs=32                      GPT2-large, bs=8                    GPT3, bs=1
+                                                                                            250
+1    import sten                                                                                                            150                                250
+                                                                                            200
+                                                                                                                                                               200
+
+
+
+
+                                                                              Latency(ms)
+2    import spatha
+                                                                                            150                             100
+3                                                                                                                                                              150
+4    @sten . register_sparsifier_implementation (                                           100                                                                100
+                                                                                                                             50
+5        sparsifier = spatha . VNMSparsifier ,                                               50                                                                 50
+6        inp = torch . Tensor , out = spatha . VNMTensor )
+                                                                                              0                               0                                     0
+     def torch_tensor_to_vnm ( sparsifier , tensor , grad_fmt ) :
+                                                                                                  se 4:2:8 :2:16 :2:32 others ense 4:2softmax
+                                                                                                                                       :8 :16 :32       se 2:8 :2:16 :2:32
+7
+8        return sten . SparseTensorWrapper \                                                  den    6 64 64                 d     6 64:2 64:2 matmulden 64: GEMMs
+                                                                                                                                                               64 64
+9              . wrapped_from_dense (                                                                                                      Sparsity
+10                  spatha . vnm_sparsifier (                                                        BERT-large, bs=32                  GPT2-large, bs=8                     GPT3, bs=1
+                                                                                            250
+11                       sparsifier .n , sparsifier .m ,                                                                    150                                250
+12                       sparsifier .v , tensor ) ,                                         200
+                                                                                                                                                               200
+
+
+
+
+                                                                              Latency(ms)
+13                  tensor , grad_fmt )
+                                                                                            150                             100
+14                                                                                                                                                             150
+15   class Spmm ( torch . nn . Module ) :                                                   100                                                                100
+                                                                                                                              50
+16       def __init__ ( self , original : torch . nn . Linear ) :                            50                                                                 50
+17           self . bias = original . bias
+18           w = original . weight . wrapped_tensor                                           0                                   0                                 0
+                                                                                                 se    :8 16 32                      se    :8 16 32                    se    :8 16 32
+19           self . values       = w . values                                                 den 128:2 128:2: 128:2:             den 128:2 128:2: 128:2:           den 128:2 128:2: 128:2:
+20           self . columns = w . columns                                                                                                   Sparsity
+21           self . metadata = w . metadata
+22       def forward ( self , input ) :                                                       Figure 15: Latency of LLMs inference using Spatha
+23           return spatha . spmm ( self . values , self . columns ,
+24                 self . metadata , input , self . bias , ...)
+     Listing 1: Pseudocode example of using Spatha and the                   GEMM time is around 50%, so the general improvement is limited
+     V:N:M sparsifier                                                        by this factor. However, when we move to GPT-3, the tensor time
+                                                                             contraction is improved up to 11×, but the GEMM time represents
+                                                                             a much higher percentage, meaning a time reduction of up to 3.20×
+7.2.3 Sparse Inference. We benchmark the end-to-end performance              of the total execution time of a GPT-3 encoder.
+of Spatha on the inference task for different real-world LLM models:
+BERT (336M), GPT2-large (774M), and GPT-3 (175B), obtained from              8               RELATED WORK
+HuggingFace. Since GPT-3 is not a public trained model, we have              Semi-structured pruning techniques are a hot research topic. The
+created a model with the same configuration than this LLM. The               column-vector-sparse-encoding [5] seeks to accelerate sparse ker-
+target of this experiment is measuring time performance, thus, we            nels, and it achieves a speedup between 1.71× and 7.19× over cuS-
+initialized the weights of the GPT-3 model with random values.               PARSE without exploiting SPTCs, and limited to the Volta archi-
+The time results on BERT and GPT2-large have been obtained over              tecture. The same authors target the SPTCs in [6] proposing DFSS,
+the inference of the entire model, while the results of GPT-3 were           a dynamic N:M sparse attention mechanism and a tailored im-
+obtained by measuring the inference time of a single encoder to fit          plementation of the sparse kernels, but limited to the 2:4 format.
+it on a single GPU.                                                          The unaligned group-level pruning proposed in [24] increases the
+    Figure 15 shows the end-to-end evaluation results on the in-             accuracy of this kind of semi-structured pruning techniques by
+ference of these models. As we have seen in the previous micro               providing additional flexibility.
+benchmark experiments, increase the arithmetic intensity of the                 N VIDIA cuSparse [29] is a library from NVIDIA that implements
+MMMs improves the utilization of the GPU resources, and also the             several linear algebra routines for sparse matrices stored in different
+final performance of the SpMM. We configured the three models to             compressed formats (COO, CSR and Blocked-Ellpack). It was origi-
+the larger configuration possible before achieving out-of-memory             nally created to target scientific applications. The cuSparseLt[28]
+issues. In the case of BERT𝑙𝑎𝑟𝑔𝑒 , this implied the selection of a batch     library from NVIDIA adds support for the exploitation of Sparse-
+size (𝑏𝑠) of 32. For GPT2-large, the 𝑏𝑠 is 8, and in the case of GPT-3, it   Tensor Cores (SPTCs) following the N:M format, and giving support
+is 1. However, 𝑏𝑠 only affect the 𝐶 dimension of the GEMM problem            to 1:2 ad 2:4 sparsity patterns (50% of sparsity).
+(𝑅 × 𝐾 × 𝐶), while the two others, 𝑅 and 𝐾, depend on the model                 Sputnik [11] library has been specifically designed for DL work-
+characteristics. Regarding these sizes, BERT has smaller weight              loads. It uses only the CSR compressed format, and it focuses on
+tensor sizes (the ones sparsified) than GPT2-large, while GPT-3 is           gaining flexibility on the scheduling of workloads by defining a one-
+formed by weight tensors much larger than the two other models.              dimensional tiling scheme. This library evolved to V ector-Sparse [5]
+Due to the previously described reasons, we can see that the best            adding support for the exploitation of Tensor-Core Units. It is based
+performance is obtained in the case of GPT-3, where the GEMM                 on using semi-structured 1D pruning, and a special compressed
+computation contributes to around 80% of the total execution time.           format called Column-Vector Sparse Encoding. As a continuation,
+    In the case of BERT, tensor contraction time is improved up to           CLASP [4] offers an SPMM implementation which extends the
+9.95×, while in terms of the whole model, the end-to-end latency is          support of Vector-Sparse to the Ampere architecture.
+improved up to a 72%. For GPT2-large, the GEMM time is improved                 In the same line, Magicube [25] is an implementation of the
+in 10.84×, since some weight tensors are slightly bigger, but the total      SPMM and SDDMM routines for quantized sparse matrices. The
+VENOM: A Vectorized N:M Format for Unleashing the Power of Sparse Tensor Cores
+
+
+kernels are complemented with en efficient online method to trans-                          Chess, Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya
+pose the dense matrix.                                                                      Sutskever, and Dario Amodei. 2020. Language Models are Few-Shot Learners.
+                                                                                            In Advances in Neural Information Processing Systems, H. Larochelle, M. Ran-
+                                                                                            zato, R. Hadsell, M.F. Balcan, and H. Lin (Eds.), Vol. 33. Curran Associates,
+9    DISCUSSION                                                                             Inc., 1877–1901. https://proceedings.neurips.cc/paper_files/paper/2020/file/
+                                                                                            1457c0d6bfcb4967418bfb8ac142f64a-Paper.pdf
+a) Spatha application to other tasks. The integration of the Spatha                   [3]   Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan,
+library into STen, and the implementation of a specific 2nd order                           Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda
+                                                                                            Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan,
+pruning technique to exploit the V:N:M format, enables distributed                          Rewon Child, Aditya Ramesh, Daniel M. Ziegler, Jeffrey Wu, Clemens Winter,
+sparse training as a direct application of the previously mentioned                         Christopher Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin
+contributions. Furthermore, notice that the Spatha library repre-                           Chess, Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya
+                                                                                            Sutskever, and Dario Amodei. 2020. Language Models are Few-Shot Learners.
+sents a tool to perform general Sparse Matrix-Matrix Multiplica-                            arXiv:2005.14165 [cs.CL]
+tions, so can be extended to other domains other than DL.                             [4]   Roberto L. Castro, Diego Andrade, and Basilio B. Fraguela. 2023. Probing the
+   b) Distributed deep learning systems. In this work, we have fo-                          Efficacy of Hardware-Aware Weight Pruning to Optimize the SpMM Routine
+                                                                                            on Ampere GPUs. In Proceedings of the International Conference on Parallel
+cused on large-scale models based on LLMs. However, the Spatha                              Architectures and Compilation Techniques (Chicago, Illinois) (PACT ’22). As-
+library represents a generic tool for sparse MMMs. To achieve ef-                           sociation for Computing Machinery, New York, NY, USA, 135–147. https:
+                                                                                            //doi.org/10.1145/3559009.3569691
+ficient large-scale DL on distributed systems, data, operator, and                    [5]   Zhaodong Chen, Zheng Qu, Liu Liu, Yufei Ding, and Yuan Xie. 2021. Efficient
+pipeline parallelism are often combined. In this context, Spatha can                        Tensor Core-Based GPU Kernels for Structured Sparsity under Reduced Precision.
+serve as a third-party implementation to accelerate the execution                           In Proceedings of the International Conference for High Performance Computing,
+                                                                                            Networking, Storage and Analysis (St. Louis, Missouri) (SC ’21). Association for
+of these operators in the backend, and mitigate the computation                             Computing Machinery, New York, NY, USA, Article 78, 14 pages. https://doi.
+bottleneck on these systems.                                                                org/10.1145/3458817.3476182
+                                                                                      [6]   Zhaodong Chen, Zheng Qu, Yuying Quan, Liu Liu, Yufei Ding, and Yuan Xie.
+                                                                                            2023. Dynamic N:M Fine-Grained Structured Sparse Attention Mechanism.
+10     CONCLUSION                                                                           In Proceedings of the 28th ACM SIGPLAN Annual Symposium on Principles and
+                                                                                            Practice of Parallel Programming (Montreal, QC, Canada) (PPoPP ’23). Association
+This paper opens the possibility to use Sparse Tensor Cores (SPTCs)                         for Computing Machinery, New York, NY, USA, 369–379. https://doi.org/10.
+for arbitrary sparsity levels and N:M patterns. In order to do so, we                       1145/3572848.3577500
+defined a new sparse format (V:N:M), a new library to efficiently                     [7]   Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. 2019. BERT:
+                                                                                            Pre-training of Deep Bidirectional Transformers for Language Understanding.
+exploit the proposed kernel (Spatha), and a second-order pruning                            In Proceedings of the 2019 Conference of the North American Chapter of the Associ-
+technique that demonstrated the applicability of the proposed for-                          ation for Computational Linguistics: Human Language Technologies, NAACL-HLT
+mat on real-world deep learning models. The experiments show that                           2019, Minneapolis, MN, USA, June 2-7, 2019, Volume 1 (Long and Short Papers), Jill
+                                                                                            Burstein, Christy Doran, and Thamar Solorio (Eds.). Association for Computa-
+this three-fold approach yields up to a 37× speedup over cuBLAS                             tional Linguistics, 4171–4186. https://doi.org/10.18653/v1/n19-1423
+at the kernel level. Furthermore, the proposed pruning technique                      [8]   Elias Frantar and Dan Alistarh. 2023. SparseGPT: Massive Language Models Can
+                                                                                            Be Accurately Pruned in One-Shot. arXiv:2301.00774 [cs.LG]
+offers a solution scalable to the dimensionality of LLMs, and is                      [9]   Elias Frantar, Eldar Kurtic, and Dan Alistarh. 2021. M-FAC: Efficient Matrix-Free
+able to achieve high sparsity ratios with minimum impact in loss                            Approximations of Second-Order Information. arXiv:2107.03356 [cs.LG]
+(∼ 2% at 2:16 sparsity on BERT models). Finally, we demonstrate                      [10]   Trevor Gale, Erich Elsen, and Sara Hooker. 2019. The state of sparsity in deep
+                                                                                            neural networks. arXiv preprint arXiv:1902.09574 (2019).
+the performance on end-to-end sparsity, achieving speedups on                        [11]   Trevor Gale, Matei Zaharia, Cliff Young, and Erich Elsen. 2020. Sparse GPU
+GPT-3 encoder of up to 3.20× at 2:32 sparsity, what is translated                           Kernels for Deep Learning. In SC20: International Conference for High Performance
+into a tensor contraction improvement of up to 11×.                                         Computing, Networking, Storage and Analysis. 1–14. https://doi.org/10.1109/
+                                                                                            SC41405.2020.00021
+                                                                                     [12]   Google Research. 2020. Deep Learning Matrix Collection. Retrieved March 26,
+ACKNOWLEDGMENTS                                                                             2023 from https://github.com/google-research/google-research/tree/master/sgk
+                                                                                     [13]   Song Han, Huizi Mao, and William J. Dally. 2016. Deep Compression: Compress-
+This research was supported by grants PID2019-104184RB-I00 and                              ing Deep Neural Networks with Pruning, Trained Quantization and Huffman
+PID2022-136435NB-I00, funded by MCIN/AEI/ 10.13039/501100011033,                            Coding. arXiv:1510.00149 [cs.CV]
+                                                                                     [14]   Joel Hestness, Sharan Narang, Newsha Ardalani, Gregory Diamos, Heewoo Jun,
+PID2022 also funded by "ERDF A way of making Europe", EU;                                   Hassan Kianinejad, Md. Mostofa Ali Patwary, Yang Yang, and Yanqi Zhou. 2017.
+the Ministry of Education (predoctoral grant of Roberto L. Castro,                          Deep Learning Scaling is Predictable, Empirically. arXiv:1712.00409 [cs.LG]
+FPU19/03974), by Xunta de Galicia under the Consolidation Pro-                       [15]   Torsten Hoefler, Dan Alistarh, Tal Ben-Nun, Nikoli Dryden, and Alexandra Peste.
+                                                                                            2021. Sparsity in Deep Learning: Pruning and Growth for Efficient Inference and
+gram of Competitive Reference Groups (ED431C 2021/30), and ERC                              Training in Neural Networks. J. Mach. Learn. Res. 22, 1, Article 241 (jan 2021),
+grant PSAP, no. 101002047. We also acknowledge the support from                             124 pages.
+                                                                                     [16]   Andrei Ivanov, Nikoli Dryden, Tal Ben-Nun, Shigang Li, and Torsten Hoefler.
+CITIC, funded by Xunta de Galicia and FEDER funds of the EU (Cen-                           2021. Data Movement Is All You Need: A Case Study on Optimizing Transformers.
+tro de Investigación de Galicia accreditation 2019-2022, ED431G                             In Proceedings of Machine Learning and Systems 3 (MLSys 2021).
+2019/01). Finally, we thank the Swiss National Supercomputing                        [17]   Andrei Ivanov, Nikoli Dryden, and Torsten Hoefler. 2022. STen: An Interface for
+                                                                                            Efficient Sparsity in PyTorch. https://github.com/spcl/sten. In Sparsity in Neural
+Center (CSCS) and the Centro de Supercomputación de Galicia                                 Networks workshop.
+(CESGA) for the use of their computers.                                              [18]   Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B. Brown, Benjamin Chess,
+                                                                                            Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and Dario Amodei. 2020.
+                                                                                            Scaling Laws for Neural Language Models. arXiv:2001.08361 [cs.LG]
+REFERENCES                                                                           [19]   Olga Kovaleva, Saurabh Kulshreshtha, Anna Rogers, and Anna Rumshisky.
+ [1] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei, Ilya                  2021.      BERT Busters: Outlier Dimensions that Disrupt Transformers.
+     Sutskever, et al. 2019. Language models are unsupervised multitask learners.           arXiv:2105.06990 [cs.CL]
+ [2] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan,          [20]   Eldar Kurtic and Dan Alistarh. 2022. GMP*: Well-Tuned Gradual Magnitude
+     Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda             Pruning Can Outperform Most BERT-Pruning Methods. arXiv:2210.06384 [cs.CL]
+     Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan,   [21]   Eldar Kurtic, Daniel Campos, Tuan Nguyen, Elias Frantar, Mark Kurtz, Benjamin
+     Rewon Child, Aditya Ramesh, Daniel Ziegler, Jeffrey Wu, Clemens Winter,                Fineran, Michael Goin, and Dan Alistarh. 2022. The Optimal BERT Surgeon:
+     Chris Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin              Scalable and Accurate Second-Order Pruning for Large Language Models. https:
+                                                                                                                                                               Castro R.L., et al.
+
+
+     //doi.org/10.48550/ARXIV.2203.07259                                                        Systems 33 (2020), 20378–20389.
+[22] François Lagunas, Ella Charlaix, Victor Sanh, and Alexander M Rush. 2021. Block       [32] Emma Strubell, Ananya Ganesh, and Andrew McCallum. 2019. Energy and
+     pruning for faster transformers. arXiv preprint arXiv:2109.04838 (2021).                   Policy Considerations for Deep Learning in NLP. In Proceedings of the 57th
+[23] Yann LeCun, John S. Denker, and Sara A. Solla. 1989. Optimal Brain Damage. In              Annual Meeting of the Association for Computational Linguistics. Association for
+     NIPS.                                                                                      Computational Linguistics, Florence, Italy, 3645–3650. https://doi.org/10.18653/
+[24] Kwangbae Lee, Hoseung Kim, Hayun Lee, and Dongkun Shin. 2020. Flexible                     v1/P19-1355
+     group-level pruning of deep neural networks for on-device machine learning. In        [33] Wei Sun, Ang Li, Tong Geng, Sander Stuijk, and Henk Corporaal. 2023. Dis-
+     2020 Design, Automation & Test in Europe Conference & Exhibition (DATE). IEEE,             secting Tensor Cores via Microbenchmarks: Latency, Throughput and Numeric
+     79–84.                                                                                     Behaviors. IEEE Transactions on Parallel and Distributed Systems 34, 1 (jan 2023),
+[25] Shigang Li, Kazuki Osawa, and Torsten Hoefler. 2022. Efficient Quantized Sparse            246–261. https://doi.org/10.1109/tpds.2022.3217824
+     Matrix Operations on Tensor Cores. In Proceedings of the International Conference     [34] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+     on High Performance Computing, Networking, Storage and Analysis (Dallas, Texas)            Aidan N Gomez, Ł ukasz Kaiser, and Illia Polosukhin. 2017. Attention is All you
+     (SC ’22). IEEE Press, Article 37, 15 pages.                                                Need. In Advances in Neural Information Processing Systems, I. Guyon, U. Von
+[26] Paul Michel, Omer Levy, and Graham Neubig. 2019. Are Sixteen Heads Re-                     Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and R. Garnett
+     ally Better than One?. In Advances in Neural Information Processing Systems,               (Eds.), Vol. 30. Curran Associates, Inc. https://proceedings.neurips.cc/paper_
+     H. Wallach, H. Larochelle, A. Beygelzimer, F. d'Alché-Buc, E. Fox, and R. Garnett          files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf
+     (Eds.), Vol. 32. Curran Associates, Inc. https://proceedings.neurips.cc/paper_        [35] Elena Voita, David Talbot, Fedor Moiseev, Rico Sennrich, and Ivan Titov. 2019.
+     files/paper/2019/file/2c601ad9d2ff9bc8b282670cdd54f69f-Paper.pdf                           Analyzing Multi-Head Self-Attention: Specialized Heads Do the Heavy Lifting,
+[27] Asit Mishra, Jorge Albericio Latorre, Jeff Pool, Darko Stosic, Dusan Stosic, Ganesh        the Rest Can Be Pruned. arXiv:1905.09418 [cs.CL]
+     Venkatesh, Chong Yu, and Paulius Micikevicius. 2021. Accelerating Sparse Deep         [36] Ziheng Wang, Jeremy Wohlwend, and Tao Lei. 2019. Structured pruning of large
+     Neural Networks. arXiv:2104.08378 [cs.LG]                                                  language models. arXiv preprint arXiv:1910.04732 (2019).
+[28] NVIDIA. 2020. Exploiting NVIDIA Ampere Structured Sparsity with cuS-                  [37] Da Yan, Wei Wang, and Xiaowen Chu. 2020. Demystifying Tensor Cores to
+     PARSELt. https://developer.nvidia.com/blog/exploiting-ampere-structured-                   Optimize Half-Precision Matrix Multiply. In 2020 IEEE International Parallel and
+     sparsity-with-cusparselt/                                                                  Distributed Processing Symposium (IPDPS). 634–643. https://doi.org/10.1109/
+[29] NVIDIA. 2023. The cuSparse Library. https://docs.nvidia.com/cuda/cusparse/                 IPDPS47924.2020.00071
+     index.html. Accessed: 2023-04-03.                                                     [38] Qingru Zhang, Simiao Zuo, Chen Liang, Alexander Bukharin, Pengcheng He,
+[30] Ali Pinar and Michael T. Heath. 1999. Improving Performance of Sparse Matrix-              Weizhu Chen, and Tuo Zhao. 2022. PLATON: Pruning Large Transformer
+     Vector Multiplication. In Proceedings of the 1999 ACM/IEEE Conference on Su-               Models with Upper Confidence Bound of Weight Importance. In Proceedings of
+     percomputing (Portland, Oregon, USA) (SC ’99). Association for Computing                   the 39th International Conference on Machine Learning (Proceedings of Machine
+     Machinery, New York, NY, USA, 30–es. https://doi.org/10.1145/331532.331562                 Learning Research, Vol. 162), Kamalika Chaudhuri, Stefanie Jegelka, Le Song,
+[31] Victor Sanh, Thomas Wolf, and Alexander Rush. 2020. Movement pruning:                      Csaba Szepesvari, Gang Niu, and Sivan Sabato (Eds.). PMLR, 26809–26823.
+     Adaptive sparsity by fine-tuning. Advances in Neural Information Processing                https://proceedings.mlr.press/v162/zhang22ao.html
+

@@ -4,14 +4,14 @@
 
 | ID | 最高阶 | 状态 | 关键数字 | 下一步 |
 |---|---|---|---|---|
-| A1 | S1 | SEALED_REPLAY | `{"c1_full_layer": {"path": "/home/zhumd/work/ideafromai/research/complete_transfer_20260907/c1_full_layer_r1.json", "n_points": 2, "first_two": [{"config": "artifact_default_256x16…` | Optional: dual-port parent SRAM model; do not call it a new mechanism until vs official run_fc same-resource |
-| A2 | S1 | SEALED_REPLAY | `{"result": {"path": "/home/zhumd/work/ideafromai/research/c1_retained_parent_promotion_20260907/result_r1.json", "status": "EXPLORATORY_LOCAL_SERVICE_OPPORTUNITY_ONLY", "excerpt_ke…` | Only retry if layout/ports change; +1.58% add was the increment |
+| A1 | S1 | SEALED_REPLAY | `{"c1_full_layer": {"path": "/home/zhumd/work/sdformer_codex/ideafromai/research/complete_transfer_20260907/c1_full_layer_r1.json", "n_points": 2, "first_two": [{"config": "artifact_default_256x16…` | Optional: dual-port parent SRAM model; do not call it a new mechanism until vs official run_fc same-resource |
+| A2 | S1 | SEALED_REPLAY | `{"result": {"path": "/home/zhumd/work/sdformer_codex/ideafromai/research/c1_retained_parent_promotion_20260907/result_r1.json", "status": "EXPLORATORY_LOCAL_SERVICE_OPPORTUNITY_ONLY", "excerpt_ke…` | Only retry if layout/ports change; +1.58% add was the increment |
 | A3 | S3_OLD_IDENTITY | SEALED_REPLAY | `{"m247_path": "/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/results/m247_paft_vs_control_paired_valid825_r1_20260825/m247_paft_vs_control_paired_valid825_r1.json"…` | Must retrain on ep34; PAFT-ep4 running AEE ~1.47 already fails 1.259 floor |
 | A4 | S1 | SEALED_REPLAY_EP34 | `{"path": "/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/results/tsbg_ep34_same_io_b2_b4_b8_quickkill_r1_20260902/result.json", "checkpoint_sha_prefix": "4bbaf7fc",…` | CPU premodel GO at 1.15 cycle gate; RTL still separate. Under new contract this is retry-not-killed. |
 | A5 | S1 | SEALED_REPLAY_EP34 | `{"path": "/home/zhumd/work/sdformer_codex/SDformer/hw_autoresearch_nts07/results/m1713_ep34_s2_fc_patch_zero_cost_upper_bound_fastkill_r1_20260901/result.json", "decision": {"fc1":…` | FC2 zero-cost UB<1.15 NO-GO; FC1/patch only if drop remaining work 39.5%/22.8% AND paired AEE |
-| A6 | S4_FUNC | SEALED_RTL_FUNC | `{"rtl": {"path": "/home/zhumd/work/ideafromai/research/c2_temporal_shared_protocol_20260907/records/functional_r2/result.json", "status": "PASS_FUNCTIONAL_ONLY", "keys": ["status",…` | Wire bank-return + persistent Y; compare same-resource vs direct FTP |
+| A6 | S4_FUNC | SEALED_RTL_FUNC | `{"rtl": {"path": "/home/zhumd/work/sdformer_codex/ideafromai/research/c2_temporal_shared_protocol_20260907/records/functional_r2/result.json", "status": "PASS_FUNCTIONAL_ONLY", "keys": ["status",…` | Wire bank-return + persistent Y; compare same-resource vs direct FTP |
 | A7 | S1 | SEALED_REPLAY | `{"bank": "BANK_LOCAL_SINGLE_MODE_ARITHMETIC_OPPORTUNITY_ONLY"}` | Remap capture address==bank or stop claiming physical request equality |
-| A8 | S4_FUNC | SEALED_RTL_FUNC | `{"rtl": {"path": "/home/zhumd/work/ideafromai/research/hardware_mechanisms_20260906/records/functional_r3/result.json", "status": "PASS_FIVE_CONFIGURATIONS", "keys": ["status", "re…` | Feed real BN/PSN intervals; measure restore rate |
+| A8 | S4_FUNC | SEALED_RTL_FUNC | `{"rtl": {"path": "/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_mechanisms_20260906/records/functional_r3/result.json", "status": "PASS_FIVE_CONFIGURATIONS", "keys": ["status", "re…` | Feed real BN/PSN intervals; measure restore rate |
 | A9 | S0 | NO_RTL_NO_AEE | `{}` | Needs DSEC train; skip until AEE probe |
 | B1 | S1 | NEW_QK_CENSUS_EP35 | `{"overlap_mean": 0.012507870370370364, "motion_xor_mean": 1.5262000000000007, "same_zero_mean": 30.62226481481481, "q_bit_density": 0.0172676731078905, "k_bit_density": 0.038265453…` | Need ep34 QK census before paper table; leaf object viable |
 | B2 | S1 | NEW_QK_CENSUS_EP35 | `{"dirty_or_frac": 0.6089288244766505, "score_leaf_needed_frac": 0.43902834138486313, "ideal_skip": 0.5609716586151369, "per_stage": {"S0": {"tokens": 135000, "k_zero_frac": 0.74333…` | Row-level Shiftmax denom still unmeasured; do not treat token skip as row skip |
@@ -28,7 +28,7 @@
 | C3 | S0 | NEEDS_RETRAIN_FROM_SDFORMERFLOW | `{}` | Changes input identity |
 | C4 | S1 | IDENTITY_LOCKED_AS_THETA_G | `{"z": "theta*g", "ep34_aee": 1.199514}` | Changing contract requires S3 AEE |
 | D1 | S1 | SEALED_CPU_REF | `{"source_order": {"status": "EXPLORATORY_SOURCE_ORDER_IMPLEMENTATION_REFERENCE", "layers": [{"module": "sttmultires_unet.encoders.swin3d.layers.0.swin_blocks.0.mlp.fc2", "slots": {…` | Complete T FTP is the strong baseline; candidate must beat it same-resource |
-| D2 | S1 | SEALED_CPU_REF | `{"fc2_signatures": "/home/zhumd/work/ideafromai/research/fusion_delivery_20260907/fc2_signatures_r1.json"}` | Keep as comparator, not auto title |
+| D2 | S1 | SEALED_CPU_REF | `{"fc2_signatures": "/home/zhumd/work/sdformer_codex/ideafromai/research/fusion_delivery_20260907/fc2_signatures_r1.json"}` | Keep as comparator, not auto title |
 | D3 | S1 | PARTIAL_EP34_SHARDS | `{"shard_dir_glob": "results/m1681_ep34_decoder_d0_shard_*"}` | Need complete decoder Table-A before system claim |
 | D4 | S0 | NEEDS_RETRAIN | `{"old_nm_audit": "FP32 weights have no exact zero blocks"}` | Retrain prune+4bit then S3 |
 | D5 | S0 | ARCHITECTURE_OPTION | `{}` | Only after A1/D1/D3 share a parent-forest ISA |

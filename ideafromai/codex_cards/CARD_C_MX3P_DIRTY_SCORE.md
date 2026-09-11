@@ -1,6 +1,6 @@
 # Card C — MX3P + dirty-lane Motion-XOR score island (Grok 4.6)
 
-**Path:** `/home/zhumd/work/ideafromai/codex_cards/CARD_C_MX3P_DIRTY_SCORE.md`  
+**Path:** `/home/zhumd/work/sdformer_codex/ideafromai/codex_cards/CARD_C_MX3P_DIRTY_SCORE.md`  
 **Status:** DRAFT. Do not execute until T0–T5 in `research/grok46_20260905/07_next_stats_rtl_gates.md` exist **and** the user picks Rank 1+4.
 
 Conflicts with Card B: Card B assumes int8 ATLIF payload. This card assumes **binary** frozen ep34 capture. Do not run A+B+C as one island.

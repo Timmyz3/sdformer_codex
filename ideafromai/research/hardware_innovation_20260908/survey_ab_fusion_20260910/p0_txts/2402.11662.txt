@@ -1,0 +1,1154 @@
+                                         TDE-3: A N IMPROVED PRIOR FOR OPTICAL FLOW COMPUTATION
+                                                                          IN SPIKING NEURAL NETWORKS
+
+
+
+                                                                Matthew Yedutenko∗                               Federico Paredes-Vallés
+                                                           Micro Air Vehicle Laboratory                           Stuttgart Laboratory 1
+                                                           Delft University of Technology                  Sony Semiconductor Solutions Europe
+                                                                  The Netherlands                                   Sony Europe B.V.
+arXiv:2402.11662v2 [cs.NE] 16 Jul 2025
+
+
+
+
+                                                            m.yedutenko@tudelft.nl                        federico.paredes-valles@sony.com
+
+                                                                       Lyes Khacef                                   Guido C.H.E. De Croon
+                                                                  Stuttgart Laboratory 1                            Micro Air Vehicle Laboratory
+                                                           Sony Semiconductor Solutions Europe                     Delft University of Technology
+                                                                    Sony Europe B.V.                                      The Netherlands
+                                                                lyes.khacef@sony.com                              g.c.h.e.decroon@tudelft.nl
+
+
+
+
+                                                                                                A BSTRACT
+                                                     Motion detection is a primary task required for robotic systems to perceive and navigate in their
+                                                     environment. Proposed in the literature bioinspired neuromorphic Time-Difference Encoder (TDE-2)
+                                                     combines event-based sensors and processors with spiking neural networks to provide real-time
+                                                     and energy-efficient motion detection through extracting temporal correlations between two points
+                                                     in space. However, on the algorithmic level, this design leads to a loss of direction-selectivity of
+                                                     individual TDEs in textured environments. Here we propose an augmented 3-point TDE (TDE-3) with
+                                                     additional inhibitory input that makes TDE-3 direction-selectivity robust in textured environments.
+                                                     We developed a procedure to train the new TDE-3 using backpropagation through time and surrogate
+                                                     gradients to linearly map input velocities into an output spike count or an Inter-Spike Interval (ISI).
+                                                     Using synthetic data we compared training and inference with spike count and ISI with respect to
+                                                     changes in stimuli dynamic range, spatial frequency, and level of noise. ISI turns out to be more
+                                                     robust towards variation in spatial frequency, whereas the spike count is a more reliable training
+                                                     signal in the presence of noise. We performed in-depth quantitative investigation of optical flow
+                                                     coding with TDE and compared TDE-2 vs TDE-3 in terms of energy-efficiency and coding precision.
+                                                     Results show that on the network level, both detectors show similar precision (20°angular error,
+                                                     88% correlation with ground truth). Yet, due to the more robust direction-selectivity of individual
+                                                     TDEs, TDE-3 –based network spike less and hence is more energy-efficient. Reported precision is
+                                                     on par with model-based methods but the spike-based processing of the TDEs provides allows more
+                                                     energy-efficient inference with neuromorphic hardware.
+
+                                         Keywords edge processing · brain-inspired computing · spiking neural networks · time difference encoders · motion
+                                         detection · optical flow
+
+
+                                         1       Introduction
+
+                                         Event-based cameras are the dawn of the brave new world of ultra-efficient neuromorphic hardware. Taking inspiration
+                                         from biological retinas, these cameras transmit only temporal changes in brightness using asynchronous events [1]. As
+                                         a result, they require >102 × less energy and memory than traditional frame-based cameras while having 104 × higher
+                                         dynamic range and up to 104 × shorter latency [2], which is particularly handy in robotics applications. Under constant
+                                             ∗
+                                                 Corresponding author
+Figure 1: TDE-2 and TDE-3. A. Left-to-right tuned 2-point TDE. It has two compartments: the facilitator and the trigger.
+When a stimulus moves to the right the trigger is activated after the facilitator and the neuron fires. However, in the gain,
+there is residual activity. Thus, when multiple textures move left (or orthogonally) the detector loses direction-selectivity
+B. Left-to-right tuned 3-point TDE. It has three compartments. Input to the inhibitor resets the gain to zero and removes
+residual activity. Therefore, direction-selectivity is retained.
+
+
+
+illumination, temporal changes in brightness are generated by motion, therefore optical flow estimation is one of, if not
+the main task in event-based vision.
+The efficiency of event-based processing in the estimation of optical flow is especially well utilized by spiking neural
+networks (SNNs) - computational abstractions of biological neurons that transmit signals in an all-or-none spiking
+fashion only when the internal neuronal activation reaches a certain threshold [3](Figure 1). Indeed, asynchronous
+all-or-none spikes seem like a perfect match to asynchronous all-or-none events due to the similar nature of these
+signals. Studies showed that when it comes to optical flow SNNs can perform on par [4] or even better [5, 6] than
+state-of-the-art traditional neural networks, while requiring up to 50-times fewer parameters [5] and promising up to
+103 decrease in compute energy [7]. With the development of specially designated to processing SNNs neuromorphic
+processors [8], event-based optical flow estimation with SNNs reached a significant milestone of technological maturity
+- implementation for vision-based navigation onboard a drone in a fully neuromorphic pipeline [9].
+Although theoretically, SNNs are capable of performing a wide variety of tasks [10, 11, 12, 13], their actual performance
+strongly depends on the choice of proper priors such as neural network architecture and connectivity on the hardware and
+algorithmic levels. For example, in image classification tasks, the introduction of randomly initialized and non-trainable
+convolutional kernels improves the classification accuracy compared to fully connected networks [14] simply because
+convolutional kernels extract a local spatial pattern. Similarly, proper priors to extract spatio-temporal patterns could
+enhance algorithms of the optical flow estimation from event-based data.
+A good computational prior for optical flow estimation from event-based data could be the correlation-based motion
+detector, which is ubiquitously employed in the animal kingdom [15]. As its name suggests, this detector extracts
+local motion direction and velocity (i.e. optical flow) based on the temporal correlations between different points
+in space [15]. Such correlation-based estimates were shown to closely approach the optimal way to extract motion
+signals in conditions with low Signal-to-Noise Ratio (SNR)[16, 17]. Event-based cameras, meanwhile, are prone to
+noisy outputs [18] due to the environment (low contrast and light intensity [19]), the temperature [20, 21], the junction
+leakage [21, 22], the hardware limitations (manufacturing mismatch [1]), and the very differential nature of processing
+which amplifies high-frequency noise [22, 19, 23]. Given such low SNR output, a correlation-based motion detector is
+well-suited to process event-based data.
+Bio-inspired correlation-based methods for optical flow estimation with SNNs generated long-lasting interest in event-
+based vision and neuromorphic computing communities with over a decade of relevant research on both software
+[24, 25, 19, 26, 27] and hardware levels [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38]. In particular, for our study, we are
+interested in the inspired by the classical model of the insect motion detector [39] Time-Difference Encoder (TDE) [29]
+due to its circuit and algorithmic simplicity [29]. The TDE detects motion by comparing signals at two points in space:
+input to the facilitator provides a time-decaying gain, whereas input to the trigger converts gain to an input current
+impulse to a Current-Based Leaky Integrate-and-Fire (CuBa LIF) neuron, which integrates it in its membrane potential
+and converts it into a firing activity as shown in Figure 1. The TDE tuning to the preferred direction of motion (PD) is
+achieved since it produces output spikes only when the trigger event arrives after the facilitator one, as otherwise there is
+no gain to be converted to firing activity. The TDE was successfully implemented on FPGA [33], digital neuromorphic
+
+
+                                                             2
+hardware such as SpiNNaker [32], Loihi 2 and Loihi 2 [35], and custom mixed-signal neuromorphic hardware [29]. Its
+potential was demonstrated in robotics applications for collision avoidance [29, 30] and estimation of ego-motion [40].
+The strength of the underlying computational primitive was also explored in tasks that are not related to vision, such as
+spotting keywords [41].
+Despite its appeal, the classical two-point TDE (TDE-2) has a notable deficiency: in highly textured environments, it
+loses direction selectivity because motion in a non-preferred direction provides the TDE with residual activity in the
+gain compartment, which can be subsequently triggered by another edge moving in the non-preferred direction as shown
+in Figure 1. Given that successful event-based navigation requires events that are produced by the apparent motion of
+textures[9], loss of direction-selectivity makes classical TDE-2 unsuitable for vision-based navigation tasks that require
+precision in optical flow estimation. Of course, this loss in direction-selectivity can be partially compensated by either
+max pooling [35], Winner-Take-All mechanism [29, 30] or subtraction of the velocities estimated by opposingly tuned
+detectors. Yet in that case, the energy-efficiency of the circuitry would be obstructed as individual TDEs would still
+respond to the non-preferred motion.
+To solve this problem, we propose to follow recent findings in neuroscience[42] and to augment the TDE with a third,
+inhibitory input. While the classical model of elementary motion sensitivity in insects [39, 15] estimated temporal
+correlations from two spatial locations, Haag et al. [42] showed that insect elementary motion detectors (so-called T4
+and T5 cells) pools signals from three spatial locations with one of them being inhibitory and activated by the motion in
+ND. In our implementation, activation of this inhibitory input resets the gain to zero and eliminates the residual activity
+to retain the TDE direction-selectivity (Figure 1). Consequently, even in highly textured environments, individual TDEs
+retain direction selectivity, and the entire circuit spikes much less, becoming more energy-efficient. We propose to call
+this detector TDE-3.
+Upon fixing issues related to detector architecture, we performed a more in-depth study of the TDE coding of velocity
+with synthetic and real-world data. Specifically, there are five major contributions of this paper:
+
+         1. We present a more robust TDE-3 and highlight its advantage over the TDE-2 on the level of direction-selectivity
+            of a single detector (Figures 1 & 2).
+
+         2. We develop a pipeline for the supervised training of the TDE using Back-Propagation Through Time (BPTT)
+            and surrogate gradients [43, 44] to linearly map input velocities into an output spike count (Figure 12) or an
+            inter-spike interval (ISI) between the first and the second spike (Figure 13) within both wide (10-fold, Figure
+            3) and narrow (1.5-fold, Figure 4) dynamic range with precision of up to 2% (Table 1).
+
+         3. We develop a novel approach for training SNNs to have a specific ISI using BPTT. While most other methods
+            [45, 46, 47] model the relationship between input magnitude with differentiable function than use BPTT, we
+            measure ISI from the amplitude of low-pass filtered spike train to use BPTT with surrogate gradient (see
+            Section 5.2.2 for the details). The theoretical advantage of our method is that it does not require estimation of
+            the relationship between spike timing and input magnitude, allowing work with more conventional activation
+            functions.
+
+         4. We compare the robustness of velocity coding with TDEs to noise (Figures 6, 7) and spatial frequency (Figure
+            5) composition of the scene - two major challenges for velocity coding with correlation-based motion detectors.
+            Our results show that spike count is more robust to noise, while ISI is less affected by changes in spatial
+            frequency and provides faster velocity inference.
+
+         5. We performed the first-ever quantitative characterization of resolution, robustness, and energy efficiency of
+            encoding real-world optical flow by TDEs (Figures 10, Figures 11 and Tables 2, 3). Indeed, although Schoepe
+            et al. [30] quantitatively assessed the dependence of the TDE output on the velocity of real-world moving
+            gratings, they did so on the network level and by measuring activity over the entire sequence rather than based
+            on individual detector activations. Our results show that the TDE performs on par with model-based methods
+            of local motion estimation reported in the literature ([48, 2] ( directional error < 20°), but has the advantage
+            of being naturally compatible with spike-based neuromorphic hardware. Furthermore, the TDE-3 is more
+            energy-efficient than the TDE-2, requiring up to 2 − 4× fewer spikes (Table 2, Supplementary Information).
+
+To sum up, the paper presents a robust computational primitive to optimize the estimation of optical flow from
+event-based data, compatible with spike-based neuromorphic hardware for low-power inference.
+
+   2
+       TDE implementation on Intel Loihi: https://github.com/intel-nrc-ecosystem/models
+
+
+                                                                3
+2     Time-Difference Encoders: Principles of Operation
+
+Before discussing the main findings of the paper it is important to understand the TDE-2 and TDE-3 computational
+principles on the level of direction-selectivity and velocity coding to get insight into the features and limitations of the
+systems under investigation.
+
+2.1   Computational primitive and detector architecture
+
+The TDE-2 computational principle is to extract temporal correlations at two spatial locations: facilitator and trigger. A
+spike input to the facilitator provides the detector with a time-decaying gain, while a spike input to the trigger converts
+the gain into an excitatory current which charges CuBa-LIF neuron and leads to spiking [29] (Figure 1). Essentially, the
+time-decaying gain extracts temporal correlations as the neuron reports the coincidence of inputs to the facilitator and
+trigger within a temporal window of the gain decay and scales the current according to the delay between activation of
+the facilitator and trigger. Hence, faster motion leads to a higher number of spikes with shorter intervals between them
+and vice versa.
+The direction-selectivity of the neuron is ensured by the combination of the two factors. Its activation in the direction
+anti-parallel to PD, also known as null direction (ND), is prevented since when activation of the trigger precedes the
+activation of the facilitator, there is no gain to convert to current (Figure 1A center). In the case of the motion in the
+direction orthogonal to PD (OD), the facilitator and trigger are activated simultaneously. In the hardware, detector
+firing is prevented by the delay between the processing of the trigger and gain. Here the delay is realized through the
+sequence of computational steps: TDE-2 first processes trigger and then gain. Hence, in the case of OD motion, there is
+also no gain to be converted to the current at the moment of trigger activation.
+The crucial deficiency of such a system is that upon motion in OD or ND, there is no gain to be converted to current
+only at the moment of the trigger’s activation by the same stimulus. As in such purely excitatory architecture, motion
+in OD and ND leaves a trace of residual gain activity, another stimulus moving in a non-preferred direction will lead
+to detector activation (Figure 1A). Hence, upon motion in a highly textured environment, individual TDE-2 can lose
+direction-selectivity.
+Our TDE-3 solves the problem of the residual gain by incorporating a third, inhibitory input. Relative to the gain, the
+inhibitory input is located on the opposite side of the detector and upon activation resets the gain to zero (Figure 1). As
+a result, when secondary stimuli are moving in the ND, they will first appear at the inhibitory flank. This will remove
+any residual gain activity, such that when the stimulus activates the trigger, there again will be no gain to be converted to
+current. In the case of motion in the OD, detector activation will be prevented by simultaneous processing of facilitator
+and inhibitory inputs (assuming stimuli wide enough to cover 3 inputs) such that the OD motion will leave no trace in
+gain activity. Thus, the addition of the inhibitory flank allows the detector to retain direction-selectivity in textured
+environments (Figure 2). As a consequence of such more robust direction-selectivity of individual TDEs, the entire
+network can spike up to 2-4 times less (Table 2, Supplementary Information Figure S2).
+
+2.2   Velocity coding with TDE
+
+When the moving stimulus passes the TDE, two properties of the emitted spike train allow downstream circuitry to
+estimate velocity: the number of spikes and ISI [29, 33]. The spike count is directly proportional to the input velocity,
+while the ISI is inversely proportional. Indeed, fast motion means a short temporal delay between the activation of
+the gain and its conversion to current. Consequently, the current is large and the number of emitted spikes is high.
+Conversely, such vigorous firing means that spikes closely follow each other and the interval between them is small
+[29]. Of special interest is ISI between the first two spikes as it allows very fast velocity inference [29].
+To decode stimulus velocity from TDE activity in the presence of multiple edges one needs to perform motion
+segmentation to relate counted spikes/measured ISIs to a particular moving edge. To do so we propose to count spikes
+starting from each activation of TDE’s trigger as it indicates passage of a new edge. Additionally, we limited the time
+window over which spikes are counted for spike count inference. Otherwise, in the presence of multiple edges motion
+of the very last edge would affect the measured velocity of the very first edge.
+From the perspective of a single neuron’s coding capacity, and regardless of the inference method, all-or-none spiking
+is more of a liability than an asset. This is because it introduces a latency vs. dynamic range dilemma, as spiking occurs
+in time [49]. For example, to discriminate input velocities within a range of, e.g., 100 different values would require a
+coding window of at least 100 timesteps either to count spikes or to measure interspike intervals. Even with a very
+short timestep of 1 ms, the lag becomes substantial for edge applications like robotics, where neuromorphic hardware is
+needed the most and low latency is paramount. Thus, to avoid impractical latency, one can either encode a narrow range
+
+
+                                                             4
+of input velocities with high resolution or a wide range of input velocities with low resolution (Figures 3, 4). Therefore,
+a strategy to reconcile latency and dynamic range requirements would be to use each detector within a relatively narrow
+range of velocities, while boosting the dynamic range of the entire network by using detectors with different spacing
+between detector inputs.
+The coding of velocity by the TDE is additionally troubled by the noise and spatial frequency of a scene. Noise leads to
+the non-stimulus-related activation of detectors. Spatial frequency bias detector responses as edges closely following
+each other will lead to stronger TDE activation than a single edge. In the results section, we compare spike count
+and ISI-based inference in terms of their robustness in various noise (Figures 6, 7) and spatial frequency (Figure 5)
+conditions.
+
+3     Experiments and results
+
+The experiments that we performed can be classified into three categories: (1) investigation of the robustness of the
+direction-selectivity of individual TDE-3 and TDE-2 (Figure 2), (2) TDEs training to linearly map input velocities into
+output (Figures 3-6), and (3) application of the TDEs for optical flow inference from real-world data (Figures 10, 11).
+
+3.1   Robust direction-selectivity of individual TDE-3 in textured environments
+
+To compare the direction-selectivity of TDE-2 and TDE-3, we simulated their responses to textures moving in four
+cardinal directions (Figure 2B): left-to-right (L-R), right-to-left (R-L), top-to-bottom (T-B) and bottom-to-top (B-T).
+For each stimulus presentation (2000 per testing round), we randomly varied the texture composition, motion direction,
+and velocity (see Section 5.1 for the details). To show that the robust direction-selectivity of the TDE-3 stems from its
+structure and is not due to some particular set of parameters, we varied at each testing round (400 in total) all of the TDE
+parameters over a 10-fold range. Without loss of the generalization, we limited our investigation of direction-selectivity
+to responses of L-R motion-sensitive TDEs (Figure 2B) that sampled signals from three adjacent pixels through which
+textures were moving.
+
+
+
+
+Figure 2: Augmented 3-point TDE retains direction-selectivity in a textured environment. A - Visual stimulus composed
+of vertical bars. The bars had three light intensity levels: white, grey, and black. The size of the texture along the motion
+axis was 80 pixels and 3 pixels along the orthogonal direction. We employed 5 velocities: 0.1 px/timestep, 0.2
+px/timestep, 0.33 px/timestep, 0.5 px/timestep and 1 px/timestep. The motion direction (left-right, right-left, top-bottom,
+bottom-top) and velocity were randomly chosen for each stimulus example (2000 examples per testing round, 400
+testing rounds). To vary the "amount" of texture in stimuli we randomly varied the fraction of the grey bars from 0% to
+80%. B. TDE-2 and TDE-3 and their responses to stimuli moving in 4 cardinal directions. C. Direction-selectivity index
+(fraction of spikes fired upon stimulus motion in PD.
+
+Figure 2B shows how the responses of TDE-2s and TDE-3s depend on the texture motion direction. One can appreciate
+that while L-R TDE-2 fires to all stimuli directions, the spiking of the TDE-3 is contained to stimuli in its preferred
+direction. To assess the TDE’s direction-selectivity quantitatively, we calculated the so-called Direction-Selectivity
+Index (DSI) as the ratio between the number of spikes emitted by motion in PD and the total number of spikes fired by
+the TDE in a testing round. Figure 2C compares the DSI of TDE-2s and TDE-3s averaged across all of the testing rounds.
+For the TDE-2, the mean DSI is 0.36 with a standard deviation of 0.08. This indicates a rather poor direction-selectivity
+in a textured environment, as on average inference of motion direction with such a detector is only 11% better than
+
+
+                                                             5
+random guessing. On the other hand, the TDE-3 has a DSI of exactly 1, with zero deviation. Indicating, that regardless
+of the initialization of the parameters, simply because of its structure with inhibitory input that eliminates residual gain
+activity (details - Section 2, illustration - Figure 1), the TDE-3 is activated only by motion in the PD.
+For simplicity of interpretation, in Figure 2 we limited our analysis to 1D motion. Yet, the same observation is true for
+the 2D motion (Supplementary Figure S1). We performed experiments with textures of increasing complexity (vertical
+bars, checkerboard, randomly generated textures) moving in 2D and showed that in all of the cases, TDE-3 had higher
+DSI than TDE-2. However, an increase in texture complexity decreased the DSI of TDE-3 (see Supplementary Figure
+S1 for the details).
+
+3.2     Supervised training of TDE-3
+
+To promote linear mapping between the input velocities in PD and the TDE outputs, we performed supervised training
+with BPTT and surrogate gradients for both spike count and ISI-based inference methods and compared obtained results
+(see Section 2 and 5.2 for the details). Note that in the context of linear mapping of input velocities into TDE outputs,
+the TDE-2 and TDE-3 are identical because the delay between the activation of the facilitator and trigger is not affected
+by the inhibitory input. Therefore, although in experiments with synthetic data we perform all of the training on the
+TDE-3, the results are generalizable to the TDE-2.
+There were three types of experiments with training of TDE-3. First, we established that detectors are trainable in
+principle and that linear mapping between input velocities in a given cardinal direction and TDE output is possible
+for various stimuli dynamic ranges (Figures 3 and 4, Table 1). Second, we investigated how training and mapping are
+affected by changes in the spatial frequency of the stimulus - a known liability of correlation-based motion detectors
+[50] (Figure 5). Third, we studied the robustness of TDE training and inference in the presence of various levels of
+noise (Figures 6, 7)
+
+3.2.1    Linear mapping of velocity of moving edge
+To study how the TDE can map the input velocity into its output, we simulated the TDE responses to a single edge
+moving from left to right at various constant velocities. We opted for these stimuli because they directly target the goal
+of linear mapping while keeping things simple and unambiguous. To avoid overfitting and the necessity to separate
+stimuli into validation and test datasets, we randomly assigned the velocity of an edge at each stimulus example
+presentation. We employed two stimuli sets. One contained 5 velocities within a 10-fold range of magnitude and was
+used to show that the TDE can encode velocities in a wide dynamic range. The second stimuli set contained 15 different
+velocities spanning 1.5-fold range of magnitudes and was used to show that the TDE can encode velocities with fine
+resolution (see Section 5.1).
+As a metric of the quality of linear mapping, we used the Pearson correlation coefficient between the stimulus and the
+estimated velocity [51]. The performance of the trained TDEs was assessed with both ISI and spike count regardless of
+which one was used during training to study the connection between these two inference methods. Additionally, to
+assess the dynamic energy efficiency of the trained detectors, we calculated the average number of spikes elicited by a
+stimulus.
+Figure 3 shows that the TDE can be trained to encode a wide dynamic range of input velocities. The loss function on
+panels A (training with the spike count) and B (training with ISI) gradually decreases during training, indicating that
+with both inference methods it is indeed possible to train the TDE to discriminate input velocities in a wide dynamic
+range.
+Panel Figure 3C makes a quantitative comparison of velocity coding with various training and inference methods.
+Unsurprisingly, the correlation coefficient between estimated and true velocity is the highest when evaluation is done
+with the same inference method as training: r=0.97 for the spike count training and inference (blue line), r=0.99 for the
+ISI training and inference (green line). Yet training with spike count leads to reasonable performance with ISI inference
+(r=0.86, orange line) and vice versa (r=0.85, red line) with the only problem being distinguishing between the two
+highest velocities. Training with ISI-based inference also leads to a lower average number of spikes emitted by stimulus
+(1.9 vs 4.4), suggesting higher energy efficiency when implemented on neuromorphic hardware [52].
+Figure 4 demonstrates that the TDE can effectively encode a narrow dynamic range of input velocities with high
+precision (Panels A and B). In Panel C, one can appreciate that apart from the case of training with spike count and
+evaluation with ISI (orange line, r = 0.91), input velocities are mapped into TDE outputs nearly perfectly, with a
+correlation r ≈ 1.0 (Table 1). Also, ISI evaluation with spike count training results in a decrease in dynamic range, as
+the estimate becomes zero for the first two velocities. This occurs because these two almost equal velocities (0.0256
+and 0.0263) were encoded with 1 spike, making the ISI indeterminable.
+
+
+                                                             6
+Figure 3: Training of the TDE-3:Wide dynamic range, low resolution, one moving edge (A)Loss function for spike
+count-based inference, (B) loss function for ISI-based inference, (C) comparison of the velocity tuning curves. Blue -
+training with spike count, inference with spike count during the test; Orange - training with spike count, inference with ISI
+during the test; Green - training with ISI, inference with ISI during the test; Red - training with ISI, inference with spike
+count during the test.
+
+
+For this experiment, fine resolution was paramount. Therefore, we calculated mean relative error by dividing the
+difference between true and inferred velocity by true velocity and averaging this metric across all velocities (see
+Equation 7, Table 1). Unsurprisingly, ISI evaluation with spike count training yielded the largest relative error (30%).
+Even when excluding the first two velocities, which because TDE emitted only 1 spike contributed to the variance
+the most, the relative error remains >= 3 times higher (7.9%) than for the other three conditions, where velocity was
+encoded with an error as small as 2.1% (ISI training, spike count evaluation, red line). We also note in this experiment
+that training with ISI led to a higher average number of spikes (7.4) compared to spike count training (5.6) (see Table 1).
+To conclude, the TDE can be trained to successfully encode the velocities in wide and narrow ranges.
+
+                                    Table 1: High-resolution velocity inference with the TDE.
+                   Training Inference       Test Inference     Correlation, r     Relative Error (%)       N Spikes
+                                              spike count            0.99                 2.5
+                   spike count                                                                                   5.6
+                                                  ISI                0.91               30(7.9* )
+                                              spike count              1.0                 2.1
+                   ISI                                                                                           7.4
+                                                  ISI                  1.0                 2.7
+
+
+*
+ Here first two input velocities generated only 1 spike. Therefore the estimated velocity was 0, which led to a large error in the
+estimated velocity. We excluded those two values from the analysis to get a better fill of what is actual coding error when the velocity
+can be estimated and get the value of 7.9%
+
+3.2.2   Spatial frequency and velocity coding by TDE
+When multiple moving edges are present, temporal signal integration by current and voltage compartments could lead to biases
+in velocity estimation due to variations in distance between moving edges (i.e. spatial frequency). To test whether training of the
+TDE-3 can mitigate this problem, we trained it to linearly map the velocities of two moving edges into the spike count and ISI while
+varying the distance between edges in a 10-fold range (see Section 5.1). Here we employed a wide dynamic range of velocities (see
+Section 5.1) as it presents a more natural kind of stimuli since optical flow in real-world scenes is known to vary over a large range of
+apparent velocities [53, 48].
+Figure 5 shows that one can indeed train the TDE to linearly encode velocities of multiple moving edges with both spike count-
+(Panel A) and ISI-based (Panel B) inference. In Panel C, we plotted the obtained tuning curves of the responses to the second edge
+
+
+                                                                   7
+Figure 4: Training of the TDE-3: Narrow dynamic range, high resolution, one moving edge. Training of the TDE-3: wide
+dynamic range, low resolution. (A)Loss function for spike count-based inference, (B) loss function for ISI-based inference,
+and (C) comparison of the velocity tuning curves. Blue - training with spike count, inference with spike count during the
+test; Orange - training with spike count, inference with ISI during the test; Green - training with ISI, inference with ISI
+during the test; Red - training with ISI, inference with spike count during the test.
+
+
+for all 4 testing combinations. Shading indicates standard deviation in response to a given velocity and originates from the variation
+in distance between edges. Panel C shows that regardless of inference during testing, training with ISI (ISI test -green line, r=0.99;
+spike count test -red line, r=0.96) leads to a higher correlation with stimulus velocity than training with spike count-based inference
+(spike count test - blue line, r=0.88; ISI test - orange line, r=0.87). However, training with ISI-based inference tends to constrict
+dynamic range, effectively encoding velocities over a 3-fold range. Training with spike count-based inference preserved almost the
+entire dynamic range of input velocities but saturated at the highest velocities. Training with spike count also led to a higher average
+number of emitted spikes 7.7 vs 2.6. Noteworthy, regardless of the inference method employed during training, spike count-based
+inference during testing resulted in higher variation in the estimation of velocity.
+To conclude, Figure 5 shows that the trained TDE is fairly robust to the variation in stimulus spatial frequency.
+
+3.2.3   Noise and velocity coding by TDE
+To test whether the training of the TDE to encode velocity is robust towards noise, we injected into our simulation background
+activity noise - one of the primary sources of noise in event-based vision [18]. The noise was injected as stochastic events with mean
+rates varied 50-fold in magnitude: from 0.2 Hz/px to 10Hz/px (see Section 5.1).
+To allow the network to combat noise we employed a Spatio-Temporal Correlation Filter (STCF) of events (Section 5). STCF is a
+popular noise-combating tool in the field of event-based vision [18, 48, 2] that allows an event to pass the filtering stage only when
+there are events in at least n neighboring pixels within a specified timeframe (Section 5.2, [18]) with n being a trainable parameter.
+Although as a result we would, strictly speaking, test not the performance of the TDE, but of the TDE and STCF, our approach is still
+sound. The reason for this is that STCF is almost always part of the TDE circuitry anyhow [29, 30, 32, 33, 35]. Therefore, since in
+real applications TDE will be always paired with STCF, it makes sense to investigate their joint performance. Especially, given that
+STCF does not eliminate all of the noise and there is always a concern that aggressive filtering would destroy part of the signal.
+In the presence of noise, not every increase in current is caused by a moving edge, therefore one of the goals of the training is to
+suppress the TDE activations caused by noise. To account for this factor in the calculation of the loss, we calculated the loss between
+all of the velocity estimates performed by the TDE and stimulus ground truth at corresponding timepoints (effectively, this ground
+truth was zero everywhere except at the moment of edge appearance). Also, to evaluate how the trained TDE can reject noise and
+preserve true motion signal, we employed an additional metric called fraction of true activity (FTA) as the sum of estimated velocities
+caused by the stimulus (true motion signal) to the total sum of estimated velocities (caused by signal and noise).
+Figure 6 shows the results of the training for two extreme cases of "bright" (noise rate=0.2Hz/px) and "dark" (noise rate=5Hz/px)
+scenes. With the low noise level, the performance of the TDE (Figure 6 top row) was almost identical to the performance in noiseless
+experiments (Figure 5) in terms of shapes of tuning curves and correlation with stimulus velocities. These observations are also
+confirmed by FTA (Figure 7) with nearly all TDEs activity being caused by the stimulus. Results of the training with a high level of
+simulated noise are shown in Figure 6, bottom row. With both inference methods, there is an early dip in the loss function (Panels
+
+
+                                                                   8
+Figure 5: Training of the TDE-3: Robustness to variation in spatial frequency. Wide dynamic range, low resolution, two
+moving edges at randomly assigned distances. (A)Loss function for spike count-based inference, (B) Loss function for
+ISI-based inference. (C)Comparison of the velocity tuning curves. Blue - training with spike count, inference with spike
+count during the test; Orange - training with spike count, inference with ISI during the test; Green - training with ISI,
+inference with ISI during the test; Red - training with ISI, inference with spike count during the test. As there was no
+noise, all of the variation in TDE response (shading) originates from the variation in stimulus spatial frequency (spacing
+between the edges)
+
+
+
+AII and BII) caused by an increase in the number of neighboring pixels where at least one event ought to occur for any given event to
+pass the STCF processing stage (see Section 5.2). As a result of this, more noise is rejected and loss dramatically decreases.
+Panel CII illustrates tuning curves obtained in all 4 testing conditions. One can immediately note that training and inference with ISI
+(green line) leads to massive standard deviation (shading) in the estimated velocity. Surprisingly, TDEs trained with ISI showed better
+performance when testing was done with spike count (red line) as the standard deviation was lower and the correlation coefficient
+was higher (r=0.8 vs r=0.64). With ISI-based training, about half of the encoded motion signals were related to the stimulus (Figure
+7). Yet, given the low mean spike count (N=1.6), TDEs coding capabilities were rather poor with at least one edge being ignored
+most of the time. Training with spike count-based inference leads to much better performance both with spike-count (blue line and
+shading, r=0.83) and ISI-based (orange line and shading, r=0.8) evaluation. Spike count-based training leads to a mean spike count
+of 7.5 spikes. Since with this training condition almost 70% of encoded motion signals were related to the stimulus (Figure 7), we
+conclude that spike count-based training allows TDE to fairly reliably encode motion signals in the presence of noise.
+In Figure 7 we summarized the influence of the noise levels on the correlation between output and ground truth input velocity (panel
+A), FTA (panel B), and mean number of spikes generated by a moving edge (panel C). Panels A and B show that TDE-3 is very
+robust up to a noise level of up to 2Hz/px with FTA >95% and correlation with the stimulus velocity r of ≈ 90% throughout and
+largely regardless of the training / inference method. However, a further increase in noise level led to a sharp decrease in performance
+with most of the TDE output being noise-driven. Our results also show that in the presence of noise, the spike-count-based inference
+serves as a more robust and reliable training signal. The likely reason for this is that ISI dependency on only two spikes makes it
+susceptible to noise, whereas spike count measures signals over a certain time window, and therefore mitigates variation in response
+caused by exact spike timing.
+
+
+3.3   Real-world data
+
+To study the performance of the TDE-2 and TDE-3 with real-world data, we used a dataset from [48]. Specifically, we focused on
+sequence with boxes moving to the right (Figure 10) and disk rotating counter-clockwise (Figure 11). The former is an example of
+textured stimuli with multiple edges moving in the same direction and thus directly tests the robustness of TDE direction-selectivity
+and gains obtained by augmenting the TDE-2 with an inhibitory input. The latter contains a high dynamic range of velocities both in
+magnitude (80-fold) and direction (360°) and is used to probe velocity coding by TDEs in real-world scenes.
+The real-world data was used as a test dataset. TDEs were pre-trained on synthetic data (see Sec. 5.2.3) using spike count as the
+inference method because it gives better performance in the presence of noise (Figure 7). We pooled together ON and OFF events as
+it is often encountered in biological systems [15, 54, 55].
+
+
+                                                                   9
+Figure 6: Training TDE: Performance in the presence of noise. Top row - low noise, Bottom row - high noise. (A)Loss
+function for spike count-based inference, (B) loss function for ISI-based inference, and (C) comparison of the velocity
+tuning curves. Blue - training with spike count, inference with spike count during the test; Orange - training with spike
+count, inference with ISI during the test; Green - training with ISI, inference with ISI during the test; Red - training with
+ISI, inference with spike count during the test.
+
+
+
+
+3.3.1   Translating boxes
+
+
+We start the analysis of TDE’s responses to boxes moving to the right (Figure 10) by estimating the direction-selectivity of individual
+TDEs in a manner similar to DSI (Figure 2). Although strictly speaking, here we cannot calculate the DSI because the motion of the
+boxes was confined to one direction, we can approximate it by calculating the fraction of total spikes in the network that belonged
+to the detectors tuned in the L-R direction. Ideally, this number should be one, as only L-R detectors should spike. Table 2 shows
+that for the network of TDE-2 only 43% of spikes are from the L-R detectors, while for the network of TDE-3 70% of spikes are
+attributed to L-R detectors. Thus, just as in the case of synthetic data (Figure 2), the TDE-3 has more robust direction-selectivity.
+Next, we visualized optical flow coding by the TDEs using the colormap from Figure 9 on Figure 10. Surprisingly, although the
+TDE-3 has a more robust direction-selectivity on the level of individual detectors, on the network level the TDE-2 and TDE-3 seem
+to have similar qualitative performance regardless of inference methods. This qualitative observation is also confirmed quantitatively:
+Table 2 indicates that in all of the testing conditions, the Average Angular Error (AAE) (≈ 20°) and standard deviation of the angular
+error (≈ 30°) were almost identical.
+
+
+                                                                  10
+Figure 7: Training of the TDE-3: Summary statistics of TDE performance in the presence of noise. A: Correlation of the
+TDE output with ground truth input velocity as a function of noise magnitude. B: FTA as a function of noise magnitude. C:
+Average number of spikes used for encoding of an edge velocity as a function of noise level. In all three cases, noise
+levels are plotted on the logarithmic scales. For panels A and B the color code is as follows: Blue - training with spike
+count, inference with spike count during the test; Orange - training with spike count, inference with ISI during the test;
+Green - training with ISI, inference with ISI during the test; Red - training with ISI, inference with spike count during the
+test. For panel C blue describes training with spike count, green - training with ISI.
+
+
+
+
+Figure 8: Spacing between compartments of TDE as                         Figure 9: Color map employed for the visualization
+a function of its location within the visual field.                      of the optical flow. Direction is encoded with hue,
+                                                                         magnitude with brightness.
+
+
+
+Table 2: TDE performance with real-world data: translating boxes. TDEs were trained with spike count inference (see
+Sec.5.2.3
+          Detector Type      Inference Method      mean AAE ± std (°)        Fraction of spikes in PD      Total N Spikes
+                                spike count                19 ± 31
+          TDE-2                                                                         0.43                       229686
+                                    ISI                    18 ± 31
+                                spike count                18 ± 32
+          TDE-3                                                                          0.7                       126692
+                                    ISI                    17± 31
+
+
+The apparent contradiction between responses on the level of individual TDEs and the network level stems from the fact that to
+estimate and visualize optical flow, one needs to subtract signals of opposingly-tuned detectors from each other (Section 5.2.3). Now,
+the motion of an edge to the right leads to residual gain activity in T-B, B-T, and R-L tuned detectors which can be converted to
+TDE output upon the appearance of a second edge moving to the right (Figures 1 and 2, Section 2). However, for B-T and T-B
+tuned detectors, this activation should be equal (except for noise), whereas activation of L-R tuned detector would be always higher
+than activation of R-L tuned detectors. Consequently, the subtraction of velocities estimated by the opposingly tuned detectors
+compensates for poor direction-selectivity of individual TDE-2s by removing signals caused by residual gain activity from the data
+stream.
+Though subtraction of velocity estimates made by opposingly tuned detectors mitigates the loss of direction-selectivity of TDE-2
+in a textured real-world environment, it is still better to employ TDE-3, because the inhibitory input eliminates residual activity
+immediately at the level of motion detection. As a result, the network becomes more computationally efficient as it spikes almost
+two times less (Table 2), and therefore will be more energy-efficient when implemented in neuromorphic hardware [52]. To make a
+statistical argument for the higher energy efficiency of TDE-3 we also compared detector spike count with an additional 10 real-world
+
+
+                                                                 11
+Figure 10: Optical flow coding by TDE: translating boxes. Raw events (top left panel) are color-coded as green-ON
+events, red - OFF events. Optical flow (the rest of the panels) is color-coded according to Figure 10.
+
+
+
+scenes (rotating disk + 9 scenes from [56]) and found that in all of the visual scenes, TDE-2 spiked more than TDE-2 (on average
+2.6 ± 0.75. times,p=1e-4; see Supplementary Information Figure S2 for the details).
+To conclude, networks of TDE-2s and TDE-3s can both reliably infer motion direction in natural scenes with spike count and
+ISI-based inference. Yet, more robust direction selectivity of individual TDE-3 leads to better energy efficiency of the entire network.
+
+
+3.3.2   Rotating disk
+
+
+
+
+                                     Figure 11: Optical flow coding by TDE: rotating disk.
+
+
+                                                                  12
+TDEs ability to encode motion in a wide dynamic range of direction and magnitude was tested with the aid of a rotating disk sequence
+[48] (Figure 11 top panel) that challenged networks of TDEs with 360°range of motion direction and 80-fold range of velocity
+magnitude. To deal with such stimuli conditions, the network of TDEs tuned to 4 cardinal directions sampled space anisotropically,
+with the lower distance between TDE inputs in the center and higher in the periphery (Figure 8). This bioinspired approach [32]
+allowed us to reconcile dynamic range, resolution, and latency requirements (see Section 2, 5.2). We assessed optical flow coding by
+networks of TDE-2 and TDE-3 with spike count and ISI-based inference.
+
+
+                                 Table 3: TDE performance with real-world data: rotating disk.
+        Detector Type      Inference Method        mean AAE ± std (°)        rAEE ± std       Correlation, r     Total N Spikes
+                               spike count                21 ± 24            0.43 ±0.23            0.87
+        TDE-2                                                                                                           1638878
+                                   ISI                    21 ± 24            0.47 ± 0.18           0.88
+                               spike count                22 ± 24            0.45 ± 0.26           0.87
+        TDE-3                                                                                                           1532557
+                                   ISI                    21 ± 24             0.47 ± 0.2           0.88
+
+
+Figure 11 employs a color-coding scheme from Figure 9 to visualize optical flow coding by various networks of TDEs to compare
+with ground truth (Figure 11 left bottom). The Figure indicates that in all 4 testing conditions, there is a close correspondence
+between TDE inference and ground truth. This observation is also supported quantitatively. In all four cases, TDE showed similar
+(and fairly low, see [48]) AAE (mean and std of ≈ 20°, Table 3) and relative average endpoint error (rAEE, mean of ≈ 0.4, std of
+≈ 0.2).
+Although a 40% error in velocity estimation might look substantial in terms of coding precision, one should keep in mind three things.
+First of all, we encode over a wide dynamic range of velocities. Secondly, each detector encodes velocities with few spikes/short ISI,
+so, naturally, such coarse binning would impair precision. However, most importantly, there is almost 90% correlation between TDE
+velocity estimate and ground truth (Table 3). Indeed, optical flow depends on the ratio between velocity and distance, so it does not
+provide information about absolute velocity anyway [57]. Meanwhile, a high correlation with velocity indicates that regardless of the
+exact scale, networks of TDE can reliably determine the relative distribution of the velocities in the visual scene.
+To summarize, both TDE-2 and TDE-3 can extract a wide dynamic range of velocity direction in magnitude from real-world
+event-based data with both spike count and ISI-based velocity inference.
+
+
+4     Discussion
+In this work, we made a thorough investigation of the TDE as a computational prior for optical flow estimation in SNNs on three
+different levels: detector architecture, velocity inference, and real-world performance. Below we summarize the key outcomes of the
+study and discuss possible future improvements on each of these three levels.
+
+4.1   Detector architecture
+On the level of detector architecture, we showed that classical TDE-2 loses direction-selectivity in a textured environment due to
+the residual activity in the gain compartment (Figures 1, 2, 10). We proposed a bio-inspired solution for this problem: to augment
+the TDE-2 with an inhibitory input that resets the gain and removes residual activity upon activation (Figures 1, 2, 10). This
+procedure preserves the direction-selectivity of individual TDE-3s (Figure 2 and Table 2) and increases the computational efficiency
+of the network of TDEs by decreasing the total number of spikes 2-4 times (Supplementary Figure S2), which decreases energy
+consumption proportionally when implemented on neuromorphic hardware [52].
+Although we obtained a principal result about the importance of inhibitory input for the performance of the TDE, there are two issues
+one needs to address to force TDE-3 to optimal performance: jitter in event timing [20, 22] and the way inhibition is implemented.
+The jitter creates a problem for direction-selectivity because the reset of the gain during motion in the orthogonal direction is due to
+the simultaneous activation of facilitator and inhibitor compartments (See Sections 2, 5.2), which is hardly achievable with real-world
+data due to the jitter. A solution to this problem is to low-pass filter inputs to the facilitator and inhibitor compartments. Here it was
+done crudely by binning events into timesteps (which is still compatible with digital neuromorphic processors such as Loihi [8]), but
+the TDE could benefit from the incorporation of an adaptive low-pass filter with trainable parameters. It is crucial for the filter to be
+adaptive because there is a trade-off between velocity resolution that requires short time constants and combating the noise that
+requires long time constants. Adaptability is crucial since the optimal time constant depends on the particular characteristics of the
+visual scene such as velocity distribution, illumination, contrast, spatial frequency, etc.
+In the present study, inhibition was implemented as an instantaneous reset of the gain, modeled as a multiplication by zero. In contrast,
+in the insect elementary motion detector that inspired TDE-3, inhibition has its own dynamics and can influence neuronal resistance,
+current, membrane potential, and time constant [54]. These richer dynamics have mainly been studied in detailed biophysical models
+of insect vision [54].
+
+
+                                                                    13
+Notably, nearly two decades before 3-point elementary motion detectors were discovered in insects, a similar triplet architecture was
+proposed for neuromorphic hardware by Kramer [37]. His FTI (facilitator-trigger-inhibitor) detector, as well as related approaches
+[58, 59, 60], used inhibition to suppress spiking by acting directly at the output. While TDE-3 shares the same functional goal —
+suppressing responses to motion in the non-preferred direction — it implements inhibition by resetting the gain, thereby intervening
+earlier in the computation. Other applications of triplet correlations for optical flow estimation from event-based data [61] used
+simple averaging of velocity estimates between triplet pairs and did not rely on spiking neural networks or trainable systems.
+Grayscale-based detectors [62, 63] modeled inhibition as a linear subtraction between the activations of the inhibitor and facilitator
+compartments. These diverse implementations highlight the flexibility of triplet-based motion detection architectures.
+In the present study, inhibition was implemented as an instantaneous multiplication of the gain by zero. However, in the insect
+elementary motion detector, which serves as inspiration for TDE-3, inhibition has its own dynamics and influences neuronal
+resistance, current, membrane potential, and time constant [54]. Nevertheless, such complex interactions have primarily been studied
+in the context of detailed biophysical models of insect motion detection [54]. Notably, nearly two decades before 3-point elementary
+motion detectors were discovered in insects, similar architectures had already been proposed for neuromorphic hardware by Kramer
+[37] from a purely engineering perspective. In his FTI (facilitator-trigger-inhibitor) detector, as well as in related approaches
+[58, 59, 60], the inhibitor acted directly on the neuronal output, preventing firing upon activation. Other applications of triplet
+correlations for optical flow estimation from event-based data [61] employed a simple averaging of velocity estimates between
+each pair within the event triplet and did not use SNNs or any type of neural network. Studies using grayscale images [62, 63]
+implemented detectors where inhibition was modeled as a simple subtraction of the inhibitor’s activation from that of the facilitator.
+Future research could benefit from exploring more biologically accurate inhibition dynamics and systematically investigating
+different interaction modes between TDE-3 compartments.
+
+4.2   Velocity inference
+For the velocity inference, we developed a procedure for supervised training of the TDEs to linearly encode input velocities using
+spike count and ISI-based inference (Figures 12,13). For the ISI-based training, we developed a novel approach. While most other
+methods [45, 46, 47] model the relationship between input magnitude with differentiable function than use BPTT, we measure
+ISI from the amplitude of low-pass filtered spike train to use BPTT with surrogate gradient (see Section 5.2.2 for the details).
+The theoretical advantage of our method is that it does not require estimation of the relationship between spike timing and input
+magnitude, allowing work with more conventional activation functions.
+We investigated the performance of both inference methods in conditions with wide (Figure 3) and narrow (Figure 4) dynamic ranges
+of input velocities and tested their robustness towards variation in stimulus spatial frequency (Figure 5) and background activity
+noise (Figure 6). We found that although in a noise-free environment, ISI-based inference performs slightly better than spike count in
+terms of the correlation coefficient between true and estimated velocity (Figures 3, 4, 5) when the noise is present spike count turns
+out to be more reliable, especially when both training and test inference are count based (Figures 6, 7).
+Overall, we found that the TDE-based networks are robust in a wide range of noise conditions, showing FTA of >95% and correlation
+with stimulus velocity of ≈ 90% at all noise levels except the two highest (5 Hz/px and 10 Hz/ px, Figure 7). However, we suspect
+that in those conditions it is possible to leverage efficient TDE performance. To this end, we suggest more aggressive filtering at the
+STCF stage, as was done for the real-world data (Figures 10, 11).
+Examiming training progression we observe that while the loss curves for training with spike count inference tend to be relatively
+smooth, the loss curves for training with ISI exhibit noticeable jumps, with changes in the loss value appearing more pulsatile than
+gradual. This behavior can be attributed to the initialization, which results in very high spiking rates (see Section 5.2 for the details).
+Under these conditions, it is easier to regulate spike count than the ISI (inter-spike interval) between the first two spikes. For spike
+count, improving the loss function requires only a slight adjustment in the spike count for one of the stimulus velocities. In contrast,
+ISI regulation is more challenging because the ISI tends to decrease over time (being shortest immediately after trigger activation).
+Consequently, training with ISI requires more epochs to produce meaningful differences in velocity estimation that also manifest
+themselves in more abrupt fashion.
+To decode stimulus velocity from TDE activity in the presence of multiple edges one needs to perform motion segmentation to
+relate counted spikes/measured ISIs to a particular moving edge. How to know when to count spikes and to measure ISI? Here we
+proposed to count spikes starting from each activation of TDE’s trigger as it indicates passage of a new edge. This worked for a
+shallow network where we could read out trigger activations, but suppose there would be more layers after the TDE. How could
+downstream circuitry perform motion segmentation? One obvious solution would be to establish so-called skip connections between
+input to TDE’s trigger and downstream circuitry. Another solution could exploit the fact that immediately after activation of the
+trigger the TDE’s signal is maximum i.e. if one would count spikes within a certain sliding time window, the local (in time) maximal
+count would be close to the moment of edge appearance at TDE’s trigger. Similarly, the shortest distance between two spikes would
+be for the first two spikes after trigger activation. Hence, downstream circuitry potentially can perform motion segmentation by
+performing temporal max pooling.
+For the velocity coding, the fundamental limitation of the TDEs is the latency vs. dynamic range dilemma (see Section 2). Since
+spike amplitude is usually fixed, high dynamic range requires a lot of spikes (or timepoints between spikes), which necessarily leads
+to a long latency in velocity inference. The best way to solve this problem is to implement TDE on the neuromorphic chip Loihi2
+([64, 35] that allows "graded" spikes of different amplitude. As a result, one does not need to count spikes or intervals between spikes,
+because velocity magnitude is immediately available from the first spike. However, apart from Loihi2, no neuromorphic hardware
+
+
+                                                                   14
+supports spikes of different amplitude. Therefore, one could also solve the latency vs. dynamic range dilemma by employing the
+so-called "eccentric downsampling" using several detectors tuned to different velocity bandwidths such that each detector emits only
+a few spikes (Figure 8 [32]).
+
+4.3       Performance with real-world data
+To the best of our knowledge, our experiments on Figures 10,11 are the first to evaluate velocity coding with TDEs in real-world
+data.3 . Comparison between TDE-2 and TDE-3 performance with the real-world data shows that despite higher energy efficiency
+of TDE-3 network (see Table 2, Supplementary Figure S2), both detectors perform almost equally in terms of determination of
+motion direction (AAE, Table 2, 3) and motion velocity (AEE, Table 2) across 360°of change in direction and the 80-fold change
+in velocity magnitude (Figure 11). TDEs performed with precision similar to model-based elementary motion detectors [48], but
+have the advantage of being naturally compatible with SNNs and thus can be implemented in low-power neuromorphic hardware to
+exploit the spatio-temporal sparsity of event-based streams.
+Subtraction of velocity estimates obtained from opposingly tuned detectors improves TDE velocity coding on the network level and
+seems like a very intuitive post-processing step. Yet, at this level, we still deal with very shallow networks. Future work should aim
+at the incorporation of TDE-3 into deeper spiking networks with learnable interactions between individual TDE-3 and the interplay
+between spike count and ISI-based inferences. Deeper networks would also allow one to mitigate drawbacks (such as latency vs.
+dynamic range dilemma) and highlight the benefits of the TDE-3.
+Our experiments with real-world data suggest the training of the TDEs is generalizable. Indeed, TDE-3 was trained in simulation and
+yet worked fine in the real world. Moreover, we trained a single detector, expressing velocities in abstract quantities of velocities,
+expressing them as a fraction of the distance between facilitator and trigger covered in one algorithmic timestep (see Section 5.2.3)
+and subsequently scaled the dynamic range of encoded velocities by simply changing the distance between facilitator and trigger.
+Thus, due to TDEs simplicity, one can easily adapt it to a variety of conditions with an appropriate choice of spacing between TDE
+outputs and the duration of the timestep.
+We hypothesize that TDE-3 can enhance the generalizability of SNNs by extracting simple, abstract features—such as moving
+edges—that are ubiquitous in visual scenes. In support of this, research on drone acrobatics has shown that autopilots trained in
+abstract representations of visual scenes bridge the simulation-to-reality gap more effectively than those trained on raw images
+[65]. We believe that for low-level visual processing, TDE-3 offers greater robustness compared to Convolutional Neural Networks
+(CNNs). Unlike CNNs, which rely on architectures shaped by training data and are therefore prone to overfitting, TDE-3 employs a
+fixed, analytic architecture, reducing the risk of overfitting and enhancing stability.
+To conclude, we presented in this paper the TDE-3 as a potent computational prior for motion detection from event-based data in
+SNNs. It can be trained and allows fast, efficient, precise, and robust coding of optical flow. In a broader sense, our study highlights
+the importance of understanding the relevant biological features (e.g. relation between structure and function) in the design of
+neuromorphic solutions for real-time and low-power motion detection.
+
+
+5         Methods
+5.1       Datasets
+5.1.1      Synthetic data
+The synthetic dataset consists of vertically oriented bars of three light intensity values: white, grey, and black. The greyscale values
+were converted into events using a simplistic custom-made simulator of an event-based camera, which retained its key property:
+encoding changes in greyscale value with spiking signals that report increases (on events) or decreases (off events) in light intensity.
+Specifically, we modeled voltage in the event-based detector as being proportional to the logarithm of light intensity and reported
+contrast each time the temporal derivative of this signal (Vt − Vt−1 ) was higher/lower than the threshold value of ±0.15.
+To compare the robustness in direction-selectivity of TDE-3 and TDE-2, we simulated their responses to moving textured stimuli
+consisting of bars oriented orthogonally towards the direction of motion. The bars had three intensity levels: white, grey, and black.
+The size of the texture along the motion axis was 80 pixels and 3 pixels along the orthogonal direction (Figure 2A). We employed 5
+velocities: 0.1 px/timestep, 0.2 px/timestep, 0.33 px/timestep, 0.5 px/timestep and 1 px/timestep. The motion direction (left-right,
+right-left, top-bottom, bottom-top) and velocity were randomly chosen for each stimulus example (2000 per testing round). To vary
+the "amount" of texture in stimuli we randomly varied the fraction of the grey bars from 0% to 80%.
+To train the TDE-3 to linearly map velocities of moving edges into spike count-based or ISI-based output, we employed isolated
+edges on a homogeneous background. To avoid over-fitting and the necessity to separate stimuli into training and test datasets, for
+each training epoch we de-novo randomly generated 100 examples of moving edges with various velocities. We employed two sets
+of velocities. One was relatively wide (5 velocities spanning a 10-fold range, see above). The other was relatively narrow with 15
+velocities within a range from 0.025 to 0.04 px/timestep. This stimulus set was employed to show that the TDE can encode velocities
+with high precision.
+      3
+     A preprint by Greatorex et al. [40] presenting an ego-motion estimation with a network of TDE-2 appeared on arXiv shortly
+after the initial release of our manuscript
+
+
+                                                                  15
+To study the effect of variation in scene spatial frequency on the coding precision of ISI- and spike count-based inference, we trained
+the TDEs to linearly encode velocities of two edges moving at the same velocities at different distances from each other. We used 5
+velocities from 0.1 to 1 px/timestep and randomly varied the distance between edges within a range of 3,4,5,7 and 10 pixels.
+To study the effect of noise on training and inference with spike count and ISI-based methods, we simulated one of the most
+prominent types of noise in event-based vision - background activity noise, as a Poisson process following the approach by [18]. The
+noise was injected after the conversion of greyscale values to events as some stochastic events. We used six mean rates of noise: 0.2
+Hz/px, 0.5 Hz/px, 1 Hz/px, 2 Hz/px, 5 Hz/px, and 10 Hz/px. This effectively covered the dynamic range in event-based vision from
+high to low SNR conditions [18]. For this set of experiments, we employed the same set of 5 velocities as above and varied the
+distance between edges within a range of 3 to 10 pixels as above. The timestep duration was set to 10ms.
+
+5.1.2    Real-world data
+We used real-world data from the dataset provided by [48]. The data was collected with an event-based camera DAVIS 240C with
+a resolution of 240*180 pixels and contained various sequences of the full-field motion with a duration between 1 second and 4
+seconds. We were specifically interested in two sequences: one with the apparent motion of the various boxes to the right (Figure 10)
+and the one with the disk rotating clockwise (Figure 11). The former sequence contained multiple moving edges closely following
+each other with very similar velocities and thus directly targeted the key weakness of the TDE-2 of loss in direction-selectivity in a
+textured environment (Figures 1 and 2. The second sequence contained a large dynamic range of velocities (proportional to the
+distance from the center of rotation) and was thus ideally suited to test the optic flow coding properties of the TDEs.
+The dataset contained ground truth optical flow that could be inferred from the IMU measurements. Indeed, motion in the sequences
+was confined to the motion of the camera: for the boxes to yaw and for the disk to roll rotations (z-axis). Hence, in this case,
+ground truth optical flow can be obtained as a displacement vector of individual events from the IMU measurements with equation 1
+following [48]:
+
+                                                      e′ = R(e − e0 + T) + e0                                                      (1)
+where e is the initial location of an event (ex , ey ), e′ - end location of the event, e0 is the location of IMU center, T describes
+motion due to yaw and pitch rotations, and R describes motion due to roll rotation (z-axis):
+                                                                                     
+                                                          y              cos z − sin z
+                                              T=k             ; R=                                                                 (2)
+                                                          x              sin z   cos z
+
+where x,y, and z are the rotation rates of IMU around corresponding axes (pitch, yaw, and roll rotations) and k is a scaling factor that
+converts degrees to pixels for the yaw and pitch rotations equal to 4.25 px/deg [48].
+
+5.2     Inference and training
+5.2.1    Training and inference with the synthetic data
+The SNNs were simulated using the PyTorch framework, inspired by previous implementations [43, 4]. Depending on the application,
+networks included several types of elements such as TDEs, STCFs, and low-pass filters of the spike trains (i.e. spike traces). Each
+element was defined by its synaptic weights and time constants. The TDE trainable parameters included gain, current, and voltage
+time constants and synaptic weight of the gain compartment. To enhance learning of the neuronal time constants, we used the
+approach developed by [66] that reformulated neuronal decays as the result of multiplying gain, current, and voltage with the Sigmoid
+of a trainable parameter.
+
+
+            Input                      Spatio-Temporal                                                     Velocity = Σ spikes
+                                                                                TDEs
+                                       Correlation Filter
+Figure 12: Pipeline for supervisory training of TDE with BPTT to linearly map velocities with spike-count based inference
+
+To train SNNs with BPTT, we tackle the non-differentiability problem of the spiking activation function by using surrogate gradients
+[43, 44]. The method enables backpropagation in SNNs by replacing the spiking activation function with a differentiable function
+with a similar shape and steep slope during the backward pass [43, 67, 44]. We used the surrogate gradient proposed in [67].
+To mitigate the effect of the background activity noise in experiments with real-world data and injected noise, we employed STCF
+filtering described by [18]. In this simple yet efficient algorithm, an event is allowed to pass the filtering stage only if there is at
+least 1 event in n nearest neighboring pixels (trainable parameter) within a specified time window. Essentially, the filter extracts
+correlations (hence the name) between a pixel and its neighborhood while rejecting uncorrelated noisy events. As a result, STCF
+improves the signal-to-noise ratio while preserving signal sparsity.
+To promote linear mapping of input velocity into velocity estimated from TDE-3’s output activity, we used the mean absolute error
+(L1 loss) between the normalized TDE-3 estimates and the ground truth edge velocities. Normalization ensures linear mapping
+because it removes scale such that the loss depends only on the non-linearities of the mapping. Normalization was done with respect
+
+
+                                                                  16
+        Input           Spatio-Temporal                                     Spike trace                                  velocity ∼ 1/ISI
+                                                       TDEs                                             ISI
+                        Correlation Filter
+
+   Figure 13: Pipeline for supervisory training of TDE with BPTT to linearly map velocities with ISI-based inference.
+
+
+to the maximum estimate/velocity in the batch. Additionally, to ensure the sparsity of the learned solution, we added a regularization
+loss which is proportional to the mean squared spike count. At the same time, to avoid gradient vanishing due to the low neuronal
+activity [68], the network was initialized to have a high firing activity by making synaptic weights large and time constants long.
+Depending on the coding scheme (spike count or ISI), we used two slightly different training pipelines to extract motion direction and
+velocity (Figures 12,13). The two first steps are common to both pipelines. The input layer simply converts events to spikes. Then,
+these spikes are fed into the layer of TDE-3s, which effectively perform 1D convolution with kernel size=3, stride=1, and weights
+being facilitator, trigger, and inhibitor. This layer consists of two channels, one for each motion direction. At the next processing
+stage, spike count-based and ISI-based pipelines deviate. For the spike count-based velocity estimator we can straightaway find the
+total number of spikes emitted by each of the detectors, convert it to estimated velocity, calculate the loss, and perform a backward
+pass. For the ISI-based velocity estimation, the training of the network is not so straightforward and is described in section 5.2.2.
+For the velocity set with a wide (10-fold) dynamic range of velocities, the detector is trained to linearly map this dynamic range
+into limited spiking output. Hence it makes sense to estimate velocity as a spike count scaled by minimal discernible velocity (0.1
+px/timestep), such that minimal velocity is encoded with one spike. For the narrow dynamic range (1.5-fold), the detector is trained
+to encode a limited dynamic range with very high precision. Hence, it makes sense to use a bias factor: to infer velocity, we multiply
+the spike count by the velocity resolution (0.001 px/timestep), and then, if the spike count is larger than 1, we add to it a bias factor of
+0.024 px/timestep. This bias factor is necessary because it allows encoding a velocity of 0.025px/timestep with only 1 spike. Without
+this bias factor to have a velocity resolution of 0.001 px/timestep, would have required to use of 25 spikes for the velocity of 0.025
+px/timestep.
+To assess TDE-3 performance in the presence of multiple moving edges, one needs to perform motion segmentation: to relate counted
+spikes to particular edges. To do so we (1) limit the temporal window within which spikes are counted to 10 timesteps and (2) count
+spikes starting from the increase in TDE current. An increase in current is always a consequence of activation of the trigger. This
+means that the motion of a new edge causes it and thus solves the problem of motion segmentation. When we trained the detector to
+encode velocity amidst variation in stimulus spatial frequency, we calculated the error for the velocity estimate of each of the edges.
+A series of fast-moving edges can result in the integration of a very large signal in the current compartment of TDE-3, which would
+lead to saturation of TDE-3 spiking output. To prevent this situation, we clamped the maximal amplitude of the current compartment
+to the synaptic weight of the facilitator input.
+In the experiments with noise (Figures 6, 7), not every increase in current is caused by a moving edge, and one of the goals of the
+training is to suppress the TDE activations caused by noise. To account for this factor in the calculation of the loss, we calculated the
+loss between all of the velocity estimates performed by the TDE and stimulus ground truth at corresponding timepoints (effectively,
+this ground truth was zero everywhere except at the moment of edge appearance see Section 5.1). Also, to evaluate how the trained
+TDE can reject noise and preserve the true motion signal, we employed an additional metric called fraction of true activity (FTA) as
+the sum of estimated velocities caused by the stimulus (true motion signal) to the total sum of estimated velocities (caused by signal
+and noise).
+
+5.2.2    Training of the spiking neural networks to code with interspike interval
+Apart from spike count, another intuitive method to encode signals in SNNs is relative spike timing [69, 49]. The main benefit of
+such signal coding is that it allows for much shorter latency [49, 69] while also enhancing coding capacity on a network level [70].
+Training of the SNNs to have spike timing has a long history, with the first classical paper being published as early as 2002 [45].
+Here we developed a novel method to train SNNs to encode a signal with ISI using supervised learning with BPTT (Figure 13).
+While most other methods [45, 46, 47] model the relationship between input magnitude with differentiable function than use BPTT,
+we measure ISI from the amplitude of low-pass filtered spike train to use BPTT with surrogate gradient. The theoretical advantage of
+our method is that it does not require estimation of the relationship between spike timing and input magnitude, allowing work with
+more conventional activation functions.
+Specifically, we were interested in the ISI between the first two spikes, as it should provide the shortest latency [29, 33]. The key is
+to estimate the time between two spikes in a differentiable manner. To do so we added to the pipeline on Figure 12 low-pass filtering
+of the TDE output spikes (Figure 13).The filtering yields an exponentially decaying spike trace x(t) (3):
+                                                                             t
+                                                            x(t) = x0 · e− τ ,                                                          (3)
+where x0 is spike trace amplitude upon arrival of a spike, t - time lapsed since the arrival of the spike, and τ - filter time constant.
+Solving equation 3 with respect to t one can estimate this time t with equation (4):
+                                                                      x 
+                                                                         0
+                                                        t(x) = τ · ln                                                                   (4)
+                                                                        x
+
+                                                                    17
+Next, by taking filter output at the timestep directly preceding the second spike one can estimate ISI as ISI = t(x) + 1. Then, by
+                                                                                                                               α
+taking an inverse of it and scaling it by a proper factor (α) one can convert it to the estimate of the input velocity vest = ISI . Finally,
+to train a network with BPTT one can calculate the loss function using equation (5):
+                                                               N
+                                                            1 X
+                                                      L=          |v̂est,i − v̂true,i |,                                                (5)
+                                                            N i=1
+
+where v̂est,i and v̂true,i represent the velocities for the i-th sample, and N is the total number of samples.
+On the practical level, there are three factors to take care of to successfully implement a training pipeline based on the ISI:
+
+        1. ISI interval is undefined when the TDE emits less than two spikes because the notion of interval requires 2 points. We
+           assume that <2 TDE spikes mean an extremely slow motion of an object. Therefore we set ISI to a very large value (103 -
+           106 timesteps) such that when inverted it will lead to an extremely low estimated velocity.
+        2. Scaling of the inverted ISI to estimate velocities. This can be done similarly to scaling of spike count: for the stimuli set
+           with a wide dynamic range we multiplied the maximal inverted ISI (=1) with maximal stimuli velocity; for the stimuli set
+           with a narrow dynamic range, we also used bias and multiplied inverted spike count with the difference between maximal
+           and minimal stimuli velocity.
+        3. Handling of multiple moving edges. We opted to handle multiple moving edges similarly to spike count inference: the
+           first two spikes were determined with respect to the current increase. Also, In the presence of noise, the loss function and
+           performance evaluation were handled similarly to the spike count.
+
+5.2.3    Nuances of the application of TDEs to the real-world data
+Real-world data was used only as a test dataset. We pooled together ON and OFF events as it is often encountered in biological
+systems [15, 54, 55]. The network was trained with synthetic moving bars to fit its dynamic range to the dynamic range of velocities
+in real-world data. Compared to simulation, estimation of the optical flow with TDEs in the real-world data has three additional
+challenges: (1) other (not only background activity) types of noise, (2) the necessity to coordinate the activity of multiple TDEs, and
+(3) the high dynamic range of velocities (2 decades for the rotating disk).
+Apart from background activity noise, another prominent source of noise in the event-based data is jitter in event timing [20].
+Event arrival is specified with microsecond precision, yet the time between actual change in intensity and event generation can
+vary in a range of milliseconds. Therefore, strictly speaking, each pixel of a moving edge generates an event at a different time
+[20]. This is especially problematic for the 3-point TDE because the prevention of its activation upon motion in an orthogonal
+direction is underpinned by simultaneous activation of facilitator and inhibitor, which is hardly possible given the event jitter. To
+avoid this problem, one needs to increase the co-activation of the facilitator and inhibitor. The most straightforward way to do so is
+to downsample the event stream in time. For instance, feeding events to the network using time bins, where events within a bin are
+considered to occur simultaneously. There is a trade-off between mitigation of event jitter and dynamic range of velocity coding.
+Here (Figures 10, 11), given the relatively low stimulus velocity, we chose to slice events into bins of 50 ms (i.e. 20 frames per
+second).
+In contrast to synthetic data where we mostly employed either one or two opposingly tuned detectors, with the real-world data
+we sampled each pixel of the visual field with TDEs tuned along 4 cardinal directions: Left-to-Right (LR), Right-to-Left (RL),
+Top-to-Bottom (TB), and Bottom-to-Top (BT) akin to how it is done in vertebrae and insect visual systems [15]. Although there are
+4 cardinal directions, motion occurs along 2 axes: horizontal and vertical. Since a point in space cannot simultaneously move in 2
+opposite directions, the next logical step in the processing pipeline is to subtract velocity estimates obtained from opposingly tuned
+detectors. This move is ubiquitously employed in biological systems [54, 15, 39] and was shown to optimize velocity coding by
+biological elementary motion detectors [71]. Here we found that such a subtraction compensates for the poor direction-selectivity of
+individual TDE-2.
+The sequence with a rotating disk contained a very high dynamic range of velocities (2 decades: from 1 to 80 px/s). As was discussed
+earlier, using a single TDE to encode such a high dynamic range with high resolution is sub-optimal in terms of latency. Yet, it is
+possible to do so using a set of detectors tuned to different velocities. One elegant way to achieve so is to gradually increase spacing
+between TDE inputs (i.e. facilitator, trigger, inhibitor) as the detector position moves away from the center [32] (Figure 8). Indeed,
+given internal parameters, the TDEs where the facilitator and trigger are spaced by n pixels can encode n times higher velocities than
+the detector where the facilitator and trigger are spaced by 1 pixel.
+Although such an eccentric increase in TDE receptive fields nicely fits the rotation disk (where velocity increases as one moves
+out of the center), this solution is rather general and universally encountered in animal visual systems [55]. The reason for this is
+that most of the optical flow is engendered by self-motion and most of the self-motion is directed forward. As animals tend to look
+towards the focus of expansion (a point in the visual field from which optical flow originates), the further an object is from the center
+of the visual field, the higher its retinal velocity. Given that robots also mostly move forward, eccentric increase in the receptive field
+is beneficial for robotics applications as well [32].
+The specifics of our implementation are as follows. Using synthetic data, we first pre-trained TDE with spacing between compartments
+of 1 px to linearly encode 5 levels of velocity (from 0.1 px/timestep to 0.5 px/timestep). Now, it is important to recognize that the
+TDE encodes only the delay between activations of the facilitator and trigger compartments. Hence, the results of the training are
+
+
+                                                                    18
+indifferent towards the spatial configuration of the TDE, i.e. resultant velocity coding is not so much about px/timestep as about a
+fraction of the distance between facilitator and trigger covered within a timestep. Hence, by simply regulating the distance between
+the TDE inputs by a factor of n, one can scale the TDE range of velocity by said n without the need to re-train the TDE. Here, we
+used TDEs with distances between inputs of 1, 2, 3, 4, 6, and 8 pixels (Figure 8). Paired with a timestep duration of 50ms, it means
+that together the TDEs were able to cover velocities in the range of 2 to 80 px/s. For the spike count inference, the window over
+which spikes were counted was limited to 5 timesteps. Before feeding into the layer of TDEs signal was filtered by 3 by 3 STCF
+filter [18].
+
+5.2.4    Performance evaluation for the real-world data
+For the qualitative comparison between the optical flow inferred with the TDEs and the ground truth, we visualized the optical flow
+using the colormap in Figure 9. To make quantitative comparisons, we used the Angular Average Error (AAE), Average Endpoint
+Error (AEE), relative Average Endpoint Error (rAEE), and Pearson correlation coefficient [51]. AAE measured the difference
+between the direction of motion estimated with the TDEs and the ground truth motion direction, and it was calculated with equation
+6:
+
+                                                           N                            
+                                                        1 X            vix uix + viy uiy
+                                              AAE =           arccos                                                                      (6)
+                                                        N i=1               |vi ||ui |
+
+where v is the velocity vector estimated with the TDEs, u is the ground truth vector, and i denotes individual optical flow estimates
+(i.e. per pixel per timestep). Zero velocity measurements were not counted in Equation 5. AEE was calculated as the difference
+between optical flow vectors inferred with TDE and ground truth using 7:
+
+                                                         N
+                                                      1 Xp
+                                            AEE =           (vix − uix )2 + (viy − uiy )2                                                 (7)
+                                                      N i=1
+
+The problem of AEE is that it is hard to get from it an intuition about the quality of velocity estimate. First of all, this error accumulates
+over time such that it becomes hard to compare algorithms run at different simulation frequencies. Secondly, understanding whether
+coding error is acceptable does not depend on the absolute value of error, but on the ratio between error and true velocity. Therefore,
+we used rAEE to normalize AEE by the ground truth velocity to give a relative measure of performance quality using equation 8:
+
+                                                     N         p
+                                                  1 X           (vix − uix )2 + (viy − uiy )2
+                                           rAEE =                                                                                         (8)
+                                                  N i=1                    |ui |
+
+To compare the energy efficiency of TDE-2 and TDE-3, we also kept track of the total number of spikes emitted by the network upon
+presentation of the stimuli sequence.
+
+
+6    Acknowledgments
+This work was supported by the Sony Research Award Program awarded to Prof. Guido C. H. E. de Croon.
+We want to thank Dr. Kirk Scheper for the fruitful discussions.
+
+
+7    Data Availability Statement
+The data and code that support the findings of this study are openly available in the GitHub repository at https://github.com/
+yedutenko/TDE-3.
+———————————————————————————————————
+
+
+References
+ [1] Patrick Lichtsteiner, Christoph Posch, and Tobi Delbruck. A 128× 128 120 db 15 µs latency asynchronous temporal contrast
+     vision sensor. IEEE Journal of Solid-State Circuits, 43(2):566–576, 2008.
+ [2] G. Gallego, T. Delbruck, G. Orchard, C. Bartolozzi, B. Taba, A. Censi, S. Leutenegger, A. J. Davison, J. Conradt, K. Daniilidis,
+     and D. Scaramuzza. Event-based vision: A survey. IEEE Transactions on Pattern Analysis and Machine Intelligence,
+     44(01):154–180, jan 2022.
+ [3] Wolfgang Maass. Networks of spiking neurons: The third generation of neural network models. Neural Networks, 10(9):1659–
+     1671, 1997.
+
+
+                                                                     19
+ [4] Jesse Hagenaars, Federico Paredes-Vallés, and Guido de Croon. Self-supervised learning of event-based optical flow with
+     spiking neural networks, 2021.
+ [5] Adarsh Kumar Kosta and Kaushik Roy. Adaptive-spikenet: Event-based optical flow estimation using spiking neural networks
+     with learnable neuronal dynamics. In 2023 IEEE International Conference on Robotics and Automation (ICRA), pages
+     6021–6027, 2023.
+ [6] Javier Cuadrado, Ulysse Rançon, Benoit R. Cottereau, Francisco Barranco, and Timothée Masquelier. Optical flow estimation
+     from event-based cameras and spiking neural networks. Frontiers in Neuroscience, 17, 2023.
+ [7] Yisa Zhang, Hengyi Lv, Yuchen Zhao, Yang Feng, Hailong Liu, and Guoling Bi. Event-based optical flow estimation with
+     spatio-temporal backpropagation trained spiking neural network. Micromachines, 14(1), 2023.
+ [8] Mike Davies, Narayan Srinivasa, Tsung-Han Lin, Gautham Chinya, Yongqiang Cao, Sri Harsha Choday, Georgios Dimou,
+     Prasad Joshi, Nabil Imam, Shweta Jain, et al. Loihi: A neuromorphic manycore processor with on-chip learning. Ieee Micro,
+     38(1):82–99, 2018.
+ [9] Federico Paredes-Vallés, Jesse Hagenaars, Julien Dupeyroux, Stein Stroobants, Yingfu Xu, and Guido de Croon. Fully
+     neuromorphic vision and control for autonomous drone flight, 2023.
+[10] Warren S McCulloch and Walter Pitts. A logical calculus of the ideas immanent in nervous activity. Bulletin of Mathematical
+     Biophysics, 5:115–133, 1943.
+[11] Kurt Hornik, Maxwell Stinchcombe, and Halbert White. Multilayer feedforward networks are universal approximators. Neural
+     Networks, 2(5):359–366, 1989.
+[12] Wolfgang Maass. Networks of spiking neurons: The third generation of neural network models. Neural Networks, 10(9):1659–
+     1671, 1997.
+[13] Wolfgang Maass. Fast Sigmoidal Networks via Spiking Neurons. Neural Computation, 9(2):279–304, 02 1997.
+[14] Charlotte Frenkel, Martin Lefebvre, and David Bol. Learning without feedback: Fixed random learning signals allow for
+     feedforward training of deep neural networks. Frontiers in Neuroscience, 15, 2021.
+[15] Damon A. Clark and Jonathan B. Demb. Parallel computations in insect and mammalian visual motion processing. Current
+     Biology, 26(20):R1062–R1072, 2016.
+[16] Shiva R. Sinha, William Bialek, and Rob R. de Ruyter van Steveninck. Optimal local estimates of visual motion in a natural
+     environment. Phys. Rev. Lett., 126:018101, Jan 2021.
+[17] Marc Potters and William Bialek. Statistical mechanics and visual signal processing. Journal de Physique I, 4(11):1755–1775,
+     nov 1994.
+[18] Shasha Guo and Tobi Delbruck. Low cost and latency event camera background activity denoising. IEEE Transactions on
+     Pattern Analysis and Machine Intelligence, 45(1):785–795, 2023.
+[19] Tobias Brosch, Stephan Tschechne, and Heiko Neumann. On event-based optical flow detection. Frontiers in Neuroscience, 9,
+     2015.
+[20] Daniel Czech and Garrick Orchard. Evaluating noise filtering for event-based asynchronous change detection image sensors.
+     pages 19–24, 2016.
+[21] Yuji Nozaki and Tobi Delbruck. Temperature and parasitic photocurrent effects in dynamic vision sensors. IEEE Transactions
+     on Electron Devices, 64(8):3239–3245, 2017.
+[22] Saizhe Ding, Jinze Chen, Yang Wang, Yu Kang, Weiguo Song, Jie Cheng, and Yang Cao. E-MLB: Multilevel benchmark for
+     event-based camera denoising. IEEE Transactions on Multimedia, pages 1–12, 2023.
+[23] Eero P. Simoncelli. Distributed representation and analysis of visual motion. 1993.
+[24] Federico Paredes-Valles, Kirk Yannick Willehm Scheper, and Guido C. H. E. de Croon. Unsupervised learning of a hierarchical
+     spiking neural network for optical flow estimation: From events to global motion perception. IEEE Transactions on Pattern
+     Analysis and Machine Intelligence, 42(8):2051–2064, aug 2020.
+[25] Francisco Barranco, Cornelia Fermuller, and Yiannis Aloimonos. Bio-inspired motion estimation with event-driven sensors. In
+     Ignacio Rojas, Gonzalo Joya, and Andreu Catala, editors, Advances in Computational Intelligence, pages 309–321, Cham,
+     2015. Springer International Publishing.
+[26] Yujie Zheng, Zitong Yu, Shiqi Wang, and Thomas Huang. Spike-based motion estimation for object tracking through
+     bio-inspired unsupervised learning. IEEE Transactions on Image Processing, 32:335–349, 2023.
+[27] Garrick Orchard, Ryad Benosman, Ralph Etienne-Cummings, and Nitish V. Thakor. A spiking neural network architecture for
+     visual motion estimation. In 2013 IEEE Biomedical Circuits and Systems Conference (BioCAS), volume 1, pages 298–301.
+     IEEE, 2013.
+[28] Tobias Brosch and Heiko Neumann. Event-based optical flow on neuromorphic hardware. In Proceedings of the 9th EAI
+     International Conference on Bio-Inspired Information and Communications Technologies (Formerly BIONETICS), BICT’15,
+     pages 551–558, Brussels, BEL, 2016. ICST (Institute for Computer Sciences, Social-Informatics and Telecommunications
+     Engineering), ICST (Institute for Computer Sciences, Social-Informatics and Telecommunications Engineering).
+
+
+                                                               20
+[29] M. B. Milde, O. J. N. Bertrand, H. Ramachandran, M. Egelhaaf, and E. Chicca. Spiking elementary motion detector in
+     neuromorphic systems. Neural Computation, 30(9):2384–2417, 2018.
+[30] Thorben Schoepe, Ella Janotte, Moritz B. Milde, Olivier J. N. Bertrand, Martin Egelhaaf, and Elisabetta Chicca. Finding the
+     gap: neuromorphic motion-vision in dense environments. Nature Communications, 15(1):817, 01 2024.
+[31] Massimiliano Giulioni, Xavier Lagorce, Francesco Galluppi, and Ryad B Benosman. Event-based computation of motion flow
+     on a neuromorphic analog neural platform. Frontiers in Neuroscience, 10:1–13, Feb 2016.
+[32] Giulia D’Angelo, Ella Janotte, Thorben Schoepe, James O’Keeffe, Moritz B. Milde, Elisabetta Chicca, and Chiara Bartolozzi.
+     Event-based eccentric motion detection exploiting time difference encoding. Frontiers in Neuroscience, 14:1–14, May 2020.
+[33] Daniel Gutierrez-Galan, Timo Schoepe, Juan Pedro Dominguez-Morales, Angel Jimenez-Fernandez, Elisabetta Chicca, and
+     Alejandro Linares-Barranco. An event-based digital time difference encoder model implementation for neuromorphic systems.
+     IEEE Transactions on Neural Networks and Learning Systems, 33(5):1959–1973, 2022.
+[34] Germain Haessig, Andrew Cassidy, Rodrigo Alvarez, Ryad Benosman, and Garrick Orchard. Spiking optical flow for
+     event-based sensors using ibm’s truenorth neurosynaptic system. IEEE Transactions on Biomedical Circuits and Systems,
+     12(4):860–870, 2018.
+[35] Stefano Chiavazza, Svea Marie Meyer, and Yulia Sandamirskaya. Low-latency monocular depth estimation using event timing
+     on neuromorphic hardware. In 2023 IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops (CVPRW),
+     pages 4071–4080, 2023.
+[36] R. Sarpeshkar, J. Kramer, G. Indiveri, and C. Koch. Analog vlsi architectures for motion processing: from fundamental limits
+     to system applications. Proceedings of the IEEE, 84(7):969–987, 1996.
+[37] J. Kramer. Compact integrated motion sensor with three-pixel interaction. IEEE Transactions on Pattern Analysis and Machine
+     Intelligence, 18(4):455–460, 1996.
+[38] R. Etienne-Cummings, S. Fernando, N. Takahashi, V. Shtonov, J. Van der Spiegel, and P. Mueller. A new temporal domain
+     optical flow measurement technique for focal plane vlsi implementation. In 1993 Computer Architectures for Machine
+     Perception, pages 241–250, 1993.
+[39] Werner Reichardt. Autocorrelation, a principle for evaluation of sensory information by the central nervous system. In Walter A.
+     Rosenblith, editor, Sensory Communication, pages 303–317. MIT Press, Cambridge, MA, USA, 1961.
+[40] Hugh Greatorex, Michele Mastella, Madison Cotteret, Ole Richter, and Elisabetta Chicca. Event-based vision for egomotion
+     estimation using precise event timing, 2025.
+[41] Mattias Nilsson, Ton Juny Pina, Lyes Khacef, Foteini Liwicki, Elisabetta Chicca, and Fredrik Sandin. A comparison of
+     temporal encoders for neuromorphic keyword spotting with few neurons, 2023.
+[42] Juergen Haag, Abhishek Mishra, and Alexander Borst. A common directional tuning mechanism of Drosophila motion-sensing
+     neurons in the on and in the off pathway. eLife, 6:e29044, aug 2017.
+[43] Emre O. Neftci, Hesham Mostafa, and Friedemann Zenke. Surrogate gradient learning in spiking neural networks: Bringing
+     the power of gradient-based optimization to spiking neural networks. IEEE Signal Processing Magazine, 36(6), 2019.
+[44] Friedemann Zenke and Tim P. Vogels. The remarkable robustness of surrogate gradient learning for instilling complex function
+     in spiking neural networks. Neural computation, 33(4):899–925, 2021.
+[45] Sander M. Bohte, Joost N. Kok, and Han La Poutré. Error-backpropagation in temporally encoded networks of spiking neurons.
+     Neurocomputing, 48:17–37, 2002.
+[46] Hesham Mostafa. Supervised learning based on temporal coding in spiking neural networks. IEEE Transactions on Neural
+     Networks and Learning Systems, 29(7):3227–3235, 2018.
+[47] Iulia M. Comsa, Krzysztof Potempa, Luca Versari, Thomas Fischbacher, Andrea Gesmundo, and Jyrki Alakuijala. Temporal
+     coding in spiking neural networks with alpha synaptic function. In ICASSP 2020 - 2020 IEEE International Conference on
+     Acoustics, Speech and Signal Processing (ICASSP), pages 8529–8533, 2020.
+[48] Bodo Rueckauer and Tobi Delbruck. Evaluation of event-based algorithms for optical flow with ground-truth from inertial
+     measurement sensor. Frontiers in Neuroscience, 10, 2016.
+[49] Fred Rieke, David Warland, Rob de Ruyter van Steveninck, and William Bialek. Spikes: exploring the neural code. MIT Press,
+     Cambridge, MA, USA, 1999.
+[50] Alexander Borst and Thomas Euler. Seeing things in motion: Models, circuits, and mechanisms. Neuron, 71(6):974–994, 2011.
+[51] Karl Pearson. Note on regression and inheritance in the case of two parents. Proceedings of the Royal Society of London Series
+     I, 58:240–242, January 1895.
+[52] Caterina Caccavella, Federico Paredes-Vallés, Marco Cannici, and Lyes Khacef. Low-power event-based face detection with
+     asynchronous neuromorphic hardware, 2023.
+[53] A. Mitrokhin, C. Ye, C. Fermüller, Y. Aloimonos, and T. Delbruck. Ev-imo: Motion segmentation dataset and learning pipeline
+     for event cameras. In 2019 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS), pages 6105–6112,
+     Nov 2019.
+
+
+                                                                21
+[54] Alexander Borst, Jürgen Haag, and Alex S. Mauss. How fly neurons compute the direction of visual motion. Journal of
+     Comparative Physiology A: Neuroethology, Sensory, Neural, and Behavioral Physiology, 206(2):109–124, 2020.
+[55] Peter Sterling and Simon Laughlin. Principles of Neural Design. The MIT Press, 06 2015.
+[56] L. Burner, A. Mitrokhin, C. Ye, C. Fermüller, Y. Aloimonos, and T. Delbruck. Evimo2: An event camera dataset for motion
+     segmentation, optical flow, structure from motion, and visual inertial odometry in indoor scenes with monocular or stereo
+     algorithms. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops, pages
+     393–402, June 2022.
+[57] Julien R. Serres and Franck Ruffier. Optic flow-based collision-free strategies: From insects to robots. Arthropod Structure &
+     Development, 46(5):703–717, 2017. From Insects to Robots.
+[58] E. ROS, F. J. PELAYO, D. PALOMAR, I. ROJAS, J. L. BERNIER, and A. PRIETO. Stimulus correlation and adaptive motion
+     detection using spiking neurons. International Journal of Neural Systems, 09(05):485–490, 1999.
+[59] C.M. Higgins, R.A. Deutschmann, and C. Koch. Pulse-based 2-d motion sensors. IEEE Transactions on Circuits and Systems
+     II: Analog and Digital Signal Processing, 46(6):677–687, 1999.
+[60] Rainer A. Deutschmann, Charles M. Higgins, and Christof Koch. Real-time analog vlsi sensors for 2-d direction of motion. In
+     Wulfram Gerstner, Alain Germond, Martin Hasler, and Jean-Daniel Nicoud, editors, Artificial Neural Networks — ICANN’97,
+     pages 1163–1168, Berlin, Heidelberg, 1997. Springer Berlin Heidelberg.
+[61] Shintaro Shiba, Yoshimitsu Aoki, and Guillermo Gallego. Fast event-based optical flow estimation by triplet matching. IEEE
+     Signal Processing Letters, 2023.
+[62] Yanis Bahroun, Dmitri Chklovskii, and Anirvan Sengupta. A similarity-preserving network trained on transformed images
+     recapitulates salient features of the fly motion detection circuit. In H. Wallach, H. Larochelle, A. Beygelzimer, F. d'Alché-Buc,
+     E. Fox, and R. Garnett, editors, Advances in Neural Information Processing Systems, volume 32. Curran Associates, Inc., 2019.
+[63] Omer Mano, Matthew S. Creamer, Bara A. Badwan, and Damon A. Clark. Predicting individual neuron responses with
+     anatomically constrained task optimization. Current Biology, 31(18):4062–4075.e4, 2021.
+[64] Garrick Orchard, E. Paxon Frady, Daniel Ben Dayan Rubin, Sophia Sanborn, Sumit Bam Shrestha, Friedrich T. Sommer, and
+     Mike Davies. Efficient neuromorphic signal processing with loihi 2, 2021.
+[65] Elia Kaufmann, Antonio Loquercio, René Ranftl, Matthias Müller, Vladlen Koltun, and Davide Scaramuzza. Deep drone
+     acrobatics, 2020.
+[66] Wei Fang, Zhaofei Yu, Yanqi Chen, Timothée Masquelier, Tiejun Huang, and Yonghong Tian. Incorporating learnable
+     membrane time constant to enhance learning of spiking neural networks. In Proceedings of the IEEE International Conference
+     on Computer Vision, volume 1, pages 2641–2651, 2021.
+[67] Friedemann Zenke. SpyTorch (v0.3), March 2019.
+[68] Julian Rossbroich, Julia Gygax, and Friedemann Zenke. Fluctuation-driven initialization for spiking neural network training.
+     Neuromorphic Computing and Engineering, 2(4):044016, dec 2022.
+[69] Tim Gollisch and Markus Meister. Rapid neural coding in the retina with relative spike latencies. Science, 319(5866):1108–1111,
+     2008.
+[70] H’el‘ene Paugam-Moisy and Sander Bohte. Computing with Spiking Neuron Networks, pages 335–376. Springer Berlin
+     Heidelberg, Berlin, Heidelberg, 2012.
+[71] Norma Krystyna Kühn and Tim Gollisch. Activity correlations between direction-selective retinal ganglion cells synergistically
+     enhance motion decoding from complex visual scenes. Neuron, 101(5):963–976.e7, 2019.
+
+
+
+
+                                                                 22
+

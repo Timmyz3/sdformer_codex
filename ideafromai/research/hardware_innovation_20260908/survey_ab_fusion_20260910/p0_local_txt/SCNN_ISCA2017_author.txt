@@ -1,0 +1,1018 @@
+                                                 SCNN: An Accelerator for Compressed-sparse
+                                                      Convolutional Neural Networks
+                                                                                           Angshuman Parashar†              Minsoo Rhu†
+                                                       Anurag Mukkara‡              Antonio Puglielli∗            Rangharajan Venkatesan†          Brucek Khailany†
+                                                                              Joel Emer†‡          Stephen W. Keckler†            William J. Dally†
+                                                      NVIDIA†           Massachusetts Institute of Technology‡                  UC-Berkeley∗       Stanford University
+arXiv:1708.04485v1 [cs.NE] 23 May 2017
+
+
+
+
+                                            Abstract—Convolutional Neural Networks (CNNs) have                          observed data. Today, training is often done on GPUs [24]
+                                         emerged as a fundamental technology for machine learning.                      or farms of GPUs, while inference depends on the application
+                                         High performance and extreme energy efficiency are critical for                and can employ CPUs, GPUs, FPGA, or specially-built ASICs.
+                                         deployments of CNNs in a wide range of situations, especially
+                                         mobile platforms such as autonomous vehicles, cameras, and                         During the training process, a deep learning expert will
+                                         electronic personal assistants. This paper introduces the Sparse               typically architect the network, establishing the number of
+                                         CNN (SCNN) accelerator architecture, which improves perfor-                    layers, the operation performed by each layer, and the connec-
+                                         mance and energy efficiency by exploiting the zero-valued weights              tivity between layers. Many layers have parameters, typically
+                                         that stem from network pruning during training and zero-valued                 filter weights, which determine their exact computation. The
+                                         activations that arise from the common ReLU operator applied
+                                         during inference. Specifically, SCNN employs a novel dataflow                  objective of the training process is to learn these weights,
+                                         that enables maintaining the sparse weights and activations                    usually via a stochastic gradient descent-based excursion
+                                         in a compressed encoding, which eliminates unnecessary data                    through the space of weights. This process typically employs
+                                         transfers and reduces storage requirements. Furthermore, the                   a forward-propagation calculation for each training example,
+                                         SCNN dataflow facilitates efficient delivery of those weights and              a measurement of the error between the computed and de-
+                                         activations to the multiplier array, where they are extensively
+                                         reused. In addition, the accumulation of multiplication products               sired output, and then back-propagation through the network
+                                         are performed in a novel accumulator array. Our results show                   to update the weights. Inference has similarities, but only
+                                         that on contemporary neural networks, SCNN can improve both                    includes the forward-propagation calculation. Nonetheless, the
+                                         performance and energy by a factor of 2.7× and 2.3×, respec-                   computation requirements for inference can be prohibitively
+                                         tively, over a comparably provisioned dense CNN accelerator.                   large, particularly with the emergence of deeper networks
+                                                                                                                        (hundreds of layers [17], [18], [26], [29]) and larger inputs
+                                                                                                                        sets, such as high-definition video. Furthermore, the energy
+                                                                   I. I NTRODUCTION
+                                                                                                                        efficiency of this computation is important, especially for
+                                            Driven by the availability of massive data and the com-                     mobile platforms, such as autonomous vehicles, cameras, and
+                                         putational capability to process it, deep learning has recently                electronic personal assistants.
+                                         emerged as a critical tool for solving complex problems across                     Recent published works have shown that common networks
+                                         a wide range of domains, including image recognition [20],                     have significant redundancy and can be pruned dramatically
+                                         speech processing [12], [16], [2], natural language process-                   during training without substantively affecting accuracy [15].
+                                         ing [8], language translation [10], and autonomous vehi-                       Our experience shows that the number of weights that can
+                                         cles [21]. Convolutional neural networks (CNNs) have become                    be eliminated varies widely across the layers but typically
+                                         the most popular algorithmic approach for deep learning for                    ranges from 20% to 80% [15], [14]. Eliminating weights
+                                         many of these domains. Employing CNNs can be decomposed                        results in a network with a substantial number of zero values,
+                                         into two tasks: (1) training — in which the parameters of a                    which can potentially reduce the computational requirements
+                                         neural network are learned by observing massive numbers of                     of inference.
+                                         training examples, and (2) inference — in which a trained                          The inference computation also offers a further optimization
+                                         neural network is deployed in the field and classifies the                     opportunity. In specific, many networks employ as their non-
+                                                                                                                        linear operator the ReLU (rectified linear unit) function which
+                                          A version appears in the 44th IEEE/ACM International Symposium on             clamps all negative activation values to zero. The activations
+                                         Computer Architecture (ISCA-44), 2017.
+                                                                                                                        are the output values of an individual layer that are passed
+                                         This research was, in part, funded by the U.S. Government, under the           as inputs to the next layer. Our experience shows that for
+                                         DARPA CRAFT program. The views and conclusions contained in this               typical data sets, 50–70% of the activations are clamped to
+                                         document are those of the authors and should not be interpreted as
+                                         representing the official policies, either expressed or implied, of the U.S.   zero. Since the multiplication of weights and activations is the
+                                         Government.                                                                    key computation for inference, the combination of these two
+factors can reduce the amount of computation required by over                                        TABLE I
+an order of magnitude. Additional benefits can be achieved by             N ETWORK CHARACTERISTICS . W EIGHTS AND ACTIVATIONS ASSUME A
+                                                                                         DATA - TYPE SIZE OF TWO BYTES .
+a compressed encoding for zero weights and activations, thus
+allowing more to fit in on-chip RAM and eliminating energy-
+                                                                                             # Conv. Max. Layer Max. Layer Total #
+costly DRAM accesses.                                                            Network     Layers   Weights   Activations Multiplies
+   In this paper, we introduce the Sparse CNN (SCNN) ac-                       AlexNet [20]     5     1.73 MB    0.31 MB     0.69 B
+celerator architecture, a new CNN inference architecture that                 GoogLeNet [28]   54     1.32 MB    1.52 MB      1.1 B
+exploits both weight and activation sparsity to improve both                   VGGNet [27]     13     4.49 MB    6.12 MB     15.3 B
+performance and power. Previous works have employed tech-
+niques for exploiting sparsity, including saving computation
+energy for zero-valued activations and compressing weights               is somewhat larger than an equivalently provisioned dense
+and activations stored in DRAM [7], [6]. Other works have                accelerator architecture due to the overheads of managing the
+used a compressed encoding of activations [1] or weights [30]            sparse dataflow. On a range of networks, SCNN provides a
+in parts of their dataflow to reduce data transfer bandwidth             factor of 2.7× speedup and a 2.3× energy reduction relative
+and save time for computations of some multiplications with              to the dense architecture.
+a zero operand. While these prior architectures have largely
+focused on eliminating computations and exploiting some                                         II. M OTIVATION
+data compression, SCNN couples an algorithmic dataflow                      Convolutional Neural Network algorithms (CNNs) are es-
+that eliminates all multiplications with a zero operand while            sentially a cascaded set of pattern recognition filters trained
+employing a compressed representation of both weights and                with supervision [21]. A CNN consists of a series of layers,
+activations through almost the entire computation.                       which include convolutional layers, non-linear scalar operator
+   At the heart of the SCNN design is a processing element               layers, and layers that downsample the intermediate data, for
+(PE) with a multiplier array that accepts a vector of weights            example by pooling. The convolutional layers represent the
+and a vector of activations. Unlike previous convolutional               core of the CNN computation and are characterized by a
+dataflows [5], [11], [7], [25], the SCNN dataflow only delivers          set of filters that are usually 1×1 or 3×3, and occasionally
+weights and activations to the multiplier array that can all             5×5 or larger. The values of these filters are the weights that
+be multiplied by one another in the manner of a Cartesian                are trained using a training set for the network. Some deep
+product. Furthermore, the activation vectors are reused in               neural networks (DNNs) also include fully-connected layers,
+an input stationary [6] fashion against a number of weight               typically toward the end of the DNN. During inference, a
+vectors to reduce data accesses. Finally, only non-zero weights          new image (in the case of image recognition) is presented
+and activations are fetched from the input storage arrays and            to the network, which classifies into the training categories by
+delivered to the multiplier array. As with any CNN accelerator,          computing in succession each of the layers in the network. The
+SCNN must accumulate the partial products generated by the               intermediate data between the layers are called activations and
+multipliers. However, since the products generated by the mul-           the output activation of one layer becomes the input activation
+tiplier array cannot be directly summed together, SCNN tracks            of the next layer. In this paper, we focus on accelerating the
+the output coordinates associated with each multiplication and           convolutional layers as they constitute the majority of the
+sends the coordinate and product to a scatter accumulator array          computation [9].
+for summing.                                                                Table II lists the attributes of three commonly used networks
+   To increase parallelism beyond a single PE, multiple PEs              in image processing: AlexNet [20], GoogLeNet [28], and
+can be run in parallel with each working on a disjoint 3D tile           VGGNet [27], whose specifications come from the Caffe
+of input activations. Because of the end-to-end compression              BVLC Model Zoo [4]. The increasing layer depth across the
+of activations, SCNN can keep the both the input and output              networks represents the successively more accurate networks
+activations of each tile local to its PE, further reducing energy-       in the ImageNet [19] competition. The Maximum Weights and
+hungry data transmission. Overall, this results in a design with         Activations columns indicate the size of the largest weight and
+efficient compressed storage and delivery of input operands,             activation matrices across the layer of the network. The last
+high reuse of the input operands in the multiplier array, and            column lists the total number of multiplies required to compute
+that spends no time on multiplications with zero operands.               a single inference pass through all of the convolutional layers
+   To evaluate SCNN, we developed a cycle-level performance              of the network. These data and computational requirements
+model and a validated analytical model that allows us to                 are derived from the standard ImageNet inputs images of
+quickly explore the design space of different types of accel-            224 × 224 pixels. Processing larger, higher resolution images
+erators. We also implemented an SCNN PE in synthesizable                 will result in greater computational and data requirements.
+System C and compiled the design into gates using a combina-                Sparsity in CNNs. Sparsity in a layer of a CNN is
+tion of commercial high-level synthesis (HLS) tools and a tra-           defined as the fraction of zeros in the layer’s weight and
+ditional verilog compiler. Our results show that 64 PE SCNN              input activation matrices. The primary technique for creating
+implementation with 16 multipliers per PE (1024 multipliers              weight sparsity is to prune the network during training. Han,
+in total) can be implemented in approximately 7.9mm2 , which             et al. developed a pruning algorithm that operates in two
+
+
+
+                                                                     2
+                                                                                                                                                                                  Density (IA)
+phases [15]. First, any weight with an absolute value that                                  1
+                                                                                                                                                                                  Density (W)
+                                                                                                                                                                                                                               1
+
+is close to zero (e.g. below a defined threshold) is set to                                                                                                                       Work (# of multiplies)
+
+
+
+
+                                                                                                                                                                                                                                     Work (# of multiplies)
+                                                                                           0.8                                                                                                                                 0.8
+
+
+
+
+                                                                         Density (IA, W)
+zero. This process has the effect of removing weights from                                 0.6                                                                                                                                 0.6
+the filters, and sometimes even forcing an output activation to                            0.4                                                                                                                                 0.4
+always to be zero. Second, the remaining network is retrained,
+                                                                                           0.2                                                                                                                                 0.2
+to regain the accuracy lost through naı̈ve pruning. The result
+                                                                                            0                                                                                                                                  0
+is a smaller network with accuracy extremely close to the                                                    conv1                conv2                      conv3                 conv4                    conv5
+original network. The process can be iteratively repeated to                                                                                          (a) AlexNet
+reduce network size while maintaining accuracy.
+   Activation sparsity occurs dynamically during inference and
+                                                                                            1                                                                                    Density (IA)                                  1
+is highly dependent on the data being processed. Specifically,
+                                                                                                                                                                                 Density (W)
+
+
+
+
+                                                                                                                                                                                                                                     Work (# of multiplies)
+the rectified linear unit (ReLU) function that is commonly                                 0.8
+                                                                                                                                                                                 Work (# of multiplies)
+                                                                                                                                                                                                                               0.8
+
+
+
+
+                                                                         Density (IA, W)
+used as the non-linear operator in CNNs forces all negatively                              0.6                                                                                                                                 0.6
+
+valued activations to be clamped to zero. After completing                                 0.4                                                                                                                                 0.4
+computation of a convolutional layer, a ReLU function is                                   0.2                                                                                                                                 0.2
+applied point-wise to each element in the output activation
+                                                                                            0                                                                                                                                  0
+matrices before the data is passed to the next layer.
+
+
+
+
+                                                                                                 pool_proj
+
+                                                                                                               1x1
+
+
+
+                                                                                                                                  3x3
+
+
+
+                                                                                                                                                       5x5
+
+
+
+                                                                                                                                                                     pool_proj
+
+                                                                                                                                                                                 1x1
+
+
+
+                                                                                                                                                                                                      3x3
+
+
+
+                                                                                                                                                                                                                         5x5
+                                                                                                                     3x3_reduce
+
+
+
+                                                                                                                                        5x5_reduce
+
+
+
+
+                                                                                                                                                                                         3x3_reduce
+
+
+
+                                                                                                                                                                                                            5x5_reduce
+   To measure the weight and activation sparsity, we used the
+Caffe framework [3] to prune and train the three networks
+listed in Table II, using the pruning algorithm of [15]. We then                                                       inception_3a                                                    inception_5b
+
+instrumented the Caffe framework to inspect the activations                                                                                          (b) GoogLeNet
+between the convolutional layers. Figure 1 shows the weight
+and activation density (fraction of non-zeros or complement of                              1                                                                                    Density (IA)                                  1
+                                                                                                                                                                                 Density (W)
+sparsity) of the layers of the networks, referenced to the left-
+
+
+
+
+                                                                                                                                                                                                                                     Work (# of multiplies)
+                                                                                           0.8                                                                                   Work (# of multiplies)                        0.8
+                                                                         Density (IA, W)
+
+
+hand y-axes. As GoogLeNet has 54 convolutional layers, we                                  0.6                                                                                                                                 0.6
+only show a subset of representative layers. The data shows                                0.4                                                                                                                                 0.4
+that weight density varies across both layers and networks,                                0.2                                                                                                                                 0.2
+reaching a minimum of 30% for some of the GoogLeNet                                         0                                                                                                                                  0
+layers. Activation density also varies, with density typically
+being higher in early layers. Activation density can be as
+                                                                                                                                                      (c) VGGNet
+low as 30% as well. The triangles shows the ideal amount of
+work (measured in multiplies of non-zero values) that could be         Fig. 1. Input activation and weight density and the reduction in the amount
+                                                                       of work achievable by maximally exploiting sparsity.
+achieved through maximum exploitation of sparsity by taking
+the product of the weight and activation densities on a per-
+layer basis. Typical layers can reduce work by a factor of 4,          activations. Second, it uses a novel dataflow that delivers
+and can reach as high as a factor of ten.                              only those densely encoded weights and activations to the
+   Exploiting sparsity. Since multiplication by zero just re-          multipliers.
+sults in a zero, it should require no work. In addition, that
+zero will contribute nothing to the partial sum it is part of,
+                                                                                                                                  III. SCNN DATAFLOW
+so the addition is unnecessary as well. Furthermore, data with
+many zeros can be represented in a compressed form. Together               The core operation in a CNN convolutional layer is a 2-
+these characteristics provide a number of opportunities for            dimensional sliding-window convolution of an R × S element
+optimization:                                                          filter over a W ×H element input activation plane to produce a
+   • Compressing data: Encoding the sparse weights and/or              W × H element output activation plane. There can be multiple
+      activations provides an architecture an opportunity to           (C) input activation planes, which are referred to as input
+      reduce the amount of data that must be moved throughout          channels. A distinct filter is applied to each input activation
+      the memory hierarchy. It also reduces the data footprint,        channel, and the filter output for each of the C channels
+      which allows larger matrices to be held a given size             are accumulated together element-wise into a single output
+      storage structure.                                               activation plane. Multiple filters (K) can be applied to the
+   • Eliminating computation: For multiplications that have            same body of input activations to produce K output channels
+      a zero weight and/or activation operand, the operation           of activations. Finally, a batch of length N of groups of C
+      can be data gated or the operands might never be sent to         channels of input activation planes can be applied to the same
+      the multiplier. This can save energy consumption or both         volume of filter weights. Figure 2 shows these parameters
+      time and energy consumption, respectively.                       applied to the computation of a single CNN layer.
+   Our SCNN architecture exploits both these opportunities.                The set of computations for the complete layer can be
+First, it employs a dense encoding of sparse weights and               formulated as a loop nest over these 7 variables. Because
+
+
+
+                                                                   3
+                 7-dimensional network layer                                     for n = 1 to N
+            Weights             Inputs                                             for k = 1 to K
+        C                                       K   Outputs                          for c = 1 to C
+                                                                                       for w = 1 to W
+    S                                                                                    for h = 1 to H
+                        H                                           H-S+1
+                                                                                           for r = 1 to R
+K            R
+        C                                   C                                                for s = 1 to S
+                                W                    W-R+1                                      out[n][k][w][h] +=
+                                  .                   .
+                                  .                   .                                           in[n][c][w+r-1][h+s-1] *
+                                      N                     N
+                                  .                   .                                           filter[k][c][r][s];
+                                                                1
+
+                                                                                                Fig. 3. 7-dimensional CNN loop nest.
+                 Fig. 2. CNN computations and parameters.
+
+                                                                                each of the the K output channels (a K × R × S subvolume).
+multiply-add operations are associative (modulo rounding er-                    Thus each input activation will contribute to a volume of
+rors, which we will ignore in this study), all permutations of                  K × R × S output activations. This order maximizes the reuse
+these 7 loop variables are legal. Figure 3 shows an example                     of the input activations, while paying a cost to stream the
+loop nest based on one such permutation. We can concisely                       weights to the computation units. Accommodating multiple
+describe this nest as N → K → C → W → H → R → S. Each                           input channels (C) adds an additional outer loop and results
+point in the 7-dimensional space formed from these variables                    in the loop nest C → W → H → K → R → S.
+represents a single multiply-accumulate operation. Note that                        The PT-IS-CP-dense dataflow requires input buffers for
+for the remainder of this paper, we assume a batch size of 1,                   weights and input activations, and a accumulator buffer to store
+which is common for inferencing tasks.                                          the partial sums of the output activations. The accumulator
+   This simple loop nest can be transformed in numerous                         buffer must perform a read-add-write operation for every
+ways to capture different reuse patterns of the activations                     access to a previously-written index. We call this accumulator
+and weights and to map the computation to a hardware                            buffer along with the attached adder an accumulation unit.
+accelerator implementation. A CNN’s dataflow defines how                            Parameters of contemporary networks cause these buffers to
+the loops are ordered, partitioned, and parallelized [6]. Prior                 be large and energy-expensive to access. The input-stationary
+work[6] has shown that the choice of dataflow has a significant                 temporal loop nest amortizes the energy cost of accessing
+impact on the area and energy-efficiency of an architecture.                    the input buffer over multiple weight and accumulator buffer
+In fact, the choice of dataflow is perhaps the single most                      accesses. More precisely, the register in which the stationary
+significant differentiator between many prior works on CNN                      input is held over K × R × S iterations serves as an inner buffer
+architectures.                                                                  filtering accesses to the larger input buffer.
+   While the concept of dataflow has been studied for dense                         Unfortunately, the stationarity of input activations comes at
+architectures, sparse architectures can also employ various                     the cost of more streaming accesses to the weights and partial
+alternative dataflows, each with its own set of trade-offs. While               sums (in the accumulator buffer). Blocking the weights and
+an exhaustive enumeration of sparse dataflows is beyond the                     partial sums in the output channel (K) dimension can increase
+scope of this paper, we present a specific dataflow called                      reuse of these data structures and improve energy efficiency.
+PlanarTiled-InputStationary-CartesianProduct-sparse (or PT-                     We factor the output channel variable (K) into Kc (which we
+IS-CP-sparse). After examining a range of different dataflows,                  call a output-channel group) and K/Kc , and only store weights
+we selected PT-IS-CP-sparse because it enables reuse pat-                       and outputs for a single output-channel group at a time inside
+terns that exploit the characteristics of sparse weights and                    the weight and accumulator buffers. Thus the subvolumes that
+activations. This section first presents an equivalent dense                    are housed in buffers at the computation unit are:
+dataflow (PT-IS-CP-dense) to explain the decomposition of the                       • Weights: C × Kc × R × S
+computations and then adds the specific features for PT-IS-CP-                      • Inputs: C ×W × H
+sparse .                                                                            • Partial Sums: Kc ×W × H
+                                                                                    An outer loop over all the K/Kc output-channel chunks
+A. The PT-IS-CP-dense Dataflow                                                  results in the complete loop nest K/Kc → C → W → H → Kc →
+   Single-multiplier temporal dataflow. To understand the                       R → S. Note that each iteration of this outer loop will require
+temporal component of the PT-IS-CP-dense dataflow, consider                     the weight buffer to be refilled and the accumulator buffer
+the operation of a processing element (or PE) with a single                     must be drained and cleared, while the contents of the input
+multiply-accumulate unit. The dataflow employs an input-                        buffer will be fully reused because the same input activations
+stationary computation order in which an input activation is                    are used across all output channels.
+held stationary at the computation units as it is multiplied by                     Intra-PE parallelism. To exploit the parallelism of many
+all the filter weights needed to make all its contributions to                  multipliers within a PE, we fetch a vector of F filter-weights
+
+
+
+                                                                            4
+from the weight buffer and a vector of I inputs from the input                 BUFFER wt_buf[C][Kc*R*S/F][F];
+                                                                               BUFFER in_buf[C][Wt*Ht/I][I];
+activation buffer. These values are delivered to an array of                   BUFFER acc_buf[Kc][Wt+R-1][Ht+S-1];
+F×I multipliers to compute a full Cartesian product of output                  BUFFER out_buf[K/Kc][Kc*Wt*Ht];
+partial-sums. Each product yields a useful partial sum such that         (A)   for k’ = 0 to K/Kc-1
+                                                                               {
+no extraneous fetches or computations are performed. PT-IS-                      for c = 0 to C-1
+CP-sparse will exploit this same property to make computation                      for a = 0 to (Wt*Ht/I)-1
+efficient on compressed-sparse weights and input activations.                      {
+                                                                         (B)         in[0:I-1] = in_buf[c][a][0:I-1];
+   The multiplier outputs are sent to the accumulation unit,             (C)         for w = 0 to (Kc*R*S/F)-1
+                                                                                     {
+which updates the partial sums of the output activation.                 (D)          wt[0:F-1] = wt_buf[c][w][0:F-1];
+Each multiplier output is accumulated with a partial sum                 (E)          parallel_for (i=0 to I-1) x (f=0 to F-1)
+at the matching output coordinates in the output activation                           {
+                                                                                        k = Kcoord(w,f);
+space. These coordinates are computed in parallel with the                              x = Xcoord(a,i,w,f);
+multiplications. The accumulation unit must employ at least                             y = Ycoord(a,i,w,f);
+F×I adders to match the throughput of the multipliers. Fig-              (F)            acc_buf[k][x][y] += in[i]*wt[f];
+                                                                                      }
+ure 4 shows pseudo-code for the PT-IS-CP-dense dataflow,                             }
+including blocking in the K dimension (A,C), fetching vectors                      }
+of input activations and weights (B,D), and computing the                        out_buf[k’][0:Kc*Wt*Ht-1] =
+                                                                                   acc_buf[0:Kc-1][0:Wt-1][0:Ht-1];
+Cartesian product in parallel (E,F). The Kcoord(), Xcoord(),                   }
+and Y coord() functions compute the k, x, and y coordinates
+of the uncompressed output volume using a de-linearization                                Fig. 4. PT-IS-CP-dense dataflow.
+of the temporal loop indices a and w, the spatial loop indices
+i and f , and the known filter width and height. Note that this
+dataflow is simply a reordered, partitioned and parallelized             B. PT-IS-CP-sparse Dataflow
+version of Figure 3.
+                                                                            PT-IS-CP-sparse is a natural extension of PT-IS-CP-dense
+   Inter-PE parallelism. To scale beyond the practical limits            that exploits sparsity in the weights and input activations. The
+of multiplier count and buffer sizes within a PE, we employ              dataflow is specifically designed to operate on compressed-
+a tiling strategy to spread the work across an array of PEs              sparse encodings of the weights and input activations and to
+so that each PE can operate independently. PT-IS-CP-dense                produce a compressed-sparse encoding of the output activa-
+partitions the W ×H element activation plane into smaller                tions. At a CNN layer boundary, the output activations of
+Wt ×Ht element tiles that are distributed across the PEs. Each           the previous layer become the input activations of the next
+tile extends fully into the input-channel dimension C, resulting         layer. While prior work has proposed a number of compressed-
+in an input-activation volume of C×Wt ×Ht assigned to each               sparse representations [13], [1], [30], the specific format used
+PE. Weights are broadcast to the PEs and each PE operates                is orthogonal to the sparse architecture itself. What is key is
+on its own subset of the input and output activation space.              that decoding a sparse format ultimately yields a non-zero data
+   Unfortunately, strictly partitioning both input and output            value and an index indicating the coordinates of the value in
+activations into Wt ×Ht tiles does not work because the sliding-         the weight or input activation matrices.
+window nature of the convolution operation introduces cross-                To facilitate easier decoding of the compressed-sparse
+tile dependencies at tile edges. These dependencies are called           blocks, weights are grouped into compressed-sparse blocks at
+halos. Halos can be resolved in two ways:                                the granularity of an output-channel group, with of Kc ×R×S
+                                                                         weights encoded into one compressed block. Likewise, input
+  •   Input halos: The input buffers at each PE are sized to be          activations are encoded at the granularity of input channels,
+      slightly larger than C ×Wt ×Ht to accommodate the halos.           with a block of Wt ×Ht encoded into one compressed block.
+      These halo input values are replicated across adjacent             At each access, the weight buffer delivers a vector of F non-
+      PEs, but outputs are strictly private to each PE. Replicated       zero filter weights along with each of their coordinates within
+      input values can be multicast when they are being fetched          the Kc ×R×S region. Similarly, the input buffer delivers a
+      into the buffers.                                                  vector of F non-zero input activations along with each of
+  •   Output halos: The output buffers at each PE are sized to           their coordinates within the Wt ×Ht region. Similar to the dense
+      be slightly larger than Kc ×Wt × Ht to accommodate the             dataflow, the multiplier array computes the full cross-product
+      halos. The halos now contain incomplete partial sums that          of F×I partial sum outputs, with no extraneous computations.
+      must be communicated to neighbor PEs for accumulation.             Unlike a dense architecture, output coordinates are not derived
+      This communication occurs at the end of computing each             from loop indices in a state machine but from the coordinates
+      output-channel group.                                              of non-zero values embedded in the compressed format.
+                                                                            Even though calculating output coordinates is trivial, the
+   Our PT-IS-CP-dense dataflow uses output halos, though the             multiplier outputs are not typically contiguous as they are in
+efficiency difference between the two approaches is minimal.             PT-IS-CP-dense. Thus the F×I multiplier outputs must be
+
+
+
+                                                                     5
+scattered to discontiguous addresses within the Kc ×Wt ×Ht
+output range. Because any value in the output range can be                                            PE               PE           PE
+non-zero, the accumulation buffer must be kept in a dense
+format. In fact, output activations will probabilistically have
+high density even with a very low density of weights and input                                                     Weights
+
+
+
+
+                                                                           DRAM
+activations, until they pass through a ReLU operation.
+   To accommodate the needs of accumulation of sparse partial                                         PE               PE           PE
+                                                                                                                  IA         OA
+sums, we modify the monolithic Kc ×Wt ×Ht accumulation
+
+
+
+
+                                                                                  Sequencer
+buffer from the PT-IS-CP-dense dataflow into a distributed
+
+
+
+
+                                                                                    Layer
+array of smaller accumulation buffers accessed via a scatter
+network which can be implemented as a crossbar switch. The                                            PE               PE           PE
+scatter network routes an array of F×I partial sums to an array
+of A accumulator banks based on the output index associated
+with each partial sum. Taken together, the complete accumula-                                 Fig. 5. Complete SCNN architecture.
+tor array still maps the same Kc ×Wt ×Ht address range, though
+the address space is now split across a distributed set of banks.
+PT-IS-CP-sparse can be implemented via small adjustments                   Each PE’s state machine operates on the weight and in-
+of Figure 4. Instead of a dense vector fetches, (B) and (D)             put activations in the order defined by the PT-IS-CP-sparse
+fetch the compressed sparse input activations and weights,              dataflow to produce an output-channel group of Kc ×Wt × Ht
+respectively. In addition, the coordinates of the non-zero values       partial sums inside the accumulation buffers. First, a vector F
+in the compressed-sparse form of these data structures must be          of compressed weights and a vector I of compressed input
+fetched from their respective buffers (not shown). After that           activations are fetched from their respective buffers. These
+the accumulator buffer (F) must be indexed with the computed            vectors are distributed into the F×I multiplier array which
+output coordinates from the sparse weight and activations.              computes a form of the cartesian product of the vectors. At
+Finally, when the computation for the output-channel group              the same time, the indices from the sparse-compressed weights
+has been completed the accumulator buffer is drained and                and activations are processed to compute the coordinates in
+compressed into the next level of buffer.                               dense output activation. The F×I products are delivered to
+                                                                        an array of A accumulator banks, indexed by the output
+                 IV. SCNN A RCHITECTURE                                 coordinates. To reduce contention among products that hash to
+   A complete SCNN accelerator employing the PT-IS-CP-                  the same accumulator bank, A is set to be larger than F×I. Our
+sparse dataflow of Section III consists of multiple SCNN pro-           results show that A = 2×F×I sufficiently reduces accumulator
+cessing elements (PEs) connected via simple interconnections.           bank contention. Each accumulator bank includes adders and
+Figure 5 shows an array of PEs, with each PE including                  small set of entries for the output channels associated with
+channels for receiving weights and input activations, and               the output-channel group being processed. The accumulation
+channels delivering output activations. The PEs are connected           buffers are double-buffered so that one set of banks can be
+to their nearest neighbors to exchange halo values during the           updated by incoming partial sums while the second set of
+processing of each CNN layer. The PE array is driven by a               banks are drained out by the PPU. When the output-channel
+layer sequencer to orchestrate the movement of weights and              group is complete, the PPU performs the following tasks: (1)
+activations and is connected to a DRAM controller that can              exchange partial sums with neighbor PEs for the halo regions
+broadcast weights to the PEs and stream activations to/from             at the boundary of the PE’s output activations, (2) apply
+the PEs.                                                                the non-linear activation (e.g. ReLU), pooling, and dropout
+   Processing Element (PE) Architecture. Figure 6 shows                 functions, and (3) compress the output activations into the
+the microarchitecture of an SCNN PE, including a weight                 compressed-sparse form and write them into the OARAM.
+buffer, input/output activation RAMs (IARAM and OARAM),                    SCNN uses a simple compressed-sparse encoding approach
+a multiplier array, a scatter crossbar, a bank of accumulator           based on run-length encoding scheme. The index vector
+buffers, and a post-processing unit (PPU). To process the               encodes the number of zeros between each element in the
+first CNN layer, the layer sequencer streams a portion of the           compressed-sparse data vector. Determining the coordinates
+input image into the IARAM of each PE and broadcasts the                in the accumulator buffer for each multiplier output requires
+compressed-sparse weights into the weight buffer of each PE.            reading the index vectors for F and I and combining them
+Upon completion of the layer, the sparse-compressed output              with the coordinates of portion of the output activation space
+activation is distributed across the OARAMs of the PEs. When            currently being processed. Four bits per index allows for up
+possible, the activations are held in the IARAMs/OARAMs                 to 15 zeros to appear between any two non-zero elements.
+and are never swapped out to DRAM. If the output activation             Non-zero elements that are further apart can have a zero-
+volume of a layer can serve as the input activation volume              value placeholder without incurring any noticable degradation
+for the next layer, the IARAMs and OARAMs are logically                 in compression efficiency.
+swapped between the two layers’ computation sequences.                     While SCNN will operate most efficiently when the activa-
+
+
+
+                                                                    6
+                                                                                                                                        (sparse)
+                                                                                                                                         OARAM
+
+                                                                                                                                                   indices
+                                           F
+                                                       Coordinate          F*I
+                                            I         Computation
+
+                       Weight FIFO          F              …
+
+
+
+
+                                                                                  F*I—A arbitrated xbar
+                        (sparse)                                                                                   Buffer bank
+                          indices                                                                                                        PPU:
+                                                                           F*I                                                         Halos
+
+
+
+
+                                                                                                             …
+                                                     …
+                                                                                                                                       ReLU
+                                                                                                                                       Compress
+                          IARAM                 I
+                         (sparse)                                                                                  Buffer bank
+
+                          indices                                                                                                      Neighbors
+                                                    FxI multiplier array                                  A accumulator buffers
+
+                                                                                                                                           1
+
+
+
+
+                                         Fig. 6. SCNN PE employing the PT-IS-CP-sparse dataflow.
+
+
+
+                          TABLE II                                                                                            TABLE III
+                   SCNN DESIGN PARAMETERS .                                                                            SCNN PE AREA BREAKDOWN .
+
+                 PE Parameter              Value                                                             PE Component              Size                  Area (mm2 )
+          Multiplier width                       16 bits                                                   IARAM + OARAM             20 KB                      0.031
+          Accumulator width                      24 bits                                                   Weight FIFO               0.5 KB                     0.004
+          IARAM/OARAM (each)                      10KB                                                     Multiplier array         16 ALUs                     0.008
+          Weight FIFO                50 entries (500 B)                                                    Scatter network        16×32 crossbar                0.026
+          Multiply array (F×I)                      4×4                                                    Accumulator buffers        6 KB                      0.036
+          Accumulator banks                          32                                                    Other                        —                       0.019
+          Accumulator bank entries                   32                                                    Total                        —                       0.123
+               SCNN Parameter              Value
+                                                                                                           Accelerator total         64 PEs                      7.9
+          # PEs                                      64
+          # Multipliers                            1024
+          IARAM + OARAM data                       1MB
+          IARAM + OARAM indices                  0.2MB                         sparse format. In total, the SCNN design includes a total
+                                                                               of 1,024 multipliers and 1MB of activation RAM. At the
+                                                                               synthesized clock speed of the PE of slightly more than 1
+tions fit in the on-chip activation RAMs, Large networks, such                 GHz, this design achieves a peak throughput of 2 Tera-ops
+as VGGNet, require activations to be saved to and restored                     (16-bit multiplies plus 24-bit adds).
+from DRAM. CNN accelerator architectures such as SCNN                             Area Analysis. To prototype the SCNN architecture, we
+can employ a tiling approach that operates on a 2D subset                      designed an SCNN PE in synthesizable SystemC and then
+of the activation space at a time. Our analysis shows that for                 used the Catapult high-level synthesis (HLS) tool [23], [22]
+both dense and sparse architectures, the DRAM accesses for                     to generate Verilog RTL. During this step, we used HLS
+one tile can be hidden by pipelining them in tandem with                       design constraints to optimize the design by mapping different
+the computation of another tile. While we do not present                       memory structures to synchronous RAMs and latch arrays
+the details of the tiled approach here, we do account for the                  and pipelining the design to achieve full throughput. We then
+DRAM access energy overhead for tiling in Section VI.                          used Synopsys Design Compiler to perform placement-aware
+   SCNN Architecture Configuration. While the SCNN ar-                         logic synthesis and obtain post-synthesis area estimates in a
+chitecture can be scaled across a number of dimensions,                        TSMC 16nm FinFET technology. Table III summarizes the
+Table II lists the key parameters of the SCNN design we                        area of the major structures of the SCNN PE. A significant
+explore in this paper. The design employs an 8×8 array of PEs,                 fraction of the PE area is contributed by memories (IARAM,
+each with a 4×4 multiplier array, and an accumulator buffer                    OARAM, accumulator buffers), which consume 57% of the PE
+with 32 banks. We chose a design point of 1,024 multipliers                    area, while the multiplier array only consumes 6%. IARAM
+to match the expected computation throughput required to                       and OARAM are large in size and consume 25% of the PE
+process HD video in real-time at acceptable frame rates. The                   area. Accumulator buffers, though smaller in size compared to
+IARAM and OARAM are sized so that the sparse activations                       IARAM/OARAM, are heavily banked (32 banks), contributing
+of AlexNet and GoogleNet can fit entirely within these RAMs                    to their large area.
+so that activations need not spill to DRAM. The weight FIFO
+and the activation RAMs each carry a 10-bit overhead for                                                        V. E XPERIMENTAL M ETHODOLOGY
+each 16-bit value to encode the coordinates in the compressed-                   CNN performance and power measurements. To model
+
+
+
+                                                                           7
+the performance of the SCNN architecture, we rely primar-                                       TABLE IV
+ily on a custom-built cycle-level simulator. This simulator                           CNN ACCELERATOR CONFIGURATIONS .
+is parameterizable across dimensions including number of                                  # PEs   # MULs    SRAM     Area (mm2 )
+processing element (PE) tiles, RAM capacity, multiplier array                  DCNN         64      1024     2MB         5.9
+dimensions (F and I), and accumulator buffers (A). The SCNN                   DCNN-opt      64      1024     2MB         5.9
+simulator is driven by the pruned weights and sparse input                     SCNN         64      1024     1MB         7.9
+activation maps extracted from the Caffe Python interface
+(pycaffe) [3] and executes each layers of the network one
+                                                                        its larger size is due to the accumulator buffers, as described
+at a time. As a result, the simulator captures the effects of the
+                                                                        in Section IV.
+sparsity of the data and its effect on load balancing within the
+                                                                           Benchmarks. To explore the sensitivity of the architectures
+SCNN architecture.
+                                                                        to sparsity parameters, we employ a synthetic network where
+   We also developed TimeLoop, a detailed analytical model
+                                                                        we can adjust the degree of sparsity of both weights and
+for CNN accelerators to enable an exploration of the design
+                                                                        activations. As described in Section II, we use AlexNet and
+space of dense and sparse architectures. TimeLoop can model
+                                                                        GoogLeNet for the bulk of our experiments. With respect to
+a wide range of data flows, including PT-IS-CP-dense, PT-IS-
+                                                                        GoogLeNet, we primarily focus on the convolutional layers
+CP-sparse and others. Architecture parameters to TimeLoop
+                                                                        that are within the inception modules [28]. VGGNet is known
+include the memory hierarchy configuration (buffer size and
+                                                                        to be over-parameterized, which results in an extremely large
+location), ALU count and partitioning, and dense/sparse hard-
+                                                                        amount of inter-layer activation data (6 MB or about 4×) the
+ware support. TimeLoop analyzes the input data parameters,
+                                                                        largest GoogLeNet layer. However, we use VGGNet as a proxy
+the architecture, and the dataflows, and computes the number
+                                                                        for large input data (such has high-resolution images) to ex-
+of cycles to process the layer based on a bottleneck analysis
+                                                                        plore the implications of tiling data on the SCNN architecture
+and the counts of ALU operations and accesses to different
+                                                                        in Section VI-D.
+buffers in the memory hierarchy. We apply an energy model
+to the time loop events derived from the synthesis modeling                                   VI. E VALUATION
+to compute the overall energy required to execute the layer.               This section first evaluates the sensitivity of SCNN to the
+TimeLoop also computes the overall area of the accelerator              sparseness of weights and activations using a synthetic CNN
+based on the inputs from the synthesis modeling. For SCNN,              benchmark. We then discuss the performance and energy-
+the area model includes all of the elements from the synthe-            efficiency of SCNN versus a dense CNN accelerator, using
+sizable SystemC implementation. For dense architectures, area           real world CNN applications. For brevity, all the inception
+is computed using area of the major structures (RAMs, ALUs,             modules in GoogLeNet are denoted as IC_id in all of the
+and interconnect) derived from the SystemC modeling.                    figures discussed in this section.
+   Architecture configurations. Table IV summarizes the ma-
+jor accelerator configurations that we explore, including both          A. Sensitivity to CNN Sparsity
+dense and sparse accelerators. All of the accelerators employ              To explore the efficacy of sparse versus dense architecture,
+the same number of multiply ALUs so that we can compare the             we first measure performance and energy as a function of
+performance of the accelerators with the same computational             density of weights and activations. Using the TimeLoop anal-
+resources. The dense DCNN accelerator operates solely on                ysis tool, we examine GoogLeNet as we artificially sweep
+dense weights and activations and employs a dataflow called             the weight and activation densities together from 100% (fully
+PT-IS-DP-dense, which is a variant of the PT-IS-CP-dense                dense) down to 10%. Figure 7 shows results on SCNN,
+data flow described in Section III that uses a dot-product as           DCNN, and DCNN-opt. On the x-axis, the total density is
+its inner core operation. The optimized DCNN-opt architec-              the product of the weight and activation density. For example,
+ture has the same configuration as DCNN but employs two                 0.5/0.5 represents the point where both weights and activations
+optimizations: (1) compression/decompression of activations             are 50% dense so the overall density is 25%. Figure 7a
+as they are transferred out of/into DRAM, and (2) multiply              shows that at 100% density, SCNN achieves about 79% of
+ALU gating to save energy when a multiplier input is zero.              the performance of DCNN because it suffers from multiplier
+The DCNN architecture is configured with 2MB of SRAM for                underutilization (discussed shortly). SCNN starts to perform
+holding inter-layer activations, and can hold all of them for           better than DCNN as density decreases to 85%, reaching a
+AlexNet and GoogLeNet. The SCNN configuration matches                   24× improvement at 10% weight/activation density. This chart
+the architecture described in Section IV, and includes a total          does not include DCNN-opt as the energy optimizations over
+of 1MB of IARAM + OARAM. Because the activations are                    DCNN do not affect performance.
+compressed, this capacity enables all of the activation data               Figure 7b first shows that DCNN-opt’s energy optimizations
+for the two networks to be held on chip, without requiring              of zero gating and DRAM traffic compression cause it to be
+DRAM transfers for activations. The larger VGGNet requires              better than DCNN at every level of density. These energy
+the activation data to be transferred in and out of DRAM.               optimizations are surprisingly effective given that they have
+The area required for each accelerator is listed in the last            such a small effect on the design of the accelerator. At
+column. While SCNN has smaller activation RAM capacity,                 high density, SCNN is notably less energy efficient than
+
+
+
+                                                                    8
+                                                              DCNN/DCNN-opt            SCNN                                                          12                                         DCNN/DCNN-opt                         SCNN             SCNN (oracle)
+                       1.4                                                                                                                           10
+
+                       1.2                                                                                                                               8
+
+
+
+
+                                                                                                                                          Speedup
+                        1                                                                                                                                6
+    Latency (cycles)
+
+
+
+
+                       0.8                                                                                                                               4
+
+                       0.6                                                                                                                               2
+
+                       0.4                                                                                                                               0
+                                                                                                                                                                       conv1                   conv2                     conv3                        conv4                    conv5                         all
+                       0.2
+                                                                                                                                                                                                                     Per-layer                                                                     Network
+                        0
+                             0.1/0.1   0.2/0.2   0.3/0.3   0.4/0.4     0.5/0.5   0.6/0.6    0.7/0.7   0.8/0.8   0.9/0.9   1.0/1.0                                                                                   (a) AlexNet
+                                                                  Weight / Activation Density
+
+                                                             (a) Performance                                                                         14                                                  DCNN/DCNN-opt                       SCNN                 SCNN (oracle)
+                                                                                                                                                     12
+                                                           DCNN          DCNN-opt          SCNN                                                      10
+
+
+
+
+                                                                                                                                          Speedup
+                                                                                                                                                      8
+                  1.4
+                                                                                                                                                      6
+                  1.2
+                                                                                                                                                      4
+                       1                                                                                                                              2
+                  0.8                                                                                                                                 0
+  Energy
+
+
+
+
+                                                                                                                                                                IC_3a              IC_3b       IC_4a           IC_4b            IC_4c        IC_4d                IC_4e        IC_5a          IC_5b                all
+                  0.6
+                                                                                                                                                                                                                               Per-layer                                                                     Network
+                  0.4
+                  0.2                                                                                                                                                                                              (b) GoogLeNet
+                       0
+                             0.1/0.1   0.2/0.2   0.3/0.3   0.4/0.4    0.5/0.5    0.6/0.6   0.7/0.7    0.8/0.8   0.9/0.9   1.0/1.0                   15                                             DCNN/DCNN-opt                        SCNN           SCNN (oracle)
+                                                                  Weight / Activation Density                                                       12
+
+                                                                   (b) Energy                                                                        9
+
+
+
+
+                                                                                                                                          Speedup
+                                                                                                                                                     6
+    Fig. 7. GoogLeNet performance and energy as a function of density.                                                                               3
+                                                                                                                                                     0
+
+
+
+
+                                                                                                                                                                                                                                                                                                                    all
+                                                                                                                                                             conv1_1
+
+                                                                                                                                                                         conv1_2
+
+                                                                                                                                                                                     conv2_1
+
+                                                                                                                                                                                               conv2_2
+
+                                                                                                                                                                                                         conv3_1
+
+                                                                                                                                                                                                                     conv3_2
+
+                                                                                                                                                                                                                                  conv3_3
+
+                                                                                                                                                                                                                                            conv4_1
+
+                                                                                                                                                                                                                                                        conv4_2
+
+                                                                                                                                                                                                                                                                     conv4_3
+
+                                                                                                                                                                                                                                                                               conv5_1
+
+                                                                                                                                                                                                                                                                                         conv5_2
+
+                                                                                                                                                                                                                                                                                                   conv5_3
+either DCNN architecture due to the overheads of storing and
+                                                                                                                                                                                                                               Per-layer                                                                     Network
+maintaining the sparse data structures. SCNN becomes more
+                                                                                                                                                                                                                    (c) VGGNet
+efficient than DCNN at about 83% weight/activation density
+                                                                                                                                                                                                         Fig. 8. Performance.
+and more efficient than DCNN-opt at 60% density. Given the
+density measurements of the networks in Figure 1, we expect
+SCNN to outperform the dense architectures on nearly all                                                                                number of non-zero activations and weights in the later layers
+of the layers of the networks we examined and be largely                                                                                to fully utilize the multiplier arrays.
+comparable in energy efficiency vs. DCNN-opt across these                                                                                  Figure 9 quantitatively demonstrates this intra-PE frag-
+layers.                                                                                                                                 mentation of the multiplier array. For the last two inception
+                                                                                                                                        modules of GoogLeNet, the fragmentation issue becomes
+B. SCNN Performance and Energy
+                                                                                                                                        noticeably severe, with less than an average 20% multiplier
+   Performance. This subsection discusses the performance                                                                               utilization. In this layer 3 out of the 6 convolutional layers
+improvements offered by SCNN over the baseline dense                                                                                    within the inception module have a filter size of 1 × 1, only
+DCNN accelerator. To demonstrate the upper-bound oppor-                                                                                 having up to 8 non-zero weights within an output-channel
+tunity on performance, we also present the speedups offered                                                                             group with a Kc value of 8. Nonetheless, the last layers
+by an oracular SCNN design (SCNN(oracle)). The perfor-                                                                                  generally account for a small portion of the overall execution
+mance of SCNN(oracle) is derived by dividing the number                                                                                 time and SCNN generally provides significant performance
+of multiplication operations required for Cartesian product-                                                                            improvement across the network. The right y-axis of Figure 9
+based convolution (Section III) with the number of multipliers                                                                          demonstrates the effect of load imbalance across the PEs by
+available on-chip. Figure 8 summarizes the speedups offered                                                                             showing the fraction of cycles spent waiting at inter-PE barrier.
+by SCNN versus a dense CNN accelerator. Overall, SCNN                                                                                   Overall, although the inter-PE global barriers and intra-PE
+consistently outperforms the DCNN design across all the                                                                                 fragmentation prevents SCNN from reaching similar speedups
+layers of AlexNet, GoogLeNet, and VGGNet, achieving an                                                                                  offered by oracular SCNN(oracle), it still provides an
+average 2.37×, 2.19×, and 3.52× network-wide performance                                                                                average 2.7× performance over DCNN across the three state-
+improvement, respectively.                                                                                                              of-the-art CNNs.
+   The    performance      gap     between     SCNN      versus                                                                            Energy-efficiency. Figure 10 compares the energy of the
+SCNN(oracle) widens in later layers of the network,                                                                                     three accelerator architectures across the layers of the three
+from left to right in the x-axis of Figure 8. The key reason                                                                            networks. DCNN-opt improves energy efficiency by 2.0× over
+behind this gap is closely related to each layer’s average                                                                              DCNN, while SCNN increases average efficiency by 2.3×.
+PE multiplier array utilization. In general, the working set                                                                            The behavior across the layers varies widely depending on the
+allocated to each of the PEs in the later layers (e.g., IC_5b)                                                                          density of the layer, ranging from 0.89× to 4.7× improvement
+are smaller than those in the earlier layers (e.g., IC_3a).                                                                             over DCNN and 0.76× to 1.9× improvement over DCNN-opt.
+As a result, it is more difficult to assign to a PE a sufficient                                                                        Input layers such as VGGNet conv1 1 and AlexNet conv1
+
+
+
+                                                                                                                                    9
+                            1                                      Multiplier util.                            1                                                                                                DCNN       DCNN-opt         SCNN
+                                                                   PE idle cycles                                                                                              1.2
+                           0.8                                                                                 0.8
+   Avg. multiplier util.
+
+
+
+
+                                                                                                                     Avg. PE idle cycles
+
+
+
+
+                                                                                                                                                   Energy (relative to DCNN)
+                                                                                                                                                                                1
+                           0.6                                                                                 0.6
+                                                                                                                                                                               0.8
+
+                           0.4                                                                                 0.4                                                             0.6
+
+                                                                                                                                                                               0.4
+                           0.2                                                                                 0.2
+                                                                                                                                                                               0.2
+                            0                                                                                  0
+                                   conv1          conv2           conv3            conv4            conv5                                                                       0
+                                                                                                                                                                                        conv1           conv2           conv3               conv4           conv5           all
+                                                             (a) AlexNet                                                                                                                                                        Per-layer
+
+                                                                                                                                                                                                                    (a) AlexNet
+                            1                                       mul_util                                   1
+                                                                    idle_cycles
+                                                                                                                                                                                                                DCNN       DCNN-opt         SCNN
+                           0.8                                                                                 0.8
+   Avg. multiplier util.
+
+
+
+
+                                                                                                                     Avg. PE idle cycles
+                                                                                                                                                                               1.2
+                           0.6                                                                                 0.6
+
+
+
+
+                                                                                                                                                   Energy (relative to DCNN)
+                                                                                                                                                                                1
+                           0.4                                                                                 0.4                                                             0.8
+
+                           0.2                                                                                 0.2                                                             0.6
+
+                                                                                                                                                                               0.4
+                            0                                                                                  0
+                                 IC_3a   IC_3b   IC_4a    IC_4b   IC_4c    IC_4d      IC_4e    IC_5a   IC_5b                                                                   0.2
+
+                                                           (b) GoogLeNet                                                                                                        0
+                                                                                                                                                                                     IC_3a      IC_3b   IC_4a   IC_4b      IC_4c       IC_4d        IC_4e   IC_5a   IC_5b         all
+                                                                                                                                                                                                                                Per-layer
+                            1                                                                 mul_util         1
+                                                                                              idle_cycles                                                                                                         (b) GoogLeNet
+                           0.8                                                                                 0.8
+   Avg. multiplier util.
+
+
+
+
+                                                                                                                      Avg. PE idle cycles
+                           0.6                                                                                 0.6                                                                                              DCNN       DCNN-opt         SCNN
+
+                           0.4                                                                                 0.4                                                             1.2
+
+
+                                                                                                                                                   Energy (relative to DCNN)
+                           0.2                                                                                 0.2                                                              1
+                                                                                                                                                                               0.8
+                            0                                                                                  0
+                                                                                                                                                                               0.6
+                                                                                                                                                                               0.4
+                                                                                                                                                                               0.2
+                                                             (c) VGGNet                                                                                                         0
+
+Fig. 9. Average multiplier array utilization (left-axis) and the average fraction
+of time PEs are stalled on a global barrier (right-axis), set at the boundaries
+                                                                                                                                                                                                                                Per-layer
+of output channel groups.
+                                                                                                                                                                                                                    (c) VGGNet
+                                                                                                                                                                                                          Fig. 10. Energy-efficiency.
+usually present a challenge for sparse architectures because
+of their 100% input activation density. In such cases, the
+overheads of SCNN’s structures such as the crossbar and                                                                                          inter-PE barriers for system-wide performance under our PT-
+distributed accumulation RAMs overshadow any benefits from                                                                                       IS-CP-sparse dataflow.
+fewer arithmetic operations and data movement.
+
+C. PE Granularity                                                                                                                                D. Larger Networks
+
+   As outlined in Section VI-B, both cross-PE global barriers                                                                                       SCNN is at its most efficient when it can capture all of the
+and intra-PE multiplier array fragmentation can contribute to                                                                                    activations in its IARAM and OARAM. For a network with
+degradation in the performance of SCNN. We quantify the                                                                                          large layers like VGGNet, there are two choices. First, the
+effects of both of these factors on system performance by                                                                                        designer could choose to provision SCNN with IARAM and
+conducting the following sensitivity study. Assuming a fixed,                                                                                    OARAM large enough to hold the largest layer. While this ap-
+chip-wide math throughput of 1,024 FLOPS, we sweep the                                                                                           proach would make processing the large layers more efficient
+total number of PEs on-chip from 64 (8×8 PEs, 16 multipliers                                                                                     by avoiding off-chip DRAM accesses, smaller layers would
+per PE) down to 4 (2×2 PEs, 256 multipliers per PE). Clearly,                                                                                    be penalized by incurring larger on-chip access overheads to
+an SCNN with 4 PEs can better sustain the effects of the                                                                                         RAMs that are larger than necessary. The second choice is
+global barriers than an SCNN with 64 PEs. However, the 4                                                                                         to employ a tiling approach as described in Section IV. Our
+PE configuration is also more likely to suffer from intra-PE                                                                                     results show that this is only required for 9 of the 72 total
+fragmentation because each PE must now process a larger                                                                                          evaluated layers, and for these 9 layers the overall energy
+working set to fully utilize the math units. When evaluated                                                                                      penalty for shuttling the activation data to and from DRAM
+on GoogLeNet, SCNN with 64 PEs achieves an 11% speedup                                                                                           ranges from 5–62%, with a mean of 18%. While the tiling
+than the one with 4 PEs as it does a better job utilizing the                                                                                    approach is attractive, we expect that there will be low power
+math arrays (average 59% math utilization versus 35%). We                                                                                        deployment scenarios that will motivate the designers of the
+observed similar trends for AlexNet and VGGNet, concluding                                                                                       neural networks to size them so that they fit in the on-chip
+that addressing intra-PE fragmentation is more critical than                                                                                     SRAM capacity provided by the accelerator implementation.
+
+
+
+                                                                                                                                            10
+                    VII. R ELATED W ORK                                  (PT-IS-CP-sparse) dataflow. This approach enables SCNN to
+   Previous efforts to exploit sparsity in CNN accelerators              use a novel Cartesian product-based computation architecture
+have focused on reducing energy or saving time, which will               that maximizes reuse of weights and activations within a set
+invariably also save energy. Eliminating the multiplication              of distributed processing elements. In addition, it allows the
+when an input operand is zero is a natural way to save energy.           use of a dense compressed representation for both weights
+Eyeriss [7] gates the multiplier when it sees an input activation        and activations to be used through almost the entire pro-
+of zero. For non-pruned networks the sparsity of weights is              cessing flow. This approach reduces data movement and on-
+a less significant factor, and Eyeriss opted not to gate the             die storage capacity relative to alternative architectures. Our
+multiplier on zero weights. This approach will save energy,              results show that the SCNN architecture starts to beat a dense
+but not save cycles. SCNN also saves energy by eliminating               architecture in performance and energy efficiency when the
+all the unnecessary multiplications, but doesn’t even prepare            weights and activations are each less than 85% dense. On three
+to do a multiplication when any input operand is zero, thus              contemporary networks (AlexNet, GoogLeNet, and VGGNet)
+saving time as well.                                                     SCCN achieves performance improvements over the dense
+   Another approach to reducing energy is to reduce data                 architecture by a factor of 2.7× while still being energy-
+transfer costs when the data is sparse. Eyeriss uses a run length        efficient by a factor of 2.3×.
+encoding scheme when transferring activations to and from                                              R EFERENCES
+DRAM. This saves energy (and time) by reducing the number
+                                                                          [1] J. Albericio, P. Judd, T. Hetherington, T. Aamodt, N. E. Jerger, and
+of DRAM accesses. However, after the data is loaded into                      A. Moshovos. Cnvlutin: Ineffectual-Neuron-Free Deep Convolutional
+the on-chip buffer the data is stored in expanded form. Thus,                 Neural Network Computing. In Proceedings of the International
+there is no savings on data transfers from one internal buffer to             Symposium on Computer Architecture (ISCA), pages 1–13, June 2016.
+                                                                          [2] D. Amodei, R. Anubhai, E. Battenberg, C. Case, J. Casper, B. Catanzaro,
+another internal buffer or to the multipliers. SCNN also uses                 J. Chen, M. Chrzanowski, A. Coates, G. Diamos, E. Elsen, J. Engel,
+a compressed representation for all data coming from DRAM,                    L. Fan, C. Fougner, T. Han, A. Hannun, B. Jun, P. LeGresley, L. Lin,
+but also maintains that compressed representation in the on-die               S. Narang, A. Ng, S. Ozair, R. Prenger, J. Raiman, S. Satheesh,
+                                                                              D. Seetapun, S. Sengupta, Y. Wang, Z. Wang, C. Wang, B. Xiao,
+buffers.                                                                      D. Yogatama, J. Zhan, and Z. Zhu. Deep Speech 2: End-To-End Speech
+   Another CNN accelerator designed to exploit sparsity, Cn-                  Recognition in English and Mandarin. https://arxiv.org/abs/1512.02595,
+vlutin [1] compresses activation values. However, it does not                 2015.
+                                                                          [3] Caffe. http://caffe.berkeleyvision.org, 2016.
+compress weights. Cambricon-X [30], does not compress the                 [4] Caffe Model Zoo.         https://github.com/BVLC/caffe/wiki/Model-Zoo,
+data coming from DRAM. Nor does it keep activations in a                      2017.
+compressed form in the internal buffers, except in the queues             [5] T. Chen, Z. Du, N. Sun, J. Wang, C. Wu, Y. Chen, and O. Temam.
+                                                                              DianNao: A Small-footprint High-throughput Accelerator for Ubiquitous
+directly delivering activations to the multipliers. Cambricon-                Machine-learning. In Proceedings of the International Conference
+X does keep only non-zero weights in the internal buffers.                    on Architectural Support for Programming Languages and Operation
+In contrast, SCNN keeps both weights and activations in a                     Systems (ASPLOS), pages 269–284, March 2014.
+                                                                          [6] Y.-H. Chen, J. Emer, and V. Sze. Eyeriss: A Spatial Architecture
+compressed form in both DRAM and internal buffers. This                       for Energy-Efficient Dataflow for Convolutional Neural Networks. In
+saves data transfer time and energy on all data transfers and                 Proceedings of the International Symposium on Computer Architecture
+allows the chip hold larger models for a given amount of                      (ISCA), pages 367–379, June 2016.
+                                                                          [7] Y.-H. Chen, T. Krishna, J. Emer, and V. Sze. Eyeriss: An Energy-efficient
+internal storage.                                                             Reconfigurable Accelerator for Deep Convolutional Neural Networks.
+   Not delivering zero activation values or zero weights to                   In Proceedings of the International Solid State Circuits Conference
+the multipliers can save time by avoiding cycles when the                     (ISSCC), February 2016.
+                                                                          [8] R. Collobert, J. Weston, L. Bottou, M. Karlen, K. Kavukcuoglu, and
+multiplier has nothing to do. Cnvlutin selects only non-zero                  P. Kuksa. Natural Language Processing (Almost) From Scratch. https:
+activation values for delivery as multiplier operands, but does               //arxiv.org/abs/1103.0398, 2011.
+occupy a multiplier with zero weights. Cambricon-X does not               [9] J. Cong and B. Xiao. Minimizing Computation in Convolutional Neural
+                                                                              Networks. In Proceedings of the International Conference on Artificial
+deliver either zero activations or weights to the multipliers.                Neural Networks (ICANN), pages 281–290, September 2014.
+SCNN also does not deliver either zero activations or weights            [10] G. Diamos, S. Sengupta, B. Catanzaro, M. Chrzanowski, A. Coates,
+to the multipliers.                                                           E. Elsen, J. Engel, A. Hannun, and S. Satheesh. Persistent RNNs:
+                                                                              Stashing Recurrent Weights On-Chip. In Proceedings of the Interna-
+   Finally, the EIE CNN accelerator [13] uses a compressed                    tional Conference on Machine Learning (ICML), June 2016.
+representation of both activations and weights, and only de-             [11] Z. Du, R. Fasthuber, T. Chen, P. Ienne, L. Li, T. Luo, X. Feng, Y. Chen,
+livers non-zero operands to the multipliers. However, EIE is                  and O. Temam. ShiDianNao: Shifting Vision Processing Closer to the
+                                                                              Sensor. In Proceedings of the International Symposium on Computer
+designed for the fully connected layers of a CNN model, while                 Architecture (ISCA), pages 92–104, June 2015.
+SCNN is targeting the convolutional layers where the majority            [12] A. Graves and J. Schmidhuber. Framewise Phoneme Classification With
+of the computations are [9].                                                  Bidirectional LSTM and Other Neural Network Architectures. In Neural
+                                                                              Networks, 2005.
+                     VIII. C ONCLUSION                                   [13] S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. Horowitz, and B. Dally.
+                                                                              EIE: Efficient Inference Engine on Compressed Deep Neural Network.
+   This paper presents the Sparse CNN (SCNN) accelerator                      In Proceedings of the International Symposium on Computer Architec-
+architecture for inference in convolutional neural networks.                  ture (ISCA), pages 243–254, June 2016.
+                                                                         [14] S. Han, H. Mao, and W. J. Dally. Deep Compression: Compressing
+SCNN exploits sparsity in both weights and activations us-                    Deep Neural Networks with Pruning, Trained Quantization and Huffman
+ing the PlanarTiled-InputStationary-CartesianProduct-sparse                   Coding. https://arxiv.org/abs/1510.00149, 2015.
+
+
+
+
+                                                                    11
+[15] S. Han, J. Pool, J. Tran, and W. J. Dally. Learning Both Weights
+     and Connections for Efficient Neural Networks. In Proceedings of
+     the International Conference on Neural Information Processing Systems
+     (NIPS), pages 1135–1143, December 2015.
+[16] A. Hannun, C. Case, J. Casper, B. Catanzaro, G. Diamos, E. Elsen,
+     R. Prenger, S. Satheesh, S. Sengupta, A. Coates, and A. Y. Ng. Deep
+     Speech: Scaling Up End-To-End Speech Recognition. https://arxiv.org/
+     abs/1412.5567, 2014.
+[17] K. He, X. Zhang, S. Ren, and J. Sun. Deep Residual Learning for Image
+     Recognition. https://arxiv.org/abs/1512.03385, 2015.
+[18] G. Huang, Y. Sun, Z. Liu, D. Sedra, and K. Weinberger. Deep Networks
+     with Stochastic Depth. https://arxiv.org/abs/1603.09382, 2016.
+[19] ImageNet. http://image-net.org, 2016.
+[20] A. Krizhevsky, I. Sutskever, and G. E. Hinton. ImageNet Classification
+     with Deep Convolutional Neural Networks. In Proceedings of the
+     International Conference on Neural Information Processing Systems
+     (NIPS), December 2012.
+[21] Y. LeCun, Y. Bengio, and G. Hinton. Deep Learning. Nature, 521:436–
+     444, May 2015.
+[22] G. Martin and G. Smith. High-Level Synthesis: Past, Present, and Future.
+     IEEE Design & Test of Computers, 26(4):18–25, July/August 2009.
+[23] Catapult High-Level Synthesis. https://www.mentor.com/hls-lp/catapult-
+     high-level-synthesis, 2017.
+[24] NVIDIA cuDNN. https://developer.nvidia.com/cudnn, 2016.
+[25] B. Reagen, P. Whatmough, R. Adolf, S. Rama, H. Lee, S. Lee, J. M. H.
+     Lobato, G.-Y. Wei, and D. Brooks. Minerva: Enabling Low-Power, High-
+     Accuracy Deep Neural Network Accelerators. In Proceedings of the
+     International Symposium on Computer Architecture (ISCA), pages 267–
+     278, June 2016.
+[26] M. Rhu, N. Gimelshein, J. Clemons, A. Zulfiqar, and S. W. Keck-
+     ler. vDNN: Virtualized Deep Neural Networks for Scalable, Memory-
+     Efficient Neural Network Design. In Proceedings of the International
+     Symposium on Microarchitecture (MICRO), October 2016.
+[27] K. Simonyan and A. Zisserman. Very Deep Convolutional Networks for
+     Large-Scale Image Recognition. https://arxiv.org/abs/1409.1556, May
+     2015.
+[28] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. Reed, D. Anguelov, D. Erhan,
+     V. Vanhoucke, and A. Rabinovich. Going Deeper with Convolutions.
+     In Proceedings of the Conference on Computer Vision and Pattern
+     Recognition (CVPR), June 2015.
+[29] Wired. Microsoft Neural Net Shows Deep Learning Can Get Way
+     Deeper, 2016.
+[30] S. Zhang, Z. Du, L. Zhang, H. Lan, S. Liu, L. Li, Q. Guo, T. Chen, and
+     Y. Chen. Cambricon-X: An Accelerator for Sparse Neural Networks.
+     In Proceedings of the International Symposium on Microarchitecture
+     (MICRO), October 2016.
+
+
+
+
+                                                                                12
+

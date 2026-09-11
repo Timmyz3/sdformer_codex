@@ -1,6 +1,6 @@
 # Cross-AI read — Grok46 / Codex independent vs Grok Bot (iscas_ssh)
 
-**Date:** 2026-09-05 · **Source of truth on ismd:** `/home/zhumd/work/ideafromai/`  
+**Date:** 2026-09-05 · **Source of truth on ismd:** `/home/zhumd/work/sdformer_codex/ideafromai/`  
 **Mirror note:** Grok46 + Codex independent packs pulled to box for this memo.
 
 ---

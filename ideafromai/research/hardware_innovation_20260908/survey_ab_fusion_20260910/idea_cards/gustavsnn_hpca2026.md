@@ -1,0 +1,17 @@
+# GustavSNN
+- uid/来源: local_author_txt:GustavSNN_HPCA2026_public_mirror.txt
+- 全文出处: /workspace/survey_ab_fusion_20260910_stage/p0_local_txt/GustavSNN_HPCA2026_public_mirror.txt
+- 精读深度: 方法级（§II SpMM/GP；§III tick-batch vs temporal-parallel；§IV CPTB/NRV/in-situ GP PE；§V weight-row tile + column-major time-second；§VI P 因子与 SPA/ONE 评测）
+- 可继承 A: Gustavson 供数底座——CPTB 列分块使膜电位 in-situ 驻留于 PE 局部 REG（每 PE 只持 P=N/K 列）；NRV（子矩阵非零行：行号+P-bit 行向量）支持行跳过；tile 内共享双端口 W-BUF + NR 宽 merger-tree（NR=4）与 Leading-1 Detector 解出非零列；column-major time-second 循环序（先扫满当前 tick 的列分区再进下一 tick）；源∩W 跳过（NRV 缺行跳权 + 权为 0 跳行）。作同分母供数/调度合同，≠标题 X。
+- 强对照 B: 相对 naive/ex-situ GP、IP tick-batch（SpinalFlow）、FTP/temporal-parallel（PTB/Stellar/LoAS）：同端口下测「局部膜 + NRV 行跳 + 列主序」是否换来净服务/能量，而非只换 SpMM 名字。
+- 可差分 X线索: 诚实：文中 CPTB/NRV/列主序是 Gustav 自身贡献；借入到本地光流残差链时须标 ≠ 本地标题 X。可挂线索：把 NRV 行打包边界与 lifting 因子组/半步写回对齐（≈F7），或在共享请求组上复用「同 ID PE 同步以减 spike 重载」思想——差分须落在 lifting/r1 消费者接口，不自称「接入 Gustav」。
+- 与 F1–F7 / Stage B 关系: Stage B 期间仅作 Gustav 供数分母（同端口/状态/背压）；F7（因子组对齐打包）Stage B 后可挂；F2 可借「共享请求同步」对照轴；不抢 lifting40 schedule_compare。
+- 不可搬用边界: 28nm FDSOI / 1GHz RTL；分类 SNN（SEW/ONE/SDT/SPA，T=4–40，8b 权）；LIF 为主、声称可换神经元但未验光流 Transformer；无残差链 PED 双消费者与 finite 背压合同；P 过小会撞共享 W-BUF 冲突。
+- 可复用 idea 点:
+  - CPTB：C=A·B 拆成独立 Ck=A·Bk，膜电位寄存器从 O(N) 降到 O(P)，换取可实现的 in-situ 更新。
+  - NRV 相对 COO/CSR：高稀疏省索引位宽；P↓ → ρ^P 全零行概率↑（ONE 上 P=8 约 80% 行跳 vs P=32 约 58%）。
+  - Fetch|Exec 两级流水：NR 行装入 → L-1D 并行取列号 → merger 选最小列更新膜；选中位清零后继续。
+  - 列主序 vs 时间主序：高稀疏(>90%) 寄存器利用率更高，且已点火神经元可提前跳过；时间主序把 T 维并到 L-1D 占用（1−ρ^{PT}）损害 NRV 跳过。
+  - Tile 同步同 ID PE：共用同一 NRV 子矩阵，减少全局 spike buffer 重复取数——可作「共享请求组」费用对照。
+  - 评测纪律：能量代理先 flat-memory 计数再 RTL/带宽闭合；本地 Stage B 同理不可用节点数冒充净服务%。
+- 杀门建议: 接入后同端口净服务不优于 ordinary 序+同 Gustav 部件；或只降逻辑 NRV 行代理、端口闭合无收益；或为 lifting 多开 bank 破坏同分母 → 停该对齐/供数布局，不杀 Gustav 家族。

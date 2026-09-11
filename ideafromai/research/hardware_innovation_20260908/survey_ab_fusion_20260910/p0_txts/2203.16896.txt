@@ -1,0 +1,943 @@
+                                                 CRAFT: Cross-Attentional Flow Transformer for Robust Optical Flow
+
+                                                                   Xiuchao Sui1 * Shaohua Li1 * Xue Geng2 Yan Wu2
+                                                                   Xinxing Xu1 Yong Liu1 Rick Goh1 Hongyuan Zhu2
+                                                                      1
+                                                                        Institute of High Performance Computing, A*STAR
+                                                         {xiuchao.sui,shaohua}@gmail.com, {xuxinx,liuyong,gohsm}@ihpc.a-star.edu.sg
+                                                                             2
+                                                                                 Institute for Infocomm Research, A*STAR
+arXiv:2203.16896v1 [cs.CV] 31 Mar 2022
+
+
+
+
+                                                                                 {geng xue,wuy,zhuh}@i2r.a-star.edu.sg
+
+
+
+                                                                 Abstract                                                    Sintel (Clean)           Sintel (Final)
+
+
+                                                                                                                Frame 1
+                                             Optical flow estimation aims to find the 2D motion field
+                                         by identifying corresponding pixels between two images.
+                                         Despite the tremendous progress of deep learning-based
+                                         optical flow methods, it remains a challenge to accurately
+                                                                                                                Frame 2
+                                         estimate large displacements with motion blur. This is
+                                         mainly because the correlation volume, the basis of pixel
+                                         matching, is computed as the dot product of the convolu-
+                                         tional features of the two images. The locality of convo-              RAFT
+
+                                         lutional features makes the computed correlations suscep-
+                                         tible to various noises. On large displacements with mo-
+                                         tion blur, noisy correlations could cause severe errors in
+                                                                                                                GMA
+                                         the estimated flow. To overcome this challenge, we pro-
+                                         pose a new architecture “CRoss-Attentional Flow Trans-
+                                         former” (CRAFT), aiming to revitalize the correlation vol-
+                                         ume computation. In CRAFT, a Semantic Smoothing Trans-                 CRAFT
+
+                                         former layer transforms the features of one frame, mak-
+                                         ing them more global and semantically stable. In addi-
+                                         tion, the dot-product correlations are replaced with trans-        Figure 1. The optical flow fields estimated by RAFT, GMA and
+                                                                                                            CRAFT on two frames from Sintel test set, in which a dragon is
+                                         former Cross-Frame Attention. This layer filters out feature
+                                                                                                            chasing a chicken. On the Clean pass, all the three methods per-
+                                         noises through the Query and Key projections, and com-
+                                                                                                            form similarly. On the Final pass, as the area enclosed in the red
+                                         putes more accurate correlations. On Sintel (Final) and            rectangle has large motions (80 ∼ 100 pixels) with motion blur,
+                                         KITTI (foreground) benchmarks, CRAFT has achieved new              RAFT and GMA only identified part of the motions. Nonetheless,
+                                         state-of-the-art performance. Moreover, to test the robust-        CRAFT still performs well.
+                                         ness of different models on large motions, we designed an
+                                         image shifting attack that shifts input images to generate
+                                         large artificial motions. Under this attack, CRAFT per-            pixels. It is a fundamental computer vision task with broad
+                                         forms much more robustly than two representative meth-             applications in action recognition [32, 35, 38], video seg-
+                                         ods, RAFT and GMA. The code of CRAFT is is available               mentation [44, 46], video frame interpolation [18], medical
+                                         at https://github.com/askerlee/craft.                              image registration [29], representation learning [11,42], au-
+                                                                                                            tonomous driving [27], and robot navigation [6].
+                                                                                                               In recent years, deep learning based methods have ad-
+                                         1. Introduction                                                    vanced optical flow estimation tremendously [8, 14, 19, 31,
+                                                                                                            37, 39, 43, 48]. Although newest methods are very accurate
+                                             Optical flow estimates pixel-wise 2D motions between
+                                                                                                            on benchmark data, under certain conditions, such as large
+                                         two consecutive video frames by matching corresponding
+                                                                                                            displacements with motion blur [10], flow errors could still
+                                           * Equal   .                                                      be large. It spurs us to dig deeper to identify the root causes.
+
+
+                                                                                                        1
+   Most of these methods perform optical flow estimation             2. Related Work
+based on a correlation volume (also known as a cost vol-
+ume), which stores the pairwise similarity between each                  FlowNet [8] is a pioneering work that uses deep neural
+pixel in Frame 1 and another in Frame 2. Given the cor-              networks to do end-to-end optical flow learning. It inspires
+relation volume, subsequent modules try to match the two             a series of deep learning methods, such as FlowNet2.0 [14],
+images, with an aim of maximizing the overall correlations           DCFlow [43], SpyNet [31], PWC-Net [37], MaskFlowNet
+between matched regions. The current paradigm computes               [48] LiteFlowNet3 [12], ScopeFlow [3] and IRR [13]. Most
+the pairwise pixel similarity as the dot product of two con-         of these methods use a correlation volume as the basis of
+volutional feature vectors. Due to the locality and rigid            pixel matching.
+weights of convolution, limited contextual information is                RAFT [39] is an important development of deep learn-
+incorporated into pixel features, and the computed correla-          ing flow methods. By using multi-scale correlation volumes
+tions suffer from a high level of randomness, such that most         and iterative flow refinement, RAFT achieves good perfor-
+of the high correlation values are spurious matches (Figure          mance, and is the precursor of a few successive works, such
+6). Noises in the correlations increase with noises in the in-       as GMA [19], RAFT-Stereo [22] and CRAFT. GMA [19] is
+put images, such as loss of texture, lighting variations and         among the first works to incorporate transformer into opti-
+motion blur. Naturally, noisy correlations may lead to un-           cal flow methods. In the motion regression stage (cf. Figure
+successful image matching and inaccurate output flow (Fig-           2), it uses self-attention to propagate motion features from
+ure 1). This problem becomes more prominent when there               non-occluded areas to occluded areas, and helps estimate
+are large displacements. Reducing noisy correlations can             more accurate flow of occluded areas. It complements with
+lead to substantial improvements of flow estimation [12,47].         the improvements of CRAFT on correlation volumes.
+   Recent years have witnessed the widespread adoption of                All the aforementioned methods compute correlations
+transformers for computer vision tasks [5, 7]. An impor-             using dot-product or cosine similarity of convolutional fea-
+tant advantage of Vision Transformers (ViTs) over convolu-           tures. Within this paradigm, some works improve the ef-
+tion is that, transformer features better encode global con-         ficiency of the correlation volume, such as VCN [45] and
+text, by attending to pixels with dynamic weights based on           DICL [41]. Similar to our objective, Separable Flow [47]
+their contents. For the optical flow task, useful informa-           aims to improve the accuracy of the correlation volume,
+tion can propagate from clear areas to blurry areas, or from         by decomposing the 4D correlation volume into two 3D
+non-occluded areas to occluded areas [19], to improve the            volumes, for the u- and v-directional flow regression, re-
+flow estimation of the latter. A recent study [30] suggests          spectively. Separable Flow essentially imposes stronger
+that, ViTs are low-pass filters that do spatial smoothing of         inductive biases to obtain more accurate correlations than
+feature maps. Intuitively, after transformer self-attention,         RAFT, as well as more accurate flow1 . In contrast, CRAFT
+similar feature vectors take weighted sums of each other,            improves correlation computation by using contextualized
+smoothing out irregularities and high-frequency noises.              frame features and reducing feature noises.
+                                                                         Optical flow training requires large, expensive annotated
+   Inspired by the feature denoising property of ViTs, we
+                                                                     datasets. SelFlow [23] and Autoflow [36] are two self-
+propose “CRoss-Attentional Flow Transformer” (CRAFT),
+                                                                     supervised methods that generate synthetic annotations.
+a novel architecture for optical flow estimation. With two
+                                                                     SMURF [34] integrates a set of techniques to do self-
+novel components, CRAFT revitalizes the computation of
+                                                                     supervised learning on unannotated video frames and has
+the correlation volume. First, a semantic smoothing trans-
+                                                                     achieved promising results.
+former layer fuses the features of one image, making them
+more global and semantically smoother. Second, a cross-
+frame attention layer replaces the dot-product operator for          3. The CRAFT Architecture
+correlation computation. It provides an additional level of
+                                                                          Figure 2 presents the architecture of CRAFT. It inher-
+feature filtering through the Query and Key projections, so
+                                                                     its the influential flow estimation pipeline of RAFT [39].
+that the computed correlations are more accurate.
+                                                                     Our main contribution is to revitalize the correlation vol-
+   We performed extensive evaluations of CRAFT on com-               ume computation part (the dashed green rectangle) with two
+mon optical flow benchmarks. On Sintel (Final) and KITTI             novel components: the Semantic Smoothing Transformer
+(foreground) benchmarks, CRAFT has achieved new state-               on Frame-2 features, and a Cross-Frame Attention Layer
+of-the-art (SOTA) performance. In addition, to test the ro-          to compute the correlation volume. These two components
+bustness of different models on large motions, we designed           help suppress spurious correlations in the correlation vol-
+an image shifting attack that shifts input images to generate        ume, as visualized in Figure 6.
+large artificial motions. As the motion magnitude increases,
+CRAFT performs robustly, while two representative meth-                   1 Unfortunately, we could not compare Separable Flow with CRAFT
+
+ods, RAFT and GMA, deteriorate severely.                             wrt. the correlation volume accuracy, as their source code is unavailable.
+
+
+                                                                 2
+              Frame 1                                          Frame-1
+                                                               Features
+                                  Feature
+                                  Network
+
+                                                                  Q           4D Correlation   Neighbourhood
+                                                                                 Volume         Correlations
+
+                                                               Cross-Frame
+                                               Relative
+                                                                Attention                                  Iterative Motion
+                                             Position Bias
+                                                                                                              Regression
+
+                                                                  K
+              Frame 2
+                                                  Semantic                                                     Attentional
+                              Feature
+                                                 Smoothing                                                        GRU
+                              Network                          Frame-2
+                                                 Transformer
+                                                               Features
+
+
+
+                                                               Contextual
+              Frame 1                                                                                                         GMA
+                                                                Features
+                                                                                                                             Attention
+                                   Context
+                                   Network
+
+                                                                                    GMA
+                                                                                    Module
+
+
+Figure 2. CRAFT architecture. In the correlation volume computation part (the dashed green rectangle), two novel components are
+highlighted as boxes with red borders: the Semantic Smoothing Transformer fuses and smooths the Frame-2 features, and the Cross-Frame
+Attention layer computes the correlation volume. The GMA module at the bottom is a Global Motion Aggregation module [19].
+
+
+3.1. Semantic Smoothing Transformer                                           nation of all mode features.
+                                                                                 To better preserve original frame features, we add a
+    Given two consecutive images – Frame 1 and Frame 2 –
+                                                                              weighted skip connection with a learnable weight w1 :
+as input, the first step of the flow pipeline is to extract frame
+features using a convolutional feature network.                                           SSTrans(X) = w1 X + (1 − w1 ) EA(X),                           (6)
+    To enhance the frame features with better global context,
+                                                                                  To impose spatial biases, we found conventional posi-
+the Semantic Smoothing Transformer (or simply SSTrans) is
+                                                                              tional embeddings do not form meaningful biases, and use
+used to transform the Frame-2 features.
+                                                                              a relative position bias [9, 24] instead. The bias is a ma-
+    To better accommodate diverse features, we adopt the
+                                                                              trix B ∈ R(2r+1)×(2r+1) , added to the computed attention,
+Expanded Attention proposed in [21] as the SSTrans, in-
+                                                                              where r is the radius specifying the local range of the bias.
+stead of the commonly used Multi-Head Attention (MHA)
+                                                                                  Specifically, suppose the original attention matrix is re-
+[40]. Expanded Attention is a type of Mixture-of-Experts
+                                                                              shaped to a 4-dimensional tensor A ∈ RH×W ×H×W ,
+[33] with higher capacities, and has demonstrated advan-
+                                                                              where H, W are the height and width of the frame feature
+tages over MHA for image segmentation tasks.
+                                                                              maps. For each pixel at i, j, where i ∈ {1, · · · , H}, j ∈
+    An Expanded Attention (EA) layer consists of N modes
+                                                                              {1, · · · , W }, A(i, j) is a matrix, specifying the attention
+(sub-transformers), computing N sets of features, which are
+                                                                              weights between pixel (i, j) with all the pixels in the same
+aggregated into one set using dynamic mode attention [21]:
+                                                                              frame. The relative position bias B is added to the neigh-
+               (k)                                                            borhood of radius r of pixel (i, j):
+            X out = Transformer(k) (X),                         (1)
+                 (k)          (k)       (k)                                      A0 (i, j, i + x, j + y)
+             B         = Linear      (X out ),                  (2)              (
+             with k ∈ {1, · · · , N },                          (3)                A(i, j, i + x, j + y) + B(x, y),                      if |x| ≤ r, |y| ≤ r
+                                                                               =
+                                                                                 A(i, j, i + x, j + y).                                otherwise
+              G = softmax B (1) , · · · , B (N ) ,              (4)
+                                                                                                                                                        (7)
+                             (1)         (N )
+          EA(X) =G> · X out , · · · , X out ,                   (5)              In our implementation, we choose the number of modes
+                                                                              to be 4, and the radius r of the relative position bias to be 7.
+where B (k) are mode attention scores, and the mode atten-                       Figure 3 visualizes the learned relative position bias of
+tion probabilities G are softmax of all B (k) along the mode                  CRAFT trained on Sintel. Two interesting patterns are ob-
+dimension. The output features EA(X) are a linear combi-                      served:
+
+
+                                                                          3
+                                                                              C ∈ RH×W ×H×W (dashed green rectangle in Figure 2).
+                                                                                 Traditionally, the correlation volume is computed as the
+                                                                              pairwise dot-product between f 1 and f 2 [39]:
+                                                                                                       1
+                                                                                      C(i, j, m, n) = √ f 1 (i, j)> · f 2 (m, n).       (8)
+                                                                                                       D
+                                                                                 Conceptually, the correlation volume is essentially Cross
+                                                                              Attention [40] in transformers, without feature transforma-
+Figure 3. Learned relative positional bias with radius r = 7. Two             tion by the Query and Key projections. The query/key pro-
+interesting patterns can be observed, as detailed below.                      jections can be viewed as feature filters that separate out
+                                                                              most informative features for correlations. In addition, to
+                                                                              capture diverse correlations, we could use multiple query
+  1. The minimum bias value is around −2 located at (0, 0),                   and key projections, as with Expanded Attention (EA) [21].
+     which means that, when computing the new features of                     Similar multi-faceted correlations are pursued in VCN [45]
+     a pixel (i, j), this bias term will reduce the weight of                 with multiple channels. These benefits motivate us to re-
+     its own features by 2. Without this term, the attention                  place the dot-product with a simplified EA:
+     weight of pixel (i, j) to itself will probably dominate
+     the weights to other pixels, as a feature vector is most                                    1
+                                                                              Ck (i, j, m, n) = √ (f 1 (i, j)Qk )> · K k f 2 (m, n), (9)
+     similar to itself. This term reduces the proportions of                                     D
+     the old features of a pixel in the combined output fea-                                    K
+                                                                                                X
+     tures, effectively encouraging inflow of new informa-                     C(i, j, m, n) =     softmax(Ck (i, j, m, n))Ck (i, j, m, n),
+     tion from other pixels.                                                                    k=1
+                                                                                                                                       (10)
+  2. The largest weights are 2 ∼ 3 pixels2 away from the
+     center pixel, meaning that features of these surround-                   where Qk , K k are the k-th query and key projections, re-
+     ing pixels are most often used to supplement the fea-                    spectively; Ck (i, j, m, n) is the correlation computed with
+     tures of the central pixel.                                              the k-th mode. The softmax operator is taken along the K
+                                                                              modes, and aggregates the K correlations. The EA here is
+These two observations are confirmed in Figure 8, where                       simplified by removing the value projection and the feed-
+each query draws new features from a nearby area. Setting                     foward network. The weights of Qk and K k are tied, as the
+the position bias to 0 leads to performance degradation.                      correlation between two frames is symmetric.
+    It is tempting to apply transformers on the features of                       Global correlation normalization           Sometimes ex-
+both frames. However, in our experiments, doing so leads to                   treme values may appear in the correlation volume, which
+performance drop. Our hypothesis is based on the common                       may disrupt the pixel matching. To match a pixel, intu-
+belief that image matching heavily relies on high-frequency                   itively the relative orders of the correlations with candidate
+(HF) features that are local and structural [15]. Meanwhile,                  pixels are more important than absolute correlation values.
+there are abundant HF noises that pollute informative fea-                    In this light, we perform layer normalization [1] on the
+tures and hinder matching. SSTrans serves as a low-pass fil-                  whole correlation volume to stabilize correlations. Empiri-
+ter to suppress HF noises [30], but at the same time, may re-                 cally, this leads to slightly improved performance.
+duce HF features and enhance low-frequency (LF) features.
+Hence, the model learns to trade off between the LF and HF                    4. Experiments
+components in Frame 2 for matching with Frame 1. After
+                                                                                 Our experiments consist of six parts:
+applying SSTrans on both frames, both frames contain less
+HF and more LF components. Matching them may yield                             1. Standard evaluation. We evaluate different methods
+many spurious correlations and hurt flow accuracy. This in-                       on Sintel [4] and KITTI [28]. On the two public leader-
+tuition is confirmed in Figure 7.                                                 boards, CRAFT has achieved the state-of-the-art per-
+                                                                                  formance on both Sintel (final pass) and KITTI (fore-
+3.2. Cross-Frame Attention for Correlation Volume                                 ground regions).
+   In the current paradigm, a correlation volume is the ba-                    2. Error distribution wrt. motion magnitudes. To
+sis of cross-frame pixel matching. After the frame fea-                           study the model behavior when the motion becomes
+tures f 1 ∈ RH×W ×D and f 2 ∈ RH×W ×D are com-                                    larger, we calculate the flow error distribution wrt. dif-
+puted, the correlation volume is computed as a 4D tensor                          ferent magnitudes of motions. CRAFT is significantly
+    2 Here “pixels” mean points in feature maps, which correspond to ×8           more accurate than other methods on large motions,
+pixels in the input image.                                                        and performs equally well on small motions.
+
+
+                                                                          4
+ 3. Ablation studies. To analyze the impact of different              KITTI leaderboards:
+    components in CRAFT, i.e., the Semantic Smoothing
+    transformer, the Cross-Frame Attention and the GMA                   • RAFT [39]: an important recent methods, and was
+    module, we remove each of them and evaluate the ab-                    previous SOTA before being surpassed by GMA.
+    lated models on the KITTI-2015 benchmark. All these                  • RAFT-A [36] uses the synthesized AutoFlow dataset
+    components show importance to the final performance.                   (instead of “C+T”) to pretrain RAFT, followed by the
+ 4. Image Shifting attack. To test the robustness of mod-                  standard fine-tuning steps.
+    els, we manually create large motions by shifting the                • Perceiver-IO [16] is a general architecture not specif-
+    first frames. At very large shifts, RAFT and GMA de-                   ically designed for optical flow estimation. It is pre-
+    teriorate severely. CRAFT is significantly more robust.                trained on Autoflow, the same as RAFT-A. The perfor-
+ 5. Visualization of correlation volumes. We visualize                     mance on the test sets is not reported in their paper.
+    the correlations between a query point in Frame 1 and                • RFPM [25] replaces the downsampling layers of
+    all pixels in Frame 2, to intuitively learn the differences            RAFT to improve the flow estimation on fine details.
+    between the correlation volumes computed by differ-                    The performance under “C+T / Autoflow” training is
+    ent models. CRAFT has the fewest spurious correla-                     not reported in their paper.
+    tions compared with RAFT and GMA.
+                                                                         • Separable Flow [47] decomposes the 4D correlation
+ 6. Visualization of semantic smoothing transformer                        volume as two 3D volumes for the u and v directions.
+    attention. To gain an intuitive idea how a pixel draws
+    information from surrounding pixels through the SS                   • GMA [19]: a recent method that enhances RAFT with
+    transformer, we visualize the self-attention between a                 a Global Motion Aggregation module to better esti-
+    query point and all pixels in Frame 2.                                 mate the motions of occluded pixels.
+Training Loss Following RAFT [39], the loss function                     • CRAFT: with 4 modes in expanded attention layers.
+we adopt is a weighted multi-iteration l1 loss.
+                                                                          Table 1 summarizes the evaluation results of the seven
+Training Schedule We follow the same optical flow train-
+                                                                      methods on Sintel and KITTI. The results on the training
+ing procedure [19, 39] of first pretraining the models on
+                                                                      sets (in parentheses, left side of the table) can hardly reflect
+FlyingChairs (“C”) [8] for 120k iterations (batch size = 8),
+                                                                      how well the models generalize to new data, and are only
+then on FlyingThings (“T”) [26] for another 120k iterations
+                                                                      listed for reference. The results on the test sets are evaluated
+with (batch size = 6). For Sintel evaluation, we fine-tune all
+                                                                      on held-out data by the Sintel and KITTI servers and ob-
+models on a combination of FlyingThings, Sintel (“S”) [4],
+                                                                      tained from their leaderboards, and better reflect model per-
+KITTI 2015 (“K”) [28] and HD1K (“H”) [20] for 120k iter-
+                                                                      formance. Although performing closely to the other meth-
+ations (batch size = 6). For KITTI evaluation, we fine-tune
+                                                                      ods on the training sets, CRAFT shows clear advantages on
+all models on KITTI 2015 for 50k iterations (batch size =
+                                                                      the test sets, and outperforms all other optical flow meth-
+6). Following [19, 39], we adopt the one-cycle learning rate
+                                                                      ods5 on Sintel (Final) and KITTI Fl-fg (i.e., fewest fore-
+scheduler with the same learning rates, in which 5 percent
+                                                                      ground outliers).
+of the iterations are used for warm-up.
+                                                                          We argue that these two performance metrics (AEPE on
+Evaluation Metrics The main evaluation metric, also                   Sintel Final pass, and Fl-fg on KITTI) has important prac-
+used by the Sintel leaderboard3 , is the average end-point            tical implications. For real world performance, the results
+error (AEPE), which is the average pixelwise flow error,              on Sintel (Final) are more indicative than on Sintel (Clean),
+measured by number of pixels. The KITTI leaderboard4                  as the final-pass images more closely resemble real world
+uses the Fl-fg (%) and Fl-All (%) metrics, which refer to             videos, with various lighting variation, shadows and motion
+the percentage of outliers (pixels whose end-point error is           blur. In addition, as the foreground objects in KITTI are
+> 3 pixels or 5% of the ground truth flow magnitude), av-             usually cars, pedestrians, etc., which naturally are more im-
+eraged over foreground regions and all pixels, respectively.          portant than the background. Hence, smaller pixel errors in
+4.1. Standard Evaluation                                              foreground regions as measured by Fl-fg, probably imply
+                                                                      greater practical benefits than smaller errors in background.
+   Seven recent methods are compared, most of which are
+selected from the top-performing methods on the Sintel and            4.2. Error Distribution wrt. Motion Magnitudes
+   3 http://sintel.is.tue.mpg.de/quant?metric_id=                        To analyze the behavior of different models when facing
+0&selected_pass=0                                                     varying magnitudes of motions, we divide the pixels into
+   4 http : / / www . cvlibs . net / datasets / kitti / eval _
+
+scene_flow.php?benchmark=flow                                            5 As   of November 2021.
+
+
+                                                                  5
+Training                                              On Training Sets                           On Test Sets from Leaderboards
+Data         Method                        Sintel (train)        KITTI-15 (train)               Sintel (test)       KITTI-15 (test)
+                                        Clean         Final       AEPE        Fl-all (%)     Clean        Final      Fl-fg (%) Fl-all (%)
+         RAFT [39]                      (1.43)       (2.71)       (5.04)       (17.4)           -            -            -            -
+C+T/     RAFT-A [36]                    (1.95)       (2.57)       (4.23)         -              -            -            -
+Autoflow Perceiver-IO [16]              (1.81)       (2.42)       (4.98)         -              -            -            -
+         Separable Flow [47]            (1.30)       (2.59)       (4.60)       (15.9)           -            -            -            -
+         GMA [19]                       (1.30)       (2.74)       (4.69)       (17.1)           -            -            -            -
+             CRAFT                      (1.27)       (2.79)       (4.88)       (17.5)           -            -            -            -
+             RAFT [39]                  (0.76)       (1.22)       (0.63)        (1.5)         1.61         2.86         6.87         5.10
+C+T+         RAFT-A [36]                   -            -            -            -           2.01         3.14         5.99         4.78
+S/K + H      RFPM [25]                  (0.61)       (1.05)       (0.60)       (1.41)         1.41         2.90           -          4.79
+             Separable Flow [47]        (0.69)       (1.10)       (0.69)       (1.60)         1.50         2.67         6.24         4.64
+             GMA [19]                   (0.62)       (1.06)       (0.57)       (1.20)         1.39         2.47         7.03         5.15
+             CRAFT                      (0.60)       (1.06)       (0.58)       (1.34)         1.45        2.42†        5.85†         4.79
+
+Table 1. Results on Sintel and KITTI 2015 benchmarks. We report the average end-point error (AEPE) where not otherwise stated, as
+well as the Fl-fg and Fl-all metrics for the KITTI dataset, which are the percentages of optical flow outliers (pixels with significant flow
+errors), calculated on the foreground regions and all pixels, respectively. “C + T / Autoflow” refers to methods that are pretrained either on
+the combined Chairs and Things datasets, or on the Autoflow dataset [36]. “S/K + H” refers to methods that are fine-tuned on the Sintel,
+KITTI and HD1K datasets. All results on Sintel (test) are generated with the “warm-start” strategy [39].
+†
+  Results are ranked as the top-1 (as of November 2021) on the two public leaderboards, which include many other methods not listed here.
+(Result) denotes a result on training sets, listed here for reference purposes.
+
+
+
+ GT range         < 1 [1,10] (10,20] (20,30] > 30 All                      4.3. Ablation Studies
+ Things-Clean
+ RAFT             0.45 0.54        0.75      1.40     7.55 3.14                      KITTI-15 (test) Fl-fg (%) Fl-all (%)
+ GMA              0.42 0.46        0.68      1.29     7.71 3.14
+                                                                                     CRAFT             5.85       4.79
+ CRAFT            0.43 0.46        0.68      1.26     6.64 2.77
+                                                                                     -SS trans         6.41       5.06
+ Things-Final
+                                                                                     -CFA              6.15       4.90
+ RAFT             0.46 0.52        0.74      1.44     7.11 2.98
+                                                                                     -GMA              6.21       4.93
+ GMA              0.41 0.45        0.68      1.25     6.76 2.80
+ CRAFT            0.42 0.45        0.65      1.21     6.11 2.57
+                                                                            Table 3. Ablated models on KITTI-2015 (test) leaderboard.
+Table 2. AEPE on Things (validation set) in different motion
+ranges. CRAFT has significantly lower AEPE on large motions.
+                                                                               CRAFT has three important components: the Semantic
+                                                                           Smoothing transformer (“SS trans”), the Cross-Frame At-
+                                                                           tention (“CFA”), and the GMA module. To study their in-
+five subsets according to their groundtruth motion magni-                  dividual contributions, in each turn we remove one of them,
+tudes, and evaluate the AEPE within each subset. As the                    train the ablated models with the standard schedule, and
+validation/test splits of Sintel and KITTI are unavailable,                evaluate on the KITTI-2015 leaderboard.
+the evaluation is done on the validation split of FlyingTh-                    Table 3 shows that all the three components make impor-
+ings, Clean pass and Final pass, respectively. Three models,               tant contributions to the overall performance.
+RAFT, GMA and CRAFT are evaluated. All the models are
+trained on “C+T”.                                                          4.4. Image Shifting Attack
+   Table 2 presents the AEPE on different magnitudes of                       Typically, most pixels in standard benchmark images are
+motions. When the motion is < 20 pixels, CRAFT performs                    with small motions, and large motions only appear in lo-
+on par with GMA. On large motions that are > 30 pixels,                    cal areas. As a result, when the model makes big errors
+CRAFT makes 10∼15% less AEPE than RAFT and GMA.                            on large local motions, as these errors are local, they may
+
+
+                                                                      6
+                                                                                      ∆u goes beyond 160, RAFT and GMA quickly deteriorate;
+                                                                                      in contrast, CRAFT performs much more robustly with sig-
+                                                                                      nificantly smaller AEPE. Possibly due to motion blur, the
+                                                                                      AEPE of RAFT and GMA on Slow Flow is 80 ∼ 100 pixels
+                                                                                      larger than on Sintel, while the AEPE of CRAFT on Slow
+Frame 1, shifted by (220, 110)   Frame 2 (unchanged)     Shifted groundtruth          Flow is only 35 pixels larger, showing its robustness against
+                                                                                      motion blur.
+
+                                                                                      4.5. Visualization of Correlation Volumes
+                                                                                          The main reason that CRAFT performs more robustly
+                                                                                      is probably that the computed correlation volumes contains
+  RAFT, AEPE 366 pixels          GMA, AEPE 286 pixels   CRAFT, AEPE 1.57 pixels
+                                                                                      much fewer spurious correlations, thanks to the SS trans-
+Figure 4. Flows fields estimated by RAFT, GMA and CRAFT on                            former and the cross-frame attention layer.
+two frames from the Slow Flow dataset. (∆u, ∆v) = (220, 110)                              To gain an intuitive understanding of the differences be-
+pixels. RAFT and GMA failed with huge AEPE. CRAFT still                               tween the correlation volumes computed by different mod-
+yielded accurate estimation.                                                          els, we visualize the correlations between a query point
+                                                                                      in Frame 1 and all pixels in Frame 2. The query point
+                                                                                      is marked as a small red square in Frame 1 (projected to
+be easily corrected by considering the contextual small mo-                           the small green square in Frame 2). It moves to the small
+tions, so that the final flow may still be accurate. Thereby,                         red square in Frame 2. The dashed green rectangle is a
+the fragility on large motions is hidden under small AEPE.                            256 × 256-pixel square centered at the query point, trun-
+    To fully reveal the model robustness on large motions,                            cated at the image boundary. It encloses the field of view
+we design an image shifting attack, i.e., create large mo-                            (FoV) of the model at the first iteration of flow estimation.
+tions by shifting one image along the u, v plane. Local cor-                          Only correlations within the FoV are shown.
+rections would hardly work on such image pairs, as all the                                Figure 6 visualizes the correlation volumes on two
+pixels will have large displacements.                                                 frames from Sintel (Final), which is rendered with shad-
+    Specifically, we shift the first frame I1 by (∆u, ∆v) to-                         ows and motion blur. Bright blobs in the heatmaps are high
+wards the bottom right, getting a new image shiftu,v (I1 ).                           correlations, and those not at the groundtruth location (red
+The new image is truncated at the original image boundary.                            square) are spurious and may be targets for mismatch. The
+    Suppose a model M estimates the flow F0 accurately on                             correlation volumes6 computed by RAFT and GMA con-
+the original image pairs: F0 = M (I1 , I2 ) ≈ Fgt , where Fgt                         tain many more spurious correlations than CRAFT. If re-
+is the groundtruth flow. We test M on the shifted pairs and                           moving the SS transformer (the cross-frame attention layer
+get new flow: F1 = M (shiftu,v (I1 ), I2 ). Then we unshift                           remains), CRAFT yields more noisy correlations, but they
+F1 and get F2 . If the model is robust against the shift, it can                      are still fewer than RAFT and GMA, suggesting that the
+be proven that the following equation should hold:                                    cross-frame attention layer also helps denoising.
+                                                                                          In addition, as stated in Section 3.1, we tested to apply
+F2 ≈ shiftu,v (F0 )−(∆u, ∆v) ≈ shiftu,v (Fgt )−(∆u, ∆v).                              the SS transformer to both Frame 1 and Frame 2 (referred
+                                                         (11)                         to as “Double SSTrans”), and observed degraded perfor-
+   Figure 4 presents an example of the shifting attack. The                           mance. To shed light on why this happens, Figure 7 vi-
+two frames are from Slow Flow [17], a dataset with motion                             sualizes the computed correlations with Double SSTrans.
+blur (flow magnitude=100, blur duration=3). After down-                               Compared with the standard “Single SSTrans”, many more
+sampling the original images from (1280, 720) to (640,                                spurious correlations are observed. This may explain the
+360), the first image is shifted by (220, 110). RAFT and                              degradation of the flow accuracy.
+GMA completely fail to estimate the flow, with huge AEPE.
+In contrast, CRAFT still yields accurate estimation.
+   Figure 5 presents the quantitative evaluations of RAFT,                            4.6. Visualization of the Self-Attention of Semantic
+GMA and CRAFT under the shifting attack. The models                                         Smoothing Transformer
+are trained with “C+T+S+K+H”, and evaluated on the train-
+                                                                                        Figure 8 visualizes the SS transformer self-attention
+ing split of Sintel (Clean) and Sintel (Final), as well as on
+                                                                                      weights on three queries in Frame 2. For each query (the
+Slow Flow (flow magnitude=100, blur duration=3), under
+                                                                                      small red square), its attention weights with all pixels in the
+varying (∆u, ∆v). In our experiments, the horizontal shift
+                                              .
+∆u ∈ [100, 300], and the vertical shift ∆v = 12 ∆u. When                                   6 All matrices have been normalized into [0, 1] to make sure the pattern
+
+∆u ≤ 160, all models perform well with AEPE < 8. When                                 differences are not caused by range discrepancy.
+
+
+                                                                                  7
+               (a) Sintel (Clean)                                (b) Sintel (Final)                               (c) Slow Flow (100-3)
+
+Figure 5. The AEPE of RAFT, GMA and CRAFT change differently with the magnitude of image shifts. (a)-(c) are on Sintel (Clean),
+                                                                                                                      .
+Sintel (Final) and Slow Flow, respectively. The horizontal shift ∆u change from 100 to 300, and the vertical shift ∆v = 12 ∆u. When ∆u
+goes beyond 160, RAFT and GMA quickly deteriorate, and CRAFT performs much more robustly.
+
+
+
+
+             Frame 1                            Frame 2
+
+                                                                                      Slow Flow              Query Point 1               Query Point 2
+
+
+
+
+              RAFT                              GMA
+
+
+                                                                                            Sintel (Final)                      Query Point 3
+
+
+                                                                             Figure 8. Heatmaps of the SS transformer self-attention, between
+                                                                             a query point (a red rectangle) and all pixels in the same image.
+         CRAFT (no SS trans)                    CRAFT
+                                                                             The most intense areas are where the query points pay the highest
+                                                                             attention and draw features to enrich themselves.
+Figure 6. Heatmaps of the correlations between Frame 2 and a
+query point in Frame 1 (the small red square), on Sintel test set
+(Final pass). The small green square in Frame 2 indicates the orig-
+inal position of the query in Frame 1. As the images are blurry with         5. Conclusions
+coarser details, RAFT and GMA make many noisy correlations. In
+contrast, CRAFT has significantly fewer noisy correlations.
+                                                                                We present a novel optical flow estimation method
+                                                                             Cross-Attentional Flow Transformer (CRAFT). It revital-
+                                                                             izes the computation of correlation volumes with two novel
+                                                                             components: Semantic-Smoothing Transformer and Cross-
+                                                                             Frame Attention. They help compute more accurate cor-
+                                                                             relation volumes by spatially smoothing feature semantics
+                                                                             and filtering out feature noises. CRAFT has achieved new
+       No SSTrans              Single SSTrans   Double SSTrans               state-of-the-art performance on a few metrics, and is espe-
+                                                                             cially robust on large displacements with motion blur.
+Figure 7. The correlations between Frame 2 and a query point in
+Frame 1, on Sintel test set (Final pass). Images are cropped. The
+standard CRAFT setting (“Single SSTrans”) has fewest noisy cor-
+relations. “Double SSTrans” yields many more noisy correlations.             Acknowledgements
+                                                                                This research is supported by A*STAR under its Ca-
+same image are displayed as a heatmap. The highest atten-                    reer Development Fund (Grant Nos. C210812035 and
+tion areas are somewhere around the query points (at differ-                 C210112016), and its Human-Robot Collaborative AI
+ent relative directions). We guess that these areas may pro-                 for Advanced Manufacturing and Engineering programme
+vide texture or contextual information absent at the queries.                (Grant No. A18A2b0046).
+
+
+                                                                        8
+References                                                                      A general architecture for structured inputs & outputs.
+                                                                                arxiv:2107.14795, 2021. 5, 6
+ [1] Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E Hinton.              [17]   Joel Janai, Fatma Güney, Jonas Wulff, Michael Black, and
+     Layer normalization. arXiv:1607.06450, 2016. 4                             Andreas Geiger. Slow flow: Exploiting high-speed cam-
+ [2] Simon Baker, Daniel Scharstein, JP Lewis, Stefan Roth,                     eras for accurate and diverse optical flow reference data. In
+     Michael J Black, and Richard Szeliski. A database and eval-                CVPR, 2017. 7, 12
+     uation methodology for optical flow. International journal          [18]   Huaizu Jiang, Deqing Sun, Varun Jampani, Ming-Hsuan
+     of computer vision, 92(1):1–31, 2011. 13                                   Yang, Erik Learned-Miller, and Jan Kautz. Super slomo:
+ [3] Aviram Bar-Haim and Lior Wolf. Scopeflow: Dynamic                          High quality estimation of multiple intermediate frames for
+     scene scoping for optical flow. In CVPR, June 2020. 2                      video interpolation. In CVPR, June 2018. 1
+ [4] Daniel J. Butler, Jonas Wulff, Garrett B. Stanley, and              [19]   Shihao Jiang, Dylan Campbell, Yao Lu, Hongdong Li, and
+     Michael J. Black. A naturalistic open source movie for opti-               Richard I. Hartley. Learning to estimate hidden motions with
+     cal flow evaluation. In Andrew Fitzgibbon, Svetlana Lazeb-                 global motion aggregation. In ICCV, 2021. 1, 2, 3, 5, 6
+     nik, Pietro Perona, Yoichi Sato, and Cordelia Schmid, edi-          [20]   Daniel Kondermann, Rahul Nair, Katrin Honauer, Karsten
+     tors, ECCV, 2012. 4, 5, 13                                                 Krispin, Jonas Andrulis, Alexander Brock, Burkhard Gusse-
+ [5] Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas                 feld, Mohsen Rahimimoghaddam, Sabine Hofmann, Claus
+     Usunier, Alexander Kirillov, and Sergey Zagoruyko. End-to-                 Brenner, and Bernd Jahne. The hci benchmark suite:
+     End Object Detection with Transformers. In ECCV, 2020. 2                   Stereo and flow ground truth with uncertainties for urban au-
+ [6] G. C. H. E. de Croon, C. De Wagter, and T. Seidl. Enhanc-                  tonomous driving. In CVPR Workshops, 2016. 5
+     ing optical-flow-based control by learning visual appearance        [21]   Shaohua Li, Xiuchao Sui, Xiangde Luo, Xinxing Xu, Yong
+     cues for flying robots. Nature Machine Intelligence, 3(1):33–              Liu, and Rick Goh. Medical image segmentation using
+     41, 2021. 1                                                                squeeze-and-expansion transformers. In IJCAI, 2021. 3, 4,
+ [7] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,                     11
+     Dirk Weissenborn, Xiaohua Zhai, et al. An image is worth            [22]   Lahav Lipson, Zachary Teed, and Jia Deng. Raft-stereo:
+     16x16 words: Transformers for image recognition at scale.                  Multilevel recurrent field transforms for stereo matching. In
+     In ICLR, 2021. 2                                                           3DV, 2021. 2
+ [8] Alexey Dosovitskiy, Philipp Fischer, Eddy Ilg, Philip               [23]   Pengpeng Liu, Michael Lyu, Irwin King, and Jia Xu. Self-
+     Häusser, Caner Hazirbas, Vladimir Golkov, Patrick van der                 low: Self-supervised learning of optical flow. In Proceedings
+     Smagt, Daniel Cremers, and Thomas Brox. Flownet: Learn-                    of the IEEE/CVF Conference on Computer Vision and Pat-
+     ing optical flow with convolutional networks. In ICCV, 2015.               tern Recognition (CVPR), June 2019. 2
+     1, 2, 5                                                             [24]   Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei, Zheng
+ [9] Philipp Dufter, Martin Schmitt, and Hinrich Schütze.                      Zhang, Stephen Lin, and Baining Guo. Swin transformer:
+     Position information in transformers:          An overview.                Hierarchical vision transformer using shifted windows. In
+     arXiv:2102.11090, 2021. 3                                                  ICCV, pages 10012–10022, October 2021. 3
+[10] Fatma Guney, Laura Sevilla-Lara, Deqing Sun, and Jonas              [25]   Libo Long and Jochen Lang. Detail preserving residual fea-
+     Wulff. ”what is optical flow for?”: Workshop results and                   ture pyramid modules for optical flow. arXiv:2107.10990,
+     summary. In ECCV Workshops, 2018. 1                                        2021. 5, 6, 14
+[11] Tengda Han, Weidi Xie, and Andrew Zisserman. Self-                  [26]   Nikolaus Mayer, Eddy Ilg, Philip Häusser, Philipp Fischer,
+     supervised co-training for video representation learning. In               Daniel Cremers, Alexey Dosovitskiy, and Thomas Brox. A
+     NeurIPS, volume 33, 2020. 1                                                large dataset to train convolutional networks for disparity,
+[12] Tak-Wai Hui and Chen Change Loy. LiteFlowNet3: Resolv-                     optical flow, and scene flow estimation. In CVPR, 2016. 5
+     ing Correspondence Ambiguity for More Accurate Optical              [27]   Moritz Menze and Andreas Geiger. Object scene flow for au-
+     Flow Estimation. In ECCV, 2020. 2                                          tonomous vehicles. In Proceedings of the IEEE conference
+[13] Junhwa Hur and Stefan Roth. Iterative residual refinement                  on computer vision and pattern recognition, pages 3061–
+     for joint optical flow and occlusion estimation. In CVPR,                  3070, 2015. 1
+     June 2019. 2                                                        [28]   Moritz Menze, Christian Heipke, and Andreas Geiger. Joint
+[14] Eddy Ilg, Nikolaus Mayer, Tonmoy Saikia, Margret Keuper,                   3d estimation of vehicles and scene flow. In Proc. of the
+     Alexey Dosovitskiy, and Thomas Brox. Flownet 2.0: Evolu-                   ISPRS Workshop on Image Sequence Analysis (ISA), 2015.
+     tion of optical flow estimation with deep networks. In Pro-                4, 5
+     ceedings of the IEEE Conference on Computer Vision and              [29]   Sergiu Mocanu, Alan R. Moody, and April Khademi.
+     Pattern Recognition (CVPR), July 2017. 1, 2                                Flowreg: Fast deformable unsupervised medical image reg-
+[15] M. Irani and P. Anandan. Robust multi-sensor image align-                  istration using optical flow. Machine Learning for Biomedi-
+     ment. In ICCV, 1998. 4                                                     cal Imaging, 1, 2021. 1
+[16] Andrew Jaegle, Sebastian Borgeaud, Jean-Baptiste Alayrac,           [30]   Namuk Park and Songkuk Kim. How do vision transformers
+     Carl Doersch, Catalin Ionescu, David Ding, Skanda Kop-                     work? In ICLR, 2022. 2, 4
+     pula, Daniel Zoran, Andrew Brock, Evan Shelhamer,                   [31]   Anurag Ranjan and Michael J. Black. Optical flow estima-
+     Olivier J. Hénaff, Matthew M. Botvinick, Andrew Zis-                      tion using a spatial pyramid network. In CVPR, 2017. 1,
+     serman, Oriol Vinyals, and João Carreira. Perceiver IO:                   2
+
+
+                                                                     9
+[32] Laura Sevilla-Lara, Yiyi Liao, Fatma Güney, Varun Jampani,         [48] Shengyu Zhao, Yilun Sheng, Yue Dong, Eric I-Chao Chang,
+     Andreas Geiger, and Michael J. Black. On the integration of              and Yan Xu. Maskflownet: Asymmetric feature match-
+     optical flow and action recognition. In German Conference                ing with learnable occlusion mask. In Proceedings of the
+     on Pattern Recognition, 2018. 1                                          IEEE Conference on Computer Vision and Pattern Recogni-
+[33] Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy                 tion (CVPR), 2020. 1, 2
+     Davis, Quoc Le, Geoffrey Hinton, and Jeff Dean. Outra-
+     geously large neural networks: The sparsely-gated mixture-
+     of-experts layer. In ICLR, 2017. 3
+[34] A. Stone, D. Maurer, A. Ayvaci, A. Angelova, and R. Jon-
+     schkowski. Smurf: Self-teaching multi-frame unsupervised
+     raft with full-image warping. In CVPR, 2021. 2
+[35] Chen Sun, Abhinav Shrivastava, Carl Vondrick, Kevin Mur-
+     phy, Rahul Sukthankar, and Cordelia Schmid. Actor-centric
+     relation network. In ECCV, 2018. 1
+[36] D. Sun, D. Vlasic, C. Herrmann, V. Jampani, M. Krainin, H.
+     Chang, R. Zabih, W. T. Freeman, and C. Liu. Autoflow:
+     Learning a better training set for optical flow. In CVPR,
+     2021. 2, 5, 6, 14
+[37] Deqing Sun, Xiaodong Yang, Ming-Yu Liu, and Jan Kautz.
+     PWC-Net: CNNs for optical flow using pyramid, warping,
+     and cost volume. In CVPR, 2018. 1, 2
+[38] Shuyang Sun, Zhanghui Kuang, Lu Sheng, Wanli Ouyang,
+     and Wei Zhang. Optical flow guided feature: A fast and
+     robust motion representation for video action recognition.
+     In Proceedings of the IEEE Conference on Computer Vision
+     and Pattern Recognition (CVPR), June 2018. 1
+[39] Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field
+     transforms for optical flow. In European conference on com-
+     puter vision, pages 402–419. Springer, 2020. 1, 2, 4, 5, 6,
+     11
+[40] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-
+     reit, Llion Jones, Aidan N. Gomez, undefinedukasz Kaiser,
+     and Illia Polosukhin. Attention is all you need. In NeurIPS,
+     2017. 3, 4
+[41] Jianyuan Wang, Yiran Zhong, Yuchao Dai, Kaihao Zhang,
+     Pan Ji, and Hongdong Li. Displacement-invariant match-
+     ing cost learning for accurate optical flow estimation. In
+     NeurIPS, 2020. 2
+[42] Yuwen Xiong, Mengye Ren, Wenyuan Zeng, and Raquel
+     Urtasun. Self-supervised representation learning from flow
+     equivariance. In ICCV, 2021. 1
+[43] Jia Xu, René Ranftl, and Vladlen Koltun. Accurate Optical
+     Flow via Direct Cost Volume Processing. In CVPR, 2017. 1,
+     2
+[44] Charig Yang, Hala Lamdouar, Erika Lu, Andrew Zisserman,
+     and Weidi Xie. Self-supervised video object segmentation
+     by motion grouping. In ICCV, 2021. 1
+[45] Gengshan Yang and Deva Ramanan. Volumetric correspon-
+     dence networks for optical flow. In NeurIPS, 2019. 2, 4
+[46] Gengshan Yang and Deva Ramanan. Learning to seg-
+     ment rigid motions from two frames. In Proceedings of
+     the IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition (CVPR), pages 1266–1275, June 2021. 1
+[47] Feihu Zhang, Oliver J. Woodford, Victor Adrian Prisacariu,
+     and Philip H.S. Torr. Separable flow: Learning motion cost
+     volumes for optical flow estimation. In ICCV, 2021. 2, 5, 6,
+     14
+
+
+                                                                    10
+A. Model Size and FLOPs                                                     We trained two GMA models and two CRAFTm=2 mod-
+                                                                         els, with and without ShiftAug, respectively. They are de-
+   Table 4 presents the number of parameters and FLOPs of                noted as GMA, GMA-shift, CRAFT and CRAFT-shift.
+RAFT, GMA and CRAFT. The “Ratio” columns take RAFT
+as the base. FLOPs are measured while inference on Sintel
+images (1024x436 pixels).                                                B.1.1   Leaderboard Evaluation
+   Similar to the SS Transformer and the Cross-Frame At-
+                                                                         Table 6 presents the performance scores of the two
+tention, the GMA module in CRAFT is implemented with
+                                                                         CRAFTm=2 models (with or without ShiftAug), along with
+Expanded Attention [21], which contains multiple modes.
+                                                                         the standard CRAFTm=4 (without ShiftAug), on Sintel and
+In Table 4, two CRAFT models with different numbers of
+                                                                         KITTI leaderboards.
+GMA modes m are presented. These two models have
+                                                                            Without ShiftAug, when m reduces from 4 to 2, the per-
+very similar overall performance (Table 6). When m = 2,
+                                                                         formance on large motions (“s40+” for Sintel, and “Fl-fg”
+the model size is only 7% and 19% larger than GMA and
+                                                                         for KITTI) degrades slightly. As expected, ShiftAug re-
+RAFT, respectively, and thus the performance gain is not to
+                                                                         covers the model performance on large motions on Sintel
+be explained away as merely having more parameters.
+                                                                         (Clean) and KITTI. However, it is surprising to see that with
+                                                                         ShiftAug, the performance on large motions on Sintel (Fi-
+                          Params           FLOPs
+                                     Ratio                  Ratio        nal) degrades slightly.
+                           (M)              (G)
+                                                                            Due to the restricted frequency of submissions to the
+      RAFT                  5.3         1   369               1
+                                                                         leaderboards, we were unable to evaluate more model set-
+      GMA                   5.9       1.11  494             1.34
+                                                                         tings before the camera ready deadline, such as CRAFTm=4
+      CRAFTm=2              6.3       1.19  613             1.66
+                                                                         and GMA trained with ShiftAug.
+      CRAFTm=4              6.3       1.19  794             2.15
+
+Table 4. Number of parameters / FLOPs (on Sintel images). m of           B.1.2   Performance under Image Shifting Attack
+CRAFT denotes the number of modes in the GMA module.
+                                                                         We evaluated the 4 models under the image shifting at-
+    As shown in Table 5, the GMA module dominates the                    tack, to study whether ShiftAug makes models more robust
+total overhead of the three transformer modules. This dras-              against it. Figure 9 presents the performance of of the four
+tic difference is because the GMA module is applied in ev-               models, evaluated on the training split of Sintel (Clean) and
+ery iteration of the iterative motion refinement [39], while             Sintel (Final), under varying (∆u, ∆v). The horizontal shift
+                                                                                                                      .
+the other two are only applied once. In this regard, for the             ∆u ∈ [100, 300], and the vertical shift ∆v = 21 ∆u.
+FLOPs computation above, we fixed SS Trans and CFA to                       It can be seen that, under the image shifting attack,
+have 4 modes, and only varied the number of modes of the                 GMA-shift and CRAFT-shift follow similar performance
+GMA module.                                                              curves as GMA and CRAFT, respectively. On both Sintel
+                                                                         (Clean) and Sintel (Final), CRAFT-shift yields significant
+                       SS Trans CFA GMA Remaining                        smaller AEPE (20-50%) on very large shifts (≥ 200 pix-
+      FLOPs (G)           66    6.6 317   405                            els). However, on Sintel (Final), GMA-shift yields almost
+                                                                         identical AEPE on very large shifts as GMA. Bewilderingly,
+Table 5. FLOPs (on Sintel images) of different components in             on Sintel (Clean), the AEPE of GMA-shift becomes signifi-
+CRAFTm=4 . SS Trans, CFA and GMA all have 4 modes.                       cantly higher on very large shifts than GMA. ShiftAug helps
+                                                                         both GMA and CRAFT reduce AEPE on medium-to-large
+B. Image Shifting as Augmentation                                        shifts (120-180 pixels). Without ShiftAug, the maximum
+                                                                         AEPE in this range is 3.4 pixels.
+   To explore how manually shifting some training images                    Based on the observations above, we conclude that mild
+impacts the model performance, we take it as an extra aug-               ShiftAug does not help make GMA more robust against
+mentation, namely “ShiftAug”, for the training of optical                very large image shifts. On the other hand, mild Shif-
+flow models.                                                             tAug already helps make CRAFT significantly more robust
+B.1. Mild ShiftAug                                                       against very large image shifts.
+
+   In the mild ShiftAug training, 10% of the training                    B.2. Aggressive ShiftAug against Image Shifting
+batches are shifted by (∆u, ∆v) sampled from two Lapla-
+                                                                            In this section, we aim to test the effects of more ag-
+cian distributions with scales 16 and 10 (the mean value of
+                                                                         gressive ShiftAug, i.e., with a probability of 10%, shift
+a Laplacian distribution is the scale7 ), respectively.
+                                                                         frame 1 by (∆x, ∆y), where ∆x is uniformly drawn from
+   7 https://en.wikipedia.org/wiki/Laplace   distribution                [−320, 320], and ∆y is uniformly drawn from [−160, 160].
+
+
+                                                                    11
+                                                                                         Sintel                                                                 KITTI
+                            Settings
+                                                                    Clean                                  Final                                  Fl-bg         Fl-fg          Fl-all
+                                                     All           s10-40          s40+         All       s10-40                  s40+             (%)           (%)            (%)
+                   CRAFTm=4                          1.45           0.97           8.30         2.43       1.74                   13.27           4.58           5.85          4.79
+                   CRAFTm=2                          1.44           0.99           8.13         2.42       1.62                   13.66           4.30           6.87          4.73
+                 CRAFT-shiftm=2                      1.40           0.96           7.84         2.51       1.73                   14.02           4.35           6.35          4.68
+
+Table 6. Additional results on Sintel and KITTI 2015 leaderboards. We report the average end-point error (AEPE) for Sintel, and the
+Fl-bg, Fl-fg and Fl-all metrics for KITTI, which are the percentages of optical flow outliers (pixels with significant flow errors), calculated
+on the foreground regions and all pixels, respectively. To show the performance on large motions, we present the AEPE on s10-40 and
+s40+, i.e., pixels whose velocities are within [10, 40] pixels, and > 40 pixels, respectively.
+
+
+                                  GMA
+                140                                                                                                                 GMA
+                                                                                                                100
+                                  GMA-shift
+                                                                                                                                    GMA-shift
+                120               CRAFT
+                                                                                                                                    CRAFT
+                                                                                                                 80
+                                  CRAFT-shift
+                100                                                                                                                 CRAFT-shift
+
+
+
+
+                                                                                                         AEPE
+         AEPE
+
+
+
+
+                 80                                                                                              60
+
+
+                 60
+                                                                                                                 40
+                 40
+                                                                                                                 20
+                 20
+
+                  0                                                                                               0
+                      100   120   140     160     180   200      220   240   260   280    300                         100   120    140      160     180   200      220   240   260   280   300
+
+                                              Horizontal Shift                                                                                  Horizontal Shift
+
+                                          (a) Sintel (Clean)                                                                                (b) Sintel (Final)
+
+Figure 9. The AEPE of RAFT, GMA and CRAFT change differently with the magnitude of image shifts. (a)-(c) are on Sintel (Clean),
+                                                                                                                      .
+Sintel (Final) and Slow Flow, respectively. The horizontal shift ∆u change from 100 to 300, and the vertical shift ∆v = 12 ∆u. When ∆u
+goes beyond 160, RAFT and GMA quickly deteriorate, and CRAFT performs much more robustly.
+
+
+ ∆x (px)                      0    240   280   320   360   400                                         through augmentation, but stronger innate robustness of
+ GMA                         1.19 120.2 270.2 362.7 427.9 478.1                                        CRAFT makes it robust to variations beyond the training
+ CRAFT                       1.11 10.8 51.8 138.4 236.5 336.9                                          data. Hence, CRAFT is likely more robust against other un-
+ GMA-shift                   1.21 1.83 3.11 9.33 47.5 124.3                                            seen image variations as well, e.g., rotations, lighting varia-
+ CRAFT-shift                 1.13 1.59 1.74 2.15 6.73 32.0                                             tions and motion blur.
+    Table 7. AEPE on Chairs under image shifting attack.
+                                                                                                       C. Iterative Motion Refinement on Shifted
+                                                                                                          Slow-Flow Images
+We fine-tuned CRAFT and GMA on Things models (pre-                                                         Figure 10 presents the flow fields estimated at different
+trained on C+T) with such random shifting. Then we evalu-                                              iterations by GMA and CRAFT (both without shift augmen-
+ated the two models on Chairs8 with varying degree of shift-                                           tation), respectively, on the same Slow Flow [17] image pair
+ing. GMA-shift becomes more robust against image shift-                                                as in Figure 4 of the main text. It partially explains why the
+ing attack, but CRAFT-shift still outperforms GMA-shift                                                AEPE (average end-point error) of GMA is huge when the
+with a large margin on larger shifts.                                                                  image shift is large (Figure 5 in the main text).
+                                                                                                           The flow field is estimated through iterative refinement
+B.3. Innate and Acquired Robustness
+                                                                                                       of N = 12 iterations in both GMA and CRAFT. At the
+   Based on the observations in Section B.1 and B.2, we                                                i + 1-th iteration, it uses the flow estimated at the i-th iter-
+hypothesize that there are two types of model robustness                                               ation as initialization, and attempts to estimate a more ac-
+– innate and acquired robustness. The latter is learned                                                curate flow field. This is effective when the flow errors are
+     8 We intentionally chose Chairs for evaluation, which has a slight do-                            confined in very small areas, in which cases the model can
+main gap with Things (used for training), to see how the robustness gener-                             correct the errors by considering the estimated motions of
+alizes.                                                                                                the surrounding pixels (which are largely accurate). How-
+
+
+                                                                                                  12
+                                Frame 1, shifted by (220, 110)            Frame 2 (unchanged)                    Shifted groundtruth
+                                                        (a) Input frames and groundtruth flow
+
+
+
+
+                                                                                                             ⋯
+
+
+                   𝐸1 =253.8                 𝐸2 = 278.8              𝐸3 = 290.6                 𝐸4 = 297.2          𝐸12 = 284.9
+                                                       (b) GMA AEPE changes with iterations
+
+
+
+
+                                                                                                             ⋯
+
+
+                   𝐸1 = 113.8                 𝐸2 = 19.2                𝐸3 = 6.4                 𝐸4 = 2.4             𝐸12 = 1.5
+                                                       (c) CRAFT AEPE changes with iterations
+
+Figure 10. The iterative refinement of optical flow on the shifted Slow Flow image pair (Figure 4 in the main text), by GMA and CRAFT,
+respectively. As in the first iteration, GMA makes excessively huge errors, it is unable to recover with more iterations. CRAFT recovers
+from smaller initial errors and yields an accurate flow field eventually.
+
+
+ever, if large errors appear in broader areas, the model may                      correlations and compute a more accurate correlation vol-
+fail to recover from the errors with more iterations. There-                      ume, which may explain its robustness demonstrated in Fig-
+fore, a relatively small AEPE at the first iteration is crucial                   ure 10.
+for achieving a small AEPE after all iterations. In Figure
+10, the flow estimated by GMA at the first iteration has huge                     E. Screenshots of Sintel and KITTI Leader-
+errors (AEPE = 253.8), and thus even with more iterations,                            boards
+GMA is unable to recover. In contrast, the flow estimated
+by CRAFT at the first iteration has a much smaller AEPE =                             Figures 14-16 are the screenshots of the Sintel (Final),
+113.8, and CRAFT quickly corrects the errors.                                     Sintel (Clean) and the KITTI-2015 optical flow leader-
+                                                                                  boards, which were taken near the CVPR’2022 submission
+D. Visualization of Correlation Volumes on                                        deadline.
+   Slow Flow                                                                          CRAFT ranked the 1st and 5th places on Sintel (Final
+                                                                                  pass), Sintel (Clean pass), respectively. As Sintel (Final
+    Figures 11-13 present more visualizations of the corre-                       pass) images contain more light variations, shadows, mo-
+lation volume. Figure 11 visualizes the correlation volume                        tion blurs, etc. that are common in real world, we argue
+of RAFT, GMA and CRAFT on the shifted image pair from                             that the performance on Sintel (Final) better reflects the per-
+Slow Flow. This is the same example as in Figure 10, and                          formance of a model on real-world images. Evidence has
+Figure 4 in the main text. It can be seen that, GMA has the                       been presented in the Sintel paper (Figure 5, [4]) that Sin-
+most spurious high correlations, and CRAFT has the least.                         tel (Final) has similar image and motion statistics as other
+    Figures 12 and 13 visualize the correlation volumes with                      real-world datasets, including Lookalikes [4] and Middle-
+two different query points in Frame 1, on the rider’s body,                       bury [2].
+and on the horse’s tail, respectively, on the original image                          On the KITTI flow-2015 leaderboard, a few meth-
+pair from Slow Flow. Similar distributions of spurious high                       ods among the top are scene flow methods (marked with
+correlations are observed. Among the four models, CRAFT                           strikethrough text) that take two stereo pairs of images as
+(with SS trans) always has the least spurious high correla-                       input (cf. two monocular images of optical flow), and thus
+tions, showing that it is able to greatly suppress spurious                       are not comparable with optical flow methods. Among the
+
+
+                                                                             13
+                               Frame 1                                 Frame 2                              RAFT
+
+
+
+
+                                  GMA                           CRAFT (no SS trans)                        CRAFT
+
+Figure 11. Heatmaps of the correlation matrices between Frame 2 and a query point on the rider’s body in a shifted Frame 1, on the
+Slow Flow dataset. At the presence of motion blur, CRAFT has significantly fewer noisy correlations than RAFT and GMA, showing its
+robustness. Removing SS transformer results in more noisy correlations.
+
+
+
+
+                               Frame 1                                 Frame 2                              RAFT
+
+
+
+
+                                  GMA                           CRAFT (no SS trans)                        CRAFT
+
+    Figure 12. Heatmaps of the correlation matrices between Frame 2 and a query point on the rider’s body in Frame 1, on Slow Flow.
+
+
+top optical flow methods, CRAFT ranks 5th. In particular, it                      ranks as the top-1 optical flow method, but its training and
+achieves the highest accuracy on foreground regions, mea-                         implementation details are missing for further analysis and
+sured as the smallest Fl-fg (percentage of flow outliers9 in                      comparison with CRAFT. Separable Flow [47] and RFPM
+the foreground regions). On Fl-all (percentage of flow out-                       [25] have significantly worse performance on foreground
+liers in both foreground and background regions), MixSup                          regions. RAFT-A uses Autoflow [36] as the pretraining
+                                                                                  data, and thus not directly comparable with CRAFT. Aut-
+    9 Pixels whose end-point error is > 3 pixels or 5% of the ground truth        oflow explore a new way to synthesise training data, which
+flow magnitude.
+
+
+                                                                             14
+                          Frame 1                           Frame 2                            RAFT
+
+
+
+
+                            GMA                       CRAFT (no SS trans)                     CRAFT
+
+Figure 13. Heatmaps of the correlation matrices between Frame 2 and a query point on the horse’s tail in Frame 1, on the Slow Flow
+dataset.
+
+
+is orthogonal to our method or other recent architectures.
+It is worth noting that, the foreground objects in KITTI are
+usually cars, pedestrians, etc., which naturally are more im-
+portant than the background. Thus, smaller Fl-fg are prob-
+ably more important for practical applications than smaller
+Fl-bg or Fl-all.
+
+
+
+
+                                                                15
+Figure 14. Screenshot of Sintel (Final) leaderboard, taken near the CVPR’2022 submission deadline.
+
+
+
+
+                                               16
+Figure 15. Screenshot of Sintel (Clean) leaderboard, taken near the CVPR’2022 submission deadline.
+
+
+
+
+                                               17
+Figure 16. Screenshot of KITT-2015 leaderboard, taken near the CVPR’2022 submission deadline. Five scene flow methods are marked
+with strikethrough text, as they are not comparable to optical flow methods. There remain the top 19 optical flow methods. “CRAFT-
+noca” and “CRAFT-nof2” are the ablated models of removing the Cross-Frame Attention, and the Semantic Smoothing Transformer from
+CRAFT, respectively.
+
+
+
+
+                                                               18
+

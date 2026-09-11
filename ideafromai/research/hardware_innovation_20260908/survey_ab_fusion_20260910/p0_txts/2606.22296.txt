@@ -1,0 +1,621 @@
+                                         IEEE INTERNET OF THINGS JOURNAL                                                                                                          1
+
+
+
+
+                                         SCENIC: Semantic-Conditioned Edge-Aware Neural
+                                         Framework for Structured IoT Command Generation
+                                                                       Luke Ztz Hu, Hongbing Lang, and Songping Mai, Member, IEEE
+
+
+
+
+                                            Abstract—Edge Internet of Things (IoT) agents are often                   For smart-home assistants, cloud-based LLM APIs can pro-
+                                         constrained by memory capacity, privacy requirements, communi-            vide strong semantic reasoning and conversational performance.
+                                         cation latency, and recurring inference cost. Current smart-home          However, reliance on remote cloud inference introduces recur-
+                                         assistants commonly rely on API-level command interfaces or
+                                         cloud-based language models that remain difficult to deploy on            ring operational costs, communication latency, and potential
+arXiv:2606.22296v1 [cs.LG] 21 Jun 2026
+
+
+
+
+                                         edge devices. This paper addresses edge IoT command generation            privacy concerns due to external transmission of user data. As
+                                         as a many-to-one structured output task, where multiple natural-          a result, recent research has increasingly focused on compact
+                                         language instructions map to the same canonical command string            language models capable of local edge deployment for smart-
+                                         for deterministic smart-home parsing. To support this setting, we         home and IoT applications. Maintaining performance under
+                                         propose Semantic-Conditioned Edge-Aware Neural Framework for
+                                         Structured IoT Command Generation (SCENIC), an end-to-end                 aggressive quantization and pruning remains challenging, par-
+                                         framework covering model architecture selection, Smart Home               ticularly for compact decoder-only auto-regressive architectures
+                                         Instruct data generation, triplet-loss contrastive supervised fine-       operating in resource-constrained environments [3], [4]. Prior to
+                                         tuning, pruning and quantization, and deployment-oriented export.         the emergence of large-scale auto-regressive language models,
+                                         We evaluate sub-0.2B-scale transformer backbones, which are, to           encoder-only architectures such as BERT [5] and its variants
+                                         the best of our knowledge, among the smallest language-model
+                                         backbones studied for edge IoT structured command generation.             dominated natural language understanding benchmarks through
+                                         On Smart Home Instruct-Bench, the strongest dense decoder-                bidirectional contextual encoding tasks. For many-to-one
+                                         only row reaches 99.0% EM@1, while the encoder–decoder                    structured command-generation tasks, encoder–decoder models
+                                         model retains stronger high-sparsity behavior. A representative           such as T5 [6] naturally align diverse linguistic formulations
+                                         pruned INT8 encoder–decoder export preserves 91.0% EM@1                   to a common structured target through cross-attention between
+                                         and 99.0% EM@5 while reducing exported model size by 25.38%.
+                                         TensorRT profiling of the NVIDIA 2:4 sparse encoder export                the encoded instruction and generated output, whereas encoder-
+                                         further shows up to 1.8× encoder-component speedup, indicating            only architectures such as BERT [5] may similarly benefit
+                                         that the selected encoder–decoder deployment path can retain              from their bidirectional semantic representations, which have
+                                         structured command accuracy under edge-oriented compression               historically excelled on language-understanding tasks.
+                                         while hardware acceleration evidence remains component-level.                Motivated by these observations, this work investigates
+                                         The SCENIC code and experimental artifacts are open sourced
+                                         to support reproducibility.                                               practical architecture and output-formulation choices for edge
+                                                                                                                   IoT deployment. Specifically, we evaluate two self-trained
+                                            Index Terms—Edge computing, Internet of Things (IoT), large            0.2B encoder-only and decoder-only models, Encoder-Chinese-
+                                         language models, model compression, smart homes.
+                                                                                                                   SLM [7] and Decoder-Chinese-SLM [8], along with ChatLM-
+                                                                                                                   mini-Chinese (CMC) [9], a 0.2B encoder–decoder model,
+                                                                 I. I NTRODUCTION                                  under data-scarce smart-home assistant settings. We propose
+                                                                                                                   Semantic-Conditioned Edge-Aware Neural Framework for
+                                              RANSFORMER-based large language models (LLMs)
+                                         T    have significantly advanced natural language processing by
+                                         enabling sophisticated semantic understanding and generation
+                                                                                                                   Structured IoT Command Generation (SCENIC). The SCENIC
+                                                                                                                   framework streamlines model selection to edge deployment for
+                                                                                                                   IoT assistants.
+                                         across diverse tasks [1]. Recent progress has largely been driven
+                                         by scaling model parameters, training data, and computational
+                                                                                                                                        II. R ELATED W ORK
+                                         resources, resulting in models with billions to trillions of
+                                         parameters that achieve strong emergent capabilities across               A. Edge LLMs for IoT and Smart Home Assistants
+                                         reasoning and generation tasks [2]. However, these large-scale               LLM architectures have largely favored decoder-only models,
+                                         models require substantial memory, computational throughput,              including LLaMA [10], Qwen [11]–[14], and ChatGLM [15],
+                                         and cloud infrastructure, limiting their practicality for resource-       due to their scalability and strong open-ended instruction-
+                                         constrained Internet of Things (IoT) edge environments.                   following capability. However, these architectures primarily
+                                                                                                                   target large-scale general-purpose generation and therefore
+                                            This work was supported by the Shenzhen Science and Technology         introduce substantial computational and memory overhead for
+                                         Innovation Bureau under Grant ZDCY20250901110707008. (Corresponding
+                                         author: Songping Mai; e-mail: mai.songping@sz.tsinghua.edu.cn.)           smart-home edge applications. Birkmose et al. [16] investigated
+                                            Luke Ztz Hu and Songping Mai are with the Tsinghua Shenzhen Interna-   fully on-device smart-home assistants using compact decoder-
+                                         tional Graduate School, Shenzhen, Guangdong, 518055 China (e-mail: zhu-   only SmolLM2 models with 0.36B and 1.7B parameters on
+                                         tz24@mails.tsinghua.edu.cn; mai.songping@sz.tsinghua.edu.cn).
+                                            Hongbing Lang is with Shenzhen Belon Technology Co., Ltd., Shenzhen,   8 GB edge hardware. Their system performed intent detection,
+                                         China (e-mail: hblang@belon.cn).                                          slot filling, JSON action generation, and response generation
+IEEE INTERNET OF THINGS JOURNAL                                                                                                                      2
+
+
+
+for lighting, thermostat, and device-control commands. While                                    TABLE I
+8-bit and 16-bit quantization largely preserved semantic per-          S MART- HOME BENCHMARK COVERAGE ADAPTED FROM H OME B ENCH .
+formance, aggressive 4-bit quantization reduced device-service
+                                                                     Resource                       VS     IS    VM     IM     MM       II    Size
+classification accuracy under noisy real-world prompts. Similar
+                                                                     IFTTT [18]                     ✓✗     ✗      ✓✗     ✗       ✗      ✗     50K+
+edge-oriented LLM systems predominantly rely on decoder-             SAGE [19]                      ✓      ✗       ✗     ✗       ✗      ✗       50
+only autoregressive architectures, whose decoding process            Home Assistant Requests [20]   ✓      ✗       ✗     ✗       ✗      ✗    30K+
+introduces reduced robustness under aggressive quantization          HomeBench [4]                  ✓      ✓      ✓      ✓       ✓      ✗    170K+
+                                                                     Smart Home Instruct-Bench      ✓      ✗      ✓      ✗       ✓      ✓      200
+and sparsification for structured edge-generation tasks [11].
+Recent surveys further highlight that compact edge LLM                VS/IS/VM/IM/MM follow the HomeBench taxonomy [4]; the II column
+                                                                     and the Smart Home Instruct-Bench row are added in this paper. II denotes
+systems remain constrained by quantization robustness, infer-        indirect instruction. For Smart Home Instruct-Bench, Size denotes the 200-entry
+ence efficiency, and hardware-aware deployment optimization          benchmark; the broader Smart Home Instruct dataset family also includes
+under resource-limited environments [3], [17]. Although prior        Smart Home Instruct-SFT and Smart Home Instruct-Contrast. Note: ✓ =
+                                                                     explicitly covered by natural-language instructions; ✗ = not covered; ✓✗ =
+edge-oriented LLM studies demonstrate the feasibility of             partially or indirectly covered.
+compact on-device inference, they mainly evaluate whether
+small models can execute smart-home language tasks under
+constrained hardware. They do not directly answer how                contextual or goal-oriented expressions. In practical smart-home
+compact transformer architecture and output formulation in-          scenarios, command difficulty is not determined only by the
+teract with structured command accuracy after pruning and            number of devices or actions involved, but also by how user
+quantization. This gap is important for edge IoT deployment,         intent is expressed. Larger models can often recover from
+where compression must reduce storage or computation without         lexical variation, syntax errors, or indirect phrasing through
+disrupting deterministic device-control behavior. Raffel et          stronger contextual reasoning. In contrast, compact models
+al. [6] proposed T5, a unified encoder–decoder transformer for       deployed under edge IoT constraints are more sensitive to intent
+sequence-to-sequence learning. Based on the T5 architecture,         ambiguity, which can lead to incorrect structured command
+Chen [9] developed CMC, a compact 0.2B Chinese language              generation. To study how architecture affects this setting, we
+model designed for lightweight deployment. Devlin et al. [5]         evaluate three sub 0.2B-scale architectures under the same
+provided BERT, demonstrating the effectiveness of bidirectional      many-to-one structured command-output formulation, including
+encoder representations for language-understanding tasks. This       the CMC encoder–decoder model [9] and two self-trained
+work revisits compact encoder–decoder and encoder-only               encoder-only [7] and decoder-only [8] variants.
+architectures for semantic smart-home command generation,
+where diverse natural-language instructions correspond to
+deterministic device-control outputs.                                C. Contrastive Learning
+                                                                        Contrastive learning has been widely studied as a mechanism
+                                                                     for improving representation structure. Khosla et al. [21]
+B. Smart Home Instruction Benchmarking                               introduced supervised contrastive learning, where samples
+   Recent LLM-based smart-home assistants use large cloud-           from the same class are pulled closer in the embedding
+hosted models as the central reasoning component, while              space while samples from different classes are separated. This
+edge devices mainly serve as sensing, communication, or              formulation improves discriminative representation learning
+command relay units. This architecture benefits from the broad       beyond standard cross entropy training, particularly when
+instruction-following ability of frontier LLMs, but it does          different input variants correspond to the same semantic label.
+not fully solve low-resource edge applications. Li et al. [4]        In text generation, Su et al. [22] showed that contrastive
+proposed HomeBench, a smart-home benchmark designed to               objectives can help calibrate the representation space of neural
+evaluate LLMs under valid and invalid instructions across both       language models, reducing degeneration and improving gener-
+single-device and multi-device scenarios. HomeBench contains         ation coherence. More recently, Yan et al. [23] proposed con-
+100 smart-home scenarios and more than 170K instructions,            trastive instruction tuning, which aligns semantically equivalent
+covering five instruction types: valid single-device (VS), invalid   instruction instance pairs and improves robustness to unseen
+single-device (IS), valid multi-device (VM), invalid multi-          instruction variations. Unlike general contrastive instruction
+device (IM), and mixed multi-device (MM) instructions [4].           tuning, which improves instruction-following robustness by
+Table I summarizes representative smart-home instruction             aligning semantically equivalent instruction–instance pairs [23],
+resources. IFTTT contains more than 50K trigger-action recipes       SCENIC defines semantic equivalence as the same command:
+from the If-This-Then-That platform, capturing automated IoT         two smart-home commands are treated as compatible only
+behavior rules rather than direct natural-language command           when they map to the same executable structured IoT command
+generation [18]. SAGE evaluates autonomous LLM agents on             output. To support this formulation, SCENIC constructs schema-
+50 grounded smart-home execution tasks [19], while Home As-          aware contrastive tuples containing same-output positives, valid
+sistant Requests provides assistant-style request-response pairs     hard negatives with different structured outputs, and invalid
+for controlling Home Assistant instances [20]. These resources       negatives corresponding to unsupported device–action requests.
+cover important aspects of smart-home automation and agent           This design encourages compact edge-oriented models to
+execution, but they provide limited emphasis on indirect intent      align paraphrased commands while separating superficially
+commands, where users imply the desired device action through        similar commands that require different or non-executable
+IEEE INTERNET OF THINGS JOURNAL                                                                                                               3
+
+
+
+
+Fig. 1. Overview of the SCENIC framework.
+
+
+
+outputs. In SCENIC, contrastive SFT is used as an auxiliary         Decoder-only and encoder–decoder backbones are trained by
+training strategy for comparing representation behavior across      token-level negative log likelihood over the same canonical
+architectures, rather than as the sole optimization objective.      command string:
+                                                                                               |ci |
+                                                                                   (i)
+                                                                                               X
+                       III. M ETHODOLOGY                                      Ldec = −                 log pθ (ci,u | xi , ci,<u ),
+                                                                                               u=1
+   This section presents the full SCENIC workflow. SCENIC                                                                                    (2)
+                                                                                               |ci |
+is designed to generate and evaluate language models for edge-               (i)
+                                                                           Lencdec = −
+                                                                                               X
+                                                                                                       log pθ (ci,u | Encθ (xi ), ci,<u ).
+deployable many-to-one structured IoT command strings. For                                     u=1
+the remainder of the paper, SCENIC refers to the framework,
+Smart Home Instruct refers to the dataset family, Smart
+Home Instruct-SFT and Smart Home Instruct-Contrast are the          B. Smart Home Instruct Generation
+training views, and Smart Home Instruct-Bench is the 200-entry         SCENIC constructs Smart Home Instruct from a finite
+benchmark. As shown in Fig. 1, SCENIC contains five stages:         executable home-action ontology. Let L denote locations, D
+architecture selection, many-to-one data generation, triplet-loss   devices, S (d) the finite set of services or actions supported by
+contrastive SFT (C-SFT), pruning and quantization, and edge         device d, and Γ argument keys. Each argument key γ ∈ Γ has
+deployment. The consolidated implementation and experimental        an admissible value set Vγ and a deterministic value normalizer
+artifacts are provided in the SCENIC repository [24].               ηγ . A single action is represented as
+                                                                                               ar = (ℓr , dr , sr , αr ),                    (3)
+A. Architecture Selection
+                                                                    where ℓr ∈ L ∪ {∅}, dr ∈ D, sr ∈ S (dr ), and αr =
+   SCENIC compares three similar corpus pretrained backbones        {(γ, vγ ) : γ ∈ Γr , vγ ∈ Vγ } is an optional argument set. A
+under the same downstream data and evaluation controls; the         multi-action output is
+difference is the command-output interface. The home action
+inventory is closed, so generalization is measured over unseen                           y = (a1 , . . . , aR ),        R ≥ 1.               (4)
+linguistic forms and compositions within the fixed schema
+                                                                    Let Yvalid denote the set of all multi-action outputs whose
+rather than over an open action ontology. Let ci = t(yi ) be the
+                                                                    action components satisfy these ontology constraints.
+canonical command string for instruction xi , let ci,u denote
+                                                                       The canonical slot order is fixed everywhere as location,
+its u-th target token, and let Ttrain = {t1 , . . . , tK } be the
+                                                                    device, service/action, and optional arguments. To define the
+deduplicated training target inventory. For the encoder-only
+                                                                    normalization map, SCENIC fixes total orders <L , <D ,
+model, qk = (wk , bk ) are the class parameters for target tk ,
+                                                                    <S , and <Γ . Argument keys are sorted by <Γ , values are
+renc (x) is a pooled instruction representation, and
+                                                                    normalized by ηγ , and the resulting argument list is denoted
+                          exp(wk⊤ renc (x) + bk )                   αr↑ . Actions are ordered by ≺ν , the lexicographic order over
+          pθ (tk | x) = PK                          ,               (ℓr , dr , sr , αr↑ ) induced by these total orders:
+                                    ⊤
+                         j=1 exp(wj renc (x) + bj )          (1)
+                L(i)
+                 enc   = − log pθ (ci | xi ).                            ar ≺ν aq ⇐⇒ (ℓr , dr , sr , αr↑ ) <lex (ℓq , dq , sq , αq↑ ).       (5)
+IEEE INTERNET OF THINGS JOURNAL                                                                                                                             4
+
+
+
+                                                                    TABLE II
+                                                C OMPACT ARCHITECTURE AND DATA - CONTROL SUMMARY.
+
+Specification                 Encoder-Chinese-SLM [7]                    Decoder-Chinese-SLM [8]                    Encoder–Decoder
+
+Model source                  Trained by the authors in this work        Trained by the authors in this work         Public compact encoder–decoder check-
+                                                                                                                     point
+Architecture type        Encoder-only                                  Decoder-only                                  Encoder–decoder
+Backbone family          BERT/RoBERTa-style bidirectional en- LLaMA-style causal decoder                             T5-style conditional sequence-to-sequence
+                         coder                                                                                       model
+Output formulation       Bidirectional command representation and Autoregressive structured-output genera- Source-conditioned structured-output gen-
+                         output selection                              tion                                          eration
+Parameter scale          ∼0.194B                                       ∼0.196B                                       ∼0.188B
+Role in this work        Representation baseline                       Causal generation baseline                    Conditional generation baseline
+Pretraining status       Author-trained compact Chinese encoder Author-trained compact Chinese decoder Public pretrained compact Chinese
+                                                                                                                     encoder–decoder
+Tokenizer and vocabulary The author-trained encoder-only and decoder-only models use the same tokenized Chinese corpus recipe; all downstream
+control                  comparisons use fixed tokenizer settings and the same Smart Home Instruct views to reduce data-induced confounding
+                         across architectures.
+Downstream control       All models are fine-tuned, pruned, and evaluated using the same Smart Home Instruct-SFT, Smart Home Instruct-Contrast,
+                         Smart Home Instruct-Bench, structured exact-match metrics, and pruning/evaluation protocol. The comparison is a practical
+                         checkpoint-level comparison under shared downstream controls, not a pure pretraining-isolation study.
+Implementation details   Training scripts, tokenizer settings, model configuration files, and repository-level implementation details for the author-trained
+                         checkpoints are provided in the cited code repositories [7], [8].
+
+
+
+The normalized structured output is                                             Smart Home Instruct-SFT is used for supervised task adaptation,
+                                                                                Smart Home Instruct-Contrast is used only for the triplet-loss C-
+                                ȳ = ν(y),                               (6)    SFT variant, and Smart Home Instruct-Bench is the benchmark
+where ν(·) sorts actions by ≺ν , uses the fixed slot order,                     view used for reporting. Duplicate normalized strings are
+serializes unspecified slots as ∅, normalizes whitespace, and                   removed when constructing the closed training inventory
+applies deterministic argument formatting. The structured                                          Ttrain = {ci : (xi , ci ) ∈ ESFT }.                  (14)
+natural-language rendering is
+                                                                                The benchmark target-overlap statistic is
+                            t(y) := τ (ν(y)).                            (7)                                        200
+                                                                                                                1 X
+                                                                                                 ρoverlap =            1{cj ∈ Ttrain } ,
+The rendering map τ is injective on normalized valid outputs                                                   200 j=1                                  (15)
+and is paired with a deterministic parser π such that
+                                                                                                   ρOOV = 1 − ρoverlap .
+                   π(t(y)) = ν(y),          ∀y ∈ Yvalid .                (8)    For the current Smart Home Instruct artifacts, ρoverlap =
+Consequently, for any two valid outputs,                                        200/200 = 1.00, so all benchmark target strings are covered
+                                                                                by the closed training inventory.
+                  t(y1 ) = t(y2 ) ⇐⇒ ν(y1 ) = ν(y2 ).                    (9)      Evaluation uses normalized exact match at top K:
+                                                                                                                  N
+Thus, SCENIC uses natural-language output, but not open-                                                       1 X
+                                                                                               EM@K =                1{ci ∈ TopK(xi )}.                 (16)
+ended dialogue: the structured command string is a determin-                                                   N i=1
+istic rendering of the structured command.
+   For each valid structured command output y, SCENIC                           For encoder-only evaluation, TopK(xi ) is ranked over Ttrain
+generates a variable-size instruction set                                       by classifier score. For decoder-only and encoder–decoder
+                                                                                evaluation, beam size is 5, the maximum decoding budget
+                                        y  n
+                           Xy = {xy,j }j=1 ,                            (10)    is 128 new tokens, decoded strings are normalized through
+                                                                                the same ν(·)-and-τ (·) pipeline, duplicates are removed in
+where the instructions include direct commands, indirect                        beam-score order, and the first K remaining candidates are
+commands, and paraphrased variants. Fig. 2 illustrates the                      used. Wilson score intervals [25] are reported for representative
+many-to-one mapping from different surface instructions to                      Smart Home Instruct-Bench EM@1 rows.
+a shared canonical command string. The three Smart Home
+Instruct views are
+                                                                                C. Command-Output-Level Triplet Loss
+                ESFT = {(xi , ci )}N
+                                   i=1 ,
+                                     SFT
+                                                 ci = t(yi ),           (11)       Smart Home Instruct-Contrast supplies anchor–positive–
+                               −,hard
+                                                                                negative tuples for a triplet-loss auxiliary objective; Smart
+      EContrast = {(xi , x+
+                          i , xi      , x−,inv
+                                         i     , ci , c−   NC
+                                                       i )}i=1 ,        (12)    Home Instruct-Bench contains no negative examples. Each
+and                                                                             record is organized as
+                                                                                                                −     −         −
+                       EBench = {(xj , cj )}200                                                 ξi = xi , x+
+                                                                                                                                  
+                                            j=1 .                       (13)                               i , xi , x̃i , ci , ci ,      (17)
+IEEE INTERNET OF THINGS JOURNAL                                                                                                                              5
+
+
+
+                             TABLE III
+         S MART H OME I NSTRUCT DATA VIEWS USED IN SCENIC.
+
+View                         Size            Role
+
+Smart Home Instruct-SFT      9,772 pairs     Supervised adaptation and pruning
+                                             calibration.
+Smart Home Instruct-Contrast 9,772 tuples    Anchor, same-target positive,
+                                             valid hard negative, and invalid
+                                             negative tuples.
+Smart Home Instruct-Bench    200 pairs       Benchmark view with 70 easy, 65
+                                             medium, and 65 hard examples.
+Unique canonical targets     1,411 strings   Deduplicated target inventory in
+                                             the SFT and Contrast artifacts.
+
+
+                                                                                 Fig. 3. Translated Smart Home Instruct-Contrast entry.
+
+                                                                                 Algorithm 1 Triplet-loss contrastive SFT used in SCENIC.
+                                                                                                                       −
+                                                                                 Require: Batch B = {(xi , x+     i , xi , ci )}, backbone A, margin m, weight
+                                                                                     λtri .
+                                                                                 Ensure: Updated model parameters.
+                                                                                  1: for each tuple i ∈ B do
+                                                                                  2:    Compute the supervised task loss for anchor and positive inputs.
+                                                                                                                 −
+                                                                                  3:    Encode xi , x+i , and xi ; mean-pool and normalize the representations.
+                                                                                                    (i)
+                                                                                  4:    Compute Ltri = [m + d(ri , ri+ ) − d(ri , ri− )]+ .
+                                                                                                             (i)              (i)
+                                                                                  5:    Combine L(i) = Ltask + λtri Ltri .
+                                                                                  6: end for
+                                                                                  7: Update A using the batch mean loss.
+
+
+
+                                                                                 With d(u, v) = 1 − u⊤ v for normalized vectors, the imple-
+                                                                                 mented triplet term is
+                                                                                    (i)                                                    −
+                                                                                  Ltri = m + d rA (xi ), rA (x+
+                                                                                                                                           
+Fig. 2. Many-to-one Smart Home Instruct mapping.                                                                 i ) − d rA (xi ), rA (xi ) + .
+                                                                                                                                                (20)
+                                                                                 The admissible margin range is 0 < m < 2; the reported
+                                   −
+where x+ i shares the target ci , xi is a valid hard negative whose              C-SFT setting uses m = 0.5 and λtri = 0.1. For the generative
+        −               −
+target ci ̸= ci , and x̃i is an invalid negative that violates the               encoder–decoder script, the task term averages anchor and
+device–action schema. Let ȳi = ν(yi ), and let Dev(ȳ) and                      positive sequence losses,
+Svc(ȳ) denote the devices and services/actions in a normalized                                                                   +
+                                                                                         L(i)     1
+                                                                                                                                         
+output. Anchor-conditioned candidate sets are                                              gen = 2 Lencdec (xi , ci ) + Lencdec (xi , ci ) ,    (21)
+                                                                                 and the reported triplet-loss C-SFT objective is
+         Pi = {xj : j ̸= i, cj = ci },
+                                                                                                          1 X  (i)             (i)
+                                                                                                                                    
+    Nihard = {xj : cj ̸= ci , Dev(ȳj ) ∩ Dev(ȳi ) ̸= ∅,                                   LC-SFT =              Ltask + λtri Ltri ,                    (22)
+                                                                         (18)                           |B|
+                                                                                                                  i∈B
+                    Svc(ȳj ) ∩ Svc(ȳi ) ̸= ∅},
+                                                                                 where Ltask is the architecture-specific supervised loss in
+       Niinv   = {x̃−     −
+                    i : x̃i is schema-invalid for xi }.
+                                                                                 Eqs. (1)–(2); for the released encoder–decoder run it is Lgen
+This makes hard negatives anchor-conditioned rather than                         in Eq. (21).
+the full different-target complement. If Pi = ∅, SCENIC
+first creates a same-output paraphrase; if no positive can be                    D. Edge-Compression Evaluation Protocol
+produced, the anchor remains in Smart Home Instruct-SFT but                         After SFT and C-SFT, SCENIC treats pruning as an edge-
+is omitted from the auxiliary triplet term.                                      compression stress test over selected compact checkpoints.
+   The released C-SFT training code loads one negative field                     Pruning is applied to transformer linear weights, calibrated
+per run. The reported C-SFT rows use the default valid                           only on training data, and reported as exploratory benchmark-
+hard negative field x−           −
+                       i ; the x̃i field is retained for schema                  view analysis unless validation-based selection is available.
+validation and optional invalid-negative runs, but is not used                   The evaluated methods include one-shot magnitude prun-
+simultaneously in the reported loss.                                             ing [26], gradient-based importance pruning [27], WANDA [28],
+   For a backbone A, the representation extractor is                             NVIDIA 2:4 structured sparsity [29], and progressive magni-
+                                                                                 tude pruning [30].
+                                  PoolA (HA (x))
+                  rA (x) =                           ,                   (19)
+                              ∥ PoolA (HA (x))∥2 + ϵ                             E. ONNX Export and Deployment-Oriented Evaluation
+where the released encoder–decoder C-SFT implementation                            SCENIC exports selected checkpoints to ONNX under
+uses attention-mask mean pooling over encoder hidden states.                     FP16 and INT8 settings to test deployment compatibility after
+IEEE INTERNET OF THINGS JOURNAL                                                                                                                                  6
+
+
+
+                                                                       TABLE IV
+                                           E XPLORATORY S MART H OME I NSTRUCT-B ENCH EM@1/EM@5 RESULTS .
+
+                          Arch.      Train. Setting             Train        Bench.          Easy          Med.          Hard        Method
+                          Enc-only Base     Unadapted        2.30/7.10     1.50/7.00    2.86/10.00     1.54/10.77     0.00/0.00   Base model
+                          Dec-only Base     Unadapted        0.00/0.00     0.00/0.00     0.00/0.00      0.00/0.00     0.00/0.00   Base model
+                          Enc-Dec Base      Unadapted        0.00/0.00     0.00/0.00     0.00/0.00      0.00/0.00     0.00/0.00   Base model
+                          Enc-only SFT      Dense          80.19/96.38   85.50/98.50   65.71/95.71 100.00/100.00 92.31/100.00 Dense baseline
+                          Dec-only SFT      Dense         99.95/100.00   99.00/99.50   97.14/98.57 100.00/100.00 100.00/100.00 Dense baseline
+                          Enc-Dec SFT       Dense          91.18/98.47   95.00/99.50   85.71/98.57 100.00/100.00 100.00/100.00 Dense baseline
+                          Enc-only SFT      30%            39.80/64.60 36.00/85.00 28.57/74.29     61.54/92.31   18.46/89.23       Prog. mag.
+                          Dec-only SFT      30%            98.82/99.88 99.50/100.00 98.57/100.00 100.00/100.00 100.00/100.00       Magnitude
+                          Enc-Dec SFT       30%            90.97/98.43 96.50/99.50 90.00/98.57 100.00/100.00 100.00/100.00           Gradient
+                          Enc-only SFT      50%            35.20/64.02   35.50/86.50   22.86/68.57 58.46/100.00    26.15/92.31     Prog. mag.
+                          Dec-only SFT      50%            63.07/77.55   32.00/44.00   85.71/97.14    0.00/20.00    6.15/10.77       Gradient
+                          Enc-Dec SFT       50%            86.74/96.95   97.00/99.50   91.43/98.57 100.00/100.00 100.00/100.00       WANDA
+                          Enc-only C-SFT Dense             67.94/90.87   78.50/95.50   55.71/87.14 96.92/100.00 84.62/100.00 Dense baseline
+                          Dec-only C-SFT Dense           100.00/100.00   97.00/97.50   91.43/92.86 100.00/100.00 100.00/100.00 Dense baseline
+                          Enc-Dec C-SFT Dense              95.65/97.96   98.00/98.50   94.29/95.71 100.00/100.00 100.00/100.00 Dense baseline
+                          Enc-only C-SFT 30%               42.57/63.93 56.50/85.50 35.71/78.57     72.31/95.38   63.08/83.08       Prog. mag.
+                          Dec-only C-SFT 30%               97.85/99.65 99.50/100.00 98.57/100.00 100.00/100.00 100.00/100.00       Magnitude
+                          Enc-Dec C-SFT 30%                94.81/97.26 98.00/99.00 94.29/97.14 100.00/100.00 100.00/100.00           Gradient
+                          Enc-only C-SFT 50%               28.28/55.58   28.00/77.50 17.14/68.57    50.77/98.46     16.92/66.15    Prog. mag.
+                          Dec-only C-SFT 50%               18.55/40.88   16.00/27.00 45.71/77.14       0.00/0.00      0.00/0.00      Gradient
+                          Enc-Dec C-SFT 50%                90.67/95.82   95.50/99.50 91.43/100.00 100.00/100.00     95.38/98.46      Gradient
+
+                           Note: Each metric entry reports EM@1/EM@5 in percent. C-SFT denotes supervised fine-tuning with the
+                          triplet-loss auxiliary objective. Dense denotes the unpruned checkpoint. Bold values mark the highest value
+                          within each comparable training and sparsity block.
+
+
+
+reduced-precision conversion. The export protocol records                                                         TABLE VI
+stored model size, latency, throughput, and EM@1/EM@5 un-                              R EPRESENTATIVE 95% W ILSON CONFIDENCE INTERVALS ON S MART H OME
+                                                                                                           I NSTRUCT-B ENCH EM@1.
+der fixed decoding settings, while hardware-aware acceleration
+is evaluated separately through TensorRT encoder profiling.                            Configuration                                 EM@1        95% CI
+
+                                                                                       Dec-only SFT dense                              99.0     [96.4,   99.7]
+                   IV. E XPERIMENTAL R ESULTS                                          Enc-Dec C-SFT dense                             98.0     [95.0,   99.2]
+                                                                                       Enc-Dec SFT 50% WANDA                           97.0     [93.6,   98.6]
+   This section evaluates SCENIC under Smart Home Instruct-                            Enc-Dec C-SFT 50% gradient                      95.5     [91.7,   97.6]
+                                                                                       Enc-Dec pruned INT8 export                      91.0     [86.2,   94.2]
+SFT, Smart Home Instruct-Contrast, pruning, ONNX export,
+and TensorRT-oriented profiling. The evaluation is organized in
+three stages. First, the three compact Chinese model architec-
+tures are compared under dense SFT and C-SFT. Second, the                              A. Benchmark Composition
+same architectures are evaluated after pruning at 30% and 50%                             SCENIC is evaluated on Smart Home Instruct-Bench, a
+target sparsity to measure sparse accuracy retention. Third,                           200-entry smart-home instruction benchmark. The benchmark
+the selected encoder–decoder deployment path is exported                               contains easy, medium, and hard instructions to test whether
+to ONNX under FP16 and INT8 runtime settings, while                                    each model can preserve structured command accuracy across
+TensorRT encoder profiling is reported separately as a hardware-                       direct single-device commands, two-action commands, and
+aware acceleration probe. All rows use the EM@1/EM@5                                   scenario-level multi-action commands. Table V summarizes
+protocol defined in Sec. III-B. The pruning rows are reported                          the benchmark composition.
+as exploratory benchmark-view results rather than locked
+validation-selected deployment choices.                                                B. Dense and Pruned Accuracy Results
+                                                                                          Table IV reports the base models, dense baselines, and repre-
+                              TABLE V
+        S MART H OME I NSTRUCT-B ENCH DIFFICULTY BREAKDOWN .                           sentative exploratory pruning rows used to analyze compression
+                                                                                       robustness under this experimental configuration.
+Criterion          Easy                   Medium               Hard                       Because Smart Home Instruct-Bench contains 200 examples,
+Examples           70                     65                   65                      one example corresponds to 0.5 percentage points; small
+Device scope       Single-device          Multi-device         Multi-device            differences are therefore interpreted cautiously, and the analysis
+Command actions    1                      2                    ≥3                      emphasizes broad architecture and compression trends rather
+Prompt type        Direct/indirect        Two-action           Scenario-indirect
+                                          command                                      than statistical significance. Table VI reports representative
+Evaluation focus   Basic command          Multi-device         Scenario-level action   Wilson intervals for key EM@1 rows.
+                                          execution            grounding
+                                                                                          The unadapted base models provide limited command-
+                                                                                       generation ability, while all three architectures learn the
+IEEE INTERNET OF THINGS JOURNAL                                                                                                               7
+
+
+
+                                                                  TABLE VII
+                                                   ONNX RUNTIME COMPARISON AT INPUT LENGTH 64.
+
+                                          Mean             P95                            Model
+          Variant           Precision     Lat.             Lat.            Throughput      Size       EM@1      EM@5          Speedup
+                                          (ms)             (ms)              (QPS)        (MB)         (%)       (%)      vs. FP16 Dense
+
+           Dense           ONNX   FP16    151.15          167.79              6.62        1056.21     97.00      98.50        1.00×
+           Pruned          ONNX   FP16    137.04          157.54              7.30        1056.21     90.50      98.50        1.10×
+           Dense           ONNX   INT8    172.78          188.40              5.79         788.18     97.50      98.50        0.87×
+           Pruned          ONNX   INT8    160.95          176.34              6.21         788.18     91.00      99.00        0.94×
+
+
+
+
+                           TABLE VIII                                           INT8 execution on Jetson Orin using the NVIDIA 2:4 sparse
+           T ENSOR RT ENCODER PROFILING ON J ETSON O RIN .                      export path. This experiment measures encoder execution only
+   Seq.
+                                                                                and should not be interpreted as end-to-end encoder–decoder
+                    FP16          INT8         INT8              INT8
+   Len.             Lat.           Lat.         TPS              Gain           generation latency. Table VIII reports encoder latency, INT8
+                    (ms)          (ms)        (tok/s)          vs. FP16         tokens per second, and INT8 speedup relative to FP16 at
+     1              5.21           3.63       275.35               1.43×        sequence lengths 1, 64, and 128.
+    64              6.25           3.46      18,478.79             1.80×          At sequence length 64, INT8 TensorRT execution reduces
+    128             6.49           6.75      18,957.94             0.96×
+                                                                                encoder latency from 6.25 ms to 3.46 ms, corresponding to
+  Note: Measurements cover encoder execution only and do not represent          a 1.80× speedup. At sequence length 128, INT8 latency is
+end-to-end encoder–decoder generation latency. The INT8 TensorRT encoder
+                        engine size is 120.90 MB.
+                                                                                6.75 ms compared with 6.49 ms for FP16, showing that
+                                                                                the acceleration benefit depends on sequence length and
+                                                                                runtime support. These results indicate that hardware-specific
+canonical command task after supervision. In dense SFT, the                     kernels can accelerate selected model components, but full
+decoder-only model obtains the strongest observed Smart Home                    SCENIC deployment still requires decoder-side and end-to-end
+Instruct-Bench row, reaching 99.00/99.50 EM@1/EM@5; under                       generation profiling.
+C-SFT, the encoder–decoder model reaches the strongest dense
+C-SFT row, 98.00/98.50.                                                         E. Summary of Findings
+   At 30% sparsity, the best decoder-only magnitude-pruning                        The experimental results support three main findings. First,
+row remains strong under both SFT and C-SFT, reaching                           all compact backbones require SCENIC task supervision before
+99.50/100.00 EM@1/EM@5. At 50% sparsity, the same                               they can perform structured smart-home command generation.
+architecture becomes unstable, falling to 32.00/44.00 under                     Second, dense training fit and moderately sparse accuracy
+SFT and 16.00/27.00 under C-SFT, with most degradation                          do not reliably predict aggressive-compression robustness:
+appearing in medium and hard multi-action commands.                             the decoder-only model provides the highest observed dense
+   The encoder-only model remains pruning-sensitive even with                   training fit and the highest observed 30% benchmark scores,
+progressive magnitude pruning, whereas the encoder–decoder                      but collapses at 50% sparsity. Third, the encoder–decoder
+model is the most stable high-sparsity candidate. At 50%                        architecture provides the most stable high-sparsity behavior and
+sparsity, the encoder–decoder SFT row with WANDA reaches                        remains the most suitable deployment candidate in this SCENIC
+97.00/99.50 EM@1/EM@5, and the encoder–decoder C-SFT                            evaluation. This supports the main SCENIC motivation: ar-
+row with gradient pruning reaches 95.50/99.50.                                  chitecture selection for edge smart-home assistants should
+   C-SFT is therefore interpreted as a triplet-loss auxiliary                   account for structured-output accuracy, pruning robustness, and
+variant rather than a uniformly improving recipe: it supports                   deployment export behavior together.
+strong encoder–decoder dense behavior and some encoder-only                        The deployment results further show that accuracy retention
+moderate-sparsity gains, but it does not prevent decoder-only                   and stored model size reduction do not guarantee runtime
+collapse under aggressive pruning.                                              acceleration; hardware-specific speedup depends on optimized
+                                                                                kernels such as TensorRT, NPU runtimes, or ASIC-oriented
+C. ONNX Runtime Results                                                         sparse execution.
+   Table VII reports ONNX FP16 and INT8 runtime results for
+                                                                                                      V. C ONCLUSION
+dense and pruned encoder–decoder exports at input length 64.
+The pruned INT8 export preserves 91.00/99.00 EM@1/EM@5                             This paper identifies compression-aware structured command
+and reduces stored model size, but ONNX runtime latency does                    generation as a key challenge for edge IoT systems. To address
+not improve over the dense FP16 reference on this software                      this is we proposed SCENIC, a framework that combines
+stack.                                                                          Smart Home Instruct data construction, compact architecture
+                                                                                comparison, triplet-loss C-SFT, pruning, ONNX export, and
+                                                                                TensorRT-oriented profiling. The results show that dense
+D. TensorRT Encoder Profiling Results                                           accuracy alone is insufficient for selecting edge IoT command
+  To examine hardware-aware acceleration potential, the CMC                     models: decoder-only backbones achieve the strongest dense
+encoder component is profiled under TensorRT FP16 and                           and moderate-sparsity rows, whereas the encoder–decoder
+IEEE INTERNET OF THINGS JOURNAL                                                                                                                              8
+
+
+
+deployment path is more stable under aggressive pruning.                         [12] J. Bai, S. Bai, Y. Chu, Z. Cui, K. Dang, X. Deng, Y. Fan, W. Ge, Y. Han,
+ONNX INT8 export reduces stored model size while preserving                           F. Huang, B. Hui, L. Ji, M. Li, J. Lin, R. Lin, D. Liu, G. Liu, C. Lu,
+                                                                                      K. Lu, J. Ma, R. Men, X. Ren, X. Ren, C. Tan, S. Tan, J. Tu, P. Wang,
+usable command accuracy, but runtime acceleration depends                             S. Wang, W. Wang, S. Wu, B. Xu, J. Xu, A. Yang, H. Yang, J. Yang,
+on hardware-specific kernels, as shown by the component-level                         S. Yang, Y. Yao, B. Yu, H. Yuan, Z. Yuan, J. Zhang, X. Zhang, Y. Zhang,
+TensorRT encoder results. Future work will extend SCENIC                              Z. Zhang, C. Zhou, J. Zhou, X. Zhou, and T. Zhu, “Qwen technical
+                                                                                      report,” 2023. [Online]. Available: https://arxiv.org/abs/2309.16609
+with locked validation-based pruning selection, larger prompt-                   [13] A. Yang, B. Yang, B. Hui, B. Zheng, B. Yu, C. Zhou, C. Li, C. Li,
+held-out and composition-held-out benchmarks, and end-to-end                          D. Liu, F. Huang, G. Dong, H. Wei, H. Lin, J. Tang, J. Wang, J. Yang,
+edge latency and energy evaluation.                                                   J. Tu, J. Zhang, J. Ma, J. Yang, J. Xu, J. Zhou, J. Bai, J. He, J. Lin,
+                                                                                      K. Dang, K. Lu, K. Chen, K. Yang, M. Li, M. Xue, N. Ni, P. Zhang,
+                                                                                      P. Wang, R. Peng, R. Men, R. Gao, R. Lin, S. Wang, S. Bai, S. Tan,
+                         ACKNOWLEDGMENT                                               T. Zhu, T. Li, T. Liu, W. Ge, X. Deng, X. Zhou, X. Ren, X. Zhang,
+                                                                                      X. Wei, X. Ren, X. Liu, Y. Fan, Y. Yao, Y. Zhang, Y. Wan, Y. Chu,
+   The authors acknowledge the use of AI-assisted tools for                           Y. Liu, Z. Cui, Z. Zhang, Z. Guo, and Z. Fan, “Qwen2 technical report,”
+manuscript editing, LaTeX formatting, and revision support.                           2024. [Online]. Available: https://arxiv.org/abs/2407.10671
+                                                                                 [14] A. Yang, A. Li, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Gao,
+All technical content, experimental results, and conclusions                          C. Huang, C. Lv, C. Zheng, D. Liu, F. Zhou, F. Huang, F. Hu, H. Ge,
+were reviewed and verified by the authors, who take full                              H. Wei, H. Lin, J. Tang, J. Yang, J. Tu, J. Zhang, J. Yang, J. Yang,
+responsibility for the accuracy and integrity of this work.                           J. Zhou, J. Zhou, J. Lin, K. Dang, K. Bao, K. Yang, L. Yu, L. Deng,
+                                                                                      M. Li, M. Xue, M. Li, P. Zhang, P. Wang, Q. Zhu, R. Men, R. Gao,
+                                                                                      S. Liu, S. Luo, T. Li, T. Tang, W. Yin, X. Ren, X. Wang, X. Zhang,
+                              R EFERENCES                                             X. Ren, Y. Fan, Y. Su, Y. Zhang, Y. Zhang, Y. Wan, Y. Liu, Z. Wang,
+                                                                                      Z. Cui, Z. Zhang, Z. Zhou, and Z. Qiu, “Qwen3 technical report,” 2025.
+ [1] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N.                 [Online]. Available: https://arxiv.org/abs/2505.09388
+     Gomez, L. Kaiser, and I. Polosukhin, “Attention is all you need,” in        [15] Team GLM, A. Zeng, B. Xu, B. Wang, C. Zhang, D. Yin, D. Zhang,
+     Advances in Neural Information Processing Systems, vol. 30, 2017.                D. Rojas, G. Feng, H. Zhao, H. Lai, H. Yu, H. Wang, J. Sun, J. Zhang,
+     [Online]. Available: https://arxiv.org/abs/1706.03762                            J. Cheng, J. Gui, J. Tang, J. Zhang, J. Sun, J. Li, L. Zhao, L. Wu,
+ [2] J. Kaplan, S. McCandlish, T. Henighan, T. B. Brown, B. Chess,                    L. Zhong, M. Liu, M. Huang, P. Zhang, Q. Zheng, R. Lu, S. Duan,
+     R. Child, S. Gray, A. Radford, J. Wu, and D. Amodei, “Scaling                    S. Zhang, S. Cao, S. Yang, W. L. Tam, W. Zhao, X. Liu, X. Xia,
+     laws for neural language models,” 2020. [Online]. Available:                     X. Zhang, X. Gu, X. Lv, X. Liu, X. Liu, X. Yang, X. Song, X. Zhang,
+     https://arxiv.org/abs/2001.08361                                                 Y. An, Y. Xu, Y. Niu, Y. Yang, Y. Li, Y. Bai, Y. Dong, Z. Qi, Z. Wang,
+ [3] Y. Zheng, Y. Chen, B. Qian, X. Shi, Y. Shu, and J. Chen, “A review               Z. Yang, Z. Du, Z. Hou, and Z. Wang, “ChatGLM: A family of large
+     on edge large language models: Design, execution, and applications,”             language models from GLM-130B to GLM-4 all tools,” 2024. [Online].
+     ACM Computing Surveys, vol. 57, no. 8, 2025. [Online]. Available:                Available: https://arxiv.org/abs/2406.12793
+     https://doi.org/10.1145/3719664                                             [16] R. Birkmose, N. M. Reece, E. H. Norvin, J. Bjerva, and
+ [4] S. Li, Y. Guo, J. Yao, Z. Liu, and H. Wang, “HomeBench: Evaluating               M. Zhang, “On-device LLMs for Home Assistant: Dual role in
+     LLMs in smart homes with valid and invalid instructions across single            intent detection and response generation,” 2025. [Online]. Available:
+     and multiple devices,” in Proceedings of the 63rd Annual Meeting                 https://arxiv.org/abs/2502.12923
+     of the Association for Computational Linguistics. Vienna, Austria:          [17] K. Khatiwada, J. Hopper, J. Cheatham, A. Joshi, and S. Baidya,
+     Association for Computational Linguistics, 2025, pp. 12 230–12 250.              “Large language models in the IoT ecosystem: A survey on
+     [Online]. Available: https://aclanthology.org/2025.acl-long.597/                 security challenges and applications,” 2025. [Online]. Available:
+ [5] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, “BERT: Pre-                    https://arxiv.org/abs/2505.17586
+     training of deep bidirectional transformers for language understanding,”    [18] H. Yu, J. Hua, and C. Julien, “Analysis of IFTTT recipes
+     in Proceedings of the 2019 Conference of the North American                      to study how humans use internet-of-things (IoT) devices,” in
+     Chapter of the Association for Computational Linguistics: Human                  Proceedings of the 19th ACM Conference on Embedded Networked
+     Language Technologies. Minneapolis, MN, USA: Association for                     Sensor Systems. ACM, 2021, pp. 537–541. [Online]. Available:
+     Computational Linguistics, 2019, pp. 4171–4186. [Online]. Available:             https://doi.org/10.1145/3485730.3494115
+     https://aclanthology.org/N19-1423/                                          [19] D. Rivkin, F. Hogan, A. Feriani, A. Konar, A. Sigal, S. Liu, and
+ [6] C. Raffel, N. Shazeer, A. Roberts, K. Lee, S. Narang, M. Matena,                 G. Dudek, “SAGE: Smart home agent with grounded execution,” 2023.
+     Y. Zhou, W. Li, and P. J. Liu, “Exploring the limits of transfer                 [Online]. Available: https://arxiv.org/abs/2311.00772
+     learning with a unified text-to-text transformer,” Journal of Machine       [20] acon96, “Home Assistant requests dataset,” Hugging Face Datasets,
+     Learning Research, vol. 21, no. 140, pp. 1–67, 2020. [Online]. Available:        2024, accessed: 2026-05-18. [Online]. Available: https://huggingface.co/
+     https://jmlr.org/papers/v21/20-074.html                                          datasets/acon96/Home-Assistant-Requests
+ [7] Luke Z. Hu, “Encoder-Chinese-SLM: An encoder-only Chinese                   [21] P. Khosla, P. Teterwak, C. Wang, A. Sarna, Y. Tian, P. Isola,
+     small language model training codebase,” GitHub repository, 2026,                A. Maschinot, C. Liu, and D. Krishnan, “Supervised contrastive learning,”
+     version 0.1.0, released 2026-06-07. [Online]. Available: https:                  in Advances in Neural Information Processing Systems, vol. 33, 2020,
+     //github.com/huluk98/Encoder-Chinese-SLM                                         pp. 18 661–18 673. [Online]. Available: https://arxiv.org/abs/2004.11362
+ [8] Luke Z. Hu, “Decoder-Chinese-SLM: A decoder-only Chinese                    [22] Y. Su, T. Lan, Y. Wang, D. Yogatama, L. Kong, and N. Collier,
+     small language model training codebase,” GitHub repository, 2026,                “A contrastive framework for neural text generation,” 2022. [Online].
+     version 0.1.0, released 2026-05-20. [Online]. Available: https:                  Available: https://arxiv.org/abs/2202.06417
+     //github.com/huluk98/Decoder-Chinese-SLM                                    [23] T. Yan, F. Wang, J. Y. Huang, W. Zhou, F. Yin, A. Galstyan, W. Yin, and
+ [9] C. Chen, “A small Chinese chat language model with 0.2b parameters               M. Chen, “Contrastive instruction tuning,” in Findings of the Association
+     based on T5,” GitHub repository, 2023, accessed: 2026-05-18. [Online].           for Computational Linguistics: ACL 2024. Bangkok, Thailand:
+     Available: https://github.com/charent/ChatLM-mini-Chinese                        Association for Computational Linguistics, 2024, pp. 10 288–10 302.
+[10] H. Touvron, T. Lavril, G. Izacard, X. Martinet, M.-A. Lachaux,                   [Online]. Available: https://aclanthology.org/2024.findings-acl.613/
+     T. Lacroix, B. Rozière, N. Goyal, E. Hambro, F. Azhar, A. Rodriguez,        [24] Luke Z. Hu, “SCENIC: Consolidated code for compact
+     A. Joulin, E. Grave, and G. Lample, “LLaMA: Open and                             Chinese smart-home command generation under edge IoT
+     efficient foundation language models,” 2023. [Online]. Available:                constraints,” GitHub repository, 2026, version 0.1.0, commit
+     https://arxiv.org/abs/2302.13971                                                 7e8484ac589147d935323678c4a227743048bde0. [Online]. Available:
+[11] A. Yang, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Li, D. Liu,              https://github.com/huluk98/SCENIC
+     F. Huang, H. Wei, H. Lin, J. Yang, J. Tu, J. Zhang, J. Yang, J. Yang,       [25] E. B. Wilson, “Probable inference, the law of succession, and
+     J. Zhou, J. Lin, K. Dang, K. Lu, K. Bao, K. Yang, L. Yu, M. Li,                  statistical inference,” Journal of the American Statistical Association,
+     M. Xue, P. Zhang, Q. Zhu, R. Men, R. Lin, T. Li, T. Tang, T. Xia,                vol. 22, no. 158, pp. 209–212, 1927. [Online]. Available: https:
+     X. Ren, X. Ren, Y. Fan, Y. Su, Y. Zhang, Y. Wan, Y. Liu, Z. Cui,                 //doi.org/10.1080/01621459.1927.10502953
+     Z. Zhang, and Z. Qiu, “Qwen2.5 technical report,” 2024. [Online].           [26] S. Han, J. Pool, J. Tran, and W. J. Dally, “Learning
+     Available: https://arxiv.org/abs/2412.15115                                      both weights and connections for efficient neural network,” in
+IEEE INTERNET OF THINGS JOURNAL                                                   9
+
+
+
+       Advances in Neural Information Processing Systems, vol. 28, 2015.
+       [Online]. Available: https://papers.nips.cc/paper_files/paper/2015/file/
+       ae0eb3eed39d2bcef4622b2499a05fe6-Paper.pdf
+[27]   P. Molchanov, A. Mallya, S. Tyree, I. Frosio, and J. Kautz,
+       “Importance estimation for neural network pruning,” in Proceedings
+       of the IEEE/CVF Conference on Computer Vision and Pattern
+       Recognition, 2019, pp. 11 264–11 272. [Online]. Available: https:
+       //doi.org/10.1109/CVPR.2019.01152
+[28]   M. Sun, Z. Liu, A. Bair, and J. Z. Kolter, “A simple and effective
+       pruning approach for large language models,” 2023. [Online]. Available:
+       https://arxiv.org/abs/2306.11695
+[29]   A. Mishra, J. Albericio, J. Pool, D. Stosic, D. Stosic, G. Venkatesh,
+       C. Yu, and P. Micikevicius, “Accelerating sparse deep neural networks,”
+       2021. [Online]. Available: https://arxiv.org/abs/2104.08378
+[30]   M. Zhu and S. Gupta, “To prune, or not to prune: Exploring the
+       efficacy of pruning for model compression,” 2017. [Online]. Available:
+       https://arxiv.org/abs/1710.01878
+

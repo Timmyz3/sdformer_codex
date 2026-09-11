@@ -1,0 +1,17 @@
+# FlexSpIM
+- uid/来源: local_author_txt:FlexSpIM_ISCAS2025_author.txt
+- 全文出处: /workspace/survey_ab_fusion_20260910_stage/p0_local_txt/FlexSpIM_ISCAS2025_author.txt
+- 精读深度: 方法级（§I 三挑战；§II 数字 CIM 五相位/任意分辨率与 operand shaping/HS 数据流；§III 芯片与系统外推）
+- 可继承 A: 「按层选驻留对象」思想——统一存储权重与膜电位，使每层在 WS 与 OS（膜电位驻留）间切换（HS-min/HS-max）；operand shaping（NR×NC 任意纵横比 + carry-select 链式加法）避免固定分辨率浪费；event-driven layer-first 执行流（按 timestep 收事件→逐层执行并保留膜）。作系统级数据移动对照，≠ X。
+- 强对照 B: 相对固定分辨率/固定纵横比/仅 WS 的 SNN CIM：同工作量下测「按层选驻留 + 任意 shaping」是否真减片外搬移。
+- 可差分 X线索: 诚实：CIM 宏与光流 SNN Transformer 残差链接口远；可借「按层/按消费者选驻留面」对照有限 RF 下 source vs 中间 RNE 谁该住片上（贴近 F5 生存期问题），借入≠宣称 CIM-X。
+- 与 F1–F7 / Stage B 关系: 旁证「驻留选择影响净服务」；可启发 F5（中间量释放）与 Stage B 分项表里读端口/重读瓶颈解读；不进主岛、不抢 Stage B。
+- 不可搬用边界: 40nm 数字 CIM-SRAM 实测；IBM DVS gesture 分类 SCNN（非光流）；IF/位串行 XNOR-accumulate；片上 16kB 宏 + 外推多宏；精度/能耗曲线绑定 CIM 相位时钟（157/942 MHz）。
+- 可复用 idea 点:
+  - 五相位 CIM 更新：预充→双 WL 布尔→PC 全加得新膜位→半选防护预充→写回 A；阈值后比较出 spike。
+  - Carry-select + 2b 控制胞：邻列链式多比特，ping-pong 左右进位方向限制邻接通信。
+  - HS-min：每层选「内存需求更小」的操作数为驻留，双宏映射相对 WS-only 增约 46% 驻留操作数。
+  - Operand shaping 相对固定行堆叠：未用列 standby，同分辨率能量可省至 4.3×，形状间能量波动 <24%。
+  - 逐层分辨率调优：DVS gesture 可达 95.8% 且相对固定精度方案约 −30% 模型体积。
+  - 系统外推：稀疏↑时 HS+灵活 shaping 相对先验 CIM 分类能量可降约 79–90%（外推，非本地合同）。
+- 杀门建议: 若仅「换驻留名」而无同端口重读/带宽分项改善；或 CIM 相位开销不可映射到数字残差链 → 停该驻留布局类比，不杀有限 RF/生存期家族。

@@ -1,0 +1,1161 @@
+                                                                                                                                                                                         1
+
+
+
+
+                                                       Neural Ganglion Sensors:
+                                             Learning Task-specific Event Cameras Inspired
+                                               by the Neural Circuit of the Human Retina
+                                                                                           Haley M. So and Gordon Wetzstein
+
+                                              Abstract—Inspired by the data-efficient spiking mechanism of neurons in the human eye, event cameras were created to achieve high
+                                              temporal resolution with minimal power and bandwidth requirements by emitting asynchronous, per-pixel intensity changes rather than
+                                              conventional fixed-frame rate images. Unlike retinal ganglion cells (RGCs) in the human eye, however, which integrate signals from
+arXiv:2504.13457v1 [cs.CV] 18 Apr 2025
+
+
+
+
+                                              multiple photoreceptors within a receptive field to extract spatio-temporal features, conventional event cameras do not leverage local
+                                              spatial context when deciding which events to fire. Moreover, the eye contains around 20 different kinds of RGCs operating in parallel,
+                                              each attuned to different features or conditions. Inspired by this biological design, we introduce Neural Ganglion Sensors, an extension
+                                              of traditional event cameras that learns task-specific spatio-temporal retinal kernels (i.e., RGC “events”). We evaluate our design on
+                                              two challenging tasks: video interpolation and optical flow. Our results demonstrate that our biologically inspired sensing improves
+                                              performance relative to conventional event cameras while reducing overall event bandwidth. These findings highlight the promise of
+                                              RGC-inspired event sensors for edge devices and other low-power, real-time applications requiring efficient, high-resolution visual
+                                              streams.
+
+                                              Index Terms—Computational Photography, Event Sensing, Silicon Retina, Retinal Circuits, In-Pixel Compute
+
+                                                                                                                      ✦
+
+                                         1    I NTRODUCTION
+
+
+                                         E    VENT cameras can offer numerous advantages over
+                                              frame-based image sensors that are crucial for the ex-
+                                         treme constraints of emerging edge devices such as au-
+                                                                                                                          RGCs operate with is a center-surround organization, in
+                                                                                                                          which the center receptive field is compared to the sur-
+                                                                                                                          rounding larger selected region to determine whether or not
+                                         tonomous vehicles, robotics, and augmented/virtual reality.                      to fire a spike [12]. For example, CENTER ON cells look
+                                         These include high temporal resolution, low latency, low                         for where the center is on (light falls on the photoreceptor)
+                                         power consumption, low bandwidth, and high dynamic                               and the surround is off, and CENTER OFF cells look for
+                                         range. Whereas traditional cameras output intensity frames                       the inverse. In the human eye, this organization can allow
+                                         at a fixed frame rate, a traditional event camera outputs                        for edge and contrast enhancement. In addition, there are
+                                         asynchronous spikes that capture differences in intensity.                       direction-selective RGCs that are attuned to specific spatial
+                                         This design was initially inspired by the spiking nature of                      frequencies, color-sensitive RGCs, and temporally attuned
+                                         retinal ganglion cells (RGCs) which encodes the light hitting                    RGCs specialized for flicker or motion, to name a few. There
+                                         our retina into information-dense spikes and transmits the                       are roughly 1.5 million RGCs in our eye that distill the in-
+                                         signals to our brain. Event cameras have shown promise in                        formation falling on our roughly 120 million photoreceptors,
+                                         many tasks including action recognition [1], [2], [3], optical                   encoding the spatio-temporal information into sparse binary
+                                         flow [4], [5], [6], depth or shape estimation [7], [8], [9],                     spikes. This raises our motivating question: How can we
+                                         and more [10]. However, event cameras are still limited                          replicate the retina’s diverse retinal circuitry to achieve more
+                                         compared to their biological analogues. While RGCs can                           efficient and versatile vision and perception?
+                                         aggregate information spatially across an area on the retina,                        Towards this end, we revisit the retina’s bandwidth-
+                                         event cameras only operate on a per-pixel basis: each pixel                      efficient design principles and seek to learn the optimal
+                                         decides whether to send an event independent of neighbor-                        set of functions for generating events, bridging the gap
+                                         ing pixels.                                                                      between conventional event cameras and their biological
+                                             Most RGCs use local spatial information to decide                            counterparts. Specifically,
+                                         whether or not to fire. There are roughly 20 kinds of RGCs in
+                                         the human eye, and while the exact function of each varies,                         •   we introduce a framework for learning asyn-
+                                         in general, these retinal ganglion cells receive information                            chronous, spatio-temporal events to optimize perfor-
+                                         from not just a single photoreceptor, but rather a small                                mance and bandwidth for perception tasks;
+                                         group (as in midget cells) or from an even larger receptive                         •   we develop a differentiable event simulator;
+                                         field (as in parasol cells) to decide whether to send an action                     •   we show that integrating local spatial information
+                                         potential to the brain [11]. One identified organization these                          can improve the performance on vision tasks over
+                                                                                                                                 event cameras while exhibiting lower bandwidth;
+                                         •   Haley M. So and Gordon Wetzstein are with the Department of Electrical          •   we explore learning multiple complementary event
+                                             Engineering, Stanford University, Stanford, CA, 94305, United States.               “channels,” further enriching the captured informa-
+                                             https://www.computationalimaging.org
+                                                                                                                                 tion and boosting performance.
+                                                                                                                                 2
+
+2     R ELATED W ORK                                              camera as “when to send” and “what to send.” While there
+2.1   Retinal ganglion cells                                      are similar notes, the fundamental formulation as well as
+                                                                  outputs are different: they output full intensity values while
+Recent literature has made significant progress in under-
+                                                                  our approach remains truer to the human retina and the
+standing how visual signals are processed even before they
+                                                                  original event camera, sending just binary bits. Inspired by
+leave the human retina [13], [14]. Here, photoreceptors sense
+                                                                  the human retina, we also uniquely explore learning multi-
+the incoming light, and the resulting signals are transmitted
+                                                                  ple parallel task-specific RGCs and optimize specifically for
+through and modulated by a diversity of horizontal, bipo-
+                                                                  bandwidth, not just performance.
+lar, and amacrine interneurons before being processed by
+roughly 20 different types of retinal ganglion cells (RGCs).
+The variation in interneuron pathways and RGC activation          2.3   Event-based processing in vision applications
+create multiple parallel retinal circuits or functions that       There are a number of representations used to process
+extract a variety of complementary visual features at the         asynchronous events in computer vision including event-
+retina [15], resulting in spikes sent to the brain. While the     by-event processing, events paired with intensity frames,
+specific visual features identified by each RGC can vary,         and events processed in voxel grids. Recent review
+the output of RGCs can generally be described by similar          papers [10], [40] offer good insight into the advantages
+structures. As a result, biologists often use simplified models   and disadvantages of each. Of these approaches, two of
+such as the linear–nonlinear (LN) cascade model [16], [17],       the most common ways to process events are either by
+the Hodgkin–Huxley model [18], and the various integrate-         utilizing spiking neural networks (SNNs) or by aggregating
+and-fire models [19], [20], [21]. There are also recent works     events into image-like frames and using conventional
+in using deep learning techniques to try to predict retinal       convolution neural networks (CNNs) [41]. While SNNs
+responses to natural images [22], [23], [24]. From this lit-      have been successful in a number of tasks including image
+erature, the key insight that we apply to our work is that        classification [42], object detection [43], video reconstruction
+ganglions receive signals not only across time but also across    [44] and more [45], [46], [47], [48], they can be difficult
+space from a receptive field of photoreceptors, not just a        to train as there is no traditional back propagation and
+single one. In addition, our eyes also use multiple types of      they are relatively new, so are still catching up to the more
+RGCs in parallel for efficient sensing.                           mature field of CNN-based computer vision. As a result,
+                                                                  most state-of-the-art networks [48], [49], [50], [51], [52]
+2.2   Event cameras                                               opt to aggregate events into voxel-like grids and use more
+Mahowald and Mead first introduced the silicon retina in          traditional image-based computer vision techniques. As this
+the late 1980s [25], which quickly led to the development         is the most widely used method, we create a differentiable
+of the Dynamic Vision Sensor (DVS) or the event camera            binning procedure to backpropagate through event voxel
+[26], [27], [28]. In these systems, each pixel operates in-       grids to be able to learn task-specific events.
+dependently, always comparing the current intensity to a
+previously memorized intensity. If the intensity difference          In our work, we demonstrate that augmenting event
+is larger than a set threshold value, an “event” is sent. The     cameras with additional biologically inspired spatial aggre-
+outputted information includes an x-y location, timestamp,        gation can improve performance for machine vision tasks.
+and the polarity of the brightness change. The pixel then         Furthermore, we explore learning multiple RGC channels
+updates its memorized value to the intensity that triggered       and introduce a framework for optimizing these asyn-
+the output. Other variants of event cameras include the           chronous events for bandwidth and performance.
+Asynchronous Time-based Image Sensor (ATIS) [29], where
+an event trigger will also readout the intensity value at the     3     P ROPOSED M ETHOD
+given pixel or encode intensity through inter-spike time
+intervals [30], and the Dynamic and Active Pixel Vision           3.1   Model of RGC Events
+Sensor (DAVIS) [31], [32], which outputs full frame intensity     The linear-nonlinear cascade (LN) is a popular way to model
+values at a slow frame-rate along with the asynchronous           the response of RGCs [16]. In these models, the Poisson
+events. While the events in these systems are inspired by         spike rate of a neuron is determined by a linear spatio-
+the basic spiking nature in the retina, they don’t utilize the    temporal filter and a nonlinear activation. Specifically, the
+spatial surroundings. Recently, Li and Delbrück introduced       probability, P that a neuron spikes can be described as a
+the Center Surround Dynamic Vision Sensor (CSDVS) and             continuous 3D convolution of the intensity, I , over space
+illustrated the potential benefits of using a center-surround     x, y and time t followed by a non-linearity f :
+organization and suggested a future hardware implemen-                                          h      i     
+tation to achieve such a sensor with lateral polysilicon                         P (x, y, t) = f W ∗ I                       (1)
+                                                                                                          (x,y,t)
+resistors and controllable transverse conductance [33], [34].
+In 2023, [35] proposed using a pattern of different event         where ∗ denotes the convolution operation, and W is a
+thresholds across the sensor, analogous to spatially varying      kernel with the weights of the spatiotemporal filter.
+pixel exposures seen in computational imaging [36], [37],             From the LN model, the event camera emerged with
+[38]. Most recently in 2024, [39] presented Generalized Event     a few simplifications. Firstly, the probabilistic spiking is
+Cameras, which explored a few kinds of statistical “differ-       replaced with a deterministic activation if the output of f
+encing” methods, of which included the spatial dimension.         exceeds a threshold δ . Secondly, the continuous intensity
+They also introduced a nice breakdown of a general event          I is split temporally into the current intensity Icurr and a
+                                                                                                                                                              3
+
+
+                                                   Cross section of the Human Retina   Neural Ganglion Sensor
+
+
+
+                                   Photoreceptors                                                    Light                             Light absorption
+
+
+                                                                                                                     Photodetectors
+
+
+
+
+                                   Bipolar Cells                                                                                       Information exchange
+
+
+
+
+                                                                                                                        Learned
+                                   Retinal Ganglion Cells                              𝜉     𝜓       𝜇        𝜑         Ganglion
+                                                                                                                        Neurons
+                                                                                                                                       Event encoding
+                                 output:
+                                 action potentials
+                                                                                                             output:
+                                                                                                             asynchronous events
+
+
+
+Fig. 1. Analogy between Neural Ganglion Sensors and the human retina: On the left, we show a simplified diagram of different layers in
+the human retina. Light hits the photoreceptors (rods and cones), of which there are about 100 million per eye. The signals get transferred and
+modulated through Bipolar cells along with additional Horizontal and Amacrine cells. In the end, the roughly 1 million Retinal Ganglion Cells (RGCs),
+receive signals from a small area on the retina, not just from a single photoreceptor. These RGCs look at the pattern of information to decide whether
+to send a spike signal to the brain. We see spatial and temporal pooling occurs in the first few layers of the retina to encode all the information into
+bandwidth efficient spiking potentials. On the right, we show our proposed Neural Ganglion Sensor, an event camera augmented to better match
+the human retina.
+
+memory intensity Imem . Lastly, the W filter is reduced to a                    The equations for the output (eqn. 3) and the memory
+simple temporal differencing. For Neural Ganglion Sensors,                      update (eqn. 4) remain the same. While this formulation
+our RGC event formulation uses the first two simplifications                    enables event cameras to mirror the temporal aggregation
+of conventional event cameras, but reintroduces the spatial                     of the retina, ganglion cells observe light from a receptive
+dimension. The resulting model for when a RGC event is                          field, not just at a single point [15].
+triggered becomes:
+                   h                                                         3.1.2 Center–Surround Model
+   P (x, y, t) = 1 f W ∗ (Icurr − Imem )
+                                          i      
+                                                   >δ     (2)                   One type of spatial aggregation for RGCs is the center–
+                                                            (x,y,t)
+                                                                                surround organization. At a high level, this allows for
+where 1 is the indicator function.                                              contrast or edge enhancements, spatial filtering, and more.
+   Biological neurons are limited to outputting binary                          In a given receptive field, the center pixels are compared
+spikes, which is bandwidth efficient and fast to transmit.                      to the surrounding pixels. Center ON cells look for when
+Similarly, when an event is triggered in event cameras, the                     the center is excited and the surround is inhibited. Center
+output O for each event triggered is binary and can be                          OFF cells look for the inverse. Midget and parasol cells, two
+computed by the polarity of the difference:                                     of the most ubiquitous cell types in the retina, each have
+              (
+                sign(Icurr − Imem )(x,y,t) if P (x, y, t) = 1                   Center ON and OFF configurations, though their spatial
+ O(x, y, t) =                                                                   reaches differ, making them more attuned to different spatial
+                None                       if P (x, y, t) = 0
+                                                                                frequencies. To achieve this spatial behavior with our RGC
+                                                            (3)
+                                                                                event formulation, the center pixel can be compared to the
+In addition, when the event is triggered at pixel (x, y),                       average value of the surround. W would be set to a k × k
+Imem (x, y) is updated to Icurr (x, y).                                         kernel with 1 in the center pixel and weights summing to
+                      (                                                         −1 in the surrounding pixels to model a Center ON. Center
+                        Icurr (x, y) if P (x, y, t) = 1                         OFF would be the same kernel, but negated. Again, f is the
+       Imem (x, y) =                                    (4)
+                        Imem (x, y) if P (x, y, t) = 0                          absolute value function. Similarly, another variation of the
+With these three equations defining the event trigger, the                      center–surround was suggested by [33]. In their case, the W
+output, and the memory update, we have our full RGC                             kernel was set to:
+event model. In fig. 1, we draw the parallel between the                                                     0           1         0
+human retina and Neural Ganglion Sensors.                                                                W = 1          −4         1                      (6)
+                                                                                                             0           1         0
+3.1.1 Event Camera model
+Pixels in traditional event cameras operate independently                       3.1.3 Modeling other Human RGCs
+of other pixels. Our RGC event formulation in equation 2                        With our RGC model, we can model a number of
+reduces to the traditional event camera when W is simply                        other RGCs found in the human eye. Among vertebrates,
+the identity kernel, and f is the absolute value function.                      orientation-selective neurons are attuned to edges in the
+                                                                                cardinal directions (horizontal and vertical). In addition,
+          P (x, y, t) = 1 |Icurr − Imem |(x,y) ≥ δ
+                                                  
+                                                           (5)
+                                                                                some have selection for oblique orientations as well. To
+                                                                                                                                 4
+
+model these, we can use gradient-like filters or edge filters     offset to bin− , pol is the polarity of the generated events,
+like the Sobel filter or even simpler binary filters. While the   and N is the quantized number of generated events:
+specific functions and the receptive fields of our 20 types
+of RGCs in our eyes are still being studied, the spatial                         IRGC = W ∗ (Icurr − Imem )
+dimension plays an integral role in event sparsification.                          pol = sign(IRGC )
+                                                                                         tk+1 − tk
+                                                                                    α=
+                                                                                          IRGC /δ
+3.2     Learning Task-Specific RGC events                                           β = (tk − t−
+                                                                                               bin )                           (7)
+While the human retina inspires us, in the end, what visual                         N = IRGC //δ
+features our eyes evolved to be attuned to may be very            where δ is either the positive or negative threshold, de-
+different from what machine vision would find important.          pending on the polarity of IRGC . Each event generated
+As in deep learning where we moved from handcrafted fea-          is weighted linearly into the two bins, depending on the
+tures to learned features, here we follow a similar trajectory    distance, wi , to each bin.
+and learn what may be useful for perception tasks. We take
+our proposed model of a RGC event and learn the W kernel                                       β + (i + 1) ∗ α
+                                                                                          wi =            −
+and the threshold values to tailor our sensing for vision                                        t+
+                                                                                                  bin − tbin
+applications. In order to do so, we need to backpropagate                               −
+                                                                                     bini = (1 − wi ) · pol                    (8)
+through to the event generation, so we build a differentiable
+                                                                                     bin+
+                                                                                        i = wi · pol
+simulator which will be open-sourced.
+                                                                  Binning all the events generated between the pair of frames,
+                                                                  we get the following:
+3.2.1    Simulating RGC events
+                                                                                                     N −1
+We construct our event generation based on ESIM and                                    bin−
+                                                                                                     X
+                                                                                                            bin−
+                                                                                          f rame =             i
+V2E [53], the two most widely used event simulators.                                                 i=0
+However, we also support spatial kernels, allowing us to                                             N −1
+simulate diverse types of RGC kernels that goes beyond con-
+                                                                                                     X
+                                                                                       bin+
+                                                                                          f rame =          bin+
+                                                                                                               i               (9)
+ventional events. We incorporate shot noise, non-uniform                                             i=0
+thresholds, refractory periods, separate and learnable pos-
+                                                                  We can derive the closed-form solution for these summa-
+itive and negative contrast thresholds, and the option to
+                                                                  tions by using the formula for the sum of an arithmetic
+operate on log or linear intensity. Analogous to how human
+                                                                  sequence:
+eyes have 20 kinds of RGCs, we also support learning
+multiple kinds of events, either through spatially-varying                                                       !
+thresholds and kernels in a 2-by-2 bayer-like pattern or                                                  β
+                                                                         bin−
+                                                                            f rame   = pol · 1 − +                 ·N
+through multi-channel events.                                                                       tbin − t−bin
+                                                                                                     !
+                                                                                              α                 (N + 1)(N )
+3.2.2    Differentiable binning                                                      − +         −      · pol ·
+                                                                                         tbin − tbin                 2
+Current state-of-the-art event-based vision pipelines pre-
+                                                                                                           !
+process events into sparse frame-like images or sparse vox-                                         β
+els. This allows researchers to build off of the plethora of             bin+
+                                                                            f rame   = pol · +               ·N
+                                                                                               tbin − t−
+                                                                                                       bin
+works in frame-based computer vision. In this work, we                                               !                        (10)
+seek to learn events for two different tasks, one that uses                                   α                (N + 1)(N )
+                                                                                     + +               · pol ·
+events and RGB images, as is common with the DAVIS                                       tbin − t−
+                                                                                                 bin
+                                                                                                                   2
+sensor and other emerging industry sensors, and the other
+that uses just events. In both cases, the state-of-the-art            These equations are for a pair of frames and are applied
+works we build off of pre-process the events into a voxel-        for all the pairs in the video sequence to get the full voxel
+like data structure. To learn our RGC kernels, we must            grid. With these closed-form equations and the straight-
+backpropagate through these voxel structures to the event         through-estimator [56] for quantized operations, we can
+generation, so we implement differentiable binning. Our           now backpropagate from the binned events inputted to our
+binning is performed with a closed-form solution that can         vision models directly through to the RGC kernels, W , that
+compute binned RGC events from high-speed video. This             we want to learn. We additionally extend our formulation
+combines the functionalities of video-to-event simulators         to include non-zero refractory periods. See the supplement
+and conventional event pre-processing. Following recent           for these details.
+approaches [54], [55], events are weighted linearly into the
+two closest time bins. For each pair of frames at time tk and     3.2.3 Optimizing Bandwidth and Performance
+tk+1 in the input high-speed video, the events generated          In this work, we seek to learn the RGC kernels for two
+between the frames are distributed into the two nearest           tasks: video interpolation and optical flow. We use task-
+neighboring bins at times t−         +
+                            bin and tbin , as described by the    specific loss functions, specifically Charbonnier pixel-wise
+following equations. Here, IRGC is the output of the RGC          loss and a masked L1 loss respectively. To optimize for
+kernels, α is the time spacing between events, β is the time      sparsity while fitting our learned RGC kernels, we add an
+                                                                                                                                          5
+
+
+             36                                                             4.2   Optical Flow
+                                                           DVS
+                                                           CSDVS
+             35                                            CSDVS-Delbrück
+                                                                            For optical flow, we built off of the state-of-the-art optical
+                                                           RGC-log          flow from events model [55] by Wu et. al. We utilize the
+             34                                            RGC-lin
+                                                                            TartanAir dataset [58] as it has ground truth optical flow.
+ PSNR (dB)
+
+
+                                                           RGC-lin-sv
+             33                                                             Similarly to [59], we use EMA-VFI [60] to interpolate the
+             32                                                             RGB video before feeding the frames into our differentiable
+             31
+                                                                            simulator, interpolating 15 frames between each pair. These
+                                                                            intensity frames are used to simulate the RGC events but are
+             30
+                                                                            not used to recover optical flow. In this task, only events are
+             29                                                             used to predict flow. We use the “Hard” subset of TartanAir.
+                  0         20,000       40,000       60,000
+                                                                            It provides 18 different scenes, with about 10 trajectories
+                          Bandwidth (event count)                           in each scene. Each trajectory has roughly 1,000 frames.
+Fig. 2. Video Interpolation Performance vs Bandwidth Trade-off.             To speed up training, we create train, validation, and test
+We perform video interpolation using DVS, CSDVS, CSDVS-Delbrück,
+RGC-log (learned, log regime), RGC-lin (learned, linear space), and         datasets from the “Hard” subset of the TartanAir Dataset,
+RGC-lin-sv (learned, linear space, and spatially varying). For any given    saving out random crops of the interpolated images and
+bandwidth, RGC-lin-sv provides the best performance.                        ground truth optical flow. For maximal generalizability, we
+                                                                            split train/val/test at the scene level. The generated dataset
+additional weighted L1 loss on the number of events to push
+                                                                            has 44,776 training sequences, 5,000 validation sequences,
+the model to learn RGC events that maximize performance
+                                                                            and 5,000 test sequences. Using this dataset and our dif-
+while minimizing the number of total events.
+                                                                            ferentiable event simulator, we learn the RGC kernels and
+                                                                            optical flow model end-to-end.
+
+4            E XPERIMENTS
+                                                                            5     R ESULTS
+We experiment with two tasks to demonstrate the potential                   5.1   Video Interpolation Results
+benefits of learning RGC events in both DAVIS (intensity +
+events) and DVS (events only) settings.                                     We present the bandwidth vs. performance tradeoff for
+                                                                            interpolating 7 frames between pairs of frames, recover-
+         1)       Video interpolation is one of the most challenging        ing 240fps from 30fps. Fig. 2 shows the trade-off between
+                  tasks for event cameras and can act as an plug-and-       bandwidth and performance of different types of events
+                  play connection to perception tasks. The state-of-        including the traditional DVS, the two variants of the center-
+                  the-art uses output from a DAVIS camera.                  surround (CSDVS and the hand-crafted CSDVSDelbrück ), our
+         2)       Optical flow is a particularly useful perception task.    RGC-log (learned RGC in the log intensity domain) and
+                  In this case, only events are used.                       RGC-lin (learned RGC in linear domain). We also show
+                                                                            spatially-varying events in the same plot as RGC-lin-sv.
+For both tasks, we learn the RGC for improving perfor-                          As shown, RGC-lin achieves better performance at any
+mance and bandwidth. At the end of this section, we also                    given bandwidth compared to the traditional DVS. Fur-
+delve into a number of questions the reader may be curious                  thermore, adding spatially varying events and thresholds
+about, including if learning not one, but multiple kinds of                 pushes the performance vs bandwidth pareto front up to the
+RGC types, improves performance.                                            left even more. For example, DVS achieves 33.8dB at 33.0k
+                                                                            average events per bin while RGC-lin-sv achieves 35.4dB
+                                                                            with 32.2k events, a 1.6dB increase using the same number
+                                                                            of events. Similarly, if we look at a given performance,
+4.1           Video Interpolation
+                                                                            such as the 33.8dB that DVS achieves in 33.0k events, RGC-
+We train the state-of-the-art model [54] by Sun et. al that per-            lin achieves 33.8dB with 9.9k events or over 3.3× fewer
+forms video interpolation from events. In the original work,                events, and RGC-lin-sv achieves 33.6dB with 5.9k events or
+two intensity frames along with the events triggered in-                    over 5.7× fewer events. These clear benefits highlight the
+between are fed into their model. From this, they reconstruct               promise of our learned RGC events.
+7 frames in-between the two base frames. The original work                      Fig. 3 shows a few examples of the reconstructed videos.
+used ESIM to simulate events from the high-speed GoPRO                      The comparisons are for a given average bandwidth of
+dataset [57]. To learn our events, we replace ESIM with our                 about 20,000 events per bin, specifically 20, 716 events for
+differentiable simulator. We train with a variety of learned                DVS, 20, 357 for CSDVS, and 19, 557 for RGC-lin. Averaging
+event settings and sparsity weightings to tune the overall                  over the full GoPRO test set sequences, DVS achieves 32.7dB
+average bandwidth. We train the interpolation model with                    in PSNR, CSDVS achieves 33.0dB, while RGC-lin reaches
+a learning rate of 2e−4 and our RGC kernels with a learn-                   34.4dB, 1.67dB higher than DVS. As the middle frame in
+ing rate of 5e−5 end-to-end for 200,000 iterations. We use                  the sequence is the most challenging to predict, images and
+the Charbonnier pixel-wise loss and our sparsity loss with                  metrics (PSNR and SSIM) shown are for the middle frame in
+varying weights to tune performance and bandwidth. Our                      each scene. We show the events generated and zoom-ins to
+simulator allows us to learn spatially-varying events too. In               details in the reconstructed images. In the ground truth col-
+this setting, we learn a 2 by 2 bayer-like pattern of kernels               umn, we also show the alpha-blended start and end frames
+and thresholds.                                                             of the sequence to illustrate the amount of motion being
+                                                                                                                                          6
+
+
+
+
+                           DVS                     CSDVS                              RGC-lin                           Ground Truth
+Generated Events
+
+
+
+
+                                                                                                          Alpha-blended input frames
+Reconstruction
+
+
+
+
+                   PSNR: 32.8 SSIM: 0.961    PSNR: 32.6 SSIM: 0.958             PSNR: 35.5 SSIM: 0.973
+Details
+
+
+
+
+                           DVS                     CSDVS                              RGC-lin                           Ground Truth
+Generated Events
+
+
+
+
+                                                                                                          Alpha-blended input frames
+Reconstruction
+
+
+
+
+                   PSNR: 31.6 SSIM: 0.928    PSNR: 31.9 SSIM: 0.934             PSNR: 34.5 SSIM: 0.954
+Details
+
+
+
+
+                           DVS                     CSDVS                              RGC-lin                           Ground Truth
+Generated Events
+
+
+
+
+                                                                                                          Alpha-blended input frames
+Reconstruction
+
+
+
+
+                   PSNR: 28.6 SSIM: 0.945    PSNR: 28.5 SSIM: 0.940             PSNR: 31.0 SSIM: 0.963
+Details
+
+
+
+
+Fig. 3. Video Interpolation Qualitative Results. For each scene, we compare the reconstructions of the middle frame in the sequence for DVS,
+CSDVS, and RGC-lin. The top row shows the generated events, binned into the corresponding middle time bin, the second is the predicted image
+and the bottom row shows zoom-ins. The right-most column shows the start and end frames, alpha-blended, ground truth frame, and zoom-ins.
+PSNR(↑) and SSIM(↑) metrics are shown for each reconstruction.
+                                                                                                                                                                                                   7
+
+                                   TABLE 1                                                                  DVS                             RGC-lin                         Ground Truth
+  Optical Flow Quantitative Results. We compare models trained on
+
+
+
+
+                                                                             Generated Events
+   DVS with different contrast threshold magnitudes, (which effectively
+ changes the bandwidth), against two of our learned RGC-lin models at
+different bandwidths. RGC-linlite and RGC-lin are the same base model,
+    just trained with different sparsity loss weightings. End-point-error
+(EPE) is the L2 norm between the predicted and ground truth flow. 1PE
+is the percentage of pixels that have a predicted flow that is off by more                                                                                               Alpha-blended endpoints
+ than 1 pixel. 3PE is the percentage of pixels off by more than 3 pixels.
+
+
+
+
+                                                                             Optical Flow
+               DVS 0.1T    DVS 0.3T     DVS 0.5T     RGC-linlite   RGC-lin
+ Bandwidth      7.30M        4.11M       2.77M         2.10M       3.80M
+ ↓ EPE           2.80         3.02        3.33          2.75        2.42
+ ↓ 1PE           55.1         60.8        66.3          52.4        47.1                        EPE: 23.2 1PE: 92.1 3PE: 81.9      EPE: 4.66 1PE: 85.5 3PE: 40.4
+ ↓ 3PE           20.1         23.0        26.1          20.7        17.4                                    DVS                             RGC-lin                         Ground Truth
+
+
+
+
+                                                                             Generated Events
+interpolated. Quantitatively, our learned RGC-lin achieves
+higher PSNR and SSIM given the same bandwidth as DVS
+or CSDVS. Qualitatively, the reconstructed structures are
+sharper and truer to the ground truth images.                                                                                                                            Alpha-blended endpoints
+
+
+
+
+                                                                             Optical Flow
+5.2   Optical Flow Results
+In this task, solely events are used to reconstruct the op-
+tical flow. Similarly to interpolation, learning the kernels
+provides improved performance and lower bandwidth. In                                           EPE: 2.33 1PE: 64.7 3PE: 21.9      EPE: 1.90 1PE: 55.9 3PE: 18.3
+
+Table 1, we compare the models trained end-to-end with our                                                  DVS                             RGC-lin                         Ground Truth
+learned RGC-lin to multiple models trained on DVS outputs
+                                                                             Generated Events
+
+
+of different contrast thresholds. The higher the contrast
+threshold, the fewer the events. RGC-lin and RGC-linlite
+are the same model, just trained with different sparsity
+weightings resulting in different average bandwidths. Over                                                                                                               Alpha-blended endpoints
+the test set, our learned kernel for optical flow provides
+the best performance over all metrics. We use the standard
+                                                                             Optical Flow
+
+
+
+
+metrics: End-point-error (EPE) is the L2-norm between pre-
+dicted and ground truth flows, 1PE is the percentage of
+pixels whose flow is off by more than 1 pixel, and 3PE is
+                                                                                                EPE: 21.7 1PE: 97.4 3PE: 65.7      EPE: 1.10 1PE: 40.9 3PE: 3.79
+the percentage of pixels whose flow is off by more than 3
+pixels. For DVS, the performance increases with the number                   Fig. 4. Optical Flow Qualitative Results. For each sample, the top row
+of events. However, the best performance comes from the                      shows the events generated by the DVS kernel and our learned RGC-lin
+learned RGC-lin kernel, which achieves an EPE of 2.42,                       kernel as well as the alpha-blended camera frames just for reference.
+                                                                             In this task, solely events are used to reconstruct the flow. The bottom
+better than even the DVS model with nearly twice the
+                                                                             row shows the reconstructed flows and the ground truth flow. We show
+number of events. In fact, at the same performance as the                    EPE↓, 1PE↓, and 3PE↓ metrics for the reconstructions.
+DVS 0.1T model, the learned approach only needs 2.10M
+events, which is 3.5 times fewer events.                                                              DVS                  CSDVS            RGC-lin Interpolation   RGC-lin Optical Flow
+                                                                                                                                                                                               1.00
+    Fig. 4 shows three samples of the optical flow reconstruc-
+tion from DVS and from our Learned RGC-lin events. The
+                                                                             𝑊
+
+
+
+
+DVS model corresponds to DVS 0.1T from tab. 1, as it had                                                                                                                                       0.00
+
+the best performance among the DVS models. Learning the
+kernel end-to-end allows RGC-lin to better reconstruct the                                                                                                                                     -1.00
+flow of the whole frame than DVS while lowering overall                      Fig. 5. Comparison of Kernels. We show the 5 × 5 kernels for DVS,
+bandwidth.                                                                   CSDVS, the learned RGC-lin kernels for video interpolation, and the
+                                                                             learned RGC-lin kernels for optical flow.
+
+5.3   Insights from the Learned Kernels
+In fig. 5, we show a comparison of the DVS, CSDVS, and                       captures something akin to an edge detection or bandpass
+the learned kernels. As we can see, the best kernels for                     filter, which can be a powerful cue for figuring out how
+interpolation and optical flow differ greatly, which is not                  intermediate frames should look.
+surprising as the tasks are quite different. However, this                        For optical flow, the kernel has even greater contrast.
+highlights how choosing a single sensing kernel like the                     While the kernel for interpolation was nearly symmetric,
+DVS for every task can limit the potential performance.                      the kernel for optical flow is strongly asymmetric, exhibiting
+    For interpolation, the learned kernel reveals that the                   some direction-selectivity or the importance of directional
+model places importance on local contrast as its ring struc-                 gradients. In our eyes, we also have direction-selective
+ture emphasizes sharp changes in intensity. It effectively                   RGCs that are more attune to detecting motions, and they
+                                                                                                                                      8
+
+       Learned Kernels              Generated Events                     6   D ISCUSSION AND C ONCLUSION
+
+                                                                         We present a biologically inspired way of sensing by cre-
+𝑅𝐺𝐶1
+
+
+
+
+                                                                         ating a new event-generation framework that extends the
+                                                                         traditional pixel-wise event paradigm by leveraging local
+                                                                         spatial information. For this purpose, we craft a differen-
+                                                                         tiable event simulator to enable learning of the RGC kernels.
+                                                                         We demonstrate experiments on video interpolation and
+𝑅𝐺𝐶2
+
+
+
+
+                                                                         optical flow, showing that our learned events outperform
+                                                                         both conventional DVS and center-surround DVS (CSDVS)
+                                                                         methods under the same bandwidth constraints. By utiliz-
+                                                                         ing neighborhood context, our proposed approach deliv-
+                                                                         ers richer, more informative event streams—pointing to a
+                                                                         promising new direction in event-based sensing for real-
+                                                                         time and resource-constrained applications.
+                                                                         Hardware Feasibility. There are several avenues for creating
+                                                                         Neural Ganglion Sensors in hardware, especially with the
+                                                                         rise of in-pixel compute. [33] explored the feasibility of a
+𝑅𝐺𝐶4
+
+
+
+
+                                                                         center-surround DVS and proposed using polysilicon lateral
+                                                                         resistors to weight the surround according to their hand-
+                                                                         crafted kernel. A similar resistor mesh could be applied
+                                                                         with our learned kernel weights. For more adaptability
+                                                                         where the weights can be dynamically updated on-the-
+                                                                         fly, emerging in-pixel compute platforms such as [61] can
+                                                                         also be an attractive candidate. These emerging platforms
+                                                                         integrate compute and memory into the sensor plane and
+Fig. 6. Comparison between learned single and multi-event. We            have already shown promise in a number of computational
+compare the learned kernels of a single RGC model, two RGC, and four     imaging pipelines [37], [38], [62]. Implementing the ideal
+RGC for interpolation and show the generated events for each. Each       learned RGC kernels requires a multiplication in floating
+column is a different scene At the same bandwidth, the 2-kernel model
+had a 0.40dB improvement over the single kernel and the 4-kernel model   point precision. However, the operations available on in-
+had an additional 0.35dB over the 2-kernel model.                        pixel processors are currently limited. Some approximations
+                                                                         or training with additional constraints would be required
+are also asymmetric or have elongated receptive fields.                  for implementation on the current generation of sensor–
+    Additionally, in our supplement, we study how the                    processors, such as operating in highly quantized regimes
+learned kernels change as we increase the receptive field                where kernels are binary or ternary [63], [64], [65], [66]. As
+and as we increase bandwidth for video interpolation. In                 the capabilities of in-pixel compute continue to develop, our
+the first study, we sweep kernel sizes k = 3, 5, 7, 9, 11                full floating point RGC kernels will quickly become feasible.
+and find that the performance stays roughly the same at                  Future Directions. There are a number of potential
+a given bandwidth. In the second study, we increase the                  extensions to this work. In particular, exploring non-binary
+weighting on the sparsity loss to tune the bandwidth. We                 nonlinearities could be beneficial to the vision tasks.
+include visualizations of the corresponding kernels in the               Thresholding is currently used as it best aligns with what
+supplement.                                                              we see in existing event sensors, and the binary spikes are
+                                                                         akin to the spiking potential in human retinas.
+5.4       Multi-Event Exploration
+Inspired by the diversity of RGCs in the human eye, we ex-                   As the demand for efficient sensing grows across do-
+plore models with increasing number of learned RGC types                 mains ranging from AR/VR headsets to drones and as
+per pixel location for the task of interpolation. With one RGC           emerging cameras place more compute in-pixel, we envi-
+type, the kernel is roughly symmetric, but as the number of              sion that these insights will help guide sensor designers in
+kernels increases, we begin to see asymmetry and direction               optimizing future event-sensing technologies. As compute
+sensitive features appear. In fig. 6, we show a comparison               capabilities and memory continue to improve in emerging
+of the learned kernels when learning 1, 2, and 4 types of                sensor-–processors, Neural Ganglion Sensors will offer a
+RGC events for interpolation with a bandwidth of roughly                 promising balance— a small amount of compute on-sensor
+150, 000 events per bin, along with the generated events for             for massive bandwidth savings.
+three different scenes. Learning one type of event, RGC1 ,
+achieves an average PSNR of 36.52dB. Learning just one
+more kernel, RGC2 , increases the performance to 36.92dB.
+With four types of RGCs, RGC4 , we achieve 37.27dB at the                ACKNOWLEDGMENTS
+same bandwidth. Similarly, in our supplement, we show
+that at a lower total bandwidth of 10, 000 events per bin,               This project was in part supported by Samsung, SK Hynix,
+RGC1 achieves 33.76dB, while RGC16 achieves 35.16dB.                     and the NSF Graduate Research Fellowship Program.
+                                                                                                                                                               9
+
+R EFERENCES                                                                        [21] J. W. Pillow, L. Paninski, V. J. Uzzell, E. P. Simoncelli, and
+                                                                                        E. J. Chichilnisky, “Prediction and decoding of retinal ganglion
+[1]    C. Plizzari, M. Planamente, G. Goletto, M. Cannici, E. Gusso,                    cell responses with a probabilistic spiking model,” Journal of
+       M. Matteucci, and B. Caputo, “E2(go)motion: Motion augmented                     Neuroscience, vol. 25, no. 47, pp. 11 003–11 013, 2005. [Online].
+       event stream for egocentric action recognition,” in Proceedings of               Available: https://www.jneurosci.org/content/25/47/11003
+       the IEEE/CVF Conference on Computer Vision and Pattern Recognition          [22] L. T. McIntosh, N. Maheswaranathan, A. Nayebi, S. Ganguli, and
+       (CVPR), June 2022, pp. 19 935–19 947.                                            S. A. Baccus, “Deep learning models of the retinal response to
+[2]    Y. Gao, J. Lu, S. Li, N. Ma, S. Du, Y. Li, and Q. Dai, “Action recog-            natural scenes,” in Proceedings of the 30th International Conference
+       nition and benchmark using event cameras,” IEEE Transactions on                  on Neural Information Processing Systems, ser. NIPS’16. Red Hook,
+       Pattern Analysis and Machine Intelligence, vol. 45, no. 12, pp. 14 081–          NY, USA: Curran Associates Inc., 2016, p. 1369–1377.
+       14 097, 2023.                                                               [23] V. Botella-Soler, S. Deny, G. Martius, O. Marre, and G. Tkačik,
+[3]    R. Ghosh, A. K. Gupta, A. N. Silva, A. B. Soares, and                            “Nonlinear decoding of a complex movie from the mammalian
+       N. V. Thakor, “Spatiotemporal filtering for event-based action                   retina,” PLOS Computational Biology, vol. 14, no. 5, pp. 1–27, 05
+       recognition,” ArXiv, vol. abs/1903.07067, 2019. [Online]. Available:             2018. [Online]. Available: https://doi.org/10.1371/journal.pcbi.
+       https://api.semanticscholar.org/CorpusID:81978239                                1006057
+[4]    S. Shiba, , F. Hamann, Y. Aoki, and G. Gallego, “Event-based                [24] N. Parthasarathy, E. Batty, W. Falcon, T. Rutten, M. Rajpal,
+       background-oriented schlieren,” 2023.                                            E. Chichilnisky, and L. Paninski, “Neural networks for efficient
+[5]    S. Shiba, Y. Aoki, and G. Gallego, “Secrets of event-based optical               bayesian decoding of natural images from retinal neurons,” in
+       flow,” in European Conference on Computer Vision (ECCV), 2022, pp.               Advances in Neural Information Processing Systems, I. Guyon, U. V.
+       628–645.                                                                         Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan,
+[6]    Y. Tian and J. Andrade-Cetto, “Event transformer flownet                         and R. Garnett, Eds., vol. 30. Curran Associates, Inc., 2017.
+       for optical flow estimation,” in 33rd British Machine Vision                     [Online]. Available: https://proceedings.neurips.cc/paper files/
+       Conference 2022, BMVC 2022, London, UK, November 21-                             paper/2017/file/b0169350cd35566c47ba83c6ec1d6f82-Paper.pdf
+       24, 2022. BMVA Press, 2022. [Online]. Available: https:                     [25] M. Mahowald, VLSI analogs of neuronal visual processing: a synthesis
+       //bmvc2022.mpi-inf.mpg.de/0577.pdf                                               of form and function, Jul 2008.
+[7]    S. Tulyakov, F. Fleuret, M. Kiefel, P. Gehler, and M. Hirsch, “Learn-       [26] P. Lichtsteiner, C. Posch, and T. Delbruck, “A 128× 128 120 db 15
+       ing an event sequence embedding for dense event-based deep                       µs latency asynchronous temporal contrast vision sensor,” IEEE
+       stereo,” in Proceedings of the IEEE/CVF International Conference on              Journal of Solid-State Circuits, vol. 43, no. 2, pp. 566–576, 2008.
+       Computer Vision (ICCV), October 2019.                                       [27] C. Posch, T. Serrano-Gotarredona, B. Linares-Barranco, and T. Del-
+[8]    J. Gu, J. Zhou, R. S. W. Chu, Y. Chen, J. Zhang, X. Cheng, S. Zhang,             bruck, “Retinomorphic event-based vision sensors: Bioinspired
+       and J. S. Ren, “Self-supervised intensity-event stereo matching,”                cameras with spiking output,” Proceedings of the IEEE, vol. 102,
+       2022. [Online]. Available: https://arxiv.org/abs/2211.00509                      no. 10, pp. 1470–1484, 2014.
+[9]    M. Muglikar, L. Bauersfeld, D. Moeys, and D. Scaramuzza, “Event-            [28] T. Delbruck, “Neuromorophic vision sensing and pro-
+       based shape from polarization,” in IEEE / CVF Computer Vision and                cessing,” 2016 46th European Solid-State Device Research
+       Pattern Recognition Conference (CVPR), Jun 2023.                                 Conference (ESSDERC), pp. 7–14, 2016. [Online]. Available:
+[10]   G. Gallego, T. Delbruck, G. Orchard, C. Bartolozzi, B. Taba,                     https://api.semanticscholar.org/CorpusID:44003126
+       A. Censi, S. Leutenegger, A. J. Davison, J. Conradt, K. Daniilidis,         [29] C. Posch, D. Matolin, and R. Wohlgenannt, “A qvga 143 db
+       and D. Scaramuzza, “Event-based vision: A survey,” IEEE Transac-                 dynamic range frame-free pwm image sensor with lossless pixel-
+       tions on Pattern Analysis &amp; Machine Intelligence, vol. 44, no. 01,           level video compression and time-domain cds,” IEEE Journal of
+       pp. 154–180, jan 2022.                                                           Solid-State Circuits, vol. 46, no. 1, pp. 259–275, 2011.
+[11]   B. A. Wandell, Foundations of vision. Sinauer Associates, 1995.             [30] E. Culurciello, R. Etienne-Cummings, and K. Boahen, “A biomor-
+[12]   S. W. Kuffler, “Discharge patterns and functional organization of                phic digital image sensor,” IEEE Journal of Solid-State Circuits,
+       mammalian retina,” Journal of neurophysiology, vol. 16, no. 1, pp.               vol. 38, no. 2, pp. 281–294, 2003.
+       37–68, 1953.                                                                [31] R. Berner, C. Brandli, M. Yang, S.-C. Liu, and T. Delbruck,
+[13]   G. Field and E. Chichilnisky, “Information processing in                         “A 240x180 120db 10mw 12us-latency sparse output vision
+       the primate retina: Circuitry and coding,” Annual Review of                      sensor for mobile applications,” 2013. [Online]. Available:
+       Neuroscience, vol. 30, no. 1, pp. 1–30, 2007, pMID: 17335403.                    https://api.semanticscholar.org/CorpusID:17870509
+       [Online]. Available: https://doi.org/10.1146/annurev.neuro.30.              [32] C. Brandli, R. Berner, M. Yang, S.-C. Liu, and T. Delbruck, “A
+       051606.094252                                                                    240 × 180 130 db 3 µs latency global shutter spatiotemporal vision
+[14]   T. Guo, D. Tsai, S. Bai, J. Morley, G. Suaning, N. Lovell, and                   sensor,” IEEE Journal of Solid-State Circuits, vol. 49, no. 10, pp. 2333–
+       S. Dokos, “Understanding the retina: A review of computational                   2341, 2014.
+       models of the retina from the single cell to the network level,”            [33] T. Delbruck, C. Li, R. Graca, and B. Mcreynolds, “Utility and
+       Critical reviews in biomedical engineering, vol. 42, pp. 419–36, 01 2014.        feasibility of a center surround event camera,” Feb. 2022. [Online].
+[15]   B. Roska and M. Meister, “The retina dissects the visual scene                   Available: http://arxiv.org/abs/2202.13076
+       into distinct features,” in The New Visual Neurosciences (Werner, JS,       [34] C. Li, “Two-stream vision sensors,” Jun. 2017. [Online]. Available:
+       Chalupa, LM, eds), M. Press., Ed., 2014, pp. 163–182.                            https://doi.org/10.3929/ethz-b-000164862
+[16]   E. Chichilnisky, “A simple white noise analysis of neuronal light           [35] S. Liu and P. L. Dragotti, “Sensing diversity and sparsity models
+       responses,” in Network (Bristol, England), vol. 12, 2001, pp. 199–213.           for event generation and video reconstruction from events,” IEEE
+[17]   N. Brackbill, C. Rhoades, A. Kling, N. P. Shah, A. Sher,                         Transactions on Pattern Analysis and Machine Intelligence, vol. 45,
+       A. M. Litke, and E. Chichilnisky, “Reconstruction of natural                     no. 10, pp. 12 444–12 458, 2023.
+       images from responses of primate retinal ganglion cells,”                   [36] S. K. Nayar and T. Mitsunaga, “High dynamic range imaging:
+       eLife, vol. 9, p. e58516, nov 2020. [Online]. Available: https:                  spatially varying pixel exposures,” Proceedings IEEE Conference
+       //doi.org/10.7554/eLife.58516                                                    on Computer Vision and Pattern Recognition. CVPR 2000 (Cat.
+[18]   A. Hodgkin and A. Huxley, “A quantitative description of                         No.PR00662), vol. 1, pp. 472–479 vol.1, 2000. [Online]. Available:
+       membrane current and its application to conduction and                           https://api.semanticscholar.org/CorpusID:12463047
+       excitation in nerve,” Bulletin of Mathematical Biology, vol. 52, no. 1,     [37] J. N. P. Martel, L. K. Müller, S. J. Carey, P. Dudek, and G. Wetzstein,
+       pp. 25–71, 1990. [Online]. Available: https://www.sciencedirect.                 “Neural sensors: Learning pixel exposures for hdr imaging and
+       com/science/article/pii/S0092824005800047                                        video compressive sensing with programmable sensors,” IEEE
+[19]   T. W. Troyer and K. D. Miller, “Physiological Gain Leads to High                 Transactions on Pattern Analysis and Machine Intelligence, vol. 42,
+       ISI Variability in a Simple Model of a Cortical Regular Spiking                  no. 7, pp. 1642–1653, 2020.
+       Cell,” Neural Computation, vol. 9, no. 5, pp. 971–983, 07 1997.             [38] C. M. Nguyen, J. N. Martel, and G. Wetzstein, “Learning spatially
+       [Online]. Available: https://doi.org/10.1162/neco.1997.9.5.971                   varying pixel exposures for motion deblurring,” IEEE International
+[20]   R. Jolivet, T. J., and W. Gerstner, “The spike response model: A                 Conference on Computational Photography (ICCP), 2022.
+       framework to predict neuronal spike trains,” in Artificial Neural           [39] V. Sundar, M. Dutson, A. Ardelean, C. Bruschini, E. Charbon,
+       Networks and Neural Information Processing — ICANN/ICONIP 2003,                  and M. Gupta, “Generalized event cameras,” in Proceedings of the
+       O. Kaynak, E. Alpaydin, E. Oja, and L. Xu, Eds. Berlin, Heidel-                  IEEE/CVF Conference on Computer Vision and Pattern Recognition
+       berg: Springer Berlin Heidelberg, 2003, pp. 846–853.                             (CVPR), June 2024.
+                                                                                                                                                    10
+
+[40] X. Zheng, Y. Liu, Y. Lu, T. Hua, T. Pan, W. Zhang, D. Tao, and           [58] W. Wang, D. Zhu, X. Wang, Y. Hu, Y. Qiu, C. Wang, Y. Hu,
+     L. Wang, “Deep learning for event-based vision: A comprehensive               A. Kapoor, and S. Scherer, “Tartanair: A dataset to push the limits
+     survey and benchmarks,” arXiv preprint arXiv:2302.08890, 2023.                of visual slam,” 2020.
+[41] T. Dalgaty, T. Mesquida, D. Joubert, A. Sironi, C. Soubeyrat,            [59] Y. Yang, L. Pan, and L. Liu, “Event camera data pre-
+     P. Vivet, and C. Posch, “The cnn vs. snn event-camera dichotomy               training,” CoRR, vol. abs/2301.01928, 2023. [Online]. Available:
+     and perspectives for event-graph neural networks,” in 2023 De-                https://doi.org/10.48550/arXiv.2301.01928
+     sign, Automation & Test in Europe Conference & Exhibition (DATE),        [60] G. Zhang, Y. Zhu, H. Wang, Y. Chen, G. Wu, and L. Wang,
+     2023, pp. 1–6.                                                                “Extracting motion and appearance via inter-frame attention for
+[42] Z. Zhou, Y. Zhu, C. He, Y. Wang, S. YAN, Y. Tian,                             efficient video frame interpolation,” in Proceedings of the IEEE/CVF
+     and L. Yuan, “Spikformer: When spiking neural network                         Conference on Computer Vision and Pattern Recognition, 2023, pp.
+     meets transformer,” in The Eleventh International Conference                  5682–5692.
+     on Learning Representations, 2023. [Online]. Available: https:           [61] S. J. Carey, A. Lopich, D. R. Barr, B. Wang, and P. Dudek, “A
+     //openreview.net/forum?id=frE4fUwz h                                          100,000 fps vision sensor with embedded 535gops/w 256×256
+[43] Q. Su, Y. Chou, Y. Hu, J. Li, S. Mei, Z. Zhang, and G. Li, “Deep              simd processor array,” in 2013 Symposium on VLSI Circuits, 2013,
+     directly-trained spiking neural networks for object detection,” in            pp. C182–C183.
+     Proceedings of the IEEE/CVF International Conference on Computer         [62] H. M. So, J. P. Martel, G. Wetzstein, and P. Dudek,
+     Vision, 2023, pp. 6555–6565.                                                  “Mantissacam: Learning snapshot high-dynamic-range imaging
+[44] L. Zhu, X. Wang, Y. Chang, J. Li, T. Huang, and Y. Tian, “Event-              with perceptually-based in-pixel irradiance encoding,” in 2022
+     based video reconstruction via potential-assisted spiking neural              IEEE International Conference on Computational Photography (ICCP).
+     network,” in 2022 IEEE/CVF Conference on Computer Vision and                  Los Alamitos, CA, USA: IEEE Computer Society, aug 2022, pp.
+     Pattern Recognition (CVPR), 2022, pp. 3584–3594.                              1–12. [Online]. Available: https://doi.ieeecomputersociety.org/
+[45] F. Gu, W. Sng, T. Taunyazov, and H. Soh, “Tactilesgnet: A spiking             10.1109/ICCP54855.2022.9887659
+     graph neural network for event-based tactile object recognition,”        [63] H. M. So, L. Bose, P. Dudek, and G. Wetzstein, “Pixelrnn: In-pixel
+     in IEEE/RSJ International Conference on Intelligent Robots and Systems        recurrent neural networks for end-to-end-optimized perception
+     (IROS), 2020.                                                                 with neural sensors,” in CVPR, June 2024, pp. 25 233–25 244.
+[46] A. Amir, B. Taba, D. Berg, T. Melano, J. McKinstry, C. Di Nolfo,         [64] L. Bose, P. Dudek, J. Chen, S. Carey, and W. Mayol-Cuevas,
+     T. Nayak, A. Andreopoulos, G. Garreau, M. Mendoza, J. Kusnitz,                “A camera that cnns: Towards embedded neural networks on
+     M. Debole, S. Esser, T. Delbruck, M. Flickner, and D. Modha, “A               pixel processor arrays,” in 2019 IEEE/CVF International Conference
+     low power, fully event-based gesture recognition system,” in 2017             on Computer Vision (ICCV). Los Alamitos, CA, USA: IEEE
+     IEEE Conference on Computer Vision and Pattern Recognition (CVPR),            Computer Society, nov 2019, pp. 1335–1344. [Online]. Available:
+     2017, pp. 7388–7397.                                                          https://doi.ieeecomputersociety.org/10.1109/ICCV.2019.00142
+[47] J. Botzheim, T. Obo, and N. Kubota, “Human gesture recognition           [65] L. Bose, P. Dudek, J. Chen, S. J. Carey, and W. W. Mayol-Cuevas,
+     for robot partners by spiking neural network and classification               “Fully embedding fast convolutional networks on pixel processor
+     learning,” in The 6th International Conference on Soft Computing              arrays,” in Computer Vision – ECCV 2020: 16th European Conference,
+     and Intelligent Systems, and The 13th International Symposium on              Glasgow, UK, August 23–28, 2020, Proceedings, Part XXIX. Berlin,
+     Advanced Intelligence Systems, 2012, pp. 1954–1958.                           Heidelberg: Springer-Verlag, 2020, p. 488–503. [Online]. Available:
+[48] X. Zheng, Y.-P. Liu, Y. Lu, T. Hua, T. Pan, W. Zhang, D. Tao, and             https://doi.org/10.1007/978-3-030-58526-6 29
+     L. Wang, “Deep learning for event-based vision: A comprehensive          [66] Y. Liu, L. Bose, J. Chen, S. J. Carey, P. Dudek, and
+     survey and benchmarks,” ArXiv, vol. abs/2302.08890, 2023.                     W. Mayol-Cuevas, “High-speed light-weight cnn inference
+     [Online]. Available: https://api.semanticscholar.org/CorpusID:                via strided convolutions on a pixel processor array,” in
+     257019827                                                                     British Machine Vision Conference, 2020. [Online]. Available:
+                                                                                   https://api.semanticscholar.org/CorpusID:221671340
+[49] H. Rebecq, R. Ranftl, V. Koltun, and D. Scaramuzza, “High
+                                                                              [67] S. Liu and P. L. Dragotti, “Sensing diversity and sparsity models
+     speed and high dynamic range video with an event camera,”
+                                                                                   for event generation and video reconstruction from events,” IEEE
+     IEEE Trans. Pattern Anal. Mach. Intell. (T-PAMI), 2019. [Online].
+                                                                                   Transactions on Pattern Analysis and Machine Intelligence, pp. 1–16,
+     Available: http://rpg.ifi.uzh.ch/docs/TPAMI19 Rebecq.pdf
+                                                                                   2023.
+[50] A. M. I. Maqueda, A. Loquercio, G. Gallego, N. Garcı́a,
+                                                                              [68] Y. Yang, L. Pan, and L. Liu, “Event camera data dense
+     and D. Scaramuzza, “Event-based vision meets deep learning
+                                                                                   pre-training,” 2024. [Online]. Available: https://arxiv.org/abs/
+     on steering prediction for self-driving cars,” 2018 IEEE/CVF
+                                                                                   2311.11533
+     Conference on Computer Vision and Pattern Recognition, pp. 5419–
+     5427, 2018. [Online]. Available: https://api.semanticscholar.org/
+     CorpusID:4610262
+[51] A. Zhu, L. Yuan, K. Chaney, and K. Daniilidis, “Ev-flownet: Self-
+     supervised optical flow estimation for event-based cameras,” in
+     Proceedings of Robotics: Science and Systems, Pittsburgh, Pennsylva-
+     nia, June 2018.
+[52] Y. Deng, Y. Li, and H. Chen, “Amae: Adaptive motion-agnostic
+     encoder for event-based object classification,” IEEE Robotics and
+     Automation Letters, vol. 5, no. 3, pp. 4596–4603, 2020.
+[53] Y. Hu, S. C. Liu, and T. Delbruck, “v2e: From video frames to
+     realistic DVS events,” in 2021 IEEE/CVF Conference on Computer
+     Vision and Pattern Recognition Workshops (CVPRW). IEEE, 2021.
+     [Online]. Available: http://arxiv.org/abs/2006.07722
+[54] L. Sun, C. Sakaridis, J. Liang, P. Sun, J. Cao, K. Zhang, Q. Jiang,
+     K. Wang, and L. Van Gool, “Event-based frame interpolation with
+     ad-hoc deblurring,” arXiv preprint arXiv:2301.05191, 2023.
+[55] Y. Wu, F. Paredes-Vallés, and G. C. H. E. de Croon, “Lightweight
+     event-based optical flow estimation via iterative deblurring,” in
+     Proceedings of IEEE International Conference on Robotics and Automa-
+     tion (ICRA’24), May 2024, to Appear.
+[56] Y. Bengio, N. Léonard, and A. C. Courville, “Estimating
+     or propagating gradients through stochastic neurons for
+     conditional computation,” ArXiv, vol. abs/1308.3432, 2013.
+     [Online]. Available: https://api.semanticscholar.org/CorpusID:
+     18406556
+[57] S. Nah, T. H. Kim, and K. M. Lee, “Deep multi-scale convolutional
+     neural network for dynamic scene deblurring,” in CVPR, July
+     2017.
+                                                                                                                             11
+
+
+
+                                        N EURAL G ANGLION S ENSORS :
+                                          S UPPLEMENTAL M ATERIAL
+S1     A DDITIONAL E XPERIMENTAL D ETAILS                        scenes as validation, and ‘gascola’ and ‘japanesealley’ as the
+S1.1   Closed Form Binning, with refractory period               test scenes prior to any experiments. As mentioned in the
+                                                                 main paper, in order to simulate events, we first interpolate
+In the main paper, we show the closed form equations
+                                                                 15 frames between each original neighboring frames. Similar
+to extract binned events from high speed video. Here, we
+                                                                 to previous work [68], we generate the dataset of high
+extend them to account for the refractory period, r, the
+                                                                 speed video using EMA-VFI to interpolate for training. Our
+“off” period of a pixel after it has fired an event, and pr ,
+                                                                 resulting training dataset consists of random crops from the
+the time since the last event timestamp, temem , during event
+                                                                 original dataset along with the interpolated frames, creating
+generation from the previous frame.
+                                                                 a dataset of 44,776 training, 5,000 validation, and 5,000 test
+            pr = tk − temem                                (1)   sequences. All experiments shown in this work are trained
+            αr = (r//α + 1) · α                            (2)   and evaluated on this created dataset. TartanAir has ground
+                                                                 truth masks for optical flow which mask out pixels that have
+            β r = β + max(0, ((r − pr )//α) · α)                 become occluded or disoccluded. Following the convention
+                                                           (3)
+                = max(0, ((r − pr )//α) · α)                     of previous work, we train and evaluate on the masked
+The weight and number of events become                           optical flow.
+
+                     β r + i ∗ αr
+                 wir =                                     (4)   S1.3   Model Details
+                    bin+ − bin−
+                N = (tk+1 − tk − β r )//αr
+                 r
+                                                           (5)   S1.3.1 Event-based Video Interpolation
+                                                                 We utilize REFID [54], a state-of-the-art model for event-
+and the closed form bin− and bin+ are                            based video interpolation. It uses an event-guided adaptive
+                                βr
+                                         
+      −                                                          channel attention and bidirectional event recurrent blocks.
+   binf rame = pol · 1 −                    · Nr
+                           bin+ − bin−                           The model we use is the default from the repo with num-
+                                                           (6)   encoders=3, 32 base channels, num-block=1, and 2 residual
+                       αr                (N r + 1)(N r )
+                              
+             −                   · pol ·                         blocks. With one type of RGC kernel, the default number
+                     +
+                  bin − bin−                  2
+                                                                 of event channels is 2. As we experiment with different
+                            βr
+                                    
+      +                                    r
+   binf rame = pol ·                   ·N                        number of types of RGC kernels, we scale just the input
+                       bin+ − bin−                               layer accordingly. In all experiments, models are trained for
+                                                           (7)
+                       αr                (N r + 1)(N r )
+                              
+             +                   · pol ·                         200k iterations using the PyTorch AdamW optimizer with a
+                  bin+ − bin−                  2                 learning rate of 2e−4 for the interpolation model, 5e−5 for
+    Now with these closed form equations and straight-           the RGC kernels, and weight decay 1e−4 . For more details,
+through gradient estimation, we can model the gradients          see the code.
+to enable learning even with non-zero refractory periods.
+In our experiments, the refractory period was set to 1 mil-      S1.3.2 Event-based Optical Flow
+lisecond, following V2E2V [67]. We also model noise non-         We use IDNet [55], the light-weight state-of-the-art model
+idealities with Gaussian noise with sigma 0.03, following        for event-based optical flow. The backbone is the recurrent
+the V2E emulator [53]. Ultimately, our closed form solution      neural network ConvGRU that processes the event bins
+with gradients produces event bins that match closely with       sequentially. Specifically, we use IDNet’s id-8x variation.
+current state-of-the-art non-differentiable video to binned      In all experiments, we train for 400k iterations with the
+event pipelines.                                                 PyTorch Adam optimizer with a learning rate of 1e−4 .
+
+S1.2   Dataset Considerations and Details                        S1.4   Additional Interpolation Results
+For video interpolation, we utilize the GoPRO dataset [57].      We include an extended comparison for bandwidth vs per-
+High speed video frames are captured at 240 fps. There           formance in fig. S1. For a no-events baseline, we train the
+are 22 scenes in the train set and 11 scenes in the test set.    same model with zero events. The average PSNR over the
+To train, each sample is a 9-frame sequential subset of a        test set is 28.91dB and the SSIM is 0.912. In addition to the
+scene. The two end-point frames are used as input to the         CSDVS and CSDVS-Delbrück shown in the main paper, we
+base model, REFID, while the rest are used to simulate the       explore CSDVS-lin, CSDVS in the linear intensity domain.
+events. The seven frames in-between the end-points are also      In neuroscience, another common way to model the center-
+used as the ground truth frames for comparison and metric        surround is with a Difference of two Gaussian kernels of
+calculation.                                                     different sizes. Here, we model the Difference of Gaussians,
+    For optical flow, we utilize the TartanAir Dataset: AirSim   learning the standard deviation of the two Gaussians as
+Simulation Dataset for Simultaneous Localization and Map-        we tune the bandwidth via the weighting on the sparsity
+ping [58]. In our experiments, we test our methods with the      loss. Fig. S1 shows the full PSNR vs. Bandwidth trade-
+‘Hard’ subset of the TartanAir Dataset. There are 18 environ-    offs. We use a logarithmic fit for all event types. While
+ments total. We randomly set ‘office2’ and ‘westerndesert’       CSDVS performs similarly to the DVS, CSDVS in the linear
+                                                                                                                                                              12
+
+
+            36
+                                                                                                  show the learned RGC kernel for models trained at differ-
+                                                                             DVS
+                                                                             CSDVS                ent bandwidths. The performance increases from 31.01dB
+            35                                                               CSDVS-lin            with 436 events per bin to 34.45dB with 19, 557 events, to
+                                                                             CSDVS-Delbrück
+            34                                                               Diff. of Gaussians   36.52dB with 121, 343 events.
+PSNR (dB)
+
+
+
+                                                                             RGC-log
+            33                                                               RGC-lin
+                                                                             RGC-lin-sv           S1.5   Multi-channel RGCs for Video Interpolation
+            32
+                                                                                                  S1.5.1 Additional Multi-channel Results
+            31
+                                                                                                  In the main paper, we show the comparison of learning 1, 2,
+            30
+                                                                                                  and 4 different, yet complementary, kinds of RGCs. Here, we
+            29                                                                                    show qualitative results for learning 16 kernels. Fig. S4 pro-
+                 0             20,000              40,000              60,000                     vides a view of the 16 learned kernels and the single learned
+                            Bandwidth (event count)                                               kernel comparison at the ultra-low-bandwidth regime of
+                                                                                                  roughly 10,000 events. We show two scenes and the events
+Fig. S1. Extended Comparisons for Video Interpolation: Along with                                 generated by each kernel. While the kernel learned for
+the comparisons in the main paper, we include the CSDVS- in the linear
+intensity and the difference of Gaussians.                                                        single RGC is quite symmetric, we can see the 16 kernels
+                                                                                                  model can learn more specific features. We show samples of
+                 𝑘3           𝑘5          𝑘7                  𝑘9           𝑘11
+                                                                                                  the reconstruction by the models with different number of
+                                                                                           1.00
+                                                                                                  channels in fig. S5 and fig. S6 with PSNR and SSIM metrics
+                                                                                                  and some with zoom-in details. With more learned kernels,
+𝑊
+
+
+
+
+                                                                                           0.00
+                                                                                                  there is less warping and color discrepancies.
+                                                                                          -1.00
+                                                                                                  S1.5.2 Trade-off of Performance and Bandwidth
+Fig. S2. Learned kernels at increasing kernel sizes. As our eye’s
+RGCs have varying receptive field sizes, we test the effect of increasing
+                                                                                                  Fig. S7 shows how using multiple kinds of events can
+the kernel for the task of interpolation, given a set bandwidth of ≈ 20, 000                      further improve the performance at any given bandwidth.
+events per bin. As the kernel size increases, a subtle structure emerges                          The i in RGCi refers to how many parallel circuits are
+where around the center pixel, it is negative, and then just further out is                       learned per pixel. This is similar to how our eyes operate.
+a ring of positive again before decreasing once more.
+                                                                                                  For a given receptive field, there can be multiple kinds of
+                                                                                                  RGCs looking at the signals. In fig. S7, we also show DVS
+domain performs better. The Difference of Gaussians is
+                                                                                                  for reference as well as the RGC-lin-sv model, which is
+also an improvement over the DVS kernel. While it may
+                                                                                                  spatially varying kernels. RGC4 and RGC-lin-sv are similar
+approximately model human RGCs well, for machine vision
+                                                                                                  in that they both have 4 learned kernels. However, the
+tasks, the best is still the learned RGC-lin and the spatially-
+                                                                                                  spatially varying model is 1 kernel per pixel, as opposed
+varying RGC-lin-sv.
+                                                                                                  to 4 per pixel. We can see that the performance for video
+                                                                                                  interpolation is similar.
+S1.4.1                The effect of increasing the receptive field
+We experiment with different kernel sizes k = 3, 5, 7, 9, 11                                      S1.5.3 Additional considerations for Multi-event Bandwidth
+for the video interpolation task. All of these models are                                         Typically, the event packet that the traditional DVS outputs
+trained with the same settings, except for kernel size. All                                       includes the pixel location and a bit denoting the polarity.
+models converged at roughly 20, 000 events per bin with                                           In the multi-event case, we can send the location and a few
+a PSNR in the range 34.36dB to 34.52dB and SSIM of 0.97                                           bits. As we see in the generated events by each kernel in
+across the board. Although the interpolation performance                                          the main paper, one or two types of RGC seem to dominate
+does not increase significantly as we increase the receptive                                      or produce the most events, while the others complement
+field, interestingly a faint structure is revealed. Immediately                                   with additional information. There can be an improvement
+outside of the center pixel, we have a negative weighting,                                        in bandwidth if the system can support variable length
+and just further out, a positively weighted ring, before                                          packets. We can take advantage of Huffman encoding where
+decreasing once more.                                                                             fixed binary codes can be assigned to different RGC types
+                                                                                                  based on their expected frequency. In this way, it can send
+S1.4.2                The effect of increasing bandwidth                                          the minimum number of bits and only send additional bits
+                                                                                                  for rarer events when needed. Alternatively, when learning
+As we tune the bandwidth by weighting the sparsity loss                                           only a few RGC kernels, using spatially-varying kernels
+more or less, the learned kernel also changes. In fig. S3, we                                     as demonstrated with RGC-lin-sv could potentially enable
+                                                                                                  most of the performance benefits without requiring addi-
+                                                                                                  tional bits to be read out.
+             𝑏𝑤436          𝑏𝑤9,987     𝑏𝑤19,557            𝑏𝑤34,893     𝑏𝑤121,343
+                                                                                           1.00
+
+                                                                                                  S1.6   Additional Optical Flow Samples
+𝑊
+
+
+
+
+                                                                                           0.00
+                                                                                                  We provide more qualitative results for optical flow in fig.
+                                                                                          -1.00   S8. Again, we compared the DVS model with the best
+Fig. S3. Learned kernels at increasing bandwidth. We optimize per-
+                                                                                                  performance, DVS 0.1T, against our learned, single kernel
+formance while tuning the bandwidth jointly by varying the weighting of                           model. Even with half the average number of events, we
+the sparsity loss during training. Here we show the learned 5 × 5 kernels                         achieve better optical flow.
+for different bandwidths (bw).
+                                                                                                                                           13
+
+
+
+
+        Learned Kernels   Generated Events
+𝑅𝐺𝐶1
+𝑅𝐺𝐶16
+
+
+
+
+        Learned Kernels   Generated Events
+𝑅𝐺𝐶1
+𝑅𝐺𝐶16
+
+
+
+
+Fig. S4. Multi-channel Comparison: Above are the learned kernels for K1 and K16 along with the events generated by the kernels for two scenes.
+                                                                                                                                    14
+
+
+
+
+                𝑅𝐺𝐶1                              𝑅𝐺𝐶2                              𝑅𝐺𝐶4                         Ground Truth
+
+
+
+
+       PSNR: 35.5 dB SSIM: 0.962         PSNR: 36.2 dB SSIM: 0.966         PSNR: 37.2 dB SSIM: 0.971
+
+
+
+
+       PSNR: 32.5 𝑅𝐺𝐶
+                  dB SSIM: 0.949        PSNR: 33.7 𝑅𝐺𝐶
+                                                   dB SSIM: 0.954         PSNR: 34.8 𝑅𝐺𝐶
+                                                                                     dB SSIM: 0.964              Ground Truth
+                     1                                 2                                 4
+
+
+
+
+       PSNR: 31.5 dB SSIM: 0.956         PSNR: 33.1 dB SSIM: 0.965        PSNR: 33.6 dB SSIM: 0.969
+
+
+
+
+       PSNR: 32.3 dB SSIM: 0.970        PSNR: 33.8 dB SSIM: 0.976         PSNR: 34.2 dB SSIM: 0.978
+
+
+
+
+       PSNR: 32.8 dB SSIM: 0.932        PSNR: 33.5 dB SSIM: 0.943         PSNR: 34.8 dB SSIM: 0.956
+
+
+Fig. S5. Interpolation reconstructions from RGC1 , RGC2 , and RGC4 . We show the middle reconstructed frame with PSNR and SSIM metrics.
+                                                                                                                                  15
+
+
+
+
+                      𝑅𝐺𝐶1                                        𝑅𝐺𝐶16                                  Ground Truth
+
+
+
+
+            PSNR: 30.1 dB SSIM: 0.912                    PSNR: 33.5 dB SSIM: 0.945
+                      𝑅𝐺𝐶1                                        𝑅𝐺𝐶16                                  Ground Truth
+
+
+
+
+            PSNR: 29.0 dB SSIM: 0.923                    PSNR: 32.0 dB SSIM: 0.943
+
+
+
+
+            PSNR: 39.1 dB SSIM: 0.988                    PSNR: 40.2 dB SSIM: 0.989
+
+
+Fig. S6. Interpolation reconstructions from RGC1 and RGC16 : We show the middle reconstructed frame for the one learned kernel and 16
+learned kernel models trained at the ultra-low bandwidth of roughly 10, 000 events.
+                                                                                                                                                                                             16
+
+
+
+
+                                                                                                              DVS                           RGC-lin                  Ground Truth
+
+
+
+
+                                                                               Generated Events
+                                                                                                                                                                   Alpha-blended endpoints
+
+
+
+
+                                                                               Optical Flow
+                                                                                                  EPE: 1.30 1PE: 53.9 3PE: 5.23   EPE: 0.883 1PE: 27.4 3PE: 2.50
+
+                                                                                                              DVS                           RGC-lin                  Ground Truth
+
+
+
+
+                                                                               Generated Events
+            38                                                DVS
+                                                              𝑅𝐺𝐶1
+                                                              𝑅𝐺𝐶2
+            37                                                𝑅𝐺𝐶4                                                                                                 Alpha-blended endpoints
+                                                              RGC-lin-sv (4)
+PSNR (dB)
+
+
+
+
+                                                              𝑅𝐺𝐶16
+                                                                               Optical Flow
+            36
+
+            35
+
+                                                                                                  EPE: 2.03 1PE: 67.3 3PE: 21.9   EPE: 1.61 1PE: 57.8 3PE: 12.9
+            34
+                                                                                                              DVS                           RGC-lin                  Ground Truth
+                                                                               Generated Events
+
+
+
+
+            33
+                 0            100,000                  200,000
+                     Bandwidth (event count)
+
+Fig. S7. Multi-channel RGCs for Video Interpolation: We explore                                                                                                    Alpha-blended endpoints
+the idea of having mulitple learned retinal circuits per pixel, similar to
+the the human retina. K1 is a single kind of event, K2 is two kinds of
+                                                                               Optical Flow
+
+
+
+
+events, and so on. In the main paper, we also had the option to learn
+spatially-varying kernels. This means there are 4 unique kernels, but
+each pixel only gets one circuit. We show this setting, RGC-lin-sv (4) as
+a comparison. K4 and RGC-lin-sv perform similarly. We also show DVS
+for reference.                                                                                    EPE: 2.77 1PE: 72.3 3PE: 29.1   EPE: 2.35 1PE: 67.1 3PE: 24.0
+
+                                                                                                              DVS                           RGC-lin                  Ground Truth
+                                                                               Generated Events
+
+
+
+
+                                                                                                                                                                   Alpha-blended endpoints
+                                                                               Optical Flow
+
+
+
+
+                                                                                                  EPE: 3.83 1PE: 66.8 3PE: 37.0   EPE: 3.41 1PE: 68.1 3PE: 35.9
+
+
+                                                                               Fig. S8. Additional Optical Flow Qualitative Results. We show EPE↓,
+                                                                               1PE↓, and 3PE↓ metrics for four additional scenes. With our learned
+                                                                               RGC kernel, we achieve both sparser readout and better optical flow
+                                                                               performance.
+

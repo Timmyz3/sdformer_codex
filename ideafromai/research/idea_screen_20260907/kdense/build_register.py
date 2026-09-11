@@ -10,7 +10,7 @@ import csv
 import json
 from pathlib import Path
 
-OUT = Path("/home/zhumd/work/ideafromai/research/idea_screen_20260907/kdense")
+OUT = Path("/home/zhumd/work/sdformer_codex/ideafromai/research/idea_screen_20260907/kdense")
 
 SKILL_CITATION = (
     "Kassis, T., Agarwal, V., He, Y., Patel, D., & Brueckner, A. M. (2026). "

@@ -1,0 +1,1077 @@
+                                          Systolic Array Acceleration of Diagonal-Optimized
+                                           Sparse-Sparse Matrix Multiplication for Efficient
+                                                         Quantum Simulation
+                                                                             Yuchao Su, Srikar Chundury, Jiajia Li, Frank Mueller‡
+                                                                                          North Carolina State University†
+                                                                                    {ysu34, schundu3, jli256, fmuelle}@ncsu.edu
+
+
+                                            Abstract—Hamiltonian simulation is a key workload in quan-              development. Simulators serve as essential tools for proto-
+                                         tum computing, enabling the study of complex quantum systems               typing, debugging, and benchmarking quantum applications,
+arXiv:2510.14172v2 [cs.AR] 29 Oct 2025
+
+
+
+
+                                         and serving as a critical tool for classical verification of quantum       often long before they can run on real hardware [7], [15].
+                                         devices. However, it is computationally challenging because the
+                                         Hilbert space dimension grows exponentially with the number                Depending on the target workload, simulators adopt different
+                                         of qubits. The growing dimensions make matrix exponentiation,              numerical strategies, such as state vector evolution for general-
+                                         the key kernel in Hamiltonian simulations, increasingly expensive.         purpose circuits [12], unitary simulation [1] for analyzing
+                                         Matrix exponentiation is typically approximated by the Taylor              circuit matrices, or Hamiltonian-based techniques for time
+                                         series, which contains a series of matrix multiplications. Since           evolution [16] and physics inspired models [33].
+                                         Hermitian operators are often sparse, sparse matrix multiplica-
+                                         tion accelerators are essential for improving the scalability of              A key challenge in classical simulation is the exponen-
+                                         classical Hamiltonian simulation. Yet, existing accelerators are           tial scaling of the Hilbert space, which makes even mod-
+                                         primarily designed for machine learning workloads and tuned to             est quantum systems computationally intensive. This growth
+                                         their characteristic sparsity patterns, which differ fundamentally         makes simulation a natural candidate for High-Performance
+                                         from those in Hamiltonian simulations that are often dominated             Computing (HPC), leveraging large-scale compute, memory,
+                                         by structured diagonals.
+                                            In this work, we present DIAMOND, the first diagonal-                   and bandwidth. Recent HPC-oriented simulators and acceler-
+                                         optimized quantum simulation accelerator. It exploits the diag-            ators [17], [43] demonstrate the importance of architectural
+                                         onal structure commonly found in problem-Hamiltonian (Her-                 support for scalable quantum simulation. To mitigate the
+                                         mitian) matrices and leverages a restructured systolic array               cost, recent efforts have begun to exploit sparsity in quantum
+                                         dataflow to transform diagonally sparse matrices into dense com-           applications, either in the structure of quantum circuits or in
+                                         putations, enabling high utilization and performance. Through
+                                         detailed cycle-level simulation of diverse benchmarks in HamLib,           the operators they encode. For instance, Trotterized Hamilto-
+                                         DIAMOND demonstrates average performance improvements of                   nians and domain-specific unitaries often yield matrices with
+                                         10.26×, 33.58×, and 53.15× over SIGMA, Outer Product, and                  block-diagonal or sparse diagonal structure. Recognizing and
+                                         Gustavson’s algorithm, respectively, with peak speedups up to              leveraging these patterns has enabled the development of
+                                         127.03× while reducing energy consumption by an average of                 custom numerical formats such as DiaQ [5], a more compact
+                                         471.55× and up to 4630.58× compared to SIGMA.
+                                                                                                                    version of the traditional DIA format [22]. While such sparse
+                                                                                                                    representations significantly reduce memory footprint, they
+                                                                I. I NTRODUCTION
+                                                                                                                    often increase computational cost because arithmetic must now
+                                            Quantum computing has emerged as a promising computa-                   operate only on nonzeros rather than on contiguous dense
+                                         tional paradigm with the potential to accelerate solutions to              blocks. This shift amplifies the importance of sparse matrix-
+                                         classically intractable problems. Notably, quantum algorithms              matrix multiplication (SpMSpM), which already dominates the
+                                         have demonstrated theoretical advantages for tasks such as                 runtime of many simulation methods and becomes even more
+                                         combinatorial optimization, simulation of quantum systems,                 critical as sparsity grows. Whether simulating time evolution
+                                         and certain NP-complete problems like Max-Cut [8], 3-SAT,                  or applying deep quantum circuits, the efficiency of the simu-
+                                         and beyond [25]. Industry efforts — from IBM’s supercon-                   lator increasingly depends on high-throughput, sparsity-aware
+                                         ducting architectures [19] and Google’s Sycamore proces-                   numerical kernels that can handle extreme sparsity that often
+                                         sor [2] over IonQ’s ion traps [24] to Microsoft’s topological              exceed 99% (shown in Table II, which is discussed detailed
+                                         approaches [9] — have advanced quantum hardware capabili-                  in Section V) while sustaining HPC-level performance.
+                                         ties, but these systems remain limited by coherence times, gate               Encoding Hermitian matrices in a diagonal format trans-
+                                         fidelity, and restricted quantum bit (qubit) counts [35]. Archi-           forms extremely sparse matrices into dense diagonal bands.
+                                         tectural studies address these challenges via hardware-aware               This representation improves data locality and reuse but re-
+                                         compilation [40], noise-aware mapping [29], surface-code                   quires a fundamental rethinking of dataflow to be efficiently
+                                         adaptations [46], and inter-chip links [48].                               supported in hardware. Conventional systolic arrays [20],
+                                            Due to these limitations, classical simulation of quantum               though effective for dense matrix multiplication, are ill-suited
+                                         circuits continues to play a central role in quantum algorithm             for such structured sparsity without significant adaptation to
+
+
+
+                                                                                                                1
+avoid processing redundant elements. Hardware microarchi-                                    II. BACKGROUND
+tectures that exploit predictable graph structures have been            A. Hamiltonian Simulations
+proposed in quantum error correction decoders [6], [42],
+                                                                           Quantum simulation workloads, such as previously intro-
+demonstrating how tailoring dataflow to domain-specific pat-
+                                                                        duced in Section I, span a diverse range of numerical tech-
+terns can deliver efficiency gains. However, existing sparse
+                                                                        niques ranging from full state vector evolution to structured
+matrix multiplication accelerators are primarily optimized
+                                                                        Hamiltonian dynamics. Among these, simulations with sparse
+for machine learning workloads [3], [30], [31], [44], [45],
+                                                                        time-evolution operators are particularly challenging due to
+and fail to exploit the diagonal regularity seen in quantum
+                                                                        their extreme size and sparsity. These matrices are often over
+applications. Prior diagonal-format accelerators [10] instead
+                                                                        99% sparse and, unlike unstructured ML workloads, exhibit
+target Sparse Matrix Vector Multiplication (SpMV) using the
+                                                                        highly regular patterns aligned along fixed diagonals due to
+classic DIA format, where each diagonal must be padded
+                                                                        the underlying physics.
+to the same length. Padding reduces storage efficiency and
+                                                                           Hamiltonian simulation [11] focuses on simulating the time
+wastes computation, which worsens for SpMSpM due to
+                                                                        evolution operator:
+                                                                                                U (t) = e−iHt ,
+diagonal interactions. Therefore, a specialized architecture and
+                                                                                                                                   (1)
+diagonal-aware dataflow are essential.
+   To address this need, we present DIAMOND, Diagonal                   where H is a Hermitian Hamiltonian. The evolved quantum
+Inspired Accelerator for Matrix Multiplication On Nonzero               state is obtained by applying this operator to the initial state
+Diagonals, to the best of our knowledge the first diagonal-             vector:
+optimized quantum simulation accelerator that can be dynam-                             ψ(t) = U (t) ψ(0) = e−iHt ψ(0).              (2)
+ically adapted to execute sparse matrix times sparse matrix             Directly computing the matrix exponential in Eq. (1) is
+(SpMSpM) multiplication predominant in Hamiltonian simu-                prohibitively expensive for large N = 2n -dimensional ma-
+lation. DIAMOND features: (a) a novel Diagonal Processing               trices, as it entails dense general-purpose matrix multiplica-
+Element (DPE) that ensures data correctness, (b) a diagonal             tion (GEMM) O(N 3 ) operations. To make this computation
+accumulator that supports the accumulation of partial results           tractable, quantum simulation frameworks employ approxi-
+along diagonals, (c) a systolic array-like topology that exploits       mations such as Trotterization or the truncated Taylor series
+the inner grid data reuse pattern, and (d) a two-level memory           expansion, which decompose the evolution into products of
+hierarchy with (e) an efficient blocking strategy. The complete         sparse factors:
+DIAMOND system connects multiple DPEs via a lightweight                                                 K
+                                                                                                           Ak
+global network-on-chip (NoC). Inside the NoC, each diagonal                                       eA ≈ ∑      .                    (3)
+is associated with a dedicated accumulator to collect results.                                         k=0 k!
+
+DIAMOND thus effectively morphs extremely sparse matrix                 Applying the Taylor series to a small timestep t/K, the full
+multiplication into dense diagonal matrix multiplication.               evolution e−iHt is approximated as a product of K short-time
+   Our key contributions are as follows:                                expansions:
+                                                                                                                     K
+ 1) Analysis of diagonal matrix multiplication to motivate                                  −iHt
+                                                                                                      K
+                                                                                                          (−iH t/K)k
+    acceleration of diagonal sparse matrices,                                           e          ≈ (∑              ) .             (4)
+                                                                                                      k=0     k!
+ 2) a novel accelerator architecture, DIAMOND, for efficient
+    diagonal sparse SpMSpM operations,                                  Each short-time expansion involves matrix exponentiation and
+ 3) a diagonal accumulator design for efficient partial sum             can be decomposed into a series of SpMSpM operations (with
+    accumulation in diagonal format,                                    one additional SpMSpM per iteration). Hence, SpMSpM is
+ 4) an efficient blocking strategy that enhances data locality          a dominant computational kernel in Hamiltonian simulations,
+    and minimizes memory overhead, and                                  particularly in scenarios involving time evolution via Trot-
+ 5) experimental results that show average speedups of                  terization. To efficiently multiply them, data reuse patterns
+    10.26×, 33.58×, and 53.15× over SIGMA [36], Outer                   and storage formats are required that differ significantly from
+    Product, and Gustavson (with the latter two originating             conventional assumptions.
+    from Flexagon [26]), respectively, along with a 471.55×             B. Quantum-Tailored Diagonal Storage Format
+    average energy reduction compared to SIGMA.                           Matrices pertinent to Hamiltonian simulations frequently
+   The remainder of this paper is organized as follows: Sec-            exhibit structured diagonal sparsity, with non-zero values
+tion II discusses modern Hamiltonian simulation and diagonal-           confined to a small number of fixed diagonal offsets. General-
+oriented storage formats. Section III details the mathematical          purpose formats, such as CSR, CSC, and COO, represent each
+formulation for diagonal-based matrix multiplication. Sec-              non-zero entry with explicit row and column indices, incurring
+tion IV presents the microarchitecture of DIAMOND. Sec-                 metadata overhead and leading to irregular memory access.
+tion V describes the benchmarks, experimental setup, and                For example, CSR-based sparse matrix-vector multiplication
+performance evaluation against state-of-the-art accelerators.           (SpMV) in libraries like SciPy operates in O(N + nnz) time,
+Section VI reviews related work, and Section VII concludes              where N = 2n is the state vector size and nnz is the number
+the paper.                                                              of non-zeros [41].
+
+
+
+                                                                    2
+   In contrast, DiaQ [5] stores sparse quantum operators as                      0 A12 0           A11 0 0           0 0 0          A11 A12 0
+collections of dense diagonals indexed by offset, eliminating                    0 0 A23
+                                                                                 0 0 0
+                                                                                               +   0 A22 0
+                                                                                                   0 0 A33
+                                                                                                                 +   A21 0 0
+                                                                                                                     0 A32 0
+                                                                                                                                = A0 21 A22 A23
+                                                                                                                                        A32 A33
+per-entry metadata and enabling memory-aligned access, as
+seen in Fig. 1. Their format differs from the traditional DIA                   diagd(a(+1))       diagd(a(0))       diagd(a(-1))      A
+format in that it does not require storing placeholder NA                     Fig. 2: Diagonal Sparse Matrix Decomposition.
+values, though this comes at the cost of reduced memory
+contiguity. By skipping identity regions and directly traversing       DIAMOND, a specialized accelerator architecture that lever-
+active diagonals, it achieves O(dN ) complexity with fused             ages diagonal structure to enable efficient sparse matrix-matrix
+SIMD kernels, where d is the number of relevant diagonals              multiplication for quantum simulation workloads.
+(typically constant) yielding improved arithmetic intensity
+and locality. Its design choice to skip NA values makes it                III. D IAGONALLY S PARSE M ATRIX M ULTIPLICATION
+particularly effective for matrices exhibiting extreme sparsity,         We reformulate matrix multiplication into diagonal-wise
+where diagonals can be exponentially far apart. Such cases             computation for efficient acceleration that leverages the di-
+are frequently encountered in sparse problem Hamiltonians              agonal sparse format.
+(Hermitian matrices), where the shorter diagonals enable more
+efficient storage than the standard DIA format. Such charac-           A. Diagonal Sparse Matrix Decomposition
+teristics make their storage layout particularly effective when          To exploit diagonal sparsity, we recast matrix multiplication
+applying unitary gates of the form (I ⊗ G ⊗ I) to quantum              entirely in diagonal space. Let A, B ∈ RN ×N . Recall that each
+states, where G is a small matrix acting on a subset of qubits.        matrix can be uniquely expressed as the sum of its diagonals
+                                                                              A = ∑ diagd (a(d) ),               B = ∑ diagd (b(d) ),               (5)
+            Dense                      DiaQ                                       d∈DA                                    d∈DB
+
+     ⎛                                                                 where
+         a 0 0 b ⎞              Offset     Values
+     ⎜           ⎟                                                       ● DA and DB are the sets of diagonal offsets containing
+     ⎜           ⎟
+     ⎜   0 c 0 0 ⎟                -3          [e]
+                                                                           nonzeros, e.g., d = 0 is the main/principle diagonal, d = 1
+     ⎜           ⎟
+     ⎜           ⎟                                                         is the first (upper) superdiagonal, d = −1 the first (lower)
+     ⎜   0 0 d 0 ⎟                0           [a, c, d, f]
+     ⎜           ⎟
+     ⎜           ⎟                                                         subdiagonal;
+     ⎜           ⎟                +3          [b]                            (d)
+     ⎝   e 0 0 f ⎠                                                       ● a     is the vector of entries along diagonal d in matrix
+                                                                           A, often stored contiguously in diagonal formats; and
+Fig. 1: A diagonal matrix in dense format vs. DiaQ format.               ● diagd (v) denotes the operator that creates a matrix whose
+Each diagonal in DiaQ can have a different length (deduced                 diagonal d contains vector v, such that all other entries
+from the matrix dimensions and the offset), which eliminates               are zero.
+the need for padding and saves space compared to the tradi-              Formally, for any offset d, this operator is defined by
+tional DIA format.
+                                                                                                       ⎧
+                                                                                                       ⎪
+                                                                                                       ⎪vi , j − i = d,
+                                                                                      [diagd (v)]i,j = ⎨                            (6)
+   While this quantum-tailored sparse format was previously                                            ⎪
+                                                                                                       ⎪0, otherwise.
+                                                                                                       ⎩
+integrated with SV-Sim [21], a state vector simulator, it
+also supports structured SpMSpM via diagonal-wise products,              This formulation allows us to express A and B as structured
+which form the basis for Hamiltonian simulations, as dis-              sums over their diagonals, as shown in Fig. 2.
+cussed in subsection II-A. Instead of relying on dense O(N 3 )
+                                                                       B. Offset Additivity
+multiplication or general-purpose sparse kernels, it performs
+O(d2 N ) compositions when each operand has d diagonals.                 A key property of diagonal multiplication is that multiplying
+This design benefits from sequential memory access, low in-            two diagonals yields a new diagonal whose offset is the sum
+dexing overhead, and tight loop nests suited to modern vector          of the input offsets
+units. Hence, domain-specific diagonal formats are a natural
+                                                                                  diag dA +dB (⋅) ∶= diagdA (⋅) diagdB (⋅).                         (7)
+fit for quantum workloads where sparsity is aligned and pre-
+dictable. They expose regularity absent in traditional formats,        Proposition (Offset-Sum Rule). Let dA ∈ DA and dB ∈ DB .
+making them well suited for HPC accelerators targeting large-          Then any partial product between these diagonals contributes
+scale quantum simulations. This focus on regularity aligns             exclusively to the result diagonal, described as dC = dA + dB .
+with broader architectural efforts that co-design hardware and
+structured workloads [46].                                             C. Diagonal Convolution Form
+   However, conventional sparse accelerators are not designed            Using Eq. (7), the matrix product C = AB can be rewritten
+for diagonal-banded formats and fail to fully exploit the              as a sum over output diagonals:
+reuse and regularity these formats expose. Unlocking their
+full potential requires hardware that natively understands and               C=     ∑ diagdC (                   ∑             a(dA ) ⊙ b(dB ) ),   (8)
+accelerates diagonal operations. This motivates the design of                     dC ∈DC                dA ∈DA , dB ∈DB
+                                                                                                          dA +dB =dC
+
+
+
+
+                                                                   3
+where ⊙ denotes element-wise multiplication over the over-                 A distinguishing feature of the DPE is its comparator, which
+lapping index range of a(dA ) and b(dB ) . Specifically, since          enables dynamic alignment of diagonals, a mechanism inspired
+diagonals a(dA ) and b(dB ) may have different lengths depend-          by the control logic used in SpMV accelerators [13]. Unlike
+ing on their offsets, their element-wise product is computed            conventional systolic arrays, where processing elements op-
+only over the range where both vectors are defined, i.e., at the        erate under fixed neighboring relationships, DIAMOND must
+intersection of row and column indices. DC is defined as                accommodate arbitrary and irregular diagonal patterns without
+                                                                        prior structural assumptions. The comparator in each DPE
+   DC = DA ⊕ DB = { dA + dB ∣ dA ∈ DA , dB ∈ DB },           (9)        evaluates whether the column index of the matrix A element
+the Minkowski sum of the offset sets.                                   matches the row index of the B element. If a match is detected
+                                                                        (see Table I), the operands are sent to the multiplier to compute
+   The diagonal-space reformulation expresses matrix multi-
+                                                                        a partial product, which is then forwarded to the output FIFOs
+plication as a diagonal-wise convolution using the offset-sum
+                                                                        and subsequently to the corresponding diagonal accumulator.
+rule. This isolates nonzero interactions, eliminates redundant
+computation on zeros, and exposes a natural structure for                          TABLE I: Comparator Operating Logic.
+parallel and memory-efficient execution. It forms the math-
+ematical basis for our sparsity-aware acceleration strategy.                       Condition                     Action
+                                                                                   jA = i B         Forward to Multiplier & Multiply
+               IV. DIAMOND A RCHITECTURE                                           jA ≠ i B          Stall the data with larger index
+                                                                                  Missing one             Forward existing data
+   DIAMOND comprises a grid of Diagonal Processing Ele-                           Missing both              Wait for valid data
+ments (DPEs), multiple diagonal accumulators, DRAM, and
+a set-associative cache. Fig. 3 illustrates the high-level archi-          The detailed comparison logic is as follows:
+tecture. DPEs, detailed in Section IV-A, are interconnected                ● If a match is detected, the two values are multiplied.
+via a lightweight Network-on-Chip (NoC) to form a scalable                 ● If the indices differ, the DPE retains the data with the
+compute fabric. Input diagonals from matrix A are streamed                   larger index and forwards the other operand to its neigh-
+from the top in increasing offset order, and those from ma-                  boring DPE (A data downward and B data rightward).
+trix B from the left in decreasing order. Prior to entering                ● If the DPE receives only one operand in a cycle (from
+the grid, a lightweight index builder extracts the offset from               either A or B), it forward the operand to its neighbor
+the diagonal format to initialize element indices efficiently.               PE(A to bottom and B to right).
+Each diagonal enters at cycle t, t + 1, t + 2, . . . , enabling a       This strategy builds on the observation that the indices of
+synchronized dataflow. The DPE grid is dynamically sized:               nonzero elements along each diagonal increase monotonically
+the number of columns equals the number of active diagonals             as data flows through the systolic array. The original matrix
+in A and rows in B. The anti-diagonal accumulation naturally            coordinates (i, j) can be determined from the diagonal format
+aligns with the Minkowski-sum-based dataflow (Section III).             with the diagonal index. The coordinate calculation is per-
+   Unlike MAC-based accelerators [4], [18], DIAMOND as-                 formed only for the first element of each diagonal; subsequent
+signs each output diagonal to a dedicated accumulator (Sec-             positions are obtained through self-increment, eliminating the
+tion IV-B). A set-associative cache improves efficiency by              repeated index computation.
+capturing temporal locality in diagonal reuse (Section IV-D).              When two operands arrive at a DPE — one from matrix A
+Data is fetched from DRAM into cache, then fed into the grid.           with index pair (i, jA ) and one from B with index pair (iB , j)
+Each diagonal occupies a full column or row, and only the first
+                                                                                  DRAM         Cache
+element’s position is explicitly encoded; all others are derived
+by self-increment, as shown by the gray blocks in Fig. 3.                                                                     @ t+2
+   To scale to larger matrices, DIAMOND applies a two-                                           @t           @ t+1
+dimensional diagonal blocking strategy (Section IV-C), which                                    @t
+bounds the grid size and enhances memory locality. Sec-
+tion IV-E details the execution timeline (preload, compute,
+and popout) and provides a cycle-level performance model
+for sparse workloads. A complete example of data movement                                      @ t+1
+and computation is presented in Section IV-F.
+
+A. Microarchitecture of the DPE
+   Each DPE consists of a comparator, a multiplier, four                                 @ t+2
+DEMUXes, six input FIFOs (three from the left and three from
+the top), and three output FIFOs (see Fig. 4). All FIFOs are of
+                                                                                      Matrix      Matrix            Index        Diagonal
+                                                                                                           DPE
+size one and are used to store the row index (i), column index                         A           B                Builder     Accumulator
+
+(j), and value of each operand. The left-side FIFOs buffer data
+from matrix B, while the top-side FIFOs buffer data from A.                            Fig. 3: Overview of DIAMOND.
+
+
+
+                                                                    4
+                   Multiply             Psum                 Bypass          Control                  four possible feeding strategies and the resulting accumulation
+                   Related             Related               Related         Signal
+                                                                                                      patterns:
+                                  Aj                 A Val             Ai                                ● Fig. 5a shows both A and B fed in increasing order of
+                                                                                                           diagonal offset. In this case, all DPEs along the same
+           Bi                     =              0     1           0    1                                  anti-diagonal contribute to the same output diagonal.
+                                                                                                         ● Fig. 5b feeds A in increasing order and B in decreasing
+                                                                                                           order, producing a diagonal pattern in the grid, where
+                              0
+                                                                                          Right            each diagonal contributes to the same output diagonal.
+                                                                                          DPE
+           B Val              1
+                                                      Multiplier
+                                                                                                         ● Fig. 5c feeds both A and B in decreasing order. This also
+                                                                                                           results in an anti-diagonal contribution pattern.
+                                                                                                         ● Fig. 5d feeds A in decreasing order and B in increasing
+                                                                              C Val
+                                                                                                           order, again forming a diagonal contribution pattern.
+           Bj
+                              0
+                                                                              Ci
+                              1
+                                                                              Cj
+                                                                            Diagonal
+                                                                            Accumulator                             A-2         A0   A +2         A-2         A0   A +2
+                                       Bottom DPE
+                                                 Compute
+                    FIFO
+                                                  Unite
+                                                                               DEMUX                          B-2   -4          -2    0     B+2   0           +2   +4
+
+                                                                                                               B0   -2          0    +2     B0    -2          0    +2
+                Fig. 4: Microarchitecture of DPE.
+                                                                                                              B+2   0           -2   +4     B-2   -4          -2    0
+— the comparator checks if the inner dimensions align, i.e.,
+if jA = iB is true, a valid multiplication is possible.
+                                                                                                                          (a)                           (b)
+   Otherwise, assuming jA < iB , the operand from A is
+considered “behind” the operand from B. Since the column
+indices from A and the row indices from B both increase in                                                          A+2         A0   A -2         A+2         A0   A -2
+
+future cycles, any upcoming A elements in this row will have                                                  B+2   +4          +2    0     B-2   0           -2   -4
+j > jA , moving even further away from iB . Thus, the current
+A operand can no longer match any future B operands in this                                                    B0   +2          0    -2     B0    +2          0    -2
+
+column and is forwarded downward, while the B operand is                                                      B-2   0           -2   -4     B+2   +4          +2    0
+retained.
+   Conversely, if jA > iB , then the B operand is behind and is                                                           (c)                           (d)
+forwarded rightward, while the A operand is held. This selec-
+tive forwarding ensures that operands are only retained when                                                        Fig. 5: Minkowski-Sum Mapping.
+a future match remains possible, thereby avoiding unnecessary                                            Across all configurations, a consistent structural property
+computations and optimizing data movement within the array.                                           emerges: DPEs aligned along a given diagonal or anti-diagonal
+   The above DPE design is critical to DIAMOND, while                                                 in the compute grid contribute to the same output diago-
+the comparator plays a pivotal role. By integrating index                                             nal. This observation naturally leads to the use of diagonal
+matching and value holding within each DPE, DIAMOND can                                               accumulators in DIAMOND. Each accumulator is assigned
+effectively handle the irregular structure of diagonal sparse                                         to a unique output diagonal and gathers partial sums from
+matrices and ensure the correctness of partial sums.                                                  all corresponding DPEs. Since output diagonals are mutually
+                                                                                                      independent, the accumulation process is highly parallelizable.
+B. Diagonal Accumulator                                                                                  The accumulators are implemented using conventional hard-
+                                                                                                      ware, i.e., they do not require specialized logic beyond index
+   The structure of DIAMOND’s dataflow is derived from the                                            decoding. Their structure is simple but well-aligned with the
+Minkowski-sum formulation described in Section III, which                                             deterministic dataflow exposed by the Minkowski-based map-
+governs how diagonals from the input matrices contribute                                              ping, enabling both efficiency and scalability in accumulation.
+to diagonals in the output matrix. Specifically, each DPE is
+mapped to a unique pair of input diagonals from A and B,                                              C. Blocking
+where A is streamed into the array from the top and B is                                                 Matrix sizes in Hamiltonian simulations grow exponentially.
+streamed from the left. Let di and dj denote the diagonal                                             For example, a 10-qubit gate yields a 1024×1024 matrix, with
+offsets fed into row i and column j, respectively. The DPE at                                         dimensions scaling as 2n for n qubits. Although diagonals
+position (i, j) is responsible for computing partial sums that                                        formats often omit entirely zero diagonals, the length of non-
+contribute to the output diagonal at offset dC = di + dj , as                                         zero diagonals remains tied to the full matrix size, given by
+determined by the Minkowski-sum rule.                                                                 LDi = N − ∣i∣, where N is the matrix dimension and i is the
+   This direct mapping allows us to examine how data flows                                            diagonal index. These long diagonals demand large buffers.
+through the DPE grid and reveals patterns in the spatial                                                 Moreover, as chained multiplications proceed, the number
+alignment of computation and accumulation. Fig. 5 illustrates                                         of non-zero diagonals increases (see Fig. 6). Without blocking,
+
+
+
+                                                                                                  5
+this growth would require dynamic scaling of the DPE grid.             in Section III, diagonal matrix multiplication requires each
+To maintain a fixed and feasible grid size, efficient blocking         diagonal in A to be multiplied with every diagonal in B. This
+becomes critical. We identify two key strategies: row/column-          implies that each pairwise multiplication between diagonals is
+wise blocking and diagonal blocking.                                   independent of the others.
+                                                                          Given this property, unlike row/column-wise blocking, we
+                                                                       can partition the diagonals of A and B independently into
+                               1250
+                                                                       different numbers of groups. This flexibility is especially
+         Number of Diagonals
+
+
+
+                               1000                                    useful in quantum simulation workloads. For instance, in
+                                750                                    Hamiltonian simulation, A (resulting from the previous multi-
+                                500                                    plication) contains a growing number of diagonals, whereas B
+                                                                       consistently maintains the same number of diagonals. In such
+                                250
+                                                                       a scenario, A can be divided into multiple diagonal groups,
+                                  0                                    while B remains as a single group.
+                                      1   2   3   4                       After grouping, each diagonal group in A must be multiplied
+                                   Iter
+                                                                       with all groups in B. As shown in Figs. 7c, 7d, partition
+Fig. 6: Rapid growth of the number of non-zero diagonals
+                                                                       boundaries do not need to align. For example, A is split at
+during 10-qubit Heisenberg Hamiltonian simulation. Each iter
+                                                                       diagonal −1 and B at 0, each forming two groups. Each
+corresponds to a step in the chained matrix multiplication.
+   1) Row/Col-wise Blocking: To address the problem of                 diagonal in A maps to a grid column and each in B to a
+long diagonals, we partition the diagonals based on rows               row. Thus, the DPE grid size is determined by the maximum
+and columns. Since matrix multiplication involves multiplying          number of diagonals in any group. In this case, a 2 × 2 grid
+rows of A with columns of B, we partition A column-wise                suffices.
+and B row-wise. This restricts the column range in A and the              The full multiplication comprises four group-wise computa-
+row range in B.                                                        tions: (A1 , B1 ), (A1 , B2 ), (A2 , B1 ), and (A2 , B2 ). Each pair
+   As long as both matrices are partitioned at the same                utilizes the grid, though some rows or columns may remain
+row/column indices, this strategy generates aligned group              idle when the group has fewer diagonals. Execution order is
+pairs. Each column group of A has a one-to-one correspon-              flexible and does not affect correctness.
+dence with a row group of B because they share the same                   Although the example is simple, diagonal blocking is critical
+index range. Groups with non-overlapping index ranges do               for scalability. For instance, a 10-qubit Heisenberg Hamilto-
+not need to be multiplied, as their respective row and column          nian simulation yields 783 diagonals in the third iteration.
+indices do not intersect, which means there would be no                Blocking these into groups of 64 or 256 limits grid dimensions
+valid (i, j, k) triplets satisfying the multiplication condition       and reduces hardware demands. Additionally, such blocking
+Ai,k ⋅ Bk,j . In other words, if the column indices of A in one        improves temporal locality, as all multiplications within a
+group do not match the row indices of B in the corresponding           group pair reuse loaded data before switching to the next pair.
+group, their product contributes nothing to the result matrix.
+                                                                       D. Memory System and Data Locality
+Therefore, multiplying mismatched groups is unnecessary and
+wasteful.                                                                 To evaluate the impact of data locality in the DIA-
+   As shown in Fig. 7a, A is partitioned at column index 3             MOND dataflow, we design a simple two-level memory sys-
+(1-based), yielding two groups: columns 1–3 and 4–5. Simul-            tem. Our goal is not to simulate detailed memory behavior, but
+taneously, B is row-partitioned at the same index (Fig. 7b),           rather to observe how the blocking algorithm affects memory
+forming two matching groups: rows 1–3 and 4–5. This reduces            access patterns and footprint. This abstraction allows us to
+a problem with diagonals up to length 5 into two smaller                        A11 A12   0     0     0      B11 B12     0     0     0
+subproblems with maximum diagonal lengths of 3 and 2.                          A21 A22    A23   0     0      B21 B22     B23   0     0
+   The same method can be applied to much larger matrices
+                                                                                0   A32   A33   A34   0       0    B32   B33   B34   0
+by creating more groups. Importantly, only matching group
+pairs from the two matrices need to be multiplied as cross-                     0   0     A43   A44 A45       0     0    B43   B44 B45
+group products are irrelevant due to index mismatch. This                       0   0     0     A54 A55       0     0    0     B54 B55
+technique significantly reduces cache-line overhead by limiting
+                                                                                (a) Column Groups                 (b) Row Groups
+the number of elements stored per line, thereby improving                       A11 A12                      B11 B12     0     0     0
+                                                                                          0     0     0
+cache efficiency.
+                                                                                A21 A22   A23   0     0      B21 B22     B23   0     0
+   2) Diagonal Blocking: Although the matrix remains sparse
+during the Hamiltonian simulation, the number of diagonals                      0   A32   A33   A34   0       0    B32   B33   B34   0
+grows exponentially, as shown in Fig. 6, making the DPE grid                    0    0    A43   A44 A45       0     0    B43   B44 B45
+size difficult to manage. To address this, a diagonal blocking
+                                                                                0    0    0     A54 A55       0     0    0     B54 B55
+algorithm is necessary.
+   In classical dense matrix multiplication, all rows in A must                (c) Diagonal Groups           (d) Diagonal Groups
+be multiplied with all columns in B. Similarly, as described                               Fig. 7: Blocking Strategies.
+
+
+                                                                   6
+measure the effectiveness of data locality, rather than modeling        memory transfers and improves performance for deep iterative
+real-world overheads.                                                   computations.
+   1) Memory System: The memory system consists of two                     Together, these three levels of locality, (1) intra-grid, (2)
+layers: a set-associative cache and a backing DRAM. The                 inter-block, and (3) algorithmic, help DIAMOND reduce mem-
+cache connects to the left and top inputs of the DPE grid and           ory traffic, lower latency, and sustain high throughput in sparse
+to the diagonal accumulators. All DRAM accesses are medi-               quantum workloads. Their combined effect is evaluated in
+ated by the cache, enabling simulation of latency differences           Section V.
+between fast and slow memory.
+                                                                        E. Cycle Analysis
+   Each cache line holds one diagonal block group, and a Least
+Recently Used (LRU) policy is applied. Cache hits incur 1                  Although DIAMOND inherits the systolic array’s pipelined
+cycle, while misses add a 5-cycle LRU penalty and trigger               feeding pattern, its cycle behavior diverges significantly. Dense
+a DRAM access. DRAM reads and writes incur a fixed 50-                  matrix multiplication requires O(N 3 ) cycles, while systolic
+cycle latency, modeling the cost gap between local and remote           arrays reduce this to O(3N ) [32] by exploiting spatial paral-
+memory and highlighting the importance of locality-aware                lelism. Notice that in highly sparse cases (e.g., > 99% spar-
+blocking.                                                               sity), dense approaches waste cycles on zero-valued elements,
+   2) Intra-Grid Locality: DIAMOND exhibits two distinct                underutilizing hardware and memory. DIAMOND overcomes
+types of data locality. The first is intra-grid locality, enabled       this by applying sparsity-aware scheduling in diagonal space,
+by the systolic array structure. Once data enters the DPE grid          executing only valid operations. To model performance, we
+from the left or top, it is forwarded to neighboring DPEs               decompose DIAMOND’s cycle count into three phases, (1)
+along the row or column, allowing multiple DPEs to use the              preload, (2) compute, and (3) pop-out, capturing the unique
+same operand across cycles without repeated memory access               execution flow of sparse, diagonal-structured workloads.
+as illustrated in Fig. 8b and Fig. 8c.                                     1) Preloading Stage: Similar to the preloading stage in a
+                                                                        traditional systolic array, we define the end of DIAMOND’s
+             ...
+
+
+
+
+                    2                                                   preload stage as the point when every DPE has received both
+                                                   Aij                  of its input operands. The number of cycles required for this
+                    1
+     1                                                                  stage is
+                                                                                             CyclePreload = R + C − 1,               (10)
+                                                                        where R is the number of rows in the DPE grid and C is
+                                                                        the number of columns. DPER,C is last to receive both inputs,
+ (a) Inter-Block Locality         (b) Intra-Grid Locality(Column)       requiring R − 1 cycles for the top data and C − 1 cycles for
+                                                                        the left data to propagate. Since the top data is fed at cycle
+                                                                        C and the left data is fed at cycle R, the total cycle count for
+                                                                        preload is always R + C − 1 no matter which arrives first.
+                            Bij
+                                                                           2) Computation Stage: We define the computation stage as
+                   (c) Intra-Grid Locality(Row)                         starting from the cycle immediately after the preload stage
+                                                                        and ending when all input data has been fed into the DPE
+     Fig. 8: Reuse patterns in the DIAMOND dataflow.
+                                                                        grid(TFF ). This duration is
+   3) Inter-Block Locality: The second type is inter-block                              CycleComp = TFF − CyclePreload ,            (11)
+locality, which emerges from the diagonal blocking strategy.
+                                                                        where CyclePreload is given by Eq. (10) and TFF is defined as
+Since diagonal matrix multiplication requires each diagonal in
+                                                                                             ⎧
+                                                                                             ⎪
+A to be multiplied with every diagonal in B, blocking allows                                 ⎪Ld    + Rdmax , dmax ∈ B,
+partial locality of operand groups across multiple group-pair                          TFF = ⎨ max                                 (12)
+                                                                                             ⎪
+                                                                                             ⎪ L    + Cdmax , dmax ∈ A.
+computations. A block group from A can be used across                                        ⎩ dmax
+several groupings with different B blocks before it is evicted          Here, dmax is the index of the longest diagonal, Ldmax the
+from the cache. As shown in Fig. 8a, diagonal from B(⃝)     1           length of that diagonal, and Rdmax (or Cdmax ) the row (or
+can multiply with all A diagonals inside the cache before it            column) index at which this diagonal is fed, depending on
+is evicted. This access pattern improves temporal locality and          whether it originates from B or A.
+reduces DRAM accesses.                                                     In DIAMOND, diagonals are fed in ascending or descending
+   4) Algorithmic Locality: DIAMOND also benefits from                  order. Diagonals near the center are longer, while those near
+locality patterns specific to quantum simulation workloads. In          the edges are shorter. Since the number of diagonals is much
+Hamiltonian simulation, matrix exponentiation via Taylor ex-            smaller than the matrix size, diagonal lengths decrease at a
+pansion, Eq. (4), is commonly used. Repeated sparse multipli-           faster rate than the simultaneous increase in feed delays. As a
+cations are performed until convergence. Intermediate results           result, the overall feed completion is dominated by the longest
+are written to DRAM, while active portions of matrix A are              diagonal, not the edge of the array as in traditional systolic
+reused from cache. This reuse pattern minimizes unnecessary             designs.
+
+
+
+                                                                    7
+              Offset    Values          First:
+                                        if offset >= 0
+                                                                     Following:
+                                                                     i = iPre + 1
+                                                                                                                     A+2                  Aj       A Val       Ai
+                -1      [1,2,2,6]
+                                         i = IndexValues             j = jPre + 1                              A0
+                0      [1,9,9,8,5]       j = IndexValues + Offset
+                                                                                                        A-1                   Bi          =    0     1     0    1
+
+   MatrixA     +1       [2,0,0,3]       if offset < 0
+                           Size = 3
+                                          i = IndexValues - Offset
+                                          j = IndexValues                                       B+2                           B Val
+                                                                                                                                      0
+                                                                                                                                      1
+              Offset    Values                                                                                                                      Multiplier
+                -2      [1,9,9,9]          Matrix A -1: [1,2,2,6]
+                                         First:                 Following:                     B0                                                                   C Val
+
+
+
+
+                                                                                                                                                                             Accumulator
+                                                                                                                                                                              Diagonal
+                0      [0,8,0,1,3]       IndexValues: 0         (2,2,1)                                                               0
+                                                                                                                                                                    Ci
+                                                                                                                              Bj      1
+   MatrixB                                                                                                                                                          Cj
+               +2       [0,3,1,5]
+                           Size = 3
+                                         Offset: -1
+                                         i: 1 j: 0
+                                                                (2,3,2)
+                                                                (6,4,3)
+                                                                                         B-2
+
+  (a) Load Diagonal Matrices.         (b) Construct Coordinate Info                                 (c) Feed Data           (d) Compute and Accumulate
+                                                             Fig. 9: Walkthrough Example.
+  Combining Eq. (10), (11), and (12), we derive                                          Accordingly, the overall cycle complexity of DIAMOND can
+             ⎧                                                                           be expressed as
+             ⎪
+             ⎪Ld    + Rdmax − R − C + 1, dmax ∈ B,
+ CycleComp = ⎨ max                                 (13)                                                  O(∣DA ∣ + ∣DB ∣ + max(NA , NB )),
+             ⎪
+             ⎪Ldmax + Cdmax − R − C + 1, dmax ∈ A.
+                                                                                                                                                                            (18)
+             ⎩
+   This analysis highlights that the computation stage length                            where ∣DA ∣ and ∣DB ∣ are the numbers of nonzero diagonals
+in DIAMOND is tightly coupled to the structure of the longest                            in matrices A and B, respectively, and NA , NB are the
+diagonal, underscoring the importance of diagonal structure in                           dimensions of the input matrices.
+overall cycle efficiency.                                                                Remark: Note that the three execution stages — preloading,
+   3) Popout Stage: The popout stage starts at the cycle after                           computation, and popout — are not strictly sequential and
+TFF , when all data has been fed, and ends when the last partial                         often overlap in practice. This overlap manifests when comput-
+sum exits the DPE grid at cycle TPF . The cycle count is                                 ing individual stage durations, where negative values may arise
+                                                                                         due to shared or pipelined cycles across stages. As a result,
+                       CyclePopout = TPF − TFF ,                              (14)       the total cycle count provides a more holistic and accurate
+                                                                                         measure of execution latency than the isolated stage timings.
+where TFF is defined in Eq. (12), and TPF is
+         ⎧
+         ⎪
+                                                                                         F. Walk-Through Example
+         ⎪Ld      + Rdmax + C − 1 + R − Rdmax , dmax ∈ B,
+   TPF = ⎨ max                                                                              The following steps (corresponding to Fig. 9) depict a
+         ⎪
+         ⎪ L      + Cdmax + R − 1 + C − Cdmax , dmax ∈ A.
+         ⎩ dmax                                                                          walk-through example demonstrating how DIAMOND utilizes
+                                                        (15)                             diagonal formats to map sparse GEMMs onto DPEs. In this
+Assuming the longest diagonal dmax originates from matrix B,                             example, A and B both contain 3 diagonals, and both matrices
+then DPER,C receives the last B element in its row before                                have a dimension of N = 5. These steps are as follows:
+it receives the last A element in its column due to blocking
+conditions. DPERdmax ,C holds the last A value until cycle                               Step i) Load two diagonally-compressed matrices to cache.
+Ldmax + Rdmax + C − 1, at which point it forwards the data                               Step ii) Construct the matrix metadata .
+down the column. It then takes R − Rdmax additional cycles                               Step iii) Instantiate a 3×3 DPE grid, with 3 diagonals from A
+for this data to reach DPER,C .                                                          (columns) and 3 from B (rows). Feed A diagonals top-down
+   Combining Eq. (14), (12), and (15), we get                                            by ascending index and B left-right by descending index,
+                                                                                         pipelined one cycle apart following systolic scheduling .
+                   ⎧
+                   ⎪
+                   ⎪R + C − 1 − Rdmax ,           dmax ∈ B,                              Step iv) Each DPE receives data with metadata. It compares
+     CyclePopout = ⎨                                                          (16)       A’s j index to B’s i index to determine if multiplication
+                   ⎪
+                   ⎪R + C − 1 − Cdmax ,           dmax ∈ A.
+                   ⎩                                                                     occurs. Outputs carry A’s i and B’s j indices and are accumu-
+   This behavior highlights how the tail latency of the popout                           lated per diagonal. Once all FIFOs drain, results are written
+phase is influenced by the relative position of the longest                              back to cache, and the grid is released for the next task.
+diagonal in the matrix, further reinforcing the cycle impact
+of sparse structure in DIAMOND.                                                                                     V. E VALUATION
+   4) Total Cycle Count: Combining the results from Eq. (10),                            A. Methodology
+(13), and (16), the total cycle count for a complete DIAMOND                                1) Benchmarks: We select a representative set of matrices
+operation can be expressed as                                                            from HamLib [37], a dataset containing problem Hamiltonians
+               CycleTotal = R + C + Ldmax − 1,                                (17)       from a variety of application domains. Specifically, we choose
+                                                                                         the Transverse Field Ising Model (TFIM), the Heisenberg
+where R and C are the number of rows and columns in the                                  model, and several Hubbard models from the condensed
+DPE grid, and Ldmax is the length of the longest diagonal.                               matter domain; the Maximum Cut problem (Max-Cut) and
+
+
+
+                                                                                     8
+its quantum variant (Q-Max-Cut) from the binary optimiza-               maintain performance within the PE constraint(1024 in total).
+tion domain; and the classical Traveling Salesman Problem               For clarity, all architectures operate under the same total PE
+(TSP) from the discrete optimization domain. The sparsity               capacity, with DIAMOND selectively activating only the subset
+characteristics of these HamLib examples are summarized in              required by the diagonal structure. In contrast, for single-
+Table II, and the associated computational details are provided         diagonal workloads such as Maxcut and TSP, we apply a
+in Section II. Most Hermitians in the HamLib suite exhibit              compact 1×4 pipelined grid to minimize resource usage while
+diagonal sparsity inherent to their problem definitions and             preserving throughput. This flexibility allows DIAMOND to
+therefore selected a representative subset from the thousands           adapt efficiently across a wide range of diagonal densities.
+available.                                                                 3) Simulation Infrastructure: To evaluate the performance
+                                                                        of DIAMOND and baseline designs, we developed a cycle-
+TABLE II: Representative matrices from HamLib [37] used                 accurate model under the STONNE simulator [28]. Flexagon
+in our evaluation. Here, Dim denotes the matrix dimensions.             and SIGMA are both implemented within the STONNE sim-
+DSparsity represents the fraction of non-zero diagonals                 ulator framework and use the same PE design, enabling a
+relative to all diagonals. NNZE and NNZD indicate the number            direct comparison within a unified framework. The simulator
+of non-zero elements and non-zero diagonals, respectively.              collects statistics such as the number of multiplications, FIFO
+Iter refers to the iteration count at which the Taylor series           reads/writes, and memory accesses.
+converges, as determined by the matrix one-norm.                           For accurate area and power analysis, we implemented the
+Benchmark Qubit      Dim Sparsity DSparsity NNZE NNZD        Iter       DPE design of DIAMOND as well as the PE designs of
+                                                                        SIGMA and Flexagon in Verilog. All processing elements
+                10    1,024 99.90%   99.95%    1,024    1     4
+ Max-Cut        12    4,096 99.99%   99.99%    1,936    1     4         were realized as float32 precision. We synthesized each
+                14   1,6384 99.99%   99.99%   16,384    1     5         design using Synopsys’ Design Compiler with a 28nm CMOS
+                10    1,024 99.46%   99.07%     5,632   19    4         standard cell library targeting a clock frequency of 700 MHz.
+Heisenberg      12    4,096 99.84%   99.72%    26,624   23    4            The power and area estimates, as well as the relative costs
+                14   16,384 99.95%   99.91%   122,880   27    4
+                                                                        of the DIAMOND DPE and STONNE PE, are summarized
+                8     256 99.61%     99.80%    256      1     4         in Table III. The DPE exhibits a modest area overhead of
+   TSP
+                15   32,768 99.99%   99.99%   32,768    1     4
+                                                                        1.05× and a higher power overhead of 1.30× compared to
+                8     256 96.58%     96.67%   2,240     17    4         the STONNE PE under the float32 configuration. This
+   TFIM
+                10   1,024 98.93%    98.97%   11,264    21    4
+                                                                        overhead primarily stems from the additional comparator logic
+                8     256 98.60%     97.46%     916     13    4         and more sophisticated control structures required to sup-
+Fermi-Hubbard
+                10   1,024 99.51%    99.17%    5,120    17    4
+                                                                        port sparse and index-aware operations. However, DIAMOND
+                8     256 98.24%     97.06%    1,152    15    3
+Q-Max-Cut
+                10   1,024 99.46%    99.07%    5,632    19    3
+                                                                        compensates for this overhead by significantly reducing total
+                                                                        execution cycles. As demonstrated in Section V-B, this trade-
+                8     256 99.27%     96.28%     480     19    4
+Bose-Hubbard
+                10   1,024 99.36%    98.39%    6,663    33    5         off leads to lower overall energy consumption for SpMSpM
+                                                                        workloads.
+
+   2) Baseline Accelerators: We compare DIAMOND against                   TABLE III: PE Evaluation of DIAMOND and STONNE.
+two state-of-the-art SpMSpM accelerators: SIGMA [36] and
+                                                                          Component                   Power (mW)          Area (µm2 )
+Flexagon [26]. Within Flexagon, we evaluate both the Outer
+                                                                          DPE                       4.3877 (130.77%)
+Product (OP) and Gustavson dataflows. Existing SpMSpM                        –   Multiplier              1.6354
+accelerators are limited in their ability to handle the extreme              –   Comparator              0.3247        7,585.20 (105.10%)
+sparsity patterns found in quantum simulation. Due to the dis-               –   FIFOs                   0.7568
+                                                                             –   Control & Others        1.6708
+tinct computational patterns of SpMSpM compared to sparse-
+dense matrix multiplication (SpMM) and dense matrix mul-                  STONNE PE                  3.3554 (100%)      7,214.26 (100%)
+tiplication (GEMM), we do not compare DIAMOND against
+SpMM or GEMM accelerators such as TPU [18], Sextans [38],               B. Performance and Energy for SpMSpM
+or Mentor [23].                                                            1) Performance: Fig. 10 shows the speedup of our DIA-
+   To ensure fair comparison, we standardize the total PE               MOND design over competing methods across seven quantum
+count across all architectures, setting it equal to the matrix          benchmarks. In MaxCut, DIAMOND achieves 28×, 62×, and
+dimension. While SIGMA and Flexagon use linear PE layouts               113× speedup over SIGMA, OP, and Gustavson, respectively.
+with 1-to-1 distribution and reduction networks, DIAMOND                For TSP, the speedups are 28×, 56×, and 106×. On the irregu-
+adopts a 2D DPE grid under the same PE budget. The grid                 lar Heisenberg workload, DIAMOND is 6× faster than SIGMA
+dimensions are derived from the number of active diagonals              and delivers 77×–88× gains over OP and Gustavson. For
+in matrices A and B, prioritizing B due to its static na-               TFIM, the improvements are 6.7×, 13×, and 24×. In Fermi-
+ture. When diagonal counts exceed feasible hardware limits              Hubbard and Q-Max-Cut, DIAMOND runs 4×–6× faster than
+(e.g., 10 qubits Bose-Hubbard contain 33 non-zero diagonals)            SIGMA and achieves 12×–33× speedups over OP and Gus-
+we adopt a balanced grid configuration (e.g., 32 × 32) to               tavson. For Bose-Hubbard, DIAMOND improves performance
+
+
+
+                                                                    9
+Normalized Runtime (cycles)   100                                                                                                                     6
+                                                                                                                        103                           5
+
+
+
+
+                                                                                                 Normalized Energy
+                              10
+                                                                                                                                                      4
+                               1                                                                                        102                           3
+                              0.1                                                                                       101                           2
+                                                                                                                                                      1
+                          0                                                                                             100
+                              10 12 P-8 10 12 FH-8 H-10 FIM-8 IM-10 BH-8 H-10 cut-8 ut-10                                                             0
+                          cut- cut- TS Heis- Heis- F    T TF             B ax- x-c                                      10 12 P-8 -8                    s-10 s-12 H-8 -10 H-8 -10 -10 ut-8 t-10
+                       Ma Max                                                                                       cut- cut- TS TFIM
+                         x
+                                                                          Q-m Q-ma
+                                                                                                                 Max Max                             Hei Hei B BH F FH TFIMmax-c ax-cu
+                                                                                                                                                                                Q- Q-m
+                                    SIGMA   OP-Flexagon   Gustavson-Flexagon   DIAMOND                                                               SIGMA           DIAMOND
+
+Fig. 10: Comparison of performance relative to SIGMA for                                         Fig. 11: Comparison of energy between SIGMA and DIA-
+Flexagon and DIAMOND across seven quantum workloads.                                             MOND across seven quantum workloads. Energy is normal-
+Performance is normalized to SIGMA.                                                              ized to SIGMA.
+
+by 1.4× over SIGMA and 8×–16× over OP and Gustavson.                                             and Bose-Hubbard-10, DIAMOND achieves savings of 5.86×,
+Notably, DIAMOND successfully completes all benchmarks,                                          4.26×, 1.92×, 1.59×, and 1.25×, respectively. Even when
+including those with 14+ qubits, while baseline designs fail to                                  matrix density increases, such as in the final iterations of
+finish within the 12-hour timeout.                                                               TFIM, DIAMOND maintains its advantage due to selective
+   These performance advantages stem from DIAMOND’s                                              DPE activation and reduced data movement in the early
+diagonal-centric design, which enables efficient DPE utiliza-                                    iterations.
+tion through diagonal grouping and selective activation. This                                       These results underscore the strength of DIAMOND’s
+improves data locality and minimizes unnecessary computa-                                        diagonal-aware scheduling: by activating only the necessary
+tion. For instance, in MaxCut and TSP, where matrices contain                                    DPEs and minimizing switching activity, memory accesses,
+only a single principal diagonal, DIAMOND computes just the                                      and redundant computation, DIAMOND delivers substantial
+principal diagonal of matrices, achieving substantial speedups                                   energy savings—especially in sparse scenarios common to
+over baselines that operate on non diagonal formats. As spar-                                    quantum simulation.
+sity decreases, such as in Heisenberg, Fermi-Hubbard, and Q-                                     C. Memory Footprint
+Max-Cut, the relative advantage of DIAMOND diminishes but
+remains meaningful due to its ability to align execution with                                       1) Storage Saving: Fig. 12 illustrates the substantial mem-
+active diagonal patterns. In contrast, SIGMA incurs substantial                                  ory savings enabled by the diagonal storage format, which
+overhead from dense bitmap representations and must allocate                                     motivates our DIAMOND accelerator. During Hamiltonian
+large storage regardless of sparsity.(2 GiB bitmap for TSP-15.)                                  simulation, matrix exponentiation is performed using Taylor
+Meanwhile, Outer Product and Gustavson methods traverse                                          series expansion, where the iteration depth is determined by
+entire rows or columns, leading to significant inefficiency                                      the matrix one-norm. As chained multiplications progress,
+when processing diagonal structured sparse matrices. DIA-                                        new diagonals accumulate due to offset additivity, grad-
+MOND avoids these pitfalls by confining computation strictly                                     ually increasing storage demand. Nevertheless, DIAMOND
+to nonzero diagonals.                                                                            preserves high compression in early iterations. In MaxCut
+   2) Energy: To evaluate energy efficiency, we compare                                          and TSP, where only the principal diagonal is active, mem-
+DIAMOND against SIGMA, the most cycle-efficient among                                            ory savings remain above 99% throughout. Even in denser
+the baselines. Flexagon is excluded from this comparison, as it                                  workloads like Heisenberg, Fermi-Hubbard, and Q-Max-Cut,
+shares the same simulation backend (STONNE) as SIGMA but                                         DIAMOND achieves 60%–98% savings in early steps and
+performs worse than SIGMA on every benchmark. Including                                          retains 31%–48% at convergence. Bose-Hubbard and TFIM
+it offers no additional insight and would not affect the overall                                 also see 67%–87% early savings, though benefits taper off
+energy analysis. Focusing on SIGMA enables a fair and                                            as the diagonal count increases. Crucially, by storing only
+representative comparison of per-operation energy cost.                                          active diagonals, DIAMOND operates independently of full
+   Fig. 11 presents energy reductions achieved by DIAMOND                                                               100
+                                                                                                 Memory Reduction (%)
+
+
+
+
+over SIGMA across various 8, 10, and 12 qubit quantum                                                                   75
+workloads. For single-diagonal problems such as MaxCut-10                                                               50
+and TSP-8, DIAMOND activates only a minimal 1 × 4 grid
+                                                                                                                        25
+(4 for pipelining), in contrast to SIGMA’s use of a full 1024-
+PE array, leading to energy savings of 1,158× and 290× for                                                          0
+                                                                                                                          0 2 4 -8 5 0 2 4 -8 0 -8 0 -8 0 -8 0
+                                                                                                                    c ut-1 cut-1 cut-1 TSP TSP-1Heis-1Heis-1Heis-1 FH FH-1ax-cutx-cut-1 TFIM TFIM-1 BH BH-1
+the two benchmarks. At 12 qubits, DIAMOND continues to                                                           Max Max Max                                           Q-m Q-ma
+outperform SIGMA with a 4630× saving on MaxCut-12. In
+                                                                                                                                       Iter 1         Iter 2        Iter 3          Iter 4         Iter 5
+multi-diagonal cases that are still sparse in early iterations like
+TFIM-10, Q-Max-Cut-10, Fermi-Hubbard-10, Heisenberg-10,                                                                   Fig. 12: Storage Saving on Hamiltonian Simulation.
+
+
+
+                                                                                            10
+Cache Hit Rate (%)   100                                                              matrices into partial products but incur heavy off-chip traffic.
+                     80                                                               SpArch [49] scales better with high-radix mergers and com-
+                     60                                                               pact representations, yet complex mergers struggle at extreme
+                     40                                                               sparsity. ExTensor [14] uses a hybrid outer/inner dataflow for
+                     20                                                               sparse tensor algebra but, like its predecessors, fails to exploit
+                      0                                                               structured sparsity.
+                                                                                         Inner-product designs such as SIGMA [36] maintain com-
+                                P-8
+
+                          He 5
+                          He 0
+                          He 2
+                                 14
+                                 -8
+                        ma 10
+
+                         x-c 8
+
+                           TF 0
+                          TF -8
+                                -10
+                                 -8
+                                -10
+                        Ma t-10
+                        Ma t-12
+
+                                   4
+
+                              P-1
+
+                                 1
+                                 1
+
+
+
+
+                       ma t-
+                                 1
+                               t-1
+
+
+
+
+                              FH
+
+
+
+
+                              IM
+
+
+                             BH
+                             is-
+                             is-
+                             is-
+
+
+                      Q- FH-
+
+
+                             ut-
+                     Q- x-cu
+                            TS
+
+
+
+
+                            IM
+
+
+                            BH
+                          xcu
+                          xcu
+                          xcu
+
+
+                           TS
+
+                                                                                      pute utilization with bitmap intersections but degrade on high-
+            Ma
+
+
+
+
+                                                                                      dimensional matrices. Row-wise designs based on Gustavson’s
+                           Fig. 13: Cache hit rate using a 2-set, 2-way cache.        algorithm, e.g., Gamma [47], reduce off-chip traffic by accu-
+                                                                                      mulating full rows. Flexagon [26] adds reconfigurability across
+matrix dimensions, enabling it to handle much larger matrices                         inner/outer/Gustavson dataflows but still treats diagonal ma-
+than conventional accelerators with fixed-size dense buffers or                       trices like any other sparse operand. CSR-based accelerators
+row/column-based sparsity. This diagonal-aware compression                            such as MatRaptor [39] similarly target general sparsity; at
+is key to both memory efficiency and scalability across quan-                         high sparsity, compressed formats lose storage benefit and
+tum workloads.                                                                        induce irregular memory access, reducing arithmetic intensity
+   2) Data Cache Locality: After applying the blocking strat-                         and stalling SIMD pipelines.
+egy in DIAMOND, cache hit rates exceed 90% across all multi-                             Architectures such as FEASTA [27] extend beyond SpM-
+diagonal benchmarks, as shown in Fig. 13. Denser workloads                            SpM to general sparse tensor algebra through iterative fiber
+such as Heisenberg-10/12/14 (hit rates of 98.0%, 99.4%,                               joins, but their flexibility sacrifices specialization and, like
+99.6%), Fermi-Hubbard-10 (96.1%), TFIM-10 (92.3%), Bose-                              the above designs, ignores diagonal structure. Accelerators
+Hubbard-10 (93.9%), and Q-Max-Cut-10 (94.6%) benefit sub-                             for Sparse-Dense matrix multiplication (SpMM) or dense
+stantially from blocking. This strategy maps each diagonal                            matrices, e.g., TPU [18], Sextans [38], and Mentor [23], target
+group to a dedicated cache line and completes all operations                          different computational patterns. Likewise, high-performance
+before switching, thereby maximizing temporal locality and                            quantum simulators and FPGA-based emulators focus on gates
+minimizing evictions.                                                                 or state-vectors, not sparse matrix kernels in Hamiltonian
+   In contrast, MaxCut and TSP benchmarks contain only a                              evolution.
+single diagonal; blocking has no effect, and their hit rates                             To our knowledge, no prior work optimizes for the diagonal
+remain around 58.3%, reflecting only compulsory misses.                               sparsity common in Hermitian matrices of Hamiltonian-based
+Overall, the results validate that blocking is particularly effec-                    quantum simulations. Our architecture, DIAMOND, is the first
+tive for workloads with numerous diagonals and dense reuse,                           SpMSpM accelerator to be diagonal-aware. By transforming
+significantly boosting cache efficiency in DIAMOND.                                   diagonal and near-diagonal matrices into dense systolic-array
+                                                                                      computations, DIAMOND removes costly fiber intersections
+D. Analysis                                                                           and merges, significantly improving utilization and perfor-
+   DIAMOND excels when nonzeros are concentrated in a                                 mance. Existing accelerators treat all sparsity uniformly and
+few dense diagonals near the principal axis, enabling compact                         thus cannot exploit structured diagonality.
+mapping to the DPE grid with high data reuse, minimal
+routing, and consistent utilization, even as matrix dimensions                                              VII. C ONCLUSION
+grow. Unlike traditional architectures that scale with matrix                            In this paper, we proposed DIAMOND, a co-designed sys-
+size, DIAMOND decouples performance from overall dimen-                               tolic accelerator for SpMSpM operating in diagonal space.
+sionality by operating only on active diagonals. However,                             By feeding only the nonzero diagonals in diagonal-oriented
+performance diminishes when nonzeros spread across many                               formats, DIAMOND decouples performance from matrix di-
+distant diagonals, particularly near matrix corners, which leads                      mensions and scales with diagonal sparsity. Its Diagonal
+to fragmented compute regions, lower reuse, and increased idle                        Processing Elements (DPEs) support index matching, data
+cycles. In Hamiltonian simulation, the diagonal count tends                           holding, data forwarding, and multiplication, enabling efficient
+to grow due to offset additivity, as shown in Fig. 12, but                            execution of structured quantum workloads. Evaluated on
+early iterations typically remain compact. These early stages                         benchmarks from HamLib, DIAMOND achieves average per-
+dominate both runtime and energy, allowing DIAMOND to                                 formance improvements of 10.26×, 33.58×, and 53.15× over
+maintain efficiency before diagonal spread becomes a limiting                         SIGMA, Outer Product, and Gustavson-style baselines (the
+factor.                                                                               latter two from Flexagon) with peak speedups up to 127.03×
+                                                                                      while reducing energy consumption by an average of 471.55×
+                                         VI. R ELATED W ORK                           and up to 4630.58× compared to SIGMA. These results
+  SpMSpM is a fundamental primitive in machine learning,                              demonstrate that diagonal-centric reformulation, combined
+graph analytics, and scientific computing. Several accelerators                       with hardware-aware co-design, which provides a scalable
+have been proposed to address irregular sparsity. Early outer                         and energy-efficient solution for sparse matrix computation
+product designs such as OuterSPACE [34] partition output                              in quantum simulation and beyond.
+
+
+
+                                                                                 11
+                               R EFERENCES                                                     Reports, vol. 9, no. 1, Jul. 2019. [Online]. Available: http:
+                                                                                               //dx.doi.org/10.1038/s41598-019-47174-9
+ [1] M. Amy, D. Maslov, M. Mosca, and M. Roetteler, “A meet-in-the-                     [18]   N. P. Jouppi, C. Young, N. Patil, D. Patterson, G. Agrawal, R. Bajwa,
+     middle algorithm for fast synthesis of depth-optimal quantum circuits,”                   S. Bates, S. Bhatia, N. Boden, A. Borchers, R. Boyle, P.-l. Cantin,
+     IEEE Transactions on Computer-Aided Design of Integrated Circuits                         C. Chao, C. Clark, J. Coriell, M. Daley, M. Dau, J. Dean, B. Gelb,
+     and Systems, vol. 38, no. 6, pp. 1226–1236, 2019.                                         T. V. Ghaemmaghami, R. Gottipati, W. Gulland, R. Hagmann, C. R.
+ [2] F. Arute, K. Arya, R. Babbush, D. Bacon, J. C. Bardin, R. Barends,                        Ho, D. Hogberg, J. Hu, R. Hundt, D. Hurt, J. Ibarz, A. Jaffey,
+     R. Biswas, S. Boixo, F. G. S. L. Brandao, D. A. Buell, B. Burkett,                        A. Jaworski, A. Kaplan, H. Khaitan, D. Killebrew, A. Koch, N. Kumar,
+     Y. Chen, Z. Chen, B. Chiaro, R. Collins, W. Courtney, A. Dunsworth,                       S. Lacy, J. Laudon, J. Law, D. Le, C. Leary, Z. Liu, K. Lucke,
+     E. Farhi, B. Foxen, A. Fowler, C. Gidney, M. Giustina, R. Graff,                          A. Lundin, G. MacKean, A. Maggiore, M. Mahony, K. Miller, R. Na-
+     K. Guerin, S. Habegger, M. P. Harrigan, M. J. Hartmann, A. Ho,                            garajan, R. Narayanaswami, R. Ni, K. Nix, T. Norrie, M. Omernick,
+     M. Hoffmann, T. Huang, T. S. Humble, S. V. Isakov, E. Jeffrey, Z. Jiang,                  N. Penukonda, A. Phelps, J. Ross, M. Ross, A. Salek, E. Samadiani,
+     D. Kafri, K. Kechedzhi, J. Kelly, P. V. Klimov, S. Knysh, A. Korotkov,                    C. Severn, G. Sizikov, M. Snelham, J. Souter, D. Steinberg, A. Swing,
+     F. Kostritsa, D. Landhuis, M. Lindmark, E. Lucero, D. Lyakh, S. Mandrà,                  M. Tan, G. Thorson, B. Tian, H. Toma, E. Tuttle, V. Vasudevan, R. Wal-
+     J. R. McClean, M. McEwen, A. Megrant, X. Mi, K. Michielsen,                               ter, W. Wang, E. Wilcox, and D. H. Yoon, “In-datacenter performance
+     M. Mohseni, J. Mutus, O. Naaman, M. Neeley, C. Neill, M. Y. Niu,                          analysis of a tensor processing unit,” SIGARCH Comput. Archit. News,
+     E. Ostby, A. Petukhov, J. C. Platt, C. Quintana, E. G. Rieffel, P. Roushan,               vol. 45, no. 2, p. 1–12, Jun. 2017.
+     N. C. Rubin, D. Sank, K. J. Satzinger, V. Smelyanskiy, K. J. Sung, M. D.           [19]   J. Koch, T. M. Yu, J. Gambetta, A. A. Houck, D. I. Schuster, J. Majer,
+     Trevithick, A. Vainsencher, B. Villalonga, T. White, Z. J. Yao, P. Yeh,                   A. Blais, M. H. Devoret, S. M. Girvin, and R. J. Schoelkopf, “Charge-
+     A. Zalcman, H. Neven, and J. M. Martinis, “Quantum supremacy using                        insensitive qubit design derived from the cooper pair box,” Physical
+     a programmable superconducting processor,” Nature, vol. 574, no. 7779,                    Review A, vol. 76, no. 4, p. 042319, 2007.
+     pp. 505–510, Oct. 2019.                                                            [20]   H. T. Kung and C. E. Leiserson, “Systolic arrays (for vlsi),” in Sparse
+ [3] A. Buluç and J. R. Gilbert, “Parallel sparse matrix-matrix multiplication                Matrix Proceedings 1978, vol. 1. Society for industrial and applied
+     and indexing: Implementation and experiments,” SIAM Journal on                            mathematics Philadelphia, PA, USA, 1979, pp. 256–282.
+     Scientific Computing, vol. 34, no. 4, pp. C170–C191, 2012.                         [21]   A. Li, B. Fang, C. Granade, G. Prawiroatmodjo, B. Heim, M. Roet-
+ [4] Y.-H. Chen, T. Krishna, J. S. Emer, and V. Sze, “Eyeriss: An energy-                      teler, and S. Krishnamoorthy, “Sv-sim: scalable pgas-based state vector
+     efficient reconfigurable accelerator for deep convolutional neural net-                   simulation of quantum circuits,” in Proceedings of the International
+     works,” IEEE Journal of Solid-State Circuits, vol. 52, no. 1, pp. 127–                    Conference for High Performance Computing, Networking, Storage and
+     138, 2017.                                                                                Analysis, 2021, pp. 1–14.
+ [5] S. Chundury, J. Li, I.-S. Suh, and F. Mueller, “Diaq: Efficient
+                                                                                        [22]   J. Li, G. Tan, M. Chen, and N. Sun, “Smat: An input adaptive auto-
+     state-vector quantum simulation,” 2024. [Online]. Available: https:
+                                                                                               tuner for sparse matrix-vector multiplication,” in Proceedings of the
+     //arxiv.org/abs/2405.01250
+                                                                                               34th ACM SIGPLAN conference on Programming language design and
+ [6] P. Das, C. A. Pattison, S. Manne, D. M. Carmean, K. M. Svore,                             implementation, 2013, pp. 117–126.
+     M. Qureshi, and N. Delfosse, “Afs: Accurate, fast, and scalable error-
+                                                                                        [23]   X. Lu, J. Fang, L. Peng, C. Huang, Z. Du, Y. Zhao, and Z. Wang, “Men-
+     decoding for fault-tolerant quantum computers,” in 2022 IEEE Interna-
+                                                                                               tor: A memory-efficient sparse-dense matrix multiplication accelerator
+     tional Symposium on High-Performance Computer Architecture (HPCA),
+                                                                                               based on column-wise product,” ACM Transactions on Architecture and
+     2022, pp. 259–273.
+                                                                                               Code Optimization, vol. 21, no. 4, pp. 1–25, 2024.
+ [7] C. Developers, “Cirq: A python framework for creating, editing, and
+     invoking noisy intermediate scale quantum (nisq) circuits,” Mar. 2021.             [24]   C. Monroe and J. Kim, “Scaling the ion trap quantum processor,”
+     [Online]. Available: https://cirq.readthedocs.io                                          Science, vol. 339, no. 6124, pp. 1164–1169, 2013.
+ [8] E. Farhi, J. Goldstone, and S. Gutmann, “A quantum approximate                     [25]   A. Montanaro, “Quantum algorithms: An overview,” npj Quantum
+     optimization algorithm,” arXiv preprint arXiv:1411.4028, 2014.                            Information, vol. 2, no. 1, p. 15023, 2016.
+ [9] M. Freedman, A. Kitaev, M. Larsen, and Z. Wang, “Topological quantum               [26]   F. Muñoz Martı́nez, R. Garg, M. Pellauer, J. L. Abellán, M. E. Aca-
+     computation,” Bulletin of the American Mathematical Society, vol. 40,                     cio, and T. Krishna, “Flexagon: A multi-dataflow sparse-sparse matrix
+     no. 1, pp. 31–38, 2003.                                                                   multiplication accelerator for efficient dnn processing,” in Proceedings
+[10] J. Gao, Y. Xia, R. Yin, and G. He, “Adaptive diagonal sparse matrix-                      of the 28th ACM International Conference on Architectural Support
+     vector multiplication on gpu,” Journal of Parallel and Distributed                        for Programming Languages and Operating Systems, Volume 3, ser.
+     Computing, vol. 157, pp. 287–302, 2021.                                                   ASPLOS 2023. New York, NY, USA: Association for Computing
+[11] D. J. Griffiths and D. F. Schroeter, Introduction to Quantum Mechanics,                   Machinery, 2023, p. 252–265.
+     3rd ed. Cambridge University Press, 2018.                                          [27]   F. Muñoz Martı́nez, R. Garg, M. Pellauer, J. L. Abellán, M. E.
+[12] T. Häner, D. S. Steiger, K. M. Svore, and M. Troyer, “High performance                   Acacio, and T. Krishna, “Flexagon: A multi-dataflow sparse-
+     emulation of quantum circuits,” in Proceedings of the International                       sparse matrix multiplication accelerator for efficient dnn processing,”
+     Conference for High Performance Computing, Networking, Storage, and                       in Proceedings of the 28th ACM International Conference on
+     Analysis (SC), 2016, pp. 1–10.                                                            Architectural Support for Programming Languages and Operating
+[13] X. He, S. Pal, A. Amarnath, S. Feng, D.-H. Park, A. Rovinski,                             Systems, Volume 3, ser. ASPLOS 2023. New York, NY, USA:
+     H. Ye, Y. Chen, R. Dreslinski, and T. Mudge, “Sparse-tpu: adapting                        Association for Computing Machinery, 2023, p. 252–265. [Online].
+     systolic arrays for sparse matrices,” in Proceedings of the 34th ACM                      Available: https://doi.org/10.1145/3582016.3582069
+     International Conference on Supercomputing, ser. ICS ’20. New York,                [28]   F. Muñoz-Martı́nez, J. L. Abellán, M. E. Acacio, and T. Krishna,
+     NY, USA: Association for Computing Machinery, 2020. [Online].                             “Stonne: Enabling cycle-level microarchitectural simulation for dnn
+     Available: https://doi.org/10.1145/3392717.3392751                                        inference accelerators,” in 2021 IEEE International Symposium on
+[14] K. Hegde, H. Asghari-Moghaddam, M. Pellauer, N. Crago, A. Jaleel,                         Workload Characterization (IISWC). IEEE, 2021, pp. 201–213.
+     E. Solomonik, J. Emer, and C. W. Fletcher, “Extensor: An accelerator for           [29]   P. Murali, J. M. Baker, A. Javadi-Abhari, F. T. Chong, and M. Martonosi,
+     sparse tensor algebra,” in Proceedings of the 52nd Annual IEEE/ACM                        “Noise-adaptive compiler mappings for noisy intermediate-scale
+     International Symposium on Microarchitecture, ser. MICRO ’52. New                         quantum computers,” in Proceedings of the Twenty-Fourth International
+     York, NY, USA: Association for Computing Machinery, 2019, p.                              Conference on Architectural Support for Programming Languages
+     319–333. [Online]. Available: https://doi.org/10.1145/3352460.3358275                     and Operating Systems, ser. ASPLOS ’19. New York, NY, USA:
+[15] A. Javadi-Abhari, M. Treinish, K. Krsulich, C. J. Wood, J. Lishman,                       Association for Computing Machinery, 2019, p. 1015–1029. [Online].
+     J. Gacon, S. Martiel, P. D. Nation, L. S. Bishop, A. W. Cross, B. R.                      Available: https://doi.org/10.1145/3297858.3304075
+     Johnson, and J. M. Gambetta, “Quantum computing with Qiskit,” 2024.                [30]   Y. Nagasaka, S. Matsuoka, A. Azad, and A. Buluç, “High-performance
+[16] J. R. Johansson, P. D. Nation, and F. Nori, “Qutip 2: A python                            sparse matrix-matrix products on intel knl and multicore architectures,”
+     framework for the dynamics of open quantum systems,” Computer                             in Workshop Proceedings of the 47th International Conference on
+     Physics Communications, vol. 184, no. 4, pp. 1234–1240, 2013.                             Parallel Processing, 2018, pp. 1–10.
+[17] T. Jones, A. Brown, I. Bush, and S. C. Benjamin, “Quest and                        [31]   Y. Nagasaka, S. Matsuoka, A. Azad, and A. Buluç, “Performance
+     high performance simulation of quantum computers,” Scientific                             optimization, modeling and analysis of sparse matrix-matrix products
+
+
+
+
+                                                                                   12
+       on multi-core and many-core processors,” Parallel Computing, vol. 90,                  Press, 2024, p. 750–764. [Online]. Available: https://doi.org/10.1109/
+       p. 102545, 2019.                                                                       MICRO61859.2024.00061
+[32]   K. Okuda and S. W. Song, “Algoritmo de multiplicação de matrizes para           [47] G. Zhang, N. Attaluri, J. S. Emer, and D. Sanchez, “Gamma: leveraging
+       implementação em vlsi,” Anais, 1986.                                                 gustavson’s algorithm to accelerate sparse matrix multiplication,”
+[33]   R. Orús, “Tensor networks for complex quantum systems,” Nature                        in Proceedings of the 26th ACM International Conference on
+       Reviews Physics, vol. 1, pp. 538–550, 2019.                                            Architectural Support for Programming Languages and Operating
+[34]   S. Pal, J. Beaumont, D.-H. Park, A. Amarnath, S. Feng, C. Chakrabarti,                 Systems, ser. ASPLOS ’21. New York, NY, USA: Association
+       H.-S. Kim, D. Blaauw, T. Mudge, and R. Dreslinski, “Outerspace:                        for Computing Machinery, 2021, p. 687–701. [Online]. Available:
+       An outer product based sparse matrix multiplication accelerator,” in                   https://doi.org/10.1145/3445814.3446702
+       2018 IEEE International Symposium on High Performance Computer                    [48] H. Zhang, K. Yin, A. Wu, H. Shapourian, A. Shabani, and Y. Ding,
+       Architecture (HPCA), 2018, pp. 724–736.                                                “Mech: Multi-entry communication highway for superconducting
+[35]   J. Preskill, “Quantum computing in the nisq era and beyond,” Quantum,                  quantum chiplets,” in Proceedings of the 29th ACM International
+       vol. 2, p. 79, 2018.                                                                   Conference on Architectural Support for Programming Languages and
+[36]   E. Qin, A. Samajdar, H. Kwon, V. Nadella, S. Srinivasan, D. Das,                       Operating Systems, Volume 2, ser. ASPLOS ’24. New York, NY, USA:
+       B. Kaul, and T. Krishna, “Sigma: A sparse and irregular gemm ac-                       Association for Computing Machinery, 2024, p. 699–714. [Online].
+       celerator with flexible interconnects for dnn training,” in 2020 IEEE                  Available: https://doi.org/10.1145/3620665.3640377
+       International Symposium on High Performance Computer Architecture                 [49] Z. Zhang, H. Wang, S. Han, and W. J. Dally, “Sparch: Efficient ar-
+       (HPCA), 2020, pp. 58–70.                                                               chitecture for sparse matrix multiplication,” in 2020 IEEE International
+[37]   N. P. Sawaya, D. Marti-Dafcik, Y. Ho, D. P. Tabor, D. E. B. Neira,                     Symposium on High Performance Computer Architecture (HPCA), 2020,
+       A. B. Magann, S. Premaratne, P. Dubey, A. Matsuura, N. Bishop,                         pp. 261–274.
+       W. A. d. Jong, S. Benjamin, O. Parekh, N. Tubman, K. Klymko,
+       and D. Camps, “HamLib: A library of Hamiltonians for benchmarking
+       quantum algorithms and hardware,” Quantum, vol. 8, p. 1559, Dec.
+       2024. [Online]. Available: https://doi.org/10.22331/q-2024-12-11-1559
+[38]   L. Song, Y. Chi, A. Sohrabizadeh, Y.-k. Choi, J. Lau, and J. Cong,
+       “Sextans: A streaming accelerator for general-purpose sparse-matrix
+       dense-matrix multiplication,” in Proceedings of the 2022 ACM/SIGDA
+       International Symposium on Field-Programmable Gate Arrays, 2022,
+       pp. 65–77.
+[39]   N. Srivastava, H. Jin, J. Liu, D. Albonesi, and Z. Zhang, “Matraptor:
+       A sparse-sparse matrix multiplication accelerator based on row-wise
+       product,” in 2020 53rd Annual IEEE/ACM International Symposium on
+       Microarchitecture (MICRO), 2020, pp. 766–780.
+[40]   S. S. Tannu and M. K. Qureshi, “Not all qubits are created equal:
+       A case for variability-aware policies for nisq-era quantum computers,”
+       in Proceedings of the Twenty-Fourth International Conference on
+       Architectural Support for Programming Languages and Operating
+       Systems, ser. ASPLOS ’19. New York, NY, USA: Association
+       for Computing Machinery, 2019, p. 987–999. [Online]. Available:
+       https://doi.org/10.1145/3297858.3304007
+[41]   P. Virtanen, R. Gommers, T. E. Oliphant, M. Haberland, T. Reddy,
+       D. Cournapeau, E. Burovski, P. Peterson, W. Weckesser, J. Bright, S. J.
+       van der Walt, M. Brett, J. Wilson, K. J. Millman, N. Mayorov, A. R. J.
+       Nelson, E. Jones, R. Kern, E. Larson, C. J. Carey, İ. Polat, Y. Feng,
+       E. W. Moore, J. VanderPlas, D. Laxalde, J. Perktold, R. Cimrman,
+       I. Henriksen, E. A. Quintero, C. R. Harris, A. M. Archibald, A. H.
+       Ribeiro, F. Pedregosa, P. van Mulbregt, and S. . Contributors, “Scipy 1.0:
+       Fundamental algorithms for scientific computing in python,” in Proc.
+       19th Python in Science Conference (SciPy), M. Aguirre, C. Calloway,
+       D. Lippa, D. Niederhut, and D. Shupe, Eds. IEEE, 2020, pp. 1–22.
+[42]   S. Vittal, P. Das, and M. Qureshi, “Astrea: Accurate quantum
+       error-decoding via practical minimum-weight perfect-matching,” in
+       Proceedings of the 50th Annual International Symposium on Computer
+       Architecture, ser. ISCA ’23. New York, NY, USA: Association for
+       Computing Machinery, 2023. [Online]. Available: https://doi.org/10.
+       1145/3579371.3589037
+[43]   A. Wu, G. Li, H. Zhang, G. G. Guerreschi, Y. Ding, and Y. Xie, “A
+       synthesis framework for stitching surface code with superconducting
+       quantum devices,” in Proceedings of the 49th Annual International
+       Symposium on Computer Architecture, ser. ISCA ’22. New York,
+       NY, USA: Association for Computing Machinery, 2022, p. 337–350.
+       [Online]. Available: https://doi.org/10.1145/3470496.3527381
+[44]   Z. Xie, G. Tan, W. Liu, and N. Sun, “IA-SpGEMM: An input-aware
+       auto-tuning framework for parallel sparse matrix-matrix multiplication,”
+       in Proceedings of the ACM International Conference on Supercomput-
+       ing, 2019, pp. 94–105.
+[45]   D. Yao, S. Zhao, T. Liu, G. Wu, and H. Jin, “ApSpGEMM: Accelerat-
+       ing large-scale spgemm with heterogeneous collaboration and adaptive
+       panel,” ACM Transactions on Architecture and Code Optimization,
+       vol. 22, no. 1, pp. 1–23, 2025.
+[46]   K. Yin, X. Fang, T. S. Humble, A. Li, Y. Shi, and Y. Ding,
+       “Surf-deformer: Mitigating dynamic defects on surface code via
+       adaptive deformation,” in Proceedings of the 2024 57th IEEE/ACM
+       International Symposium on Microarchitecture, ser. MICRO ’24. IEEE
+
+
+
+
+                                                                                    13
+

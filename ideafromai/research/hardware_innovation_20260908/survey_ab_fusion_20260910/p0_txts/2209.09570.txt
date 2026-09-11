@@ -1,0 +1,1463 @@
+                                                                 Adaptable Butterfly Accelerator for Attention-based NNs via
+                                                                            Hardware and Algorithm Co-design
+
+
+                                                   Hongxiang Fan                                Thomas Chau                              Stylianos I. Venieris                         Royson Lee
+                                              Imperial College London                        Samsung AI Center                           Samsung AI Center                       University of Cambridge
+                                                    London, UK                                 Cambridge, UK                               Cambridge, UK                             Cambridge, UK
+                                              h.fan17@imperial.ac.uk                     thomas.chau@samsung.com                      s.venieris@samsung.com                        dsrl2@cam.ac.uk
+
+                                               Alexandros Kouris                            Wayne Luk                                Nicholas D. Lane                         Mohamed S. Abdelfattah
+arXiv:2209.09570v1 [cs.AR] 20 Sep 2022
+
+
+
+
+                                               Samsung AI Center                      Imperial College London                      Samsung AI Center &                           Cornell University
+                                                 Cambridge, UK                              London, UK                            University of Cambridge                    New York, NY, United States
+                                             a.kouris@samsung.com                      w.luk@imperial.ac.uk                            Cambridge, UK                           mohamed@cornell.edu
+                                                                                                                                  nic.lane@samsung.com
+
+
+
+
+                                            Abstract—Attention-based neural networks have become                                                                      Dominated by linear layers
+                                         pervasive in many AI tasks. Despite their excellent algorithmic
+                                         performance, the use of the attention mechanism and feed-
+                                         forward network (FFN) demands excessive computational and
+                                         memory resources, which often compromises their hardware
+                                         performance. Although various sparse variants have been
+                                         introduced, most approaches only focus on mitigating the                                                                               Dominated by attention
+                                         quadratic scaling of attention on the algorithm level, without
+                                         explicitly considering the efficiency of mapping their methods
+                                         on real hardware designs. Furthermore, most efforts only
+                                         focus on either the attention mechanism or the FFNs but
+                                                                                                                                     Figure 1. FLOPs percentage of attention and linear layers with different
+                                         without jointly optimizing both parts, causing most of the                                  input sequence length.
+                                         current designs to lack scalability when dealing with different
+                                         input lengths. This paper systematically considers the sparsity
+                                         patterns in different variants from a hardware perspective.                                 algorithmic performance in various natural language pro-
+                                         On the algorithmic level, we propose FABNet, a hardware-
+                                         friendly variant that adopts a unified butterfly sparsity pattern                           cessing [3], [4] and computer vision [5] applications. How-
+                                         to approximate both the attention mechanism and the FFNs.                                   ever, the advances of attention-based NNs come at a cost:
+                                         On the hardware level, a novel adaptable butterfly accelerator                              the use of attention and linear layers significantly increases
+                                         is proposed that can be configured at runtime via dedicated                                 the computational load, resulting in a large overhead on
+                                         hardware control to accelerate different butterfly layers using                             their speed and power consumption [6]. Figure 1 shows
+                                         a single unified hardware engine. On the Long-Range-Arena
+                                         dataset, FABNet achieves the same accuracy as the vanilla                                   an operation breakdown on four mainstream attention-based
+                                         Transformer while reducing the amount of computation by                                     models. For short input sequences, linear layers occupy over
+                                         10 ∼ 66× and the number of parameters 2 ∼ 22×. By jointly                                   80% of operation counts. As the input sequence increases,
+                                         optimizing the algorithm and hardware, our FPGA-based                                       the computation is gradually dominated by the attention
+                                         butterfly accelerator achieves 14.2 ∼ 23.2× speedup over state-                             layer. Since both attention and linear layers are memory- and
+                                         of-the-art accelerators normalized to the same computational
+                                         budget. Compared with optimized CPU and GPU designs on                                      compute-intensive, it is challenging to achieve high hardware
+                                         Raspberry Pi 4 and Jetson Nano, our system is up to 273.8×                                  performance on attention-based NNs across input sequences
+                                         and 15.1× faster under the same power budget.                                               of various lengths.
+                                           Keywords-Adaptable Butterfly Accelerator, Attention-based                                    So far, various approaches and designs have been intro-
+                                         Neural Networks, Butterfly Sparsity, Algorithm and Hardware                                 duced to accelerate attention-based DNNs. On the algorith-
+                                         Co-Design                                                                                   mic level, several efficient sparse variants have attempted
+                                                                                                                                     to reduce the computational complexity [7]–[13]. However,
+                                                                     I. I NTRODUCTION                                                most of these approaches only focus on reducing the number
+                                            Recent years have witnessed a great success of attention-                                of parameters and operations without considering the real
+                                         based neural networks (NNs) on many AI tasks [1]. The                                       hardware performance, such as end-to-end latency. Further-
+                                         attention mechanism [2] that captures long-range informa-                                   more, the hardware efficiency of implementing these sparsity
+                                         tion from sequences of data has demonstrated its excellent                                  patterns on real hardware designs is often overlooked. On
+
+                                                 © 2022 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or future media, including
+                                           reprinting/republishing this material for advertising or promotional purposes, creating new collective works, for resale or redistribution to servers or lists, or reuse of any
+                                               copyrighted component of this work in other works. This work has been accepted at the IEEE/ACM International Symposium on Microarchitecture (MICRO’22).
+                                                                                               Table I
+the hardware level, although various highly-optimized accel-        C OMPARISON OF EXISTING ACCELERATORS FOR ATTENTION - BASED
+erators (Table I) have been proposed [6], [14]–[20], several        NN S IN TERMS OF SPARSITY REGULARITY, PATTERN AND LOCATION .
+issues still remain unresolved:
+                                                                                                                    Sparsity    Sparsity
+                                                                       Accelerators       Pattern Regularity
+•   Most of current accelerators only focus on optimizing                                                           Pattern     Location
+
+    either FFNs [19] or the attention mechanism [6], [14]–               A3 [14]              unstructured
+                                                                        SpAtten [6]     coarse-grained structured
+    [18]. Without jointly optimizing both parts, these hardware
+                                                                        Sanger [15]    load-balanced unstructured
+    designs lack scalability when accelerating the end-to-end                                                       dynamic     attention
+                                                                       Energon [16]           unstructured
+    attention-based NNs with different input lengths.
+                                                                        ELSA [17]             unstructured
+•   While optimizing the attention mechanism, most of the
+                                                                        DOTA [18]             unstructured
+    existing designs dynamically detect and prune the redun-           FTRANS [19]               None                static       FFN
+    dant computation at runtime to achieve high sparsity on           EdgeBERT [20]              None               dynamic       layer
+    specific datasets and networks. However, the generality of                                                                 attention &
+                                                                        Our work         fine-grained structured     static
+    these dynamic approaches needs to be further tested as                                                                         FFN
+
+    their performance gain may vary across different datasets
+    and network architectures.
+•   The sparsity patterns introduced by these dynamic ap-                       II. BACKGROUND AND M OTIVATION
+    proaches are often unstructured, requiring dynamic hard-       A. Attention-Based Neural Networks
+    ware controllers to exploit sparsity. Such complicated con-
+                                                                      Based on their network structure, attention-based NNs
+    trollers often contain larger numbers of clocking elements,
+                                                                   can be classified into three categories: i) encoder-decoder,
+    and their hardware overhead increases as the transistor size
+                                                                   ii) encoder-only, and iii) decoder-only networks. The
+    reduces [21]. As such, the performance or energy gain of
+                                                                   encoder-decoder NNs are mainly designed for sequence-
+    these dynamic methods may be diminished.
+                                                                   to-sequence tasks, such as machine translation [2]. One
+   To address the aforementioned issues, this paper adopts         of the most widely used encoder-decoder network is the
+butterfly sparsity to accelerate attention-based models with       Transformer, which is constructed by a stack of encoder
+three novel aspects (Table I): i) fine-grained structured regu-    and decoder blocks. Figure 2 illustrates the structure, where
+larity, which possesses regular data accesses to optimize both     Nl , Dhid and Rfft represent input length, hidden size and
+memory and compute efficiency; ii) static sparsity pattern,        FFN expand ratio respectively. Each encoder starts with a
+which avoids the need of designing a dynamic controller            multi-head attention module, followed by a feed-forward
+in hardware; iii) sparsity exploitation on both attention and      network (FFN) consisting of two linear (fully-connected)
+linear layers, which allows scalable end-to-end acceleration       layers. Finally, residual addition [22] and layer normalization
+of attention-based NNs. We therefore propose FABNet, a             (LN) [23] are used after FFN. Within each multi-head
+hardware-friendly model for FFT, Attention and Butterfly-          attention, the inputs are first mapped to query (Q), key (K)
+Net. To fully exploit the sparsity in hardware, we propose         and value (V) matrices through three different linear layers.
+an adaptable butterfly accelerator that can be configured          The query matrix is then multiplied with KT , followed by a
+at runtime via dedicated hardware control to accelerate            softmax operation to get the score matrix (S). The generated
+different layers using a single unified engine, significantly      S is multiplied with V and the resultant matrix will flow
+improving hardware efficiency. To push the performance             into another linear layer, which generates the final output
+limit, we jointly optimize the model and hardware via a            matrix of the multi-head attention. Similar to the encoder,
+co-design approach. Overall, this work makes the following         the decoder employs two multi-head attention modules and
+contributions:                                                     one FFN, where the difference is that the inputs of the query
+                                                                   and key matrices in the second attention module come from
+•   A hardware-friendly attention-based model, FABNet, that
+                                                                   the last encoder.
+    adopts the butterfly sparsity pattern on both attention and
+                                                                      Based on the original encoder-decoder structure of Trans-
+    linear layers for end-to-end acceleration (Section III).
+                                                                   former, different variants have been proposed. The encoder-
+•   A novel adaptable butterfly accelerator configurable at
+                                                                   only networks, such as BERT [3] and XLM [24], are
+    runtime via dedicated hardware control to accelerate dif-
+                                                                   autoencoding models that have been widely applied to NLP
+    ferent layers using a single unified engine (Section IV).
+                                                                   tasks, such as sequence classification [25]. The Vision Trans-
+•   Several hardware optimizations to improve the hardware
+                                                                   former (ViT) [5] also lies in this category. An extra linear
+    efficiency and a co-design approach to jointly optimize
+                                                                   projection layer is introduced at the beginning, while its
+    both algorithmic and hardware parameters (Section V).
+                                                                   encoder layers correspond to the encoder part of the original
+•   A comprehensive evaluation on different datasets that
+                                                                   Transformer. Finally, the decoder-only networks represent
+    demonstrates the advantages of our approach over CPU,
+                                                                   the autoregressive models designed for NLP tasks, such as
+    GPU and state-of-the-art accelerators (Section VI).
+                                                                   language modeling [26]. GPT [4] is a typical decoder-only
+               Output &                    Input &
+        Positional Embedding        Positional Embedding                                                      and their variants [31], [32] have found success in compress-
+                                                                                      [𝑁! , 𝐷"#$ ]
+
+ Decoder                           Encoder                                                                    ing attention and weight matrices, considerably improving
+                                       Multi-Head Attention                Linear     Linear         Linear
+                                                                                                              the accuracy and efficiency of attention-based NNs. For
+ Masked Multi-Head Attention
+                                                                           Layer      Layer          Layer    instance, applying butterfly factorization to a linear layer
+                                         Feed Forward                                                         with an M ×M weight matrix can reduce the computational
+                                                                           Query        Key          Value
+                                         Linear Layer 1
+        Multi-Head Attention                                                             !
+                                                                                                              and memory complexity from O(M 2 ) to O(M log M ).
+                                          [𝑁! , 𝐷"#$ ×𝑅%%& ]                   𝑄×𝐾
+                                                                                                                 Besides attention and weight matrices, some designs have
+          Feed Forward                   Linear Layer 2                       Softmax                         explored replacing the entire attention mechanism with
+                                             [𝑁! , 𝐷"#$ ]
+                                                                                              𝑆×𝑉             more efficient counterparts [33]. A prominent example is
+            Decoder                         Encoder                                                           FNet [34], in which the self-attention modules are replaced
+                                                                                    Linear Layer
+                ...
+
+
+
+
+                                                  ...
+
+                                                                                                              by 2D Discrete Fourier Transform (DFT) operations. Specif-
+            Decoder                         Encoder
+                                                                                                              ically, for each input, 1D DFT is applied along the sequence
+              Output                                                                                          and the hidden dimension independently, keeping only the
+Figure 2. The structure of a Transformer. Shortcut addition and layer
+                                                                                                              real component of the resulting outputs. To reduce DFT
+normalization are omitted for simplicity.                                                                     computation time, the Cooley-Tukey Fast Fourier Transform
+                                                                                                              (FFT) algorithm [35] is used. As the use of DFT facilitates
+model that corresponds to the decoder part of the original                                                    information flow across all embeddings, it results in a similar
+Transformer. Although we focus on encoder-only networks                                                       performance compared to the use of vanilla self-attention
+in this work, our hardware design is flexible and applicable                                                  layers, but at a significant reduction in latency and memory.
+to decoders too.                                                                                                 On the algorithmic front, our proposed FABNet utilizes a
+                                                                                                              mixture of these techniques – FFT and butterfly matrices –
+B. Butterfly Matrices and FFT                                                                                 to outperform relevant approximation approaches in terms
+                                                                                                              of accuracy. Notably, since FFT matrices can be considered
+   Despite the impressive accuracy attained using attention-
+                                                                                                              a special case of butterfly matrices with B1N/2 , B3N/2 being
+based NNs, these models are expensive and not scalable,
+                                                                                                              identity matrices and B1N/2 , B4N/2 acting as twiddle factors,
+e.g. the self-attention mechanism in the Transformer scales
+                                                                                                              both the FFT and butterfly matrices possess the recursive
+quadratically in terms of computation and memory as a
+                                                                                                              butterfly structure. Therefore, it is possible to use a unified
+function of the input sequence length. As a result, numerous
+                                                                                                              computational and data access pattern and then devise a
+works [7], [8], [13], [27] adopt structured linear mappings,
+                                                                                                              single hardware engine to accelerate both FFT and butterfly-
+such as sparse and low-rank matrices, to approximate the
+                                                                                                              based operations with high hardware efficiency.
+attention matrices and/or the weight matrices in the feed-
+forward layers. Choosing an appropriate structure for each                                                    C. Latency Breakdown and Motivation
+linear mapping, however, is application-dependent, often re-
+                                                                                                                 The operation counts in Figure 1 reveal that the com-
+quiring domain expertise and entailing an arduous process of
+                                                                                                              putation of attention-based NNs is dominated by different
+hand-picking solutions as different structures have different
+                                                                                                              components when the length of input sequences changes.
+trade-offs in accuracy and speed.
+   To counteract this, recent work has utilized butterfly                                                     To further investigate the real hardware performance of
+matrices [28], [29], which are universal representations of                                                   each subcomponent, we profile the execution time of the
+structured matrices that have a simple recursive structure.                                                   BERT-Large model on the Nvidia V100 GPU and Intel Xeon
+Specifically, each butterfly matrix WBfly of size N encodes                                                   Gold 6154 CPU. The length of input sequences is set to 256,
+the recursive divide-and-conquer structure with butterfly                                                     1024 and 2048 on both devices, and the batch size for GPU
+patterns and, hence it can be expressed as the product of
+sparse butterfly factor matrices [30] as follows:                                                             and CPU is 8 and 1, respectively. Figure 3 shows the latency
+                                                                                                              breakdown. We split the latency consumption into three main
+                                                                       0
+                                                                                                
+                       "       0
+                                                   #         W2                ...           0                subcomponents: attention layers, linear layers, and other
+          0               WN/2      0                      .                 ..             ..  
+                                                                                                              operations, e.g. layer normalization, residual connections,
+WBfly   =
+         WN                         0
+                                                            ..
+                                                        ...                      .
+                                                                                                  
+                            0       WN/2                                                       . 
+                                                                                                0             matrix transformations and IO operations. Notably, on both
+                                                             0                 ...           W2
+                                                                                                              CPU and GPU, linear layers take up a significant portion of
+                       0
+where each WN , a butterfly factor, is a 2 × 2 block matrix                                                   execution time, 67.9% and 79.34% respectively, when the
+of diagonal matrices, Bi with size N/2, whose entries can                                                     input length is small. As the input length becomes larger,
+be trained via gradient-based methods:                                                                        the execution time of attention layers increases gradually
+                                                                                                              and becomes dominant. As such, the latency is dominated
+                                        B1N/2           B2N/2
+                                                                  
+                               0
+                           WN =                                        .                                      by different components depending on the length of the input
+                                        B3N/2           B4N/2
+                                                                                                              sequence. According to Amdahl’s law [36], to achieve high
+Due to their expressiveness in representing structured matri-                                                 hardware performance across different input lengths, it is
+ces and approximating unstructured data, butterfly matrices                                                   necessary to optimize both attention and linear layers.
+                            Attention   Linear    Others                               Attention   Linear   Others    Sparsity       Low Rank       Sliding Window             Butterfly                 Random       Block-wise
+
+                     100                                                        100
+Execution Time (%)
+
+
+
+
+                                                           Execution Time (%)
+                      80                                                         80                                    Patten                                                    …                 …
+                      60                                                         60
+                      40                                                         40
+                      20                                                         20                                     Data       Sequential row       Regular                 Regular                  Random         Regular
+                                                                                                                       Access      & column read      stride read             stride read                 read        stride read
+                       0                                                          0
+                           256       1024          2048                               256          1024        2048    HW Eff.          No               Yes                      Yes                      No            Yes
+                                 On NVIDIA V100                                          On Intel Xeon Gold 6154        Info.         Global            Local                Global & Local            Global&Local     Local
+
+
+
+Figure 3. Execution time breakdown of Transformer with different input                                                               Figure 4.       Basic sparsity patterns in existing variants.
+lengths on GPU and CPU.
+
+                                                                                                                                                       Table II
+   The majority of previous accelerators for attention-based                                                                       C OMBINATION OF SPARSITIES IN DIFFERENT VARIANTS .
+NNs focused on optimizing a single component of the entire
+model (either attention or FFN as shown in Table I), leading                                                                                                                                             Unified
+                                                                                                                                   Model                  Sparsity pattern           Att.     FFN                 Co-Design
+to suboptimal end-to-end performance gains. The execution                                                                                                                                                Sparsity
+time of these accelerators is heavily dependent on the input                                                                    Performer [7]                Low-Rank
+                                                                                                                                                                                        4      7             7            7
+                                                                                                                                Linformer [8]              (Extra kernels)
+length which varies across different applications, reducing
+                                                                                                                                                             Block-wise
+the scalability of these hardware designs and thus narrowing                                                                    Reformer [9]
+                                                                                                                                                           (Extra kernels)
+                                                                                                                                                                                        4      7             7            7
+their deployability in real-world scenarios. Naively adopting                                                           Sparse Sinkhorn [10]          Block-wise + Random               4      7             7            7
+a combination of previous works on optimizing the linear                                                                                                 Sliding-Window +
+                                                                                                                           Longformer [11]                                              4      7             7            7
+layers [19] and attention layers [6], [14]–[18], however,                                                                                                    Low-Rank
+
+would result in low hardware efficiency as they adopt                                                                                                        Random +
+                                                                                                                                BigBird [12]             Sliding-Window +               4      7             7            7
+different sparsity patterns. As a result, designing an end-                                                                                                  Low-Rank
+to-end accelerator for scalable attention-based NNs remains                                                                      FNet [34]                      Butterfly               4      7             7            7
+an open problem. In this work, we address this challenge                                                                  Kaleidoscope [32]                     Butterfly               7     4             4             7
+by adopting an algorithm and hardware co-design approach.                                                                 Sparse Trans. [13]
+                                                                                                                                                     Low-Rank + Butterfly +
+                                                                                                                                                                                        4      7             7            7
+                                                                                                                                                        Sliding-Window
+On the algorithmic level, a hardware-friendly model called
+                                                                                                                                Pixelfly [31]         Butterfly + Block-Wise
+FABNet is proposed, which adopts a unified butterfly sparsity                                                                   Monarch [37]               + Low-Rank
+                                                                                                                                                                                        4     4              7            7
+pattern to compress both attention and linear layers. On the                                                                     Our work                       Butterfly               4     4             4             4
+hardware level, we propose an adaptable butterfly design that
+can be configured at runtime to accelerate different layers
+in FABNet using one unified hardware engine.                                                                          introduces an additional low-rank sparsity pattern to increase
+                                                                                                                      the expressiveness of their flat block-wise butterfly pattern
+                                  III. A LGORITHM O PTIMIZATION                                                       and improve accuracy.
+A. Computational Analysis of Sparsity Patterns                                                                           Different sparsity patterns exhibit diverse data access
+   Various pruning schemes have been proposed to re-                                                                  patterns, which calls for custom hardware support. However,
+duce the computational complexity of attention-based NNs,                                                             supporting multiple sparsity patterns may complicate the
+leading to different efficient models [7]–[13], [31], [32],                                                           hardware design. For instance, in order to fully utilize the
+[34], [37]. By analysing the computational and data access                                                            sparsity in the random pattern, complex dynamic controllers
+patterns of these variants, we define five basic sparsity                                                             are required to achieve a load-balanced execution on dif-
+patterns shown in Figure 4: i) low rank, ii) sliding window,                                                          ferent hardware engines [15], [38]. The extra overhead of
+iii) butterfly, iv) random, and v) block-wise pattern. As low-                                                        such controllers may counteract the improvement brought
+rank approximation of an attention matrix requires both se-                                                           by skipping sparse operations [21].
+quential row and column reads but the data are usually only                                                              In this work, we aim to find a hardware-friendly sparsity
+stored in either a row-major or column-major, the hardware                                                            pattern that: 1) has structured data access patterns to sim-
+efficiency of low-rank sparsity is inherently diminished.                                                             plify the memory design, 2) captures both local and global
+Random sparsity also demonstrates low hardware efficiency                                                             range information with a single sparsity pattern, and 3) is
+due to its random read pattern. Furthermore, we observe                                                               applicable to both the attention mechanism and FFNs to
+that the sparsity in various sparse variants can be expressed                                                         sustain its performance improvement across both long and
+as different combinations of the basic sparsity patterns, as                                                          short input sequences. To meet these requirements, we adopt
+summarized in Table II. As some basic sparsity patterns can                                                           the butterfly sparsity as a basis for constructing our efficient
+only capture either long-range global or short-range local                                                            algorithm.
+information (Figure 4), the rationale behind using multiple                                                              Compared to other sparsity patterns, the butterfly spar-
+sparsity patterns within each variant is mainly to compensate                                                         sity provides a number of favorable properties. As shown
+for the underlying accuracy loss. For example, Pixelfly [31]                                                          in Figure 4, although random sparsity is able to capture both
+                    NFBfly                                       NABfly
+                                                                                                         replace the attention module with a 2D Fourier transform
+                FBfly                                                 ABfly                              layer, implemented using FFT, resulting in a more compute-
+         2D Fourier                              Butterfly      Butterfly                                efficient block called FBfly. The use of FFT effectively mixes
+         Transform                             Linear Layer    Projection
+        (with SC, LN)                             (Q, K V)    (with SC, LN)                              different input tokens, which allows the following butterfly
+Input
+
+
+
+
+                                                                                                Output
+                             FBfly   … FBfly                                  ABfly   … ABfly            FFN to process a longer sequence. More importantly, all
+          Butterfly                             ! × #!          Butterfly
+            FFN                                 Softmax           FFN                                    computation in the FBfly block, which use the FFT’s twiddle
+        (with SC, LN)                            $×%          (with SC, LN)
+                                                                                                         factors and the butterfly linear layers’ weights, is performed
+                                                                                                         using a unified butterfly pattern, resulting in higher hardware
+                                                                                                         efficiency over previous works.
+Figure 5. Network structure of FABNet. (SC: shortcut addition, LN: layer
+normalization)                                                                                              Although FBfly is less compute- and memory-intensive
+                                                                                                         than ABfly, the use of the Fourier transform layer may de-
+                                                                                                         grade accuracy [34]. To preserve high accuracy, we propose
+local and global information, it has two drawbacks compared                                              a novel butterfly-based network called FABNet that intro-
+to butterfly sparsity: 1) it requires complicated controllers                                            duces a hybrid of the ABfly and FBfly blocks, as depicted
+with excessive hardware overhead [21], and 2) its perfor-                                                in Figure 5. There are NFBfly FBfly blocks at the beginning
+mance gain cannot be guaranteed as the sparsity may vary                                                 and NABfly ABfly blocks stacked on top. With this setup, we
+substantially among different datasets and tasks. Compared                                               expose both NFBfly and NABfly as hyperparameters, enabling
+with random sparsity, the sliding-window pattern is more                                                 a trade-off between algorithmic and hardware performance.
+hardware-friendly. However, Table II shows that it often                                                 To optimize this trade-off, we develop a co-design method
+requires low-rank sparsity to compensate for the accuracy                                                (Section V-C) that explores the design space of both neural
+loss, as sliding-window sparsity only captures the local                                                 architecture and hardware design.
+relationship within each window. Moreover, although some
+                                                                                                                       IV. H ARDWARE ACCELERATOR
+variants adopt a single low-rank or block-wise sparsity pat-
+tern with satisfactory algorithmic performance, they require                                             A. Architecture Overview
+extra algorithmic operations and dedicated computational                                                    Figure 6 shows the proposed hardware accelerator con-
+kernels during inference (e.g. the locality-sensitive hashing                                            sisting of: a Butterfly Processor (BP), an Attention Pro-
+(LSH) in Reformer [9]) during inference, resulting in large                                              cessor (AP), a Post-processing Processor (PostP), the off-
+hardware overhead. In contrast, this paper treats the butterfly                                          chip memory, and several on-chip buffers. BP consists of
+sparsity as a promising method due to its regular data access                                            PBE number of Butterfly Engines (BEs), which are used to
+pattern and the ability of capturing both global and local                                               accelerate the computations that involve butterfly patterns,
+information.                                                                                             including both FFT and butterfly linear transformations. AP
+                                                                                                         contains PAE number of Attention Engines (AEs), and each
+B. Unified Butterfly Pattern for Attention and Linear Layers                                             AE is composed of one QK unit and one SV unit. The
+   The butterfly pattern has demonstrated its effectiveness                                              QK unit is designed to implement the softmax and the
+and generality in approximating linear transformations [32].                                             matrix multiplication between queries and keys. The SV
+Furthermore, Lee-Thorp et al. [34] have shown the poten-                                                 receives the outputs from the QK unit and multiplies the
+tial of simplifying the computation by replacing the entire                                              results with value vectors to generate the final results of
+attention layer with Fourier transform, which effectively                                                the attention layer. The PostP module is responsible for
+mixes tokens without explicitly approximating the attention                                              executing the layer normalization and shortcut (SC) addition.
+mechanism. To maximize the ability to reduce the compu-                                                  To ease the on-chip memory consumption, the intermediate
+tation with acceptable algorithmic performance, we start by                                              results between different FFT and butterfly operations are
+proposing two basic building blocks for scalable inference:                                              transferred back to the off-chip memory. Although doing so
+1) the Attention Butterfly (ABfly), and 2) Fourier Butterfly                                             increases the bandwidth requirement, this ensures our accel-
+(FBfly) blocks.                                                                                          erator is scalable on hardware platforms with limited on-chip
+   In the ABfly block, we retain the backbone of the attention                                           memory. To improve the overall hardware performance, all
+module and compress all the linear layers using butterfly                                                the on-chip buffers utilize double-buffering to overlap the
+factorization. Specifically, the ABfly block starts with three                                           data transfer with the computation.
+butterfly linear layers to generate Q, K and V matrices.
+The results are fed into a vanilla multi-head attention layer                                            B. Adaptable Butterfly Engine
+and another butterfly linear layer to obtain the relationships                                              Figure 6b shows the hardware architecture of BE. Each
+among different tokens. A butterfly FFN that consists of                                                 BE is mainly composed of a butterfly memory system and
+two butterfly linear layers is placed at the end of the                                                  PBU number of adaptable Butterfly Units (BUs). To improve
+ABfly block for additional processing. To further reduce                                                 the hardware efficiency and enable the use of a single
+the amount of computation and number of parameters, we                                                   unified engine, the BE module is designed with a focus on
+                                                                                                                                                                                                                QK
+                                             Input Manager                                                                                   Off-chip Memory                                                    Unit
+    Adaptable
+                                    Butterfly Index Generator                                                                                                                                 PQK
+     Memory
+     System                                                                                                                                      Interface                                              MAC
+                                 Read Control          Write Control                                                                                                                                   MAC
+                                                                                                                                                                                                     MAC
+                                                              PBU                                                              Transpose                            Key Buffer                      MAC
+         S                               Butterfly Buffer                            P
+
+
+
+
+                                                                    DEMUX
+                      MUX
+
+
+
+
+         2                                Butterfly Buffer                           2
+         P                                 Butterfly Buffer                          S                         Butterfly
+                                                                                                                                      BP         PostP             AP                               Accumulator
+                                                                                                                                                                                Attention
+                                                                                                                Engine                       Shortcut Addition
+                                                                                                                                                                                  Engine              Softmax
+                                          Adaptable
+                                                              PBU                                                 Butterfly                                                 Attention
+                                            Adaptable                                                                                       Layer Normalization
+                                           Butterfly                                                               Engine                                                    Engine
+                                              Adaptable                                                                                                                                                      SV
+                                                                    Crossbar                                         Butterfly
+                      Crossbar
+
+
+
+
+                                             Butterfly
+                                            Units                                                                                                                       Attention
+                                               Butterfly
+                                              Units                                                                                                                                                         Unit
+                                                 Units                                                                 Engine                 ShortCut Buffer            Engine               PSV
+                                                                                                                                                                                                        MAC
+                                                                                                                         PBE                   Query Buffer                      Phead
+                                                                                                                                                                                                      MAC
+                                          Weight Buffer                                                                                                                                              MAC
+
+                                 (b) Butterfly Engine                                                                                      (a) Hardware Overview                            (c) Attention Engine
+
+                                                                                    Figure 6.            Hardware overview of the adaptable butterfly accelerator.
+
+
+
+         $      #           $ !"$
+ !"#!" !"''"_( $!" $''"_( !"!"
+                                       %
+                                ''"_+ $!" $''"_+
+                                                                                       $
+                                                                               !"#!" !"''"_( $!"
+                                                                                              $ $        $    $      &
+                                                                                                 ''"_+ !"!" !"''"_+ $!" $''"_(
+                                                                                                                                           mation, four multipliers in each BE are configured to execute
+   MUX                MUX                    MUX             MUX                 MUX              MUX          MUX              MUX
+                                                                                                                                           the four real-number multiplications in the equation above.
+                                                      *                                    *                              *                The values in1∼4  and wbt 1∼4
+                                                                                                                                                                         are selected via multiplexers as
+                 *                                                                                                                                       bt
+                                    +/-                         #
+                                                              !"''"_+   #
+                                                                      !"''"_(                              +                               the operands of the multipliers. At the same time, the results
+                                 DeMUX
+                                                             Complex add/sub
+                                                                                                         DeMUX                             out1∼1
+                                                                                                                                               bt  generated from the real-number adders/subtractors
+ Butterfly                                                    +           -                                                                are outputted directly from the de-multiplexers.
+   Unit
+
+                                 (a) Hardware architecture of adaptable butterfly unit                                                        For FFT (Figure 7c), since the twiddle factors of FFT
+                                                                                                                                           are complex and symmetric, it only requires one complex-
+           Butterfly Linear Transform                                                             Fast Fourier Transform
+                                                                                        #                                         #
+                                                                                                                                           number multiplication per twiddle multiplication. Thus, by
+                                                                                      !"''"_(                                  *+,''"_(
+         !"#!"
+                                 !"#!"      #
+                                         ∗ $!"
+                                                 +      #
+                                                     *+,!"
+                                                                                        #
+                                                                                      !"''"_+
+                                                                                                                     +            #
+                                                                                                                               *+,''"_+    selecting the complex inputs in1∼2            1∼2
+                                                                                                                                                                               fft r +infft i i and twiddle fac-
+                                         *
+                          $ *
+                 !"#!" ∗ $!"                                                                         *                                     tor wfft r + wfft i i, we reuse the four real-number multipliers
+                                                                                                                              $
+                                                                                         $
+                                                                                       !"''"_(                             *+,''"_(
+                   $
+                 !"!"     %
+                       ∗ $!"                                                                         *
+                             *                                                           $                           -        $
+                                                                                                                           *+,''"_+        in each BE to perform the required complex-number multi-
+           $
+         !"!"                               +           $
+                                                     *+,!"                             !"''"_+       *
+                                      *                                                                   $         $
+                                   $     &                                                             (!"''"_( + !"''"_+ !)
+                                 !"!" ∗ $!"                                                          *
+                                                                                                       ∗ ($''"_( + $''"_+ )
+                                                                                                                                           plication. The de-multiplexers are then configured to output
+(b) Dataflow of both Butterfly linear transform                                                  (c) Dataflow of both FFT                  the results to the complex-number adders/subtractors to get
+                                                                                                                                           the final results out1∼2           1∼2
+                                                                                                                                                                   fft r + outfft i i. The control signals for
+                                                                                                                                           the multiplexers and de-multiplexers are set before running
+Figure 7.            Microarchitecture and dataflow of the adaptable butterfly unit.                                                       each layer. As such, the proposed adaptable BE can be used
+                                                                                                                                           to accelerate both FFTs and butterfly linear transformations
+                                                                                                                                           by reusing the multipliers, adders and subtractors.
+adaptability. As such, it can be configured via programmable
+multiplexers and de-multiplexers at runtime to either execute
+                                                                                                                                              2) Butterfly Memory System: Our butterfly memory sys-
+an FFT or a butterfly linear transformation.
+                                                                                                                                           tem comprises an input manager, a serial-to-parallel (S2P)
+   1) Adaptable Butterfly Unit: Figure 7a depicts the ar-
+                                                                                                                                           module, a parallel-to-serial (P2S) module and butterfly
+chitecture of the proposed adaptable BU. Each adaptable
+                                                                                                                                           buffers. As shown in Figure 8a, the butterfly pattern requires
+BU consists of four real-number multipliers and two real-
+                                                                                                                                           different data access at different stages. The conventional
+number adders, followed by two complex-number adders.
+                                                                                                                                           column-major or row-major order will cause bank conflicts
+The inputs and twiddle factors of both FFT and butterfly
+                                                                                                                                           while reading the data. For instance, accessing index pair
+linear transformation are connected to the multipliers, with
+                                                                                                                                           x0 and x8 of the first stage causes a read conflict in the
+eight multiplexers used to select the correct inputs for each
+                                                                                                                                           column-major order as shown in Figure 8b, in which each
+operation. Two de-multiplexers are placed after the real-
+                                                                                                                                           row represents a memory bank. The row-major order also
+number adders to control the output flow.
+                                                                                                                                           suffers from the same issue while reading x0 and x2 in the
+   When performing the butterfly linear transformation (Fig-
+                                                                                                                                           third stage.
+ure 7b), the twiddle factors are non-symmetric real numbers.
+Hence, the output of each twiddle multiply can computed as:                                                                                   To avoid such bank conflict, we introduce a custom data
+                                                                                                                                           layout strategy and implement it using the S2P module
+out1bt    =       in1bt             1
+                                 · wbt       + in2bt         3
+                                                          · wbt ,               out2bt    =      in1bt      2
+                                                                                                         · wbt   + in2bt            4
+                                                                                                                                 · wbt
+                                                                                                                                           shown in Figure 9. We permute each column i using a
+where in1∼4bt  and wbt 1∼4
+                            represent the inputs and twiddle                                                                               starting position Pi which indicates how many rows the first
+factors, respectively. To perform the butterfly linear transfor-                                                                           element in the current column should be shifted down. We
+𝒙𝟎                𝒙𝟎             𝒙𝟎              𝒙𝟎                                                                   Starting index of each row in storage                     Data access
+                                                                           𝒙𝟎     𝒙𝟒    𝒙𝟖 𝒙𝟏𝟐
+𝒙𝟖     Mult       𝒙𝟒 Mult        𝒙𝟐 Mult         𝒙𝟏 Mult
+𝒙𝟒                𝒙𝟖             𝒙𝟖              𝒙𝟖          Bank          𝒙𝟏     𝒙𝟓    𝒙𝟗 𝒙𝟏𝟑                                        𝒙𝟎 𝒙𝟕 𝒙𝟏𝟏 𝒙𝟏𝟒                       𝒙𝟎      𝒙𝟏𝟏   𝒙𝟕          𝒙𝟏𝟒
+𝒙𝟏𝟐    Mult       𝒙𝟏𝟐 Mult       𝒙𝟏𝟎 Mult        𝒙𝟗 Mult    Conflict                                                                                             Output
+                                                                                                                                      𝒙𝟏 𝒙𝟒 𝒙𝟖 𝒙𝟏𝟓                        𝒙𝟖      𝒙𝟏    𝒙𝟏𝟓             𝒙𝟒
+𝒙𝟐                𝒙𝟐             𝒙𝟒              𝒙𝟒                        𝒙𝟐     𝒙𝟔 𝒙𝟏𝟎 𝒙𝟏𝟒
+𝒙𝟏𝟎    Mult       𝒙𝟔 Mult        𝒙𝟔 Mult         𝒙𝟓 Mult                                                                              𝒙𝟐 𝒙𝟓 𝒙𝟗 𝒙𝟏𝟐                        𝒙𝟐      𝒙𝟗    𝒙𝟓          𝒙𝟏𝟐
+                                                                           𝒙𝟑     𝒙𝟕 𝒙𝟏𝟏 𝒙𝟏𝟓               𝒙𝟎 𝒙𝟕 𝒙𝟏𝟏 𝒙𝟏𝟒
+𝒙𝟔                𝒙𝟏𝟎            𝒙𝟏𝟐             𝒙𝟏𝟐
+𝒙𝟏𝟒    Mult       𝒙𝟏𝟒 Mult       𝒙𝟏𝟒 Mult        𝒙𝟏𝟑 Mult                                                  𝒙𝟏 𝒙𝟒 𝒙𝟖 𝒙𝟏𝟓               𝒙𝟑 𝒙𝟔 𝒙𝟏𝟎 𝒙𝟏𝟑                       𝒙𝟏𝟎     𝒙𝟑    𝒙𝟏𝟑             𝒙𝟔
+                                                                  (b) Column-major order
+𝒙𝟏               𝒙𝟏              𝒙𝟏              𝒙𝟐                                                        𝒙𝟐 𝒙𝟓 𝒙𝟗 𝒙𝟏𝟐           (b) Data access of the 1st stage of butterfly pattern
+𝒙𝟗     Mult      𝒙𝟓 Mult         𝒙𝟑 Mult         𝒙𝟑 Mult
+𝒙𝟓               𝒙𝟗              𝒙𝟗              𝒙𝟏𝟎                       𝒙𝟎     𝒙𝟏    𝒙𝟐     𝒙𝟑          𝒙𝟑 𝒙𝟔 𝒙𝟏𝟎 𝒙𝟏𝟑              𝒙𝟎 𝒙𝟕 𝒙𝟏𝟏 𝒙𝟏𝟒                       𝒙𝟎      𝒙𝟕    𝒙𝟏𝟏         𝒙𝟏𝟒
+𝒙𝟏𝟑    Mult      𝒙𝟏𝟑 Mult        𝒙𝟏𝟏 Mult        𝒙𝟏𝟏 Mult    Bank                                                                                                Output 𝒙𝟒
+                                                                           𝒙𝟒     𝒙𝟓    𝒙𝟔     𝒙𝟕      (a) Data storage               𝒙𝟏 𝒙𝟒 𝒙𝟖 𝒙𝟏𝟓                                𝒙𝟏    𝒙𝟏𝟓             𝒙𝟖
+𝒙𝟑               𝒙𝟑              𝒙𝟓              𝒙𝟔         Conflict
+𝒙𝟏𝟏    Mult      𝒙 Mult
+                   𝟕             𝒙𝟕 Mult         𝒙𝟕 Mult                                                                              𝒙𝟐 𝒙𝟓 𝒙𝟗 𝒙𝟏𝟐                        𝒙𝟐      𝒙𝟓    𝒙𝟗          𝒙𝟏𝟐
+                                                                           𝒙𝟖     𝒙𝟗 𝒙𝟏𝟎 𝒙𝟏𝟏
+𝒙𝟕               𝒙𝟏𝟏             𝒙𝟏𝟑             𝒙𝟏𝟒
+𝒙𝟏𝟓    Mult      𝒙𝟏𝟓 Mult        𝒙𝟏𝟓 Mult        𝒙𝟏𝟓 Mult                  𝒙𝟏𝟐 𝒙𝟏𝟑 𝒙𝟏𝟒 𝒙𝟏𝟓
+                                                                                                                                      𝒙𝟑 𝒙𝟔 𝒙𝟏𝟎 𝒙𝟏𝟑                       𝒙𝟔      𝒙𝟑    𝒙𝟏𝟑         𝒙𝟏𝟎
+
+                                                                                                                                  (c) Data access of the 2nd stage of butterfly pattern
+  (a) Data access in each stage of Butterfly                           (c) Row-major order
+                                                                                                                       Figure 10.     An example of 16-input butterfly.
+
+       Figure 8.       Bank conflicts in column and row-major orders.
+
+                                                                                                     butterfly units preserve the original order, a recover module
+                                        Shift Down                Serial
+                                                                                                     is used before the data is written back.
+            Shift Down               !&~' = !"~% − $              Data          Valid Signal
+           !! = !" − $                                                                                                 V. O PTIMIZATIONS AND C O -D ESIGN
+ !!   !" !## !#$ !#% !&& !&" !&%                                                 Counter
+
+ !#   !'      !( !#' !#) !&* !&) !*!                                                                 A. Memory Sharing in Butterfly Buffers
+                                                      ……
+ !&   !$      !% !#& !#" !&! !&' !*#                                       Bit-count     Add
+                                                                                                        We employ butterfly buffers to allow the overlap between
+                                                                                 Permute Signal
+ !*   !) !#! !#* !#( !&# !&$ !&(                                                                     data transfer and computation. To reduce the memory con-
+                                                                       Pack & Permutation
+                    Shift Down                                                                       sumption and improve the hardware efficiency, the butterfly
+                 !#~% = !"~! − $                                                               S2P   buffers are shared between both FFT and butterfly linear
+               Shift Down                                                   Prallel Data             transformation. Nonetheless, as the data width of FFT is
+           !(~!) = !"~' − $                                                                          twice that of the butterfly linear transformation, different
+      (a) Data storage of input data in Butterfly Buffers      (b) Hardware design of S2P module
+                                                                                                     address mapping and overlapping strategies are required.
+                                                                                                        Figure 12 shows the proposed address mapping strategies
+            Figure 9.        Data layout and hardware design of S2P.                                 for butterfly linear transformation and FFT. Assuming the
+                                                                                                     bitwidth of real numbers is 16 bits, each input buffer is 16-
+                                                                                                     bit wide. While processing butterfly linear transformations,
+define the starting position using the following formula:                                            input buffers A and B are used as two independent ping-
+                                                                                                     pong banks with separate read and write ports (top right in
+P0 = 0,        P2n−1 ∼(2n −1) = P0∼(2n−1 −1) − 1 for 1 ≤ n ≤ N                                       Figure 12). In this manner, when input buffer A is used for
+                                                                                                     computation, buffer B can start the input data transfer for
+For each 2n−1 ∼ (2n − 1) columns, the starting positions
+                                                                                                     the next batch, leading to the overlapping strategy shown
+P2n−1 ∼(2n −1) is obtained by shifting P0∼(2n−1 −1) one po-
+                                                                                                     in Figure 13a. While processing FFT, since the data include
+sition down, as shown in Figure 9a. The starting positions
+                                                                                                     both real and imaginary parts which require 32-bit read and
+are generated using a counter, and a bit-count and addition
+                                                                                                     write ports, we concatenate the lower parts of input buffer
+operations (Figure 9b). After packing the serial data together,
+                                                                                                     A and B as the first ping-pong bank for the storage of
+S2P permutes them based on the starting positions.
+   Figure 10 presents an example with 16 inputs, where the
+data required by the first and second stage of the butterfly                                                                 Index Coalesce
+pattern are read from the buffers without bank conflicts.                                            𝒙𝟏𝟏      Index                 Bit-count   Add                𝒙𝟏                                        𝒙"𝟏𝟏
+However, as the butterfly units receive data in pairs, an extra                                                                                                            Butterfly
+pairing is required after the S2P module. An example is                                               𝒙𝟏      Index                                                𝒙𝟗        Unit                            𝒙"𝟏
+                                                                                                                                                                                              Recover
+
+
+
+
+                                                                                                                                    Bit-count   Add
+                                                                                                                                                      Crossbar
+
+
+
+
+the second output column hx11 , x1 , x9 , x3 i of the first stage
+                                                                                                      𝒙𝟗      Index                 Bit-count   Add                𝒙𝟑      Butterfly                         𝒙"𝟗
+in Figure 10b. To pair indices, we design an index coalescing                                                                                                                Unit
+module before the butterfly units (Figure 11). Based on the                                           𝒙𝟑      Index                 Bit-count   Add                𝒙𝟏𝟏                                       𝒙"𝟑
+index of each input, a bit-count and addition operation is
+used to calculate the corresponding shift position. Then, a
+crossbar coalesces the index pairs based on the indices and
+shift positions. To ensure the outputs generated from the                                                     Figure 11.      Hardware design of Index Coalescing module.
+                      Butterfly Linear                                                                                            Time          Reorder                          Time
+                      Transformation                                   Pingpong Bank 1
+                                                                                                                             BP          𝑄        𝐾        𝑉                            𝐾      𝑉       𝑄                𝑴"𝟏
+                                                                                                                                                                                                                            𝑻   𝑸𝑲 +
+                                                                            Real part 1                                                                                                                                  𝑴
+                                                                                                                             QK Unit                              𝑄×𝐾 !                                𝑄×𝐾 !            𝑳"𝟏
+                                                                                                                                                                                                                             𝑻(𝑺𝑽)
+                                                                                                                        AP                                                                                               𝑳
+           Butterfly Buffer                                            Pingpong Bank 2                                       SV Unit                                      𝑆×𝑉                                   𝑆×𝑉
+                   Input Buffer A
+                                                 16                         Real part 2                                                       (a) Naïve implementation            (b) Fine-grained pipeline between BP and AP
+                                                 bits
+
+                     Input Buffer B                        Pingpong Bank 1 Pingpong Bank 2                                         Figure 14.             Fine-grained pipelining between BP and AP.
+                                                 16
+                                                              Real part 1              Real part 2
+                                                 bits
+                                                                                                                                                                                                            a
+                                                                                                                                                                                      Specify Dataset,
+                  Fast Fourier Transform                   Imaginary part 1 Imaginary part2                                                                                             FPGA device,
+                                                                                                                                        Algorithm Parameters:                     Performance Constraints
+                                                                                                                                 1. Hidden Size; 2. FFN Expand Ratio;                                                    FABNet
+                                                                                                                        3. Total Number of Blocks ; 4. Number of Abfly Blocks                                         Configurations
+                   Figure 12.         Different address mapping strategies.                                                                                                                               b
+                                                                                                                                                                                        Optimization
+                                                                                                                                             Hardware Simulator
+                                                                                                                                                                                        (Grid Search)
+                                                                                                                                        Hardware Parameters:                    Algorithm Hardware Co-Design            Hardware
+                                              Naïve implementation
+                              Time                                                                                            1. Parallelism of BU; 2. Parallelism of BE;                                             Configurations
+                                Load                                                                                     3. Parallelism of QK Unit; 4. Parallelism of SV Unit
+                                         Comp Output
+                                Input
+                                                           Load
+                                                                     Comp Output
+                                                           Input
+               Overlap input load with                                                                                         Figure 15.           Flow of the algorithm-hardware co-design process.
+                                                                       Overlap input load with output
+           buttterfly linear transformation                Time
+ Time
+   Load                                                      Load
+           Bfly     Output                                            FFT     Output
+   Input                            𝑴𝒂𝒙 𝑻 𝑰𝒏 , 𝑻 𝑩𝒇𝒍𝒚 +      Input                                        𝑴𝒂𝒙(𝑻 𝑶𝒖𝒕 ,
+           Load
+                     Bfbly Output
+                                    𝑴𝒂𝒙(𝑻 𝑶𝒖𝒕 , 𝑻(𝑩𝒇𝒍𝒚))                       Load
+                                                                                          FFT   Output
+                                                                                                           𝑻(𝑩𝒇𝒍𝒚))     there are M and L rows in Q and K matrices, it takes T (QK)
+                                                                                                                                                                                M
+           Input                                                               Input
+
+(a) Fine-grained pipeline for butterfly linear transform              (b) Fine-grained pipeline for FFT
+                                                                                                                        and T (SV
+                                                                                                                                L
+                                                                                                                                   )
+                                                                                                                                     to compute one row in the SV and QK units,
+                                                                                                                        respectively. As such, the total latency reduction achieved
+                                                                                                                        is MM−1 T (QK) + L−1
+                                                                                                                                           L T (SV ) compared to the unoptimized
+                      Figure 13.         Different overlapping strategies.
+                                                                                                                        non-pipelined implementation.
+
+complex numbers. To improve the hardware efficiency, we                                                                 C. Algorithm and Hardware Co-Design
+further reuse the higher parts of both buffers as the second                                                               The overall design space of our end-to-end system is
+ping-pong bank. As the computation requires both read and                                                               formed by FABNet’s hyperparameters and the butterfly accel-
+write accesses, we adopt a different overlapping strategy that                                                          erator’s hardware parameters. Specifically, the joint design
+pipelines the output data transfer only with the input data                                                             space consists of: 1) the algorithm parameters, i.e. the hidden
+load of the next batch (Figure 13b). By employing different                                                             size (Dhid ), the expand ratio of FFN (Rffn ), the total number
+address mapping and overlapping strategies for FFT and                                                                  of blocks (Ntotal ) and the number of ABfly blocks (NABfly ) in
+butterfly linear transformation, we maximise the hardware                                                               FABNet, and 2) the hardware parameters, i.e. the parallelism
+efficiency and performance.                                                                                             of BU (Pbu ) and BE (Pbe ) in BP, and the parallelism of the
+                                                                                                                        QK (Pqk ) and SV (Psv ) units in AP.
+B. Fine-Grained Pipelining between BP and AP                                                                               To assess the trade-off provided by each design point,
+   While executing the ABfly block, BP and AP are in                                                                    we need to evaluate its algorithmic performance (e.g. an
+use, performing butterfly linear transformation and attention                                                           accuracy metric), its latency and its resource consumption.
+matrix multiplication, respectively. To further improve per-                                                            During search, the algorithmic performance is obtained
+formance when executing the ABfly block, we employ fine-                                                                by training and evaluating FABNet, while the latency is
+grained pipelining between BP and AP.                                                                                   estimated by utilizing a custom simulator built for our
+   Figure 14 illustrates the dataflow of BP and AP. In the                                                              butterfly accelerator. To verify whether the design can be
+naive implementation, the key (K), value (V) and query (Q)                                                              accommodated by the target FPGA device, we developed
+matrices are generated sequentially from BP. After Q, K and                                                             an analytical model to estimate the consumption of DSP
+V are computed, AP starts the computation of Q × KT and                                                                 blocks and on-chip memory (BRAMs). As DSPs are mainly
+S × V. To optimize this process, we reorder the execution                                                               consumed by the multipliers in AP and BP, we formulate
+sequence of linear layers such that BP computes K and                                                                   its resource usage as:
+V at the beginning (Figure 14b). As Q × KT can be
+                                                                                                                                  DSPusage = Pbe × Pbu × 4 + Phead × (Pqk + Psv )
+decomposed into multiple vector matrix multiplications that
+multiply different rows of Q with the entire matrix KT , we                                                             where the value of 4 reflects the number of multipliers in
+can actually start the computation of Q × KT once the first                                                             each BU. The consumption of BRAM is mainly occupied
+few rows of Q become available. As such, the Q×KT in AP                                                                 by the shortcut buffer, query buffer, key buffer and different
+can be pipelined with the computation of Q in BP. At the                                                                buffers in BU including butterfly buffer and weight buffers,
+same time, since S is generated from the QK unit in a row-                                                              which can be formulated as:
+by-row fashion, we can further pipeline the Q × KT with
+                                                                                                                             BRAMusage = (BRAMbfly + BRAMweight ) × Pbe
+S × V, as the computation of S × V can start once the first
+few rows of S are generated from the QK unit. Assuming                                                                                                + BRAMkey + BRAMsc + BRAMquery
+                                                                                                                                  40.0
+The proposed analytical resource model is only used during
+
+
+
+
+                                                                   Accuracy (%)
+                                                                                  63.5
+                                                                                                                                  35.0
+the design space exploration stage. At the end of the co-                         63.0                                            30.0
+design process, the final performance is obtained by run-
+                                                                                         0   1       2     3     4        5   6          0   1       2     3     4        5   6
+ning synthesis and place-&-route on our design with the                                          # of Compressed Layers                          # of Compressed Layers
+                                                                                                       (a) LRA-Text                                   (b) LRA-Image
+optimized configurations.
+   Figure 15 illustrates the proposed co-design approach.                          Figure 16.       Accuracy with different number of compressed layers.
+Given a target dataset, FPGA device and both algorithmic
+and hardware performance constraints, we employ exhaus-
+tive grid search to traverse the joint design space and find the   board and resource consumption, all the FPGA designs are
+Pareto-optimal set of algorithmic and hardware parameters.         clocked at 200 MHz which is below the maximum. We
+Each individual design point corresponds to a different            obtain power consumption values using the Xilinx Power
+compression ratio of FABNet and level of parallelism of            Estimator (XPE) tool and develop a cycle-accurate perfor-
+the butterfly accelerator, and provides different accuracy,        mance model to evaluate the speed performance, which is
+latency and resource consumption. The final output is the          cross-validated* with our RTL simulation results generated
+Pareto front of parameters for both FABNet and our butterfly       by Vivado. The memory accesses to external memory are
+accelerator that satisfies a given set of constraints.             also considered. We use 16-bit half-precision floating-point
+                                                                   in our hardware designs. We deploy four multipliers in each
+                      VI. E VALUATION                              BU. As the hidden dimension Dhid is usually at most 1024,
+                                                                   we set the depth of butterfly, query and key buffers as 1024.
+                                                                   Finally, the size of shortcut buffers is the same as butterfly
+A. Experimental Setup
+                                                                   buffers.
+Benchmarks. To evaluate the algorithmic and hardware
+performance of our approach on workloads with long se-             B. Algorithmic Performance
+quences, we choose five tasks from Long-Range-Arena [39],             The FBfly introduced in Section III-B is an efficient
+including hierarchical data classification (ListOPs), byte-        alternative to the vanilla attention block. To evaluate its al-
+level text classification (Text), byte-level document retrieval    gorithmic impact on end-to-end models, we take a six-layer
+(Retrieval), image classification for sequences of pixels          Transformer as an example† and compress it with different
+(Image), classification of long-range spatial dependency           numbers of FBfly blocks, starting from the last block to the
+(Pathfinder). The input sequences of these datasets range          first block. Figure 16 shows the accuracy results on LRA-
+from 1024 to 4096.                                                 Text and LRA-Image. Although the accuracy fluctuates with
+Software Implementation. We implement the vanilla Trans-           different numbers of compressed layers, FBfly shows higher
+former [3], FNet [34] and our FABNet models using                  accuracy than the non-compressed Transformer with 4 and
+PyTorch (v1.10) [40]. The pretrained models are obtained           1 compressed layers on LRA-Text and LRA-Image, respec-
+from Huggingface 4.16 [41]. The batch size is 256 for              tively, demonstrating the improved algorithmic performance
+both Image and Pathfinder tasks, and 32 for the rest of            of our approach on end-to-end models.
+datasets during training. The learning rate is set to 0.0001,         To obtain the best possible algorithmic performance of
+except for the Image and Pathfinder tasks where we use 0.01        each model, we use the optimized configuration specified
+and 0.0005 respectively. Multiple Nvidia A100 and V100             in [42] for both vanilla Transformer and FNet‡ . We perform
+GPUs are used for training. To use FFT cores on Nvidia             a simple grid search to optimize the hyperparameters of
+GPUs, the PyTorch API “rfft2” is used to implement the             our FABNet. Table III presents the optimized accuracy of
+FFT operation required in both FNet and FABNet. The high-          different models. FABNet achieves higher accuracy than
+performance CUDA implementation [32] of butterfly linear           both Transformer and FNet on three out of five tasks,
+transformation is adopted to accelerate both GPU training          including ListOPs, Retrieval and Image. On average, FABNet
+and inference. We define two models with different default         achieves the same accuracy as Transformer. To investigate
+settings: FABNet-Base (Dhid = 768, Rffn = 4, Ntotal = 12,          the efficiency of FABNet, Figure 17 shows the compression
+NABfly = 0) and FABNet-Large (Dhid = 1024, Rffn = 4,               * We   cross-validate the functionality and correctness of our RTL
+Ntotal = 24, NABfly = 0).                                            design with the ground-truth results generated from PyTorch.
+Hardware Implementation. We implement our hardware                   Please refer to Appendix C for details.
+                                                                   † Other models, such as GPT and BERT, actually follow the same
+accelerators using Verilog. To evaluate performance in dif-
+ferent scenarios, two Xilinx FPGA boards are used in our             network architecture of Transformer with the encoder or decoder
+experiments: VCU128 for cloud/server scenarios and Zynq              kept. To eliminate the effect of different training strategies and
+                                                                     evaluate the quality of the architecture, we choose the vanilla
+7045 for edge/mobile settings. Xilinx Vivado 2019.1 is used          Transformer for demonstration.
+for synthesis and implementation. While the maximum clock          ‡ As the vanilla FNet on Retrieval task suffers significant accuracy
+
+frequencies of our designs depend on the particular FPGA             loss, we increase its hidden size to 1024.
+                           Over Transformer        Over FNet                                 Over Transformer        Over FNet
+                                                                                                                                                                     1.65 X                                                    2.3 X
+                     60                                                                35                                                1.58 X                                                    1.83 X
+
+                                                                                       30
+
+
+
+
+                                                             Reduction in Model size
+                     50
+Reduction in FLOPs
+
+
+
+
+                                                                                       25                                                                                                                                               23.8 X
+                     40                                                                                                                           19.5 X                      30.1 X
+                                                                                       20                                                                                                                   25.6 X
+                     30
+                                                                                       15
+                     20                                                                10
+                     10                                                                 5
+                     0                                                                  0
+                                               l                                                                 l
+                          Listops Text Retrieva Image Path                                  Listops Text Retrieva Image Path
+
+                                Figure 17.    Reduction in FLOPs and model sizes.                                                                                                                  1.67 X                      2.1 X
+                                                                                                                                         1.56 X                      1.61 X
+
+
+
+                                                                                                                                                                                                            45.3 X                      42.1 X
+                                                                                                                                                  34.5 X
+                                                                                                                                                                              53.3 X
+                                                130×
+
+
+                                                              {Dhid=64, Rffn=4,Ntotal=2,NABfly=0}
+                                                                {Pbe=64, Pbu =4, Pqk=0, Psv=0}
+                          10%
+
+
+
+
+                                                                                                                                 Figure 19. Speedup breakdown of algorithm and hardware optimizations.
+
+                                  Figure 18.     Co-design on LRA-Text dataset.                                                                                   Table III
+                                                                                                                                                   ACCURACY OF DIFFERENT MODELS ON LRA.
+
+
+rate of our optimized FABNet over the vanilla Transformer                                                                                                  ListOps     Text            Retrieval     Image           Pathfinder        Avg.
+and FNet in terms of floating-point operations (FLOPs) and                                                                             Vanilla
+                                                                                                                                                            0.373     0.637             0.783         0.379            0.709           0.576
+                                                                                                                                    Transformer
+model size (number of parameters). Compared with the                                                                                Vanilla FNet            0.365     0.630             0.779         0.288             0.66           0.544
+vanilla Transformer, FABNet achieves around 10 ∼ 60×                                                                                  FABNet                0.374     0.626             0.801         0.398            0.679           0.576
+reduction in FLOPs and 2 ∼ 22× reduction in model size,
+depending on the target task. Furthermore, compared with
+FNet, FABNet reduces FLOPs by 2 ∼ 10× and model size                                                                             approach. The runtime of the co-design process is around
+by 2 ∼ 32×.                                                                                                                      10 hours on our GPU server. To get the configurations for
+                                                                                                                                 the rest of the datasets in LRA, we constrain the overall
+C. Effectiveness of Co-design
+                                                                                                                                 accuracy loss to be less than 0.5% compared to the vanilla
+   We evaluate the effectiveness of our co-design approach                                                                       Transformer. The final models and designs are chosen
+in finding the optimal algorithm and hardware designs. For                                                                       as the configurations with the highest hardware perfor-
+demonstration, we use LRA-Text as the target dataset and                                                                         mance (hPbe , Pbu , Pqk , Psv i = h64, 4, 0, 0i) without violating
+VCU128 FPGA as the target device. We select Dhid , Rffn ,                                                                        the accuracy constraints. Unless mentioned otherwise, the
+NABfly and Ntotal from {64, 128, 256, 512, 1024}, {1, 2,                                                                         remaining the sections report the algorithmic and hardware
+4}, {0, 1} and {1, 2} respectively. Parameters for hardware                                                                      performance using these optimized configurations.
+parallelism (Pbe , Pbu , Pqk and Psv ) are chosen from {0, 4, 8,
+16, 32, 64, 128}. Figure 18 shows the points in the accuracy-                                                                    D. Comparison with Baseline Design
+latency design space. The orange line represents the accuracy                                                                       To evaluate the speedup brought by our algorithm (FAB-
+loss, which is constrained to be less than 1% compared with                                                                      Net) and hardware (butterfly accelerator), we use a base-
+the vanilla Transformer. The Pareto front is indicated by the                                                                    line design for comparison [3]. The baseline hardware is
+brown line and the other blue points represent designs with                                                                      designed with multiple multiply-accumulate (MAC) units to
+less optimized software-related hyperparameters (Figure 16)                                                                      accelerate the linear transform and the matrix multiplications
+or hardware design parameters. Among the design points                                                                           between query, key and value vectors. Each MAC is com-
+that satisfy the accuracy constraint, we choose the point                                                                        posed of a multiplier array followed by an adder tree. The
+with the lowest latency in the Pareto front as our point                                                                         fine-grained intra- and inter-layer pipeline techniques [43],
+of comparison. Within our design space, the selected point                                                                       [44] are used to optimize the hardware performance. We
+is up to 10% more accurate than the points in the same                                                                           allocate the parallelism of each MAC unit according to
+latency range and up to 130× faster than points in the same                                                                      its workload in order to achieve load-balanced execution
+accuracy range, underlining the advantages of our co-design                                                                      between different pipeline stages. For a fair comparison,
+                                                                   Over V100          Over TITAN Xp                                                                                                                                        Over V100               Over TITAN Xp
+
+
+
+
+                                                                                                                                                         Energy Eff.(GOPs/Watt)
+          16                                                                                                                                                                               74 79.4                                                                    65 70.5
+                 8.0 9.0                                                                                                                                                           64                     46 49.7                                                                   40 44.1
+                                                                                        7.0 8.0                                                                                                                        26 29.9
+           8                                                                                                                                                                                                                                                                                        23 25.9
+                               5.0 5.6                                                                 4.4 5.0
+                                                                                                                                                                                                                                     18 20.9                                                                   16 19.2            19.5
+SpeedUp
+
+
+
+
+                                                                                                                                                                                                                                                      15 16.1                                                               12
+           4                                 2.9
+                                                    3.4                                                                    2.9                                                     16
+                                                                                                                     2.5                           2.2
+                                                           2.0 2.4                                                                     2.2
+           2                                                             1.6 1.8                                                 1.7                                                4
+                                                                                                                                             1.3
+           1                                                                                                                                                                        1
+                FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Large FABNet-Large FABNet-Large FABNet-Large FABNet-Large                                             FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Large FABNet-Large FABNet-Large FABNet-Large FABNet-Large
+                   128         256         512         768         1024         128          256          512          768         1024                                                     128         256         512         768         1024         128          256          512          768         1024
+
+                                                                                               (a) VCU128 FPGA compared with high-end GPUs in terms of speedup and energy efficiency
+                                                           Over Jetson Nano             Over Raspberry PI
+                                                                                                                                                                                                                                    Over Jetson Nano                Over Raspberry PI
+                                                                                                             342.3
+
+
+
+
+                                                                                                                                                         Energy Eff.(GOPs/Watt)
+                                                                                               203.5                                                                                                                                                                                      273.8
+          256                                                                                                                                                                     256                                                                                       162.8
+ SpeedUp
+
+
+
+
+           64           37.4          37.8          36.6          45.8         38.1
+                                                                                                                                                                                   64            30.0           30.2         29.2         36.6              30.5
+           16     7.6                                                                                                                                                                     15.1                                                                       13.3
+                                                                                         6.6                                                                                       16                     8.1                       7.2               7.2                           8.3             8.1        8.1          8.1
+                                4.1           3.5           3.6          3.6                           4.1           4.0         4.1         4.0                                                                       7.0
+            4                                                                                                                                                                       4
+
+
+
+
+                                                                                                                           OO
+
+
+
+
+                                                                                                                                       OO
+
+
+
+
+                                                                                                                                                   OO
+
+
+
+
+                                                                                                                                                                                                                                                                                                          OO
+
+
+
+
+                                                                                                                                                                                                                                                                                                                     OO
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                  OO
+                                                                                                                            M
+
+
+
+
+                                                                                                                                        M
+
+
+
+
+                                                                                                                                                    M
+            1                                                                                                                                                                       1
+
+
+
+
+                                                                                                                                                                                                                                                                                                           M
+
+
+
+
+                                                                                                                                                                                                                                                                                                                      M
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                   M
+                 FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Large FABNet-Large FABNet-Large FABNet-Large FABNet-Large
+                                                                                                                                                                                         FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Base FABNet-Large FABNet-Large FABNet-Large FABNet-Large FABNet-Large
+                    128         256         512         768         1024         128          256          512          768         1024
+                                                                                                                                                                                            128         256         512         768         1024         128          256          512          768         1024
+
+                                                                                      (b) Zynq 7045 FPGA compared with edge GPU and CPU in terms of speedup and energy efficiency
+
+
+                                                             Figure 20.                  Performance comparison against (a) high-end GPUs, and (b) edge GPU and CPU.
+
+
+                                                                                                                                                                                                                      Table IV
+we implement both baseline and butterfly accelerators on a                                                                                                                                        H ARDWARE SPECIFICATION OF CPU, GPU AND FPGA.
+VCU128 FPGA using 2048 multipliers. The high bandwidth
+memory (HBM) is used as the external memory. Both                                                                                                                                                               Platform                    # cores                 Compiler                 Frequency               Technology
+designs are clocked at 200 MHz. We evaluate both base (12                                                                                                                               CPU               Raspberry Pi 4                         4                                                1.5 GHz                 28 nm
+layers) and large (24 layers) versions of each model using                                                                                                                                                 Nvidia V100                       5,120                   PyTorch                  1.38 GHz                    12 nm
+four different input sequences (128, 256, 512 and 1024).                                                                                                                                GPU             Nvidia TITAN Xp                      3,840                    1.10.2                      1.6 GHz                 16 nm
+   A speedup breakdown is shown in Figure 19. To demon-                                                                                                                                                 Nvidia Jetson Nano                       128                                         921.6 MHz                    20 nm
+
+strate the improvement brought by our algorithm, we first                                                                                                                                                Xilinx VCU128                            -                   Vivado                  200 MHz                     16 nm
+                                                                                                                                                                                    FPGA
+                                                                                                                                                                                                         Xlinx Zynq 7045                          -                   2019.2                  200 MHz                     28 nm
+evaluate both BERT-Base and FABNet on the baseline de-
+sign. As the FFT is not supported in the baseline design, we
+implement the Fourier layers as linear layers by multiplying
+the input sequences with DFT matrices. Since the operation                                                                                                                        per Watt (GOPS/Watt). In the edge scenario, our design on
+reduction brought by the algorithm is not fully utilized by                                                                                                                       Zynq 7045 FPGA achieves 3.5 ∼ 8× speedup over Jetson
+the baseline design, FABNet results in a 1.6 ∼ 2.3× speedup                                                                                                                       Nano GPU and 36.6 ∼ 342.3× speedup over Raspberry
+compared to BERT. To further evaluate the improvement                                                                                                                             Pi4§ . At the same time, our design yields 7.0 ∼ 15.1×
+brought by hardware optimizations, we evaluate FABNet on                                                                                                                          and 162.8 ∼ 273.8× higher energy efficiency than Jetson
+our butterfly accelerator, showing 19.5 ∼ 53.3× speedup                                                                                                                           Nano and Raspberry Pi4, respectively. In the server scenario,
+when compared to the baseline design. By combining both                                                                                                                           our design on VCU128 is up to 8.0 and 9.0× faster and
+algorithm and hardware optimizations, the overall speedup                                                                                                                         up to 74.0 and 79.4× more energy-efficient than the V100
+of our approach is 30.8 ∼ 87.3× over the baseline design.                                                                                                                         and TITAN Xp GPU, respectively. In summary, the end-to-
+                                                                                                                                                                                  end speedup and energy efficiency gains on both edge and
+E. Comparison with GPU and CPU                                                                                                                                                    server scenarios under different input sequences highlight
+                                                                                                                                                                                  the scalability of our butterfly accelerator.
+   We compare our butterfly accelerator against GPU and
+CPU in both edge and server scenarios. In the edge scenario,                                                                                                                      F. Comparison with SOTA Accelerators
+our butterfly accelerator is implemented on a Xilinx Zynq
+                                                                                                                                                                                     Table V compares our butterfly accelerator with existing
+7045 FPGA. DDR4 is used as external memory and 512
+                                                                                                                                                                                  state-of-the-art (SOTA) accelerators in terms of speed and
+multipliers are used for computation. Nvidia Jetson Nano
+                                                                                                                                                                                  power consumption. Instead of comparing the effective
+GPU and Raspberry Pi4 are used as the GPU and CPU
+                                                                                                                                                                                  throughput [6], [15], we use the end-to-end latency to repre-
+platforms, respectively. In the server scenario, the butterfly
+                                                                                                                                                                                  sent the actual execution speed of the hardware. The energy
+accelerator is implemented on a Xilinx VCU128 FPGA.
+                                                                                                                                                                                  efficiency is represented by the number of predictions per
+HBM is used as external memory and the design consumes
+                                                                                                                                                                                  Joule (Pred./J). Following the experimental setting of [18],
+1920 multipliers. We use Nvidia V100 and TITAN Xp GPUs
+                                                                                                                                                                                  we compare all other SOTA accelerators on LRA-Image
+for comparison, with highly-optimized CUDA implementa-
+                                                                                                                                                                                  dataset with one-layer vanilla Transformer. Among these
+tions [32]. FPGA designs are clocked at 200 MHz.
+                                                                                                                                                                                  accelerators, only SpAtten [6] and DOTA [18] report the
+   We evaluate both FABNet-Base and FABNet-Large using
+                                                                                                                                                                                  end-to-end performance. For the rest of the accelerators that
+128, 256, 512 and 1024 input sequences. Figure 20 shows
+the results in term of speedup and energy efficiency. We                                                                                                                          § On FABNet-Large with long input sequences greater than 768, Raspberry
+represent energy efficiency using Giga operations per second                                                                                                                       Pi 4 suffers from out-of-memory (OOM) issues.
+                                                                                   Table V
+                                    C OMPARISON WITH EXISTING Transformer ACCELERATORS IN TERMS OF LATENCY, POWER AND ENERGY EFFICIENCY.
+
+
+                                                A3 [14]             SpAtten [6]                       Sanger [15]           Energon [16]           ELSA [17]                       DOTA [18]               FTRANS [19]
+                     Accelerators                                                                                                                                                                                                     Our work
+                                               (HPCA’20)            (HPCA’21)                        (MICRO’21)              (TCAD’21)             (ISCA’21)                      (ASPLOS’22)              (ISLPED’20)
+                        Technology            ASIC (40nm)           ASIC (40nm)                      ASIC (55nm)            ASIC (45nm)        ASIC (40nm)                        ASIC (22nm)              FPGA (16nm)           FPGA (16nm)
+                        Frequency                                                                                   1 GHz                                                                                   170 MHz                   200 MHz
+                    # of Multipliers                                                                                  128                                                                                        6531                   640
+                     Latency (ms)                   56.0                48.8                             45.2                   44.2                 34.7                                34.1                    61.6                   2.4
+               Throughput (Pred./s)                 17.86               20.49                            22.12                 22.62                 28.82                               29.32                   16.23                 416.66
+                        Power (W)                   1.217               1.060                            0.801                 2.633                 0.976                               0.858               25.130                    11.355
+               Energy Eff. (Pred./J)                14.67               19.33                            27.62                  8.59                 29.52                               34.18                   0.65                  36.69
+
+
+
+                                16 BEs          32 BEs             64 BEs                       96 BEs                128 BEs
+               60                                                                              500                                                                                2000
+Latency (ms)
+
+
+
+
+                                                                                Latency (ms)
+
+
+
+
+                                                                                                                                                                   Latency (ms)
+                                                                                               400                                                                                1500
+               40
+                                                                                               300
+                                                                                                                                                                                  1000
+               20                                                                              200
+                                                                                               100                                                                                 500
+                0                                                                                0                                                                                   0
+                    0      25      50    75   100    125    150   175   200                          0     25    50     75      100    125   150    175      200                          0      25   50    75      100   125   150     175     200
+                                    Bandwidth (GB/s)                                                              Bandwidth (GB/s)                                                                     Bandwidth (GB/s)
+                        (a) FABNet-Large with 128 input sequence                                      (b) FABNet-Large with 1024 input sequence                                           (c) FABNet-Large with 4096 input sequence
+
+                                     Figure 21.      Latency for different input sequence lengths (a-c) when varying the available off-chip memory bandwidth.
+
+
+
+only support attention, we estimate their performance by                                                                                 As shown in Table V, our butterfly accelerator achieves
+reusing their available multipliers to accelerate FFN. Fur-                                                                           25.6× speedup over the FPGA-based FTRANS [19] while
+thermore, in both [6] and [15], the authors compare different                                                                         using nearly 10× fewer DSPs. At the same time, we achieve
+ASIC and FPGA designs based on the assumption that all                                                                                62.3× higher energy efficiency than FTRANS. Compared
+the ASIC designs are clocked at 1 GHz with 128 multipliers.                                                                           with ASIC designs, our accelerator achieves 14.2 ∼ 23.2×
+For a fair comparison, we follow the same assumption in our                                                                           speedup under the same computational capacity. Although
+experiments. For designs with more than 128 multipliers,                                                                              our FPGA-based butterfly design consumes more power than
+we follow the scaling approach of [6], [15] to linearly scale                                                                         ASIC designs, it yields 1.1 ∼ 4.3× higher energy efficiency
+down its throughput to get their end-to-end performance. For                                                                          than the other SOTA ASIC accelerators. We expect further
+instance, DOTA [18]¶ achieves 11.4× speedup over Nvidia                                                                               speedup and energy efficiency improvements when our de-
+V100 using 12, 000 multipliers with 12 TOPS throughput.                                                                               sign is implemented as an ASIC.
+We scale down its throughput by 12, 000/128 = 93.75,                                                                                     We attribute the performance gain of our approach over
+which leads to 0.123× speedup over V100. To obtain                                                                                    ASIC designs to two main factors: 1) the use of FFT
+the power consumption, we use the same linear scaling                                                                                 and butterfly factorization which significantly reduces the
+approach. For instance, Sanger [15] reports the power con-                                                                            computational complexity at the algorithmic level; 2) the
+sumption of a design with 1024 multipliers. We divide the                                                                             adaptable butterfly design that adopts a single unified hard-
+power consumption of their systolic array (2243 mW) by                                                                                ware engine to accelerate both FFT and butterfly linear
+1024/128 = 8, which leads to 280.375 mW. Together with                                                                                transformation, which significantly improves the hardware
+the power of other modules such as pre-processing and                                                                                 efficiency; and 3) the co-design process which jointly opti-
+memory, their total power consumption is 0.801 W. To match                                                                            mizes both algorithm and hardware parameters.
+the computational capacity of ASIC designs, we use 640
+DSPs in the VCU128 FPGA. As our FPGA-based design                                                                                     G. Off-Chip Memory Bandwidth Analysis
+is clocked at 200 MHz, this ensures that we have the same
+                                                                                                                                         In order to investigate the sensitivity of our design to off-
+640 × 200M = 128 GOPS theoretical peak performance as
+                                                                                                                                      chip memory bandwidth, we vary the bandwidth from 6, 12,
+ASIC designs (128 × 1G = 128 GOPS). While this is a
+                                                                                                                                      25, 50, 100 and 200 GB/s, and evaluate its latency based on
+simple approximation, it allows us to compare different
+                                                                                                                                      our performance model. For these experiments, we use five
+hardware architectures regardless of their underlying target
+                                                                                                                                      different designs with 16, 32, 64 and 128 BEs executing
+platforms.
+                                                                                                                                      FABNet-Large with 24 layers. To understand the bandwidth
+                                                                                                                                      requirements under both short and long input lengths, we
+¶ We            assume their design is compute-bound.                                                                                 evaluate each design using three input sequences (128, 1024
+and 4096). The results are shown in Figure 21. For a small-                                               VII. R ELATED W ORK
+scale design of 16 BEs, a bandwidth of 50 GB/s is enough
+for the design to reach its peak performance under different                           Efficient Approaches for Attention. As the algorithmic
+input sequences. For the largest design of 128 BEs, the                                complexity of the self-attention mechanism scales quadrat-
+achieved performance saturates once the bandwidth reaches                              ically with respect to the input sequence length, many
+100 GB/s.                                                                              sparse variants have been introduced to approximate the
+                                                                                       attention-based NNs [45]. The sparsity patterns in these
+H. Power and Resource Analysis                                                         approaches are determined either dynamically [7], [8], [10],
+   Table VI shows the power consumption breakdown|| based                              [12] or statically [11], [31], [34]. Although these methods
+on the report generated from the Vivado XPE tool. We                                   achieve high compression rate on the number of operations
+implement two designs with 120 BEs (BE-120) and 40                                     and parameters, the hardware cost and efficiency of their
+BEs (BE-40) on a VCU128 FPGA, which have been used                                     mappings on real hardware designs are not considered in
+in Section VI-E and Section VI-F, respectively. In both                                these works.
+designs, the dynamic power accounts for more than 70%                                  Domain-Specific Accelerators for Attention-based NNs.
+of the total power consumption. The memory resources,                                  To better utilize existing efficient attention-based algorithmic
+including both BRAM and HBM, consume more than 25%                                     approaches on hardware, various domain-specific hardware
+of the dynamic power. Furthermore, when the number of                                  designs have been introduced. Ham et al. [14] propose a
+BEs scales from 40 to 120, the power of clocking, logic                                hardware architecture called A3 , which dynamically prunes
+& signal and DSPs increases from 2.688 W, 2.381 W and                                  entries based on their softmax importance. By leveraging
+0.338 W to 6.882 W, 7.732 W and 1.437 W, respectively.                                 the sparsity in both head and token levels, Wang et al. [6]
+   Table VII presents the resource consumption of both                                 propose SpAtten that dynamically prunes entire rows and
+BE-40 and BE-120 designs on the same VCU120 FPGA.                                      columns from the attention matrix. EdgeBERT [20] explores
+Due to the use of FFT and butterfly matrices, our FABNet                               the layer sparsity via an entropy-based early-exit approach,
+becomes less memory-intensive than the vanilla attention-                              which significantly reduces the computation and memory
+based NNs. Since the theoretical memory bandwidth of a                                 footprint. To detect the weak relationship in attention,
+single HBM (450 GB/s) can already satisfy the requirement                              DOTA [18] uses low-rank linear transformations to detect
+of our accelerator (Section VI-G), we use one HBM in                                   and omit the weak connections. ELSA [17] approximates
+both designs to reduce the resource and power consumption.                             the attention mechanism using a sign random projection
+When the number of BEs decreases from 120 to 40, the                                   approach. To further exploit the sparsity in attention-based
+BRAM usage is reduced from 978 to 338. This reduction                                  NNs, Energon [16] adopts a low-precision NN to predict
+can also be observed on the LUT and register resources.                                the sparsity in the attention matrix. However, the generated
+                            Table VI
+                                                                                       sparsity patterns from these approaches are always unstruc-
+           P OWER BREAKDOWN OF OUR DESIGNS ON VCU128.                                  tured, which may lead to hardware inefficiency. Sanger [15]
+                                                                                       propose pack-and-split modules to distribute the non-zero
+                                            Dynamic (W)                                computation to each computation engine, achieving a load-
+      Design                        Logic&                       Memory
+                                                                              Static   balanced execution. Although these accelerators achieve
+                       Clocking                   DSP
+                                    Signal                    (BRAM & HBM)     (W)     notable speedup over GPUs and CPUs when executing the
+            used        2.668       2.381         0.338            5.325      3.368
+  BE-40
+                                                                                       attention mechanism, their end-to-end hardware performance
+               pct.     18.8%       16.7%         2.3%             37.5%      23.7%
+                                                                                       is limited as the approximation and acceleration of the FFN
+            used        6.882       7.732         1.437            6.142      3.665
+  BE-120                                                                               part are not considered in their design.
+               pct.     26.4%       29.7%         5.5%             23.6%      14.1%
+                                                                                       Comparison to Previous Work. As spatial-domain con-
+                                                                                       volution corresponds to frequency-domain multiplication,
+                             Table VII                                                 various FFT-based hardware accelerators have been intro-
+            R ESOURCE USAGE OF OUR DESIGNS ON VCU128.                                  duced to accelerate CNNs [46], [47], LSTMs [48], [49]
+                                                                                       and attention-based NNs [19]. However, these designs only
+                          LUTs        Registers           DSP48s     BRAMs    HBMs     use FFT as a domain transfer approach, while the main
+     Available          1,303,680     2,607,360           9,024       2,016     2      computation is still performed in another processing en-
+               used      358,609       536,810             640         338      1      gine. In contrast, this paper adopts the butterfly sparsity,
+   BE-40
+                pct.      27.5%        20.6%               7.1%       16.8%   50.0%
+                                                                                       a generalized pattern of FFT, for the main computation
+               used     1,034,610     1,648,695           2,880        978      1
+  BE-120                                                                               of the network. Based on the proposed method, all the
+                pct.      79.3%        63.2%              31.9%       48.5%   50.0%
+                                                                                       computations are performed in a single unified butterfly
+                                                                                       accelerator, resulting in a higher hardware efficiency over
+|| Powerof I/O is not included as it occupies less than 1% of the                      previous designs.
+total power.                                                                              Although butterfly sparsity has been explored in recent
+literature, most approaches only focus on algorithm-level           running our custom Python-based performance model. We
+optimizations. Dao et al. [32] demonstrate the potential of         also provide all our training log files and Vivado design
+the butterfly matrix in approximating linear transformations,       reports in the link: https://drive.google.com/drive/folders/1
+but its efficiency on attention matrices is not explored in their   jaR8gDX-zO1Hu83xFg IJOwRgoBMPnjY?usp=sharing.
+work. On the other hand, Pixelated Butterfly [31] and Sparse
+Transformer [13] focus on adopting the butterfly pattern for        B. Artifact check-list (meta-information)
+attention matrices, neglecting the linear layers. Moreover,
+their designs require the use of multiple sparsity patterns           •   Algorithm: FABNet, an efficient model that adopts a
+to compensate for the accuracy loss, which significantly                  unified butterfly sparsity pattern to approximate both
+complicates the hardware design. Lee-Thorp et al. [34] show               the attention mechanism and the FFNs.
+the effectiveness of Fourier transforms in accelerating atten-        •   Program: Python, PyTorch, Verilog HDL
+tion layers, but did not consider the linear layers, leading          •   Model: We evaluate three models for comparison,
+to scalability issues (Section II-C). Different from all these            including Transformer, FNet and FABNet.
+efforts, this paper exploits the use of butterfly sparsity for        •   Data set: Long-Range-Arena (LRA) dataset, which is
+both attention and linear layers via an algorithm-hardware                a well-known long sequence natural language process-
+co-design approach. A novel butterfly-based algorithm and                 ing (NLP) dataset. The zip file can be downloaded from
+an adaptable hardware accelerator are jointly designed to                 the link: https://storage.googleapis.com/long-range-ar
+overcome existing limitations to push the performance limit.              ena/lra release.gz. The required disk space of the unzip
+                                                                          file is around 33 GB.
+                     VIII. C ONCLUSION                                •   Run-time environment: Ubuntu 20.04, CUDA SDK
+   This paper proposes the end-to-end acceleration of                     11.3 or higher.
+attention-based NNs via algorithm and hardware co-design.             •   Hardware: Nvidia V100 GPU, Nvidia TITAN Xp
+On the algorithmic level, we propose FABNet, a hardware-                  GPU, Nvidia Jetson Nano GPU, Intel Xeon Gold 6154
+friendly attention-based NN. Both attention and linear layers             CPU, Raspberry Pi 4.
+are compressed using a unified butterfly sparsity pattern             •   Metrics: Accuracy, simulated latency, resource and
+allowing for scalable end-to-end acceleration. On the hard-               power consumption.
+ware level, an adaptable butterfly accelerator is proposed that       •   Experiments: Bash scripts and detailed instructions
+can be configured at runtime to accelerate different layers               are provided to run experiments.
+based on a unified hardware engine to achieve high hardware           •   How much disk space required (approximately)?
+efficiency. Both algorithm and hardware design parameters             •   How much time is needed to prepare workflow
+are jointly optimized to push the performance limit. Our                  (approximately)? 1 ∼ 2 hours.
+experiments demonstrate that our co-design approach yields            •   How much time is needed to complete experi-
+up to 23.2× speedup over state-of-the-art accelerators. Fur-              ments (approximately)? Accuracy results: hundreds
+thermore, our design achieves up to 273.8× higher energy                  of GPU hours to obtain. Power and resource consump-
+efficiency compared to optimized GPU implementations.                     tion: around 70 hours. Functionality of Verilog design:
+                                                                          around 5 hours.
+                    ACKNOWLEDGEMENT                                   •   Publicly available? Yes.
+   The support of the UK EPSRC grants (UK EPSRC grant                 •   Code licenses (if publicly available)? Yes.
+number EP/V028251/1, EP/L016796/1, EP/S030069/1 and                   •   Archived (provide DOI)? We will update this later.
+EP/N031768/1), AMD and Intel is gratefully acknowledged.
+We also thank Alexander Mathiasen for insightful discus-            C. Description
+sions on model compression.
+                                                                       1) How to access: You can access our codebase from the
+                          A PPENDIX                                 link: https://zenodo.org/record/7010800#.YwQKCOzMJhF
+A. Abstract                                                         or https://github.com/os-hxfan/Butterfly Acc.git.
+   This Appendix summarizes the necessary information                  2) Hardware dependencies: A GPU server is required to
+and instructions to evaluate our artifacts. The functionality       run the training of our models. A CPU server is needed to
+of our hardware accelerator can be evaluated by running             run simulation, synthesis and place&route. Different GPUs
+Verilog HDL designs and System Verilog testbenches on               and CPUs, such as Nvidia Jetson Nano GPU and Raspberry
+Vivado design suite. The accuracy results can be obtained           Pi 4, are also required to evaluate the hardware performance
+by running our PyTorch programs and the associated Bash             of different models.
+scripts. The power and resource utilization can be obtained            3) Software dependencies: Vivado Design Suite 2019.2,
+by running Synthesis and Implementation using our RTL               PyTorch 1.10.2, CUDA SDK 11.3 or higher, Python 3.8 or
+code and constraint files. The latency can be obtained by           higher. Other dependencies are listed in requirements.txt.
+   4) Data sets: Five tasks in the LRA dataset including           G. Methodology
+ListOPs for hierarchical data classification, Text for byte-         Submission, reviewing and badging methodology:
+level text classification, Retrieval for byte-level document         • https://www.acm.org/publications/policies/artifact-rev
+retrieval, Image for image classification for sequences of             iew-badging
+pixels and Pathfinder for classification of long-range spatial       • http://cTuning.org/ae/submission-20201122.html
+dependency.                                                          • http://cTuning.org/ae/reviewing-20201122.html
+D. Installation
+                                                                                            R EFERENCES
+  We provide a detailed installation guide in the README
+.md of the root directory.                                          [1] G. Brauwers and F. Frasincar, “A General Survey on Atten-
+                                                                        tion Mechanisms in Deep Learning,” IEEE Transactions on
+E. Experiment workflow                                                  Knowledge and Data Engineering, 2021.
+   To evaluate the functionality of our hardware, perform the       [2] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones,
+following steps:                                                        A. N. Gomez, L. Kaiser, and I. Polosukhin, “Attention is
+   • Follow the instruction of experimental setup in the                All You Need,” Advances in Neural Information Processing
+     root directory to install software dependencies. Install           Systems (NeurIPS), 2017.
+     Vivado 2019.2.
+                                                                    [3] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, “BERT:
+   • Generate the test data using our Python programs.
+                                                                        Pre-training of Deep Bidirectional Transformers for Language
+   • Create a Vivado project for our hardware design.                   Understanding,” in ACL, 2019.
+   • Import all the Verilog source code and System Verilog
+     testbenches.                                                   [4] A. Radford, J. Wu, R. Child, D. Luan, D. Amodei, and
+                                                                        I. Sutskever, “Language Models are Unsupervised Multitask
+   • Include all the necessary IPs from Vivado IP library.
+                                                                        Learners,” OpenAI blog, vol. 1, no. 8, p. 9, 2019.
+We provide Vivado Tcl scripts and step-by-step instructions
+in ./hardware/npu_design/verilog/README.m                           [5] A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn,
+d to automate the whole process.                                        X. Zhai, T. Unterthiner, M. Dehghani, M. Minderer,
+   To reproduce the algorithmic and hardware performance,               G. Heigold, S. Gelly et al., “An image is worth 16x16 words:
+                                                                        Transformers for image recognition at scale,” in International
+we provide all the scripts under the directory ./script_f               Conference on Representation Learning (ICLR), 2021.
+igs to generate figures and tables. The detailed instructions
+are provided in ./script_figs/README.md.                            [6] H. Wang, Z. Zhang, and S. Han, “SpAtten: Efficient Sparse
+                                                                        Attention Architecture with Cascade Token and Head Prun-
+F. Evaluation and expected results                                      ing,” IEEE International Symposium on High Performance
+   We provide scripts under ./script_figs to generate                   Computer Architecture (HPCA), 2021.
+all the figures and tables related to accuracy performance and
+                                                                    [7] K. Choromanski, V. Likhosherstov, D. Dohan, X. Song,
+hardware performance include power consumption, resource                A. Gane, T. Sarlos, P. Hawkins, J. Davis, A. Mohiuddin,
+utilization and simulated latency performance. As running               L. Kaiser et al., “Rethinking Attention with Performers,”
+all the experiments requires a few hundred GPU/CPU hours,               in International Conference on Learning Representations
+to facilitate the artifact evaluation, we refer to the following        (ICLR), 2021.
+key results that can be obtained within a reasonable time:
+                                                                    [8] S. Wang, B. Z. Li, M. Khabsa, H. Fang, and H. Ma,
+   • Vivado simulation to run different layers, such as fast
+                                                                        “Linformer: Self-Attention with Linear Complexity,” arXiv
+      Fourier transform, butterfly matrix multiplication and            preprint arXiv:2006.04768, 2020.
+      layer normalization, on our Verilog hardware design.
+      We provide System Verilog testbenches under ./ha              [9] N. Kitaev, Ł. Kaiser, and A. Levskaya, “Reformer: The Effi-
+      rdware/npu_design/verilog/functional                              cient Transformer,” in International Conference on Learning
+                                                                        Representations (ICLR), 2020.
+      ity/testbench/, and a detailed workflow in the
+      first paragraph of Section E.                                [10] Y. Tay, D. Bahri, L. Yang, D. Metzler, and D.-C. Juan, “Sparse
+   • Power breakdown in Table VI and resource utilization               Sinkhorn Attention,” in International Conference on Machine
+      in Table VII. We provide detailed instructions and                Learning (ICML), 2020.
+      Vivado Tcl scripts under ./hardware/npu_des
+                                                                   [11] I. Beltagy, M. E. Peters, and A. Cohan, “Longformer:
+      ign/verilog/ to run synthesis and place&route on                  The Long-Document Transformer,” arXiv preprint
+      both VCU128 and Zynq 7045 FPGAs.                                  arXiv:2004.05150, 2020.
+   Although it takes longer to run other experiments, all
+the results are reproducible using our provided scripts. We        [12] M. Zaheer, G. Guruganesh, K. A. Dubey, J. Ainslie, C. Al-
+                                                                        berti, S. Ontanon, P. Pham, A. Ravula, Q. Wang, L. Yang
+provide all the GPU training log files and Vivado design                et al., “Big Bird: Transformers for Longer Sequences,” in Ad-
+reports in the link: https://drive.google.com/drive/folders/1           vances in Neural Information Processing Systems (NeurIPS),
+jaR8gDX-zO1Hu83xFg IJOwRgoBMPnjY?usp=sharing.                           2020.
+[13] R. Child, S. Gray, A. Radford, and I. Sutskever, “Generating     [25] A. Wang, A. Singh, J. Michael, F. Hill, O. Levy, and S. R.
+     Long Sequences with Sparse Transformers,” arXiv preprint              Bowman, “GLUE: A Multi-Task Benchmark and Analysis
+     arXiv:1904.10509, 2019.                                               Platform for Natural Language Understanding,” Proceedings
+                                                                           of the 2018 EMNLP Workshop BlackboxNLP: Analyzing and
+[14] T. J. Ham, S. J. Jung, S. Kim, Y. H. Oh, Y. Park, Y. Song, J.-        Interpreting Neural Networks for NLP, 2018.
+     H. Park, S. Lee, K. Park, J. W. Lee et al., “A3 : Accelerating
+     Attention Mechanisms in Neural Networks with Approxima-          [26] X. Ma, P. Zhang, S. Zhang, N. Duan, Y. Hou, M. Zhou, and
+     tion,” in IEEE International Symposium on High Performance            D. Song, “A Tensorized Transformer for Language Model-
+     Computer Architecture (HPCA), 2020.                                   ing,” in Advances in Neural Information Processing Systems
+                                                                           (NeurIPS), 2019.
+[15] L. Lu, Y. Jin, H. Bi, Z. Luo, P. Li, T. Wang, and Y. Liang,
+     “Sanger: A Co-Design Framework for Enabling Sparse At-           [27] B. Chen, T. Dao, E. Winsor, Z. Song, A. Rudra, and
+     tention Using Reconfigurable Architecture,” in 54th Annual            C. Ré, “Scatterbrain: Unifying Sparse and Low-rank Atten-
+     IEEE/ACM International Symposium on Microarchitecture                 tion,” in Advances in Neural Information Processing Systems
+     (MICRO), 2021.                                                        (NeurIPS), 2021.
+
+[16] Z. Zhou, J. Liu, Z. Gu, and G. Sun, “Energon: Towards            [28] D. S. Parker, “Random Butterfly Transformations with Ap-
+     Efficient Acceleration of Transformers Using Dynamic Sparse           plications in Computational Linear Algebra,” 1995.
+     Attention,” IEEE Transactions on Computer-Aided Design of
+     Integrated Circuits and Systems (TCAD), 2021.                    [29] T. Dao, A. Gu, M. Eichhorn, A. Rudra, and C. Ré, “Learning
+                                                                           Fast Algorithms for Linear Transforms Using Butterfly Fac-
+[17] T. J. Ham, Y. Lee, S. H. Seo, S. Kim, H. Choi, S. J. Jung,            torizations,” in International Conference on Machine Learn-
+     and J. W. Lee, “ELSA: Hardware-Software Co-Design for                 ing (ICML), 2019.
+     Efficient, Lightweight Self-Attention Mechanism in Neural
+     Networks,” in ACM/IEEE 48th Annual International Sympo-          [30] C. De Sa, A. Cu, R. Puttagunta, C. Ré, and A. Rudra,
+     sium on Computer Architecture (ISCA), 2021.                           “A two-pronged progress in structured dense matrix vector
+                                                                           multiplication,” in Proceedings of the Twenty-Ninth Annual
+[18] Z. Qu, L. Liu, F. Tu, Z. Chen, Y. Ding, and Y. Xie, “DOTA:            ACM-SIAM Symposium on Discrete Algorithms.          SIAM,
+     Detect and Omit Weak Attentions for Scalable Transformer              2018, pp. 1060–1079.
+     Acceleration,” in 27th ACM International Conference on
+                                                                      [31] B. Chen, T. Dao, K. Liang, J. Yang, Z. Song, A. Rudra, and
+     Architectural Support for Programming Languages and Op-
+                                                                           C. Re, “Pixelated Butterfly: Simple and Efficient Sparse train-
+     erating Systems (ASPLOS), 2022.
+                                                                           ing for Neural Network Models,” in International Conference
+                                                                           on Learning Representations (ICLR), 2022.
+[19] B. Li, S. Pandey, H. Fang, Y. Lyv, J. Li, J. Chen, M. Xie,
+     L. Wan, H. Liu, and C. Ding, “FTRANS: Energy-Efficient           [32] T. Dao, N. S. Sohoni, A. Gu, M. Eichhorn, A. Blonder,
+     Acceleration of Transformers using FPGA,” in ACM/IEEE                 M. Leszczynski, A. Rudra, and C. Ré, “Kaleidoscope: An
+     International Symposium on Low Power Electronics and                  Efficient, Learnable Representation for All Structured Linear
+     Design (ISLPED), 2020, pp. 175–180.                                   Maps,” in International Conference on Learning Representa-
+                                                                           tions (ICLR), 2020.
+[20] T. Tambe, C. Hooper, L. Pentecost, T. Jia, E.-Y. Yang,
+     M. Donato, V. Sanh, P. Whatmough, A. M. Rush, D. Brooks          [33] I. O. Tolstikhin, N. Houlsby, A. Kolesnikov, L. Beyer,
+     et al., “EdgeBERT: Sentence-Level Energy Optimizations for            X. Zhai, T. Unterthiner, J. Yung, A. Steiner, D. Keysers,
+     Latency-Aware Multi-Task NLP Inference,” in 54th Annual               J. Uszkoreit et al., “MLP-Mixer: An all-MLP Architecture for
+     IEEE/ACM International Symposium on Microarchitecture                 Vision,” Advances in Neural Information Processing Systems
+     (MICRO), 2021.                                                        (NeurIPS), 2021.
+[21] J.-W. Jang, S. Lee, D. Kim, H. Park, A. S. Ardestani,            [34] J. Lee-Thorp, J. Ainslie, I. Eckstein, and S. Ontanon, “FNet:
+     Y. Choi, C. Kim, Y. Kim, H. Yu, H. Abdel-Aziz et al.,                 Mixing Tokens with Fourier Transforms,” arXiv preprint
+     “Sparsity-Aware and Re-configurable NPU Architecture for              arXiv:2105.03824, 2021.
+     Samsung Flagship Mobile SoC,” in ACM/IEEE 48th Annual
+     International Symposium on Computer Architecture (ISCA),         [35] J. W. Cooley and J. W. Tukey, “An algorithm for the ma-
+     2021.                                                                 chine calculation of complex fourier series,” Mathematics of
+                                                                           computation, vol. 19, no. 90, pp. 297–301, 1965.
+[22] K. He, X. Zhang, S. Ren, and J. Sun, “Deep Residual
+     Learning for Image Recognition,” in IEEE Conference on           [36] G. M. Amdahl, “Validity of the single processor approach to
+     Computer Vision and Pattern Recognition (CVPR), 2016, pp.             achieving large scale computing capabilities,” in Proceedings
+     770–778.                                                              of the April 18-20, 1967, Spring Joint Computer Conference,
+                                                                           1967, pp. 483–485.
+[23] J. L. Ba, J. R. Kiros, and G. E. Hinton, “Layer Normaliza-
+     tion,” arXiv preprint arXiv:1607.06450, 2016.                    [37] T. Dao, B. Chen, N. S. Sohoni, A. Desai, M. Poli, J. Grogan,
+                                                                           A. Liu, A. Rao, A. Rudra, and C. Ré, “Monarch: Expressive
+[24] G. Lample and A. Conneau, “Cross-lingual language model               Structured Matrices for Efficient and Accurate Training,”
+     pretraining,” Advances in Neural Information Processing Sys-          in International Conference on Machine Learning (ICML),
+     tems (NeurIPS), 2019.                                                 2022, pp. 4690–4721.
+[38] T. Geng, A. Li, R. Shi, C. Wu, T. Wang, Y. Li, P. Haghi,
+     A. Tumeo, S. Che, S. Reinhardt et al., “AWB-GCN: A Graph
+     Convolutional Network Accelerator with Runtime Workload
+     Rebalancing,” in 53rd Annual IEEE/ACM International Sym-
+     posium on Microarchitecture (MICRO), 2020.
+
+[39] Y. Tay, M. Dehghani, S. Abnar, Y. Shen, D. Bahri, P. Pham,
+     J. Rao, L. Yang, S. Ruder, and D. Metzler, “Long Range
+     Arena: A Benchmark for Efficient Transformers,” in Interna-
+     tional Conference on Learning Representations (ICLR), 2020.
+
+[40] A. Paszke et al., “PyTorch: An Imperative Style, High-
+     Performance Deep Learning Library,” in Advances in Neural
+     Information Processing Systems (NeurIPS), 2019.
+
+[41] T. Wolf et al., “Huggingface’s Transformers: State-
+     of-the-art Natural Language Processing,” arXiv preprint
+     arXiv:1910.03771, 2019.
+
+[42] Y. Xiong, Z. Zeng, R. Chakraborty, M. Tan, G. Fung, Y. Li,
+     and V. Singh, “Nyströmformer: A Nystöm-based Algorithm
+     for Approximating Self-Attention,” in Proceedings of the
+     AAAI Conference on Artificial Intelligence (AAAI), vol. 35,
+     no. 16. NIH Public Access, 2021, p. 14138.
+
+[43] L. Song, J. Mao, Y. Zhuo, X. Qian, H. Li, and Y. Chen,
+     “HyPar: Towards Hybrid Parallelism for Deep Learning Ac-
+     celerator Array,” in 2019 IEEE International Symposium on
+     High Performance Computer Architecture (HPCA), 2019.
+
+[44] M. Alwani, H. Chen, M. Ferdman, and P. Milder, “Fused-
+     Layer CNN Accelerators,” in 49th Annual IEEE/ACM Inter-
+     national Symposium on Microarchitecture (MICRO), 2016.
+
+[45] Y. Tay, M. Dehghani, D. Bahri, and D. Metzler, “Efficient
+     Transformers: A Survey,” ACM Computing Surveys (CSUR),
+     2020.
+
+[46] C. Zhang and V. Prasanna, “Frequency Domain Acceleration
+     of Convolutional Neural Networks on CPU-FPGA Shared
+     Memory System,” in Proceedings of the 2017 ACM/SIGDA
+     International Symposium on Field-Programmable Gate Ar-
+     rays (FPGA’17), 2017, pp. 35–44.
+
+[47] T. Abtahi, C. Shea, A. Kulkarni, and T. Mohsenin, “Acceler-
+     ating Convolutional Neural Network With FFT on Embedded
+     Hardware,” IEEE Transactions on Very Large Scale Integra-
+     tion (VLSI) Systems, vol. 26, no. 9, pp. 1737–1749, 2018.
+
+[48] S. Wang, Z. Li, C. Ding, B. Yuan, Q. Qiu, Y. Wang, and
+     Y. Liang, “C-LSTM: Enabling Efficient LSTM using Struc-
+     tured Compression Techniques on FPGAs,” in Proceedings
+     of the 2018 ACM/SIGDA International Symposium on Field-
+     Programmable Gate Arrays (FPGA’18), 2018, pp. 11–20.
+
+[49] Z. Li, C. Ding, S. Wang, W. Wen, Y. Zhuo, C. Liu, Q. Qiu,
+     W. Xu, X. Lin, X. Qian et al., “E-RNN: Design Optimiza-
+     tion for Efficient Recurrent Neural Networks in FPGAs,” in
+     2019 IEEE International Symposium on High Performance
+     Computer Architecture (HPCA). IEEE, 2019, pp. 69–80.
+

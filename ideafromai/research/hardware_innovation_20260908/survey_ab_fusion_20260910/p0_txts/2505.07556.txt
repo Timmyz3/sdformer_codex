@@ -1,0 +1,704 @@
+                                           Self-Supervised Event Representations: Towards Accurate,
+                                                     Real-Time Perception on SoC FPGAs
+                                                                            Kamil Jeziorek and Tomasz Kryjak
+
+                                                                          Embedded Vision Systems Group
+                                                                            Computer Vision Laboratory
+                                                                    Department of Automatic Control and Robotics
+                                                                             AGH University of Krakow
+arXiv:2505.07556v1 [cs.CV] 12 May 2025
+
+
+
+
+                                         Figure 1: Overview of the proposed self-supervised event-representation method. Sparse spatio-temporal
+                                         events (a) are processed one by one by a stack of pretrained gated-recurrent-unit layers (b), which update a
+                                         latent-memory tensor at the corresponding pixel (x, y). The latent memory has the same spatial resolution as
+                                         the input and is updated continuously throughout the time window. After all events have been processed, the
+                                         final latent memory forms a dense representation (c) that preserves temporal information t and polarity p.
+
+
+                                                                                         ABSTRACT
+                                         Event cameras offer significant advantages over traditional frame-based sensors. These include microsecond tem-
+                                         poral resolution, robustness under varying lighting conditions and low power consumption. Nevertheless, the
+                                         effective processing of their sparse, asynchronous event streams remains challenging. Existing approaches to this
+                                         problem can be categorised into two distinct groups. The first group involves the direct processing of event data
+                                         with neural models, such as Spiking Neural Networks or Graph Convolutional Neural Networks. However, this
+                                         approach is often accompanied by a compromise in terms of qualitative performance. The second group involves
+                                         the conversion of events into dense representations with handcrafted aggregation functions, which can boost
+                                         accuracy at the cost of temporal fidelity. This paper introduces a novel Self-Supervised Event Representation
+                                         (SSER) method leveraging Gated Recurrent Unit (GRU) networks to achieve precise per-pixel encoding of event
+                                         timestamps and polarities without temporal discretisation. The recurrent layers are trained in a self-supervised
+                                         manner to maximise the fidelity of event-time encoding. The inference is performed with event representa-
+                                         tions generated asynchronously, thus ensuring compatibility with high-throughput sensors. The experimental
+                                         validation demonstrates that SSER outperforms aggregation-based baselines, achieving improvements of 2.4%
+                                         mAP and 0.6% on the Gen1 and 1 Mpx object detection datasets. Furthermore, the paper presents the first
+                                         hardware implementation of recurrent representation for event data on a System-on-Chip FPGA, achieving sub-
+                                         microsecond latency and power consumption between 1–2 W, suitable for real-time, power-efficient applications.
+                                         Code is available at https://github.com/vision-agh/RecRepEvent.
+                                         Keywords: Event Camera, Recurrent Neural Networks, Self-Supervised Representations, Object Detection,
+                                         SoC FPGA, Real-time Processing
+                                           Further author information:
+                                           Kamil Jeziorek: E-mail: kjeziorek@agh.edu.pl
+                                           Tomasz Kryjak: E-mail: tomasz.kryjak@agh.edu.pl
+                                           1. INTRODUCTION
+Event cameras are biologically inspired vision sensors whose operating principle differs fundamentally from that
+of conventional frame-based cameras.1–4 In the context of an event camera, the operation of each individual
+pixel is characterised by independence. The detection of changes in brightness is accomplished through the
+implementation of a thresholding mechanism, resulting in the generation of so-called ”events”. Every event
+encodes the pixel’s spatial position, a high-precision timestamp, and the polarity of the illumination change.
+The asynchronous operation of pixels enables the acquisition of microsecond-level temporal resolution, while
+exhibiting robust performance in conditions of lighting variations with reduced power consumption of the sensor.
+These properties successfully overcome the key limitations of classical cameras, including low frame rates and
+narrow dynamic range, which can impede rapid decision-making in time-critical applications.
+    As the event data are sparse and asynchronous, they cannot be processed directly with methods designed
+for dense RGB frames. The existing literature identifies two main approaches. The first is direct event-
+stream processing, for example, using Spiking Neural Networks (SNNs)5–7 or Graph Convolutional Neural
+Networks (GCNNs).8–10 While this enables asynchronous computation and reduced complexity, the qualitative
+performance often falls short of that achieved by methods based on dense representations. The second approach
+involves the conversion of events into dense representations, which are then analysed with standard
+Deep Convolutional Neural Networks (DCNNs) or Vision Transformers (ViTs).11–14 Within this paradigm,
+three variants prevail: (i) the aggregation of events via predefined functions (e.g. sum, maximum), (ii) the
+reconstruction of frames using recurrent neural networks, and (iii) the learning of end-to-end representations.
+    However, it should be noted that each of these solutions has certain disadvantages. Simple aggregation
+functions generally necessitate the quantisation of the time window, which can result in a degradation of tem-
+poral resolution or even the complete disregard of event timestamps.11, 13, 15 The utilisation of U-Net–inspired
+architectures within recurrent networks for frame reconstruction frequently results in a substantial escalation in
+both computational complexity and latency.16, 17 Consequently, the resulting grayscale reconstructions are found
+to be inadequate in capturing the entirety of temporal information. Learning-based representations have been
+shown to adapt to event characteristics and generally yield superior results; however, they introduce additional
+delays, are not evaluated against the throughput of modern sensors (which are capable of hundreds of millions
+of events per second), and are trained jointly with the downstream model, thereby extending the overall training
+process.18–20 The notable exception is work, where representation is selected based on the Gromov–Wasserstein
+Discrepancy between events and their representation.21 However, this selection still depends on simple aggre-
+gation functions and inherits many of the same limitations. Despite the aforementioned points, the proposed
+solutions are not yet being explored with regard to hardware acceleration on SoC FPGAs or ASICs, with a view
+to minimising power consumption and latency.
+    Given the sparsity and high-throughput nature of event data, in combination with existing approaches that
+demonstrate gaps, the optimal representation must satisfy four criteria: (a) event-by-event updating, to
+preserve maximal temporal precision, (b) accurate encoding of temporal information, to leverage the
+fine-grained timing information, (c) compatibility with modern sensor throughput, enabling processing
+of hundreds of millions of events per second,3, 4 (d) hardware acceleration capability to meet real-time
+requirements without excessive power consumption.
+    In this work, we introduce a novel method, namely Self-Supervised Event Representation (SSER), which is
+built on Gated Recurrent Unit layers.22 In contrast to previous solutions, SSER emphasises per-pixel encoding
+of both event timestamps and polarities within an encoder framework, avoiding temporal discretisation. During
+the training phase, the encoder operates entirely in parallel, enabling the rapid adaptation of representation-
+generator parameters through the utilisation of the event stream alone, thus eliminating the necessity for a
+downstream model. During the inference process, the generation of representations can be executed in a fully
+asynchronous manner. In object-detection experiments, our method outperforms aggregation-based baselines by
+2.4% mAP on the Gen1 dataset and by 0.6% on the 1 Mpx dataset. We further demonstrate the feasibility of
+hardware acceleration via an SoC FPGA implementation, which achieves dynamic power consumption of 1–2
+W and uses 19k–26k LUTs, 3,677–5,082 flip-flops, and 108 DSP slices per layer, depending on the configuration
+with 80 and 160 ns latency per event for 200 MHz and 100 MHz clock. Our contribution can be summarised as
+follows:
+  1. We introduce SSER, a novel self-supervised event-data representation using GRU networks for precise
+     per-pixel temporal encoding.
+  2. We demonstrate that SSER outperforms state-of-the-art aggregation-based methods in object detection,
+     achieving an mAP improvement of 0.6% on the 1-Mpx dataset and 2.4% on the Gen1 dataset.
+
+  3. We present the first SoC FPGA implementation of a recurrent event-representation generator, delivering
+     throughput of hundreds of millions of events per second with sub-microsecond latency.
+
+   The remainder of this paper is organised as follows. In Section 2, the existing literature on event data
+processing is presented. The proposed method is outlined in Section 3, with particular reference to its training
+and hardware implementation contexts. Section 4 presents a series of experiments on encoder training, detection
+results and utilisation of hardware implementation. The conclusion of the paper is summarised in Section 5.
+
+                                          2. RELATED WORKS
+In the literature, two main groups of event data processing methods can be distinguished. The first comprises
+methods that operate directly on events in their original form. Within this category, two approaches are
+particularly popular: Graph Convolutional Networks (GCNs)8–10 and Spiking Neural Networks (SNNs).5–7 In
+the graph-based approach, event data are represented as graphs, where vertices correspond to individual events,
+and edges are established based on distance metrics. Subsequently, vertex features are updated using graph
+convolutions, and finally, information from the entire graph is aggregated for further analysis. In the context of
+Spiking Neural Networks, information processing occurs in a spike-based manner, whereby each neuron retains
+a membrane potential, thereby preserving the asynchronous nature of the input data. The primary benefit of
+both methods is the capacity for asynchronous updates, thereby significantly reducing system latency. However,
+despite this advantage, the performance of these methods is usually lower than that of classical vision methods,
+such as Convolutional Neural Networks and Transformers.
+    The second group of methods is centred on the generation of dense representations from event streams,
+which can subsequently be processed by ”traditional” neural networks. Early approaches, including Event
+Frame,15 Event Count Image11, 23 and Surface of Active Events (SAE),24 involved the representation of polar-
+ity or the timestamp of the last event, often resulting in their aggregation into separate channels. However,
+these methods suffer from significant loss of temporal information, particularly concerning earlier timestamps.
+Contemporary methods, including Exponentially Decaying Time-Surface12, 25 and Time Ordered Recent Event
+Volume (TORE),14 place greater emphasis on incorporating temporal information. Nevertheless, the effective-
+ness of these methods is limited by manually defined aggregation functions and, in the case of the TORE method,
+by high computational complexity. Alternative approaches attempt to combine several of these representation
+strategies,26 aiming to harness their individual advantages within a single framework.
+    Other representations, such as Voxel Grid13 and Mixed-Density Event Stack,27 propose the division of the
+event stream into short temporal windows, the generation of local representations, and the subsequent combi-
+nation of these into a larger representation that better captures the dynamics of the event stream. One recent
+study proposes an automatic method for selecting representation parameters based on aggregation operations
+(e.g. sum, variance, max, min) and data types (e.g. polarity, time, separately for positive and negative polarity)
+using the Gromov-Wasserstein Discrepancy measure.21 Nevertheless, all these methods significantly simplify
+or lose precise information about event timings through aggregation within selected time sub-windows or by
+calculating a single summarising value for each window.
+    An alternative approach to generating dense representations is to utilise machine learning methods. The
+extant literature18, 28 presents examples of self-supervised learning using CNNs and Spiking-CNNs. However, in
+this case, the discretisation employed results in a loss of precise temporal information. Simple models based on
+Long Short-Term Memory (LSTM) networks, presented in,20 are used for noise filtering and feature extraction
+within short time intervals, restricting data to a two-dimensional grid only. More advanced solutions employing
+neural networks enable grayscale image reconstruction directly from events.16, 17 However, the complexity of
+these models limits their practical application in real-time scenarios.
+    The present study addresses the issue of temporal precision loss in dense event representations. The focus
+is on self-supervised learning of recurrent neural networks, which are optimised for hardware acceleration and
+high-throughput data processing.
+
+                                                     3. METHOD
+The primary objective of our approach is to develop an event representation that facilitates improved preser-
+vation of temporal information. To achieve this objective, a recurrent neural network is employed, capable
+of asynchronously updating the feature map, thereby facilitating the creation of a dense representation in the
+output.
+
+3.1 Preliminaries
+One of the unique characteristics of event cameras is their asynchronous operation. Unlike traditional cameras,
+which capture brightness levels across all pixels at uniform intervals, event cameras detect changes in logarithmic
+brightness L at the individual pixel level. The generation of events in these cameras is governed by a threshold
+mechanism, characterised by a parameter C, described by the following equation:
+
+                                        L(xi , yi , ti ) − L(xi , yi , ti − ∆ti ) ≥ pi C                             (1)
+where (xi , yi ) represents the coordinates of a pixel, ti is the time at which the current event occurs, ti − ∆ti refers
+to the time of the last event for this pixel and pi ∈ {−1, 1} indicates the polarity of the change in brightness.
+                                                                                                                      −1
+These events collectively create a spatio-temporal sequence of asynchronous data, represented as E = (ei )N         i=0 ,
+where each event ei comprises the pixel coordinates (xi , yi ), the time of the event ti , and the polarity of the
+event pi . More details can be found in the excellent event-based vision survey.1
+
+3.2 Recurrent Neural Networks
+Recurrent Neural Networks (RNNs) are a specific type of neural network that has been adapted for processing
+sequential data, such as time series. The distinguishing feature of these models is their utilisation of recurrent
+connections, in which the output of a sample is fed back as input to the network at the subsequent time step.
+The fundamental working principle of RNNs can be described as follows:
+
+                                                     ht+1 = f (xt , ht )                                             (2)
+where xt represents the input vector, and ht and ht+1 denote the hidden state vector at the current and subsequent
+time steps, respectively. The hidden state h serves as memory, updated with each incoming input vector, enabling
+the capture of long-term temporal dependencies.
+   In the literature, three main RNN models can be distinguished. The simplest of these is the Vanilla RNN,
+which can be defined as follows:
+                                       ht+1 = θ(Wi xt + Wh ht + b)                                       (3)
+where Wi and Wh are learned weight matrices for the input and hidden state, respectively, and the term θ is
+used to denote the nonlinear activation function, typically tanh. Due to its simplicity, this layer often suffers
+from the vanishing gradient problem, limiting its ability to remember distant temporal dependencies (short-term
+memory problem).
+    In order to address the issue of the vanishing gradient, the Long Short-Term Memory (LSTM)29 model was
+proposed. Each Long Short-Term Memory unit incorporates three gates and a memory cell, enabling precise
+control of information flow: the forget gate (ft ) decides what information from the previous cell state will be
+discarded; the input gate (it ) determines what new information is stored in the cell; and the output gate (ot )
+regulates what information from the cell is passed to the hidden state. The update equations for the cell state
+ct and hidden state ht are as follows:
+
+                                           ft = σ(Wf xt + Uf ht−1 + bf )                                           (4a)
+                                           it = σ(Wi xt + Ui ht−1 + bi )                                           (4b)
+                                           ot = σ(Wo xt + Uo ht−1 + bo )                                           (4c)
+                                           c̃t = tanh(Wc xt + Uc ht−1 + bc )                                       (4d)
+                                           ct = ft ⊙ ct−1 + it ⊙ c̃t                                               (4e)
+                                           ht = ot ⊙ tanh(ct )                                                     (4f)
+
+where σ is the sigmoid function and ⊙ denotes element-wise multiplication.
+    On the other hand, the Gated Recurrent Unit (GRU)22 introduces simplifications compared to LSTM by
+utilising only two gates: the update gate (zt ) decides how much of the previous hidden state is retained, and the
+reset gate (rt ) determines how much the previous state influences the candidate hidden state calculation. The
+state update functions in GRU are:
+
+                                       zt = σ(Wz xt + Uz ht−1 + bz )                                               (5a)
+                                       rt = σ(Wr xt + Ur ht−1 + br )                                               (5b)
+                                                                              
+                                       h̃t = tanh Wh xt + rt ⊙ (Uh ht−1 + bh )                                     (5c)
+                                       ht = (1 − zt ) ⊙ ht−1 + zt ⊙ h̃t                                            (5d)
+
+The GRU merges the memory cell and hidden state, simplifying computations and maintaining the capability
+to model long-range temporal dependencies.
+    As demonstrated in Section 3.2, LSTM exhibits better performance in encoding temporal dependencies in
+comparison to GRU. However, it is important to note that LSTM employs two hidden states (ct and ht ). This
+characteristic is a notable disadvantage in terms of hardware implementations, necessitating an increase in data
+storage capacity by a factor of two. Consequently, in this study, the GRU layer was selected as the base model
+to achieve a balance between computational complexity and effectiveness in handling longer sequences.
+    Beyond these fundamental RNN models, a variety of variants have been introduced, which either simplify
+or extend the models.30–32 However, the present work is specifically concerned with one variant of the GRU,
+namely the Minimal Gated Unit (MGU).31 In the MGU, the update gate (5a) and reset gate (5b) are combined
+into a single forget gate (ft ).
+
+                                      ft = σ(Wf xt + Uf ht−1 + bf )                                                (6a)
+                                                                                  
+                                      h̃t = tanh Wh xt + ft ⊙ (Uh ht − 1 + bh )                                    (6b)
+                                      ht = (1 − ft ) ⊙ ht−1 + ft ⊙ h̃t                                             (6c)
+
+This variant simplifies the GRU further, facilitating simpler hardware implementations while retaining a single
+hidden state.
+
+3.3 Self-Supervised Event Representation
+The proposed method is designed to process event streams (Fig. 1a) asynchronously. For each new event, the
+previous hidden state associated with the corresponding pixel is used. Let H0 ∈ RW ×H×C denote the initialised
+hidden state, which simultaneously serves as the resultant representation (for last layer), where W × H specifies
+the sensor resolution, and C the number of representation channels equal to the number of neurons in the final
+recurrent layer (Fig. 1b). Upon receiving a single event ei = (xi , yi , ti , pi ), the previous state value hxprev
+                                                                                                                i ,yi
+                                                                                                                      is
+read from matrix Hi−1 , and an input vector ui = (ti , pi ) is created. The state is then updated according to the
+recursive function (2):
+                                             hxnew
+                                                i ,yi             xi ,yi
+                                                      = fe (ui , hprev   )                                           (7)
+Figure 2: Overview of the training procedure for the proposed event encoder. Blue and red colours represent
+polarity, while shading indicates time. The spatio-temporal sequence of events (a) is first transformed into a
+tensor (b), where length Z corresponds to the maximum number of events per pixel in the sequence. The tensor
+is then linearised (c), and the encoder iterates over the Z timestamps, resulting in a W H × C representation
+(d). After this, the decoder reconstructs the events in a rolling manner based on the encoded representation (e).
+The loss is calculated between the input and the reconstructed events.
+
+where fe denotes the encoder update function. The new state hxnew    i ,yi
+                                                                           is then written back into the representa-
+tion matrix Hi at position (xi , yi ). After processing all n events within a given time window T , the resulting
+representation Hn is obtained and ready for further processing by subsequent system modules (Fig. 1c).
+   To train the recurrent layers, an autoencoder architecture consisting of an encoder and decoder was employed.
+The decoder’s task is to reconstruct the original input events based on the generated representation Hn . For an
+input event sequence E = (e0 , e1 , . . . , en ) and the corresponding input vectors ui = (ti , pi ), the decoder generates
+event reconstructions as follows:
+                                                (d0 , d1 , . . . , dn ) = fd (Hn , hdec
+                                                                                    prev )                              (8)
+where di = (t̂i , p̂i ) denotes the reconstructed timestamp and polarity values for each event, and hdec is the hidden
+state of the decoder. The training objective is to minimise the reconstruction error defined as:
+                                                          n
+                                                          X
+                                                    min         |di − ui |                                             (9)
+                                                          i=0
+
+
+   In order to ensure the efficient utilisation of GPU parallelisation and to guarantee uniform input size during
+the training process, it is necessary to format the input data as tensors. Given an event sequence (Fig. 2a)
+E ∈ Rn×4 (where 4 represents coordinates x, y, time t, and polarity p), we construct a tensor V ∈ RZ×W ×H×2 ,
+where Z indicates the maximum number of events per pixel in the given time window, and 2 corresponds to
+time and polarity (Fig. 2b). Pixels with fewer than Z events are zero-padded. The tensor is then linearised into
+the form V ∈ RZ×W H×2 , where dimension W H represents the batch size, allowing parallel processing by the
+encoder (Fig. 2c). Additionally, a mask M ∈ RZ×W H is created to indicate active (non-zero) event positions in
+the input tensor.
+   The encoder’s output is a tensor E ∈ RW H×C (Fig. 2d), subsequently decoded iteratively. The hidden state
+extracted from tensor E serves as the first input to the decoder’s recurrent layer, with its output processed by
+two linear layers: the first of dimension C → 2, reconstructing the event di , and the second 2 → C, generating
+input for the subsequent decoding Z steps (Fig. 2e).
+   The final reconstruction error is defined as masked mean squared error (MSE):
+                  Z WH                                             Z WH
+             α XX                                             β XX
+                         (Vt [z, w] − Dt [z, w])2 M [z, w] +              (Vp [z, w] − Dp [z, w])2 M [z, w]
+                                                                                                           
+   loss =                                                                                                             (10)
+            ZW H z=0 w=0                                     ZW H z=0 w=0
+
+where Vt , Dt and Vp , Dp represent input and output time and polarity, respectively. Scaling parameters α and β
+were experimentally set to α = 1 and β = 0.1, emphasizing accurate reconstruction of temporal information.
+   During the training phase, the timestamps associated with events were normalised to the range (0, 1). In
+order to minimise the computational complexity and mitigate the influence of the ”hot pixels” effect, random
+64 × 64 spatial windows were selected, and the maximum sequence length Z was limited to 100. Pixels without
+any events were excluded from computations.
+
+3.4 Hardware implementation
+The preliminary step in the hardware implementation process was model quantisation, which involved the con-
+version of floating-point weights and activations into low-bitwidth integer representations. Typically, two33
+approaches are applied: Post-Training Quantisation (PTQ), which involves the quantisation of a trained model
+based on predefined ranges of activations and weights, or Quantisation-Aware Training (QAT), which involves
+the simulation of quantisation during training using fake quantisation, thereby allowing the network to adjust to
+quantisation effects during the training phase. In this study, we employed QAT due to its efficacy in achieving
+better final representation quality.
+    We used mixed-precision quantisation, independently adjusting precision for weights and activations, with
+input values (timestamp) fixed at 16 bits to ensure the precise representation of timestamps. Assuming a
+time window of 50 milliseconds and microsecond-level precision, timestamp values fit within a 16-bit range
+(216 = 65536).
+     Analysing the recurrent model equations of GRU (see Equation (5)), five fundamental operations were iden-
+tified as requiring dedicated hardware implementation: (a) Matrix multiplication (used in linear layers) for
+input vectors and previous hidden states, (b) Element-wise vector addition, (c) Element-wise vector mul-
+tiplication, used in update and reset gate operations, (d) Activation functions σ and tanh, (e) Subtraction
+of a vector from the constant value 1.
+    The primary objective of the hardware implementation was to minimise latency while fully leveraging pipeline
+parallelism. Consequently, the modules for matrix multiplication and element-wise multiplication (based on the
+work34 ) were fully parallelised, with parallel multipliers matching the dimension of output vectors. Linear layers
+of GRU defined by weight matrices Wz , Wr , Wh and Uz , Ur , Uh with output dimensions dout were combined
+into a single multiplier module of dimension 3 · dout , whose output was subsequently divided into three parts.
+This structure ensures all multiplication and summation operations are completed within one clock cycle (1
+CC), with an additional cycle dedicated to re-quantising the resulting vector. Element-wise multiplications were
+implemented in a similar manner, without the necessity of summation.
+    Activation functions were realised through the use of look-up tables that were precomputed with quantised
+activation function values, thereby ensuring minimal latency. The implementation of vector addition and sub-
+traction was achieved through the utilisation of dedicated modules.
+    Each recurrent layer includes a dedicated block that stores the previous hidden states for every pixel. Its size
+is given by W × H × dout × P recision, where W × H represents the sensor resolution and P recision denotes the
+number of quantisation bits. Block RAM (BRAM) modules were used for implementation.
+    With the proposed architecture, the processing time per event is 16 clock cycles, fully pipelined. The only
+architectural constraint is that two events from the same pixel must be spaced at least 16 cycles. This is due
+to the fact that it is not possible to process another event for the same pixel if the previous event has not been
+fully processed and the hidden state has not been updated. However, at a 100 MHz clock, the total latency per
+event is 160 ns, significantly lower than the minimal interval between consecutive events from the same pixel on
+typical event sensors (µs resolution).
+   It is also noteworthy that the Minimal Gated Unit (see Equation (6)) requires the same clock cycles as a full
+GRU. This is due to the parallel operations of the forget and update gates in GRU, but the multipliers have a
+dimension of 2 · dout .
+
+                                             4. EXPERIMENTS
+4.1 Datasets
+For our study, we used two popular automotive object detection datasets: Gen135 and 1 Mpx.36 Both consist of
+car-mounted recordings. The Gen1 dataset was captured at a resolution of 304 × 240 and includes two classes
+– pedestrian and car – totalling over 255,000 object annotations and 39 hours of footage. The 1 Mpx dataset
+                   ·10−2
+               6                                                                        0.2
+                                                       GRU                                                                     GRU
+                                                       MGU                                                                     MGU
+                                                                                       0.15
+                                                       RNN
+               4
+
+
+
+
+                                                                          Total Loss
+Total Loss
+
+
+
+
+                                                       LSTM
+                                                                                        0.1
+
+
+               2
+                                                                                  5 · 10−2
+
+
+
+               0                                                                         0
+                   2       4    6     8    10     12    14    16                              2   3   4   5   6   7   8   9   10   11   12
+
+                                    Output size                                                           Quantisation bits
+             (a) Total loss vs. output size for all layers.              (b) Total loss vs. quantisation bit for GRU and MGU
+
+                       Figure 3: Ablation studies over output sizes and quantisation bit resolution for encoders.
+
+
+
+
+Figure 4: Example visualization of 12 GRU encoder channels on a sample from a 1-megapixel dataset. Values
+range from -1 to 1, with blue indicating negative values and red indicating positive values.
+
+
+has a resolution of 1280 × 720, comprises seven classes, includes 15 hours of recordings, and contains 25 million
+annotations.
+
+4.2 Encoder results
+In Figure 3a, we present an evaluation comparing our selected recurrent layers (GRU and MGU) with two other
+recurrent layers: LSTM and Vanilla RNN (hereafter referred to simply as RNN), in terms of event encoding
+quality. Each encoder consisted of three interconnected layers, and for each layer, the dimension of the hidden
+state vector was set within a range from 2 to 16. The decoder used was also a three-layer model composed
+entirely of GRU layers, with the number of inputs/outputs tailored to match the encoder’s output.
+   The encoder was trained for 100 epochs using the Adam optimizer,37 with a learning rate of 1e-3 and weight
+decay of 1e-4. The training was performed on the Gen1 dataset, where each sample consisted of randomly
+                                   Representation          mAP      AP50     AP75
+                                                 11
+                                   2D Histogram            32.54    61.21    31.03
+                                   Voxel Grid13            36.63    65.32    35.10
+                                   MDES27                  35.50    64.21    33.53
+                                   TORE14                  38.68    67.73    37.06
+                                   ERGO-1221               38.19    67.12    36.83
+                                   Time Surface25          39.11    68.45    38.04
+                                   SSER-MGU12 (Our)         39.89    68.91    38.77
+                                   SSER-GRU12 (Our)        40.13    69.03    39.12
+
+Table 1: Comparison of detection performance between our Self-Supervised Event Representations vs handcrafted
+methods on Gen1 with ResNet-50 + YOLOX.
+
+
+selected events within a 200 ms temporal window, limited to 50,000 samples. The primary metric employed was
+the mean squared error loss between input and output events from the decoder.
+   According to the assumptions detailed in Section 3.2, the results indicate the effectiveness of LSTM layers in
+encoding event-based information, with GRU layers yielding intermediate performance between RNN and LSTM.
+Improvement in all model performance was observed up to approximately a hidden dimension size of 8, beyond
+which the decrease in loss slowed down considerably. Notably, the MGU model achieved results comparable to
+those obtained by the standard GRU layer (0.003 loss difference for 8 output size). This is primarily due to the
+moderate sequence length, making a single forget gate sufficient.
+    In subsequent parts of the work, the number of encoder channels was set to 12 due to comparable loss values
+for higher output dimensions and inspired by the number of channels used in the study presented in.21
+   As shown in Figure 3b, we also conducted an experimental study on quantised GRU and MGU models. This
+experiment explored varying quantisation resolutions for the activations and weights of the recurrent layers,
+while keeping the input data quantised at a fixed 16-bit resolution, as described in Section 3.4. The precision
+was varied between 2 and 12 bits.
+    The quantisation error for the GRU model using 2 bits is 0.113. Increasing the bit width further reduces this
+error, reaching a difference of 0.00065 at 8 bits and, for precisions above 10 bits, achieving better results than the
+floating-point model. For the MGU model, the discrepancies are comparable as for GRU model with a difference
+for 2-bit quantisation. On this basis, an appropriate quantisation level can be selected, with a trade-off being
+made between accuracy and model size. The number of bits in the output representation translates directly into
+the memory footprint on an SoC FPGA: reducing the precision by a single bit saves W × H × C bits, which
+corresponds to 24 kB for W = H = 128 and C = 12.
+    In our implementation, we applied an 8-bit quantisation to the model, as the loss curve stabilised at this
+value. The result of the 12-channel GRU encoder with 8-bit quantisation is shown in Figure 4 as a visualisation
+of an example representation for each channel.
+
+4.3 Detection results
+For the detection task we employed the YOLOX framework38 (neck+head) with a ResNet-5039 backbone whose
+first convolutional layer was modified to match the size of the input representation. For the Gen135 dataset, the
+generated representations were rescaled to a resolution of 224 × 224, whereas for the 1 Mpx36 dataset they were
+rescaled to 640 × 640. The models were trained for up to 100 epochs using Stochastic Gradient Descent with
+Nesterov momentum40 and a cosine learning-rate scheduler (minimum learning rate 5 × 10−4 , maximum learning
+rate 1 × 10−2 ). The batch size was 64 for Gen1 and 32 for 1 Mpx. During training we applied random affine
+transformations together with random horizontal flipping. The primary evaluation metric was mean average
+precision (mAP).
+   We first analysed our approach against classical event-camera representations (same as in work21 ) on the Gen1
+dataset; the results are reported in Table 1. Specifically, we compared against 2D Histogram,11 Voxel Grid,13
+                                                                                                                 mAP
+Method                     Event Repr.                        Recurrent Representation   Recurrent Backbone
+                                                                                                              Gen1   1 Mpx
+                     41
+MatrixLSTM+YOLOv3          MatrixLSTM                                    ✓                                    31.0      -
+E2VID+RetinaNet16, 42      Reconstructions                               ✓                                    27.0     25.0
+RED36                      Voxel Grid                                                            ✓            40.0     43.0
+RVT-B43                    2D Histogram                                                          ✓            47.2     47.4
+ASTMNet19                  Asynchronous attention embedding                                      ✓            46.7     48.3
+Events+RetinaNet36         Voxel Grid                                                                         34.0     18.0
+Events+SSD44               2D Histogram                                                                       30.1     34.0
+Events+RRC45               2D Histogram                                                                       30.7     34.3
+Events+YOLOv346            2D Histogram                                                                       31.2     34.6
+AEGNN8                     Graph                                                                              16.3      -
+EAGR47                     Graph                                                                              32.1      -
+Spiking DenseNet48         Spike Train                                                                        18.9      -
+AsyNet49                   2D Histogram                                                                       14.5      -
+                           2D Histogram                                                                       27.8     23.2
+                           Time Surface                                                                       37.7     35.0
+                           TORE                                                                               35.9     34.6
+ResNet-50 + YOLOv621
+                           Voxel Grid                                                                         33.9     33.9
+                           MDES                                                                               34.5     34.2
+                           EST                                                                                37.0     34.8
+Swin-V2 + YOLOv621         ERGO-12                                                                            50.4     40.6
+ResNet-50 + YOLOX (ours)   SSER GRU-12                                   ✓                                    40.1     35.6
+
+Table 2: Comparison of our Self-Supervised Event Representation method on Gen1 and 1 Mpx dataset with
+state-of-the-art.
+
+
+Mixed-Density Event Stack (MDES),27 Time-Ordered Recent Event Volumes (TORE),14 Time Surface,25 and
+Event Representation through Gromov–Wasserstein Optimization (ERGO-12).21
+    The results show that both of our methods outperform the handcrafted aggregation-based representations
+in detection accuracy. The simple 2D Histogram, which ignores temporal information, performs the worst—its
+mAP is 7.5% lower than that of our representations. TORE and Time Surface, which place greater emphasis
+on encoding event timestamps, achieve the strongest results among the competing baselines. Nevertheless, our
+GRU-based representation still improves upon Time Surface by up to 1% mAP, demonstrating both the overall
+superiority of our method and the beneficial effect of stronger temporal encoding on detection performance.
+    In Table 2 we compare the proposed representation with previously used approaches, grouped into three
+categories. The first category comprises models that utilise recurrent layers. Within this group, we distinguish
+solutions in which recurrence is limited to a single temporal window, such as MatrixLSTM and E2VID, as well
+as our own method. A second subgroup contains models whose backbone incorporates a recurrent component
+directly, thereby enabling global modelling of dependencies across successive temporal windows. This set includes
+RED as Convolutions + LSTM layers, RVT with Max Vision Transformers, and ASTMNet, the latter of which
+additionally employs an attention mechanism during generation representation. The second category covers
+sparse methods that operate directly on events or event graphs, including AEGNN and EAGR, on spiking neural
+networks, or on asynchronously updated convolutional networks, termed AsyNet. The third group comprises
+hand-crafted representations, including Voxel Grid and 2D Histogram evaluated with RetinaNet, SSD, RRC,
+and YOLOv3, as well as the extensive analysis in21 based on a ResNet-50 backbone with a YOLOv6 head. As
+the authors did not report ERGO-12 results for ResNet-50, the values obtained with SwinTransformer-v2 are
+presented in that column of the table.
+   On the Gen1 dataset, our method surpasses MatrixLSTM by 9% mAP and E2VID by 13%, outperforms
+the best sparse method, EAGR, by 8% mAP, and exceeds RetinaNet with a Voxel Grid by 6% and YOLOv6
+with ResNet-50 (Time Surface) by 2.4%. Lower scores are observed only in comparison with RVT-B, ASTMNet,
+thus highlighting the benefit of recurrent backbone models when event information for static objects is absent.
+Clock     Model        LUT             FF        BlockRAM       DSP        Static Power   Dynamic Power   Latency per event
+          GRU      26744 (11.6%)   5082 (1.1%)        0       108 (6.3%)
+                                                                             0.599 W         1.344 W
+          Memory   25862 (11.2%)        0        48 (15.4%)        0
+100 MHz                                                                                                        160 ns
+          MGU      19156 (8.3%)    3677 (0.8%)        0       108 (6.3%)
+                                                                             0.597 W         1.007 W
+          Memory   17115 (7.4%)         0        48 (15.4%)        0
+          GRU      27441 (11.9%)   5082 (1.1%)        0       108 (6.3%)
+                                                                             0.607 W         2.729 W
+          Memory   27745 (12.0%)        0        48 (15.4%)        0
+200 MHz                                                                                                         80 ns
+          MGU      19156 (8.3%)    3677 (0.8%)        0       108 (6.3%)
+                                                                             0.603 W         1.986 W
+          Memory   17115 (7.4%)         0        48 (15.4%)        0
+
+Table 3: Resource utilisation and power consumption for single recurrent layer implementation for GRU/MGU
+model and 100/200 MHz clock. The values presented in brackets indicate the percentage of consumption for the
+ZCU104 platform.
+
+
+ERGO-12 also outperforms our approach by more than 10%, but this improvement derives from its Vision
+Transformer backbone; when the same backbone is used as in Table 1, its results decrease markedly.
+    On the 1 Mpx dataset, the margin over E2VID widens to 10.6% mAP; the advantage over YOLOv3+Events
+is 1% and over Time Surface 0.6%. As before, the highest results are achieved by models with a recurrent or
+transformer backbone (RVT-B, ASTMNet, SwinTransformer+YOLOv6).
+    In summary, the proposed representation is shown to significantly outperform standard event-aggregation
+procedures and sparse methods. It is evident that the best performance is achieved by architectures that integrate
+recurrence or attention mechanisms within the backbone with a comprehensive spatio-temporal representation.
+This suggests that future research should focus on either adding the recurrent component deeper into the network
+or incorporating vision transformers.
+
+4.4 Hardware implementation results
+Based on earlier experiments, we implemented two recurrent-layer models on an ZCU104 SoC FPGA: MGU and
+GRU, both in a 12-channel configuration and quantised to 8-bit precision. In each case a single layer was created
+together with dedicated on-chip memory for a 128 × 128 × 12 representation. Xilinx Vivado 2024.2 was utilised
+for the synthesis and implementation of the accelerator, from which resource utilisation and power consumption
+were extracted. These were then summarised in Table 3 for two clock frequencies: 100 MHz and 200 MHz.
+   The representation memory occupies 48 BRAM blocks in either variant, while the GRU model requires an
+additional 9k LUTs. The total utilisation of LUTs for the GRU is 22.8%, which is 7.1% higher than that of the
+MGU. In both configurations, the number of DSP blocks utilised is 108.
+    The static power consumption is measured at 0.6 W in both variants; however, the dynamic power consump-
+tion for GRU is approximately 30% higher than that of the MGU.
+    It is crucial to emphasise that the hardware design was focused on minimising per-event latency, which was
+measured at 160 ns at 100 MHz and 80 ns at 200 MHz. However, it has been demonstrated that the pipeline can
+be relaxed from 16 to 100 clock cycles, or even further, while still achieving microsecond latency and satisfying
+the requirement that two events with the same pixel position are not processed concurrently. The implementation
+of a reduced version of the pipeline is planned for the future. This relaxation enables a substantial reduction in
+resource utilisation and power consumption, given that the most significant demands for LUTs and DSP blocks
+arise from the parallel multipliers.
+
+                                                 5. CONCLUSION
+In this work, we present the first hardware implementation of a recurrent, self-supervised dense-representation
+generator for event data that preserves temporal information. The present study concentrated on lightweight
+Gated Recurrent Unit layers and a modified Minimal Gated Unit. The experimental results on the Gen1 and
+1 Mpx datasets demonstrated that the proposed method exhibited higher performance in terms of detection
+accuracy when compared to hand-crafted event-representation techniques. The hardware prototype shows that
+the representation can be updated asynchronously and fully pipelined, achieving an event latency of 80–160 ns
+and a power envelope of 1–2 W, depending on the model and clock frequency.
+    Despite the fact that the proposed approach exceeds the performance of classical handcrafted representation
+methods, it nevertheless exhibits inferior performance in comparison to architectures that incorporate recurrent
+layers within a deep backbone. This underscores the pivotal function of memory mechanisms in the detection
+process for events, a subject which this study aims to explore in the future. In addition, the investigation of
+State-Space models as a potential alternative to recurrent layers is planned. Furthermore, the development of
+a hardware variant optimised for energy efficiency and resource utilisation is underway, with the objective of
+maintaining minimal per-event latency.
+
+                                       ACKNOWLEDGMENTS
+The work presented in this paper was supported by the National Science Centre project no. 2024/53/N/ST6/04254
+entitled ”F+E: Enchancing Perception through the Integration of Frame and Event Cameras” (first author)
+and partly supported by the programme “Excellence initiative – research university” for the AGH University
+of Krakow. We also gratefully acknowledge Polish high-performance computing infrastructure PLGrid (HPC
+Center: ACK Cyfronet AGH) for providing computer facilities and support within computational grant no.
+PLG/2025/017956. Additionally, we would like to express our gratitude to Adam Pardyl and Bartosz Zieliński
+for their inspiration and support during the project’s initial phase.
+
+                                              REFERENCES
+[1] Gallego, G., Delbruck, T., Orchard, G., Bartolozzi, C., Taba, B., Censi, A., Leutenegger, S., Davison, A. J.,
+    Conradt, J., Daniilidis, K., and Scaramuzza, D., “Event-based vision: A survey,” IEEE Transactions on
+    Pattern Analysis and Machine Intelligence 44, 154–180 (Jan. 2022).
+[2] Lichtsteiner, P., Posch, C., and Delbruck, T., “A 128× 128 120 db 15 µs latency asynchronous temporal
+    contrast vision sensor,” IEEE Journal of Solid-State Circuits 43(2), 566–576 (2008).
+[3] Son, B., Suh, Y., Kim, S., Jung, H., Kim, J.-S., Shin, C., Park, K., Lee, K., Park, J., Woo, J., Roh, Y.,
+    Lee, H., Wang, Y., Ovsiannikov, I., and Ryu, H., “4.1 a 640×480 dynamic vision sensor with a 9µm pixel
+    and 300meps address-event representation,” in [2017 IEEE International Solid-State Circuits Conference
+    (ISSCC)], 66–67 (2017).
+[4] Finateu, T., Niwa, A., Matolin, D., Tsuchimoto, K., Mascheroni, A., Reynaud, E., Mostafalu, P., Brady,
+    F., Chotard, L., LeGoff, F., Takahashi, H., Wakabayashi, H., Oike, Y., and Posch, C., “5.10 a 1280×720
+    back-illuminated stacked temporal contrast event-based vision sensor with 4.86µm pixels, 1.066geps readout,
+    programmable event-rate controller and compressive data-formatting pipeline,” in [2020 IEEE International
+    Solid-State Circuits Conference - (ISSCC) ], 112–114 (2020).
+[5] Hagenaars, J., Paredes-Valles, F., and de Croon, G., “Self-supervised learning of event-based optical flow
+    with spiking neural networks,” in [Advances in Neural Information Processing Systems ], Ranzato, M.,
+    Beygelzimer, A., Dauphin, Y., Liang, P., and Vaughan, J. W., eds., 34, 7167–7179, Curran Associates,
+    Inc. (2021).
+[6] Gehrig, M., Shrestha, S. B., Mouritzen, D., and Scaramuzza, D., “Event-based angular velocity regression
+    with spiking networks,” in [2020 IEEE International Conference on Robotics and Automation (ICRA) ],
+    4195–4202 (2020).
+[7] Cordone, L., Miramond, B., and Ferrante, S., “Learning from event cameras with sparse spiking convolu-
+    tional neural networks,” in [2021 International Joint Conference on Neural Networks (IJCNN)], 1–8 (2021).
+[8] Schaefer, S., Gehrig, D., and Scaramuzza, D., “Aegnn: Asynchronous event-based graph neural networks,” in
+    [Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)], 12371–
+    12381 (June 2022).
+[9] Li, Y., Zhou, H., Yang, B., Zhang, Y., Cui, Z., Bao, H., and Zhang, G., “Graph-based asynchronous event
+    processing for rapid object recognition,” in [Proceedings of the IEEE/CVF International Conference on
+    Computer Vision (ICCV) ], 934–943 (October 2021).
+[10] Gehrig, D. and Scaramuzza, D., “Low-latency automotive vision with event cameras,” Nature 629(8014),
+     1034–1040 (2024).
+[11] Maqueda, A. I., Loquercio, A., Gallego, G., Garcia, N., and Scaramuzza, D., “Event-based vision meets
+     deep learning on steering prediction for self-driving cars,” in [2018 IEEE/CVF Conference on Computer
+     Vision and Pattern Recognition ], 5419–5427, IEEE (June 2018).
+[12] Sironi, A., Brambilla, M., Bourdis, N., Lagorce, X., and Benosman, R., “Hats: Histograms of averaged time
+     surfaces for robust event-based object classification,” in [Proceedings of the IEEE Conference on Computer
+     Vision and Pattern Recognition (CVPR)], (June 2018).
+[13] Zhu, A. Z., Yuan, L., Chaney, K., and Daniilidis, K., “Unsupervised event-based learning of optical flow,
+     depth, and egomotion,” in [Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+     Recognition (CVPR) ], (June 2019).
+[14] Baldwin, R. W., Liu, R., Almatrafi, M., Asari, V., and Hirakawa, K., “Time-ordered recent event (tore)
+     volumes for event cameras,” IEEE Transactions on Pattern Analysis and Machine Intelligence 45(2), 2519–
+     2532 (2023).
+[15] Rebecq, H., Horstschaefer, T., and Scaramuzza, D., “Real-time visual-inertial odometry for event cameras
+     using keyframe-based nonlinear optimization,” in [Proceedings of the British Machine Vision Conference
+     (BMVC) ], 16.1–16.12 (2017).
+[16] Rebecq, H., Ranftl, R., Koltun, V., and Scaramuzza, D., “Events-to-video: Bringing modern computer
+     vision to event cameras,” IEEE Conf. Comput. Vis. Pattern Recog. (CVPR) (2019).
+[17] Scheerlinck, C., Rebecq, H., Gehrig, D., Barnes, N., Mahony, R., and Scaramuzza, D., “Fast image recon-
+     struction with an event camera,” in [IEEE Winter Conf. Appl. Comput. Vis. (WACV) ], 156–163 (2020).
+[18] Gehrig, D., Loquercio, A., Derpanis, K. G., and Scaramuzza, D., “End-to-end learning of representations for
+     asynchronous event-based data,” in [Proceedings of the IEEE/CVF International Conference on Computer
+     Vision (ICCV)], (October 2019).
+[19] Li, J., Li, J., Zhu, L., Xiang, X., Huang, T., and Tian, Y., “Asynchronous spatio-temporal memory network
+     for continuous event-based object detection,” IEEE Transactions on Image Processing 31, 2975–2987 (2022).
+[20] Annamalai, L., Ramanathan, V., and Thakur, C. S., “Event-lstm: An unsupervised and asynchronous
+     learning-based representation for event-based data,” IEEE Robotics and Automation Letters 7(2), 4678–
+     4685 (2022).
+[21] Zubić, N., Gehrig, D., Gehrig, M., and Scaramuzza, D., “From chaos comes order: Ordering event represen-
+     tations for object recognition and detection,” in [Proceedings of the IEEE/CVF International Conference
+     on Computer Vision (ICCV) ], 12846–12856 (October 2023).
+[22] Cho, K., van Merrienboer, B., Bahdanau, D., and Bengio, Y., “On the properties of neural machine trans-
+     lation: Encoder-decoder approaches,” (2014).
+[23] Zhu, A., Yuan, L., Chaney, K., and Daniilidis, K., “Ev-flownet: Self-supervised optical flow estimation for
+     event-based cameras,” in [Proceedings of Robotics: Science and Systems ], (June 2018).
+[24] Benosman, R., Clercq, C., Lagorce, X., Ieng, S.-H., and Bartolozzi, C., “Event-based visual flow,” IEEE
+     Transactions on Neural Networks and Learning Systems 25(2), 407–417 (2014).
+[25] Lagorce, X., Orchard, G., Galluppi, F., Shi, B. E., and Benosman, R. B., “Hots: A hierarchy of event-
+     based time-surfaces for pattern recognition,” IEEE Transactions on Pattern Analysis and Machine Intelli-
+     gence 39(7), 1346–1359 (2017).
+[26] Wzorek, P. and Kryjak, T., “Traffic sign detection with event cameras and dcnn,” in [2022 Signal Processing:
+     Algorithms, Architectures, Arrangements, and Applications (SPA)], 86–91 (2022).
+[27] Nam, Y., Mostafavi, M., Yoon, K.-J., and Choi, J., “Stereo depth from events cameras: Concentrate
+     and focus on the future,” in [2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition
+     (CVPR) ], 6104–6113 (2022).
+[28] Barchid, S., Mennesson, J., and Djéraba, C., “Exploring joint embedding architectures and data augmen-
+     tations for self-supervised representation learning in event-based vision,” in [2023 IEEE/CVF Conference
+     on Computer Vision and Pattern Recognition Workshops (CVPRW)], 3903–3912 (2023).
+[29] Hochreiter, S. and Schmidhuber, J., “Long short-term memory,” Neural Computation 9(8), 1735–1780
+     (1997).
+[30] Ravanelli, M., Brakel, P., Omologo, M., and Bengio, Y., “Light gated recurrent units for speech recognition,”
+     IEEE Transactions on Emerging Topics in Computational Intelligence 2(2), 92–102 (2018).
+[31] Zhou, G.-B., Wu, J., Zhang, C.-L., and Zhou, Z.-H., “Minimal gated unit for recurrent neural networks,”
+     International Journal of Automation and Computing 13(3), 226–234 (2016).
+[32] Gers, F. and Schmidhuber, E., “Lstm recurrent networks learn simple context-free and context-sensitive
+     languages,” IEEE Transactions on Neural Networks 12(6), 1333–1340 (2001).
+[33] Krishnamoorthi, R., “Quantizing deep convolutional networks for efficient inference: A whitepaper,” arXiv
+     preprint arXiv:1806.08342 (2018).
+[34] Wzorek, P., Jeziorek, K., Kryjak, T., and Pinna, A., “Increasing the scalability of graph convolution for
+     fpga-implemented event-based vision,” arXiv preprint arXiv:2411.04269 (2024).
+[35] de Tournemire, P., Nitti, D., Perot, E., Migliore, D., and Sironi, A., “A large scale event-based detection
+     dataset for automotive,” (2020).
+[36] Perot, E., de Tournemire, P., Nitti, D., Masci, J., and Sironi, A., “Learning to detect objects with a 1
+     megapixel event camera,” in [Advances in Neural Information Processing Systems ], Larochelle, H., Ranzato,
+     M., Hadsell, R., Balcan, M., and Lin, H., eds., 33, 16639–16652, Curran Associates, Inc. (2020).
+[37] Kingma, D. P. and Ba, J., “Adam: A method for stochastic optimization,” (2017).
+[38] Ge, Z., Liu, S., Wang, F., Li, Z., and Sun, J., “Yolox: Exceeding yolo series in 2021,” arXiv preprint
+     arXiv:2107.08430 (2021).
+[39] He, K., Zhang, X., Ren, S., and Sun, J., “Deep residual learning for image recognition,” in [Proceedings of
+     the IEEE conference on computer vision and pattern recognition ], 770–778 (2016).
+[40] Sutskever, I., Martens, J., Dahl, G., and Hinton, G., “On the importance of initialization and momentum
+     in deep learning,” in [Proceedings of the 30th International Conference on Machine Learning], Dasgupta,
+     S. and McAllester, D., eds., Proceedings of Machine Learning Research 28, 1139–1147, PMLR, Atlanta,
+     Georgia, USA (17–19 Jun 2013).
+[41] Cannici, M., Ciccone, M., Romanoni, A., and Matteucci, M., “A differentiable recurrent surface for asyn-
+     chronous event-based data,” in [The European Conference on Computer Vision (ECCV)], (August 2020).
+[42] Rebecq, H., Ranftl, R., Koltun, V., and Scaramuzza, D., “High speed and high dynamic range video with
+     an event camera,” IEEE Trans. Pattern Anal. Mach. Intell. (T-PAMI) (2019).
+[43] Gehrig, M. and Scaramuzza, D., “Recurrent vision transformers for object detection with event cameras,” in
+     [Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ], (2023).
+[44] Iacono, M., Weber, S., Glover, A., and Bartolozzi, C., “Towards event-driven object detection with off-
+     the-shelf deep learning,” in [2018 IEEE/RSJ International Conference on Intelligent Robots and Systems
+     (IROS) ], 1–9 (2018).
+[45] Chen, N. F. Y., “Pseudo-labels for supervised learning on dynamic vision sensor data, applied to object
+     detection under ego-motion,” in [2018 IEEE/CVF Conference on Computer Vision and Pattern Recognition
+     Workshops (CVPRW)], 757–75709 (2018).
+[46] Jiang, Z., Xia, P., Huang, K., Stechele, W., Chen, G., Bing, Z., and Knoll, A., “Mixed frame-/event-
+     driven fast pedestrian detection,” in [2019 International Conference on Robotics and Automation (ICRA) ],
+     8332–8338 (2019).
+[47] Gehrig, D. and Scaramuzza, D., “Pushing the limits of asynchronous graph-based object detection with
+     event cameras,” arXiv preprint arXiv:2211.12324 (2022).
+[48] Cordone, L., Miramond, B., and Thierion, P., “Object detection with spiking neural networks on automotive
+     event data,” in [2022 International Joint Conference on Neural Networks (IJCNN) ], 1–8 (2022).
+[49] Messikommer, N., Gehrig, D., Loquercio, A., and Scaramuzza, D., “Event-based asynchronous sparse con-
+     volutional networks,” in [European Conference on Computer Vision ], 415–431, Springer (2020).
+

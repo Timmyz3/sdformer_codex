@@ -1,0 +1,1209 @@
+                                                  HeatViT: Hardware-Efficient Adaptive Token
+                                                       Pruning for Vision Transformers
+                                                  Peiyan Dong1 , Mengshu Sun1 , Alec Lu2 , Yanyue Xie1 , Kenneth Liu2 , Zhenglun Kong1 ,
+                                                           Xin Meng1 , Zhengang Li1 , Xue Lin1 , Zhenman Fang2 , Yanzhi Wang1,3
+                                                                         1
+                                                                   Northeastern University, 2 Simon Fraser University, 3 CoCoPIE LLC
+                                               {dong.pe, sun.meng, xie.yany, kong.zhe, li.zhen, xue.lin, yanz.wang}@northeastern.edu,
+                                                               {alec_lu, ksl24, zhenman}@sfu.ca, 1601214372@pku.edu.cn
+
+
+
+                                            Abstract—While vision transformers (ViTs) have continuously          the reliance on scarce domain data, ultimately addressing the
+arXiv:2211.08110v2 [cs.AR] 25 Feb 2023
+
+
+
+
+                                         achieved new milestones in the field of computer vision, their          two fundamental problems in deep learning: (i) strong reliance
+                                         sophisticated network architectures with high computation and           on domain data, and (ii) constant model improvements to serve
+                                         memory costs have impeded their deployment on resource-limited
+                                         edge devices. In this paper, we propose a hardware-efficient            evolving needs. ViTs and transformers are largely considered
+                                         image-adaptive token pruning framework called HeatViT for               as one of the future dominant deep learning techniques.
+                                         efficient yet accurate ViT acceleration on embedded FPGAs. By              However, to fully unleash advantages of transformer archi-
+                                         analyzing the inherent computational patterns in ViTs, we first         tectures, we need to address the following challenges before
+                                         design an effective attention-based multi-head token selector,          ViTs and transformers become an indispensable staple in fu-
+                                         which can be progressively inserted before transformer blocks
+                                         to dynamically identify and consolidate the non-informative             ture AI computing. (i) Although the self-attention mechanism
+                                         tokens from input images. Moreover, we implement the token              is a key defining feature of transformer architectures, a well-
+                                         selector on hardware by adding miniature control logic to               known concern is its quadratic time and memory complexity
+                                         heavily reuse existing hardware components built for the                with respect to the number of input tokens. This hinders
+                                         backbone ViT. To improve the hardware efficiency, we further            scalability in many settings, let alone deployment on resource-
+                                         employ 8-bit fixed-point quantization and propose polynomial
+                                         approximations with regularization effect on quantization error         constrained edge devices. (ii) Majority of existing works
+                                         for the frequently used nonlinear functions in ViTs. Finally,           on efficient ViT and transformer techniques followed what
+                                         we propose a latency-aware multi-stage training strategy to             has been done for Convolutional Neural Networks (CNNs)
+                                         determine the transformer blocks for inserting token selectors          by using conventional weight pruning [10], [55], [56], [64],
+                                         and optimize the desired (average) pruning rates for inserted           quantization [33], [38], [60], and compact architecture design
+                                         token selectors, in order to improve both the model accuracy
+                                         and inference latency on hardware. Compared to existing                 [6], [8], [9], [16], [18], [30], [42], [48], [50], with limited
+                                         ViT pruning studies, under the similar computation cost,                accuracy and speed performance. (iii) In the efforts of explor-
+                                         HeatViT can achieve 0.7%∼8.9% higher accuracy; while                    ing token removal to address the quadratic complexity, the
+                                         under the similar model accuracy, HeatViT can achieve more              static approaches [10], [13], [32], [41], [44] remove tokens
+                                         than 28.4%∼65.3% computation reduction, for various widely              with a fixed ratio in an input-agnostic manner, ignoring input
+                                         used ViTs, including DeiT-T, DeiT-S, DeiT-B, LV-ViT-S, and
+                                         LV-ViT-M, on the ImageNet dataset. Compared to the baseline             sample dependent redundancy; and existing image-adaptive
+                                         hardware accelerator, our implementations of HeatViT on the             approaches [36], [53], [56] simply discard non-informative
+                                         Xilinx ZCU102 FPGA achieve 3.46×∼4.89× speedup with a                   tokens and do not fully explore token-level redundancies from
+                                         trivial resource utilization overhead of 8%∼11% more DSPs               different attention heads. Both approaches achieve a relatively
+                                         and 5%∼8% more LUTs.                                                    low pruning rate (to preserve accuracy) or an undermined ac-
+                                            Keywords- Vision Transformer; FPGA Accelerator; Hardware             curacy (at a high pruning rate). Moreover, none of these studies
+                                         and Software Co-design; Data-level Sparsity.                            support efficient hardware implementation on edge devices.
+                                                                                                                 (iv) Transformer architectures tend to use more hardware-
+                                                               I. I NTRODUCTION                                  unfriendly computations, e.g., more nonlinear operations than
+                                            Transformers [2], [37] have recently made an attractive              CNNs, to improve accuracy. Therefore, we need to address
+                                         resurgence in the form of Vision Transformers (ViTs) [11],              the low hardware efficiency issue of such computations, while
+                                         showing strong versatility in NLP [3], [25], [47], computer             enjoying the additional optimization dimension provided by
+                                         vision (e.g., image classification [11], object detection [5],          multi-head self-attention.
+                                         [65], semantic segmentation [61], image processing [7], and                In this paper, we propose HeatViT, a hardware-efficient
+                                         video understanding [63]), and complex scenarios with multi-            image-adaptive token pruning framework, together with 8-bit
+                                         modal data. Furthermore, ViTs can be used as effective back-            quantization, for efficient yet accurate ViT inference acceler-
+                                         bone networks [4], [11], [19], [49] with superior transferability       ation on embedded FPGA platforms. To improve pruning rate
+                                         to downstream tasks through minor fine-tunings. Seemingly,              while preserving model accuracy, we make two observations
+                                         ViTs and transformers have great potential to unify diverse             by analyzing the computation workflow in ViTs: (i) the in-
+                                         application domains through common architectures and tackle             formation redundancy in input tokens differs among attention
+
+
+
+                                                                                                             1
+                                   Input                         Stage1                                    Stage2                      Stage3                                                             and (ii) optimize the desired (average) pruning rates for these
+                                                           1                                     1                    2            1          2                 3
+                                                                                                                                                                                                          token selectors. Specifically, we insert a token selector for
+                                                                                                                                                                                                          each transformer block, from the last block backward to the
+                                                                                                                                                                                                          first one, since early blocks are more sensitive to accuracy.
+                                                             S                                                                                                                                            For each insertion, we train the current token selector while
+                                                                          informative
+
+
+
+                                                                                                                                  S
+                                                                                                                                                                                                          fine-tuning other network components, to decrease latency
+                                                                                                                                                  informative
+                                                                                                                                                                                                          through increasing pruning rate of the current block until
+      Patch Embedding
+
+
+
+
+                                                                                                                                                                                                          accuracy loss exceeds a threshold. Then we further consolidate
+
+
+
+                                                                                                     Self-attention
+                                Self-attention
+
+
+
+
+                                                                                                                                                                         Self-attention
+                                                                                                                                                                                                          token selectors in consecutive transformer blocks with similar
+
+
+
+                                                                                                                      FFN
+                                                 FFN
+
+
+
+
+                                                                                                                                                                                                ...
+
+
+
+
+                                                                                                                                                                                          FFN
+                                                                                                                                                                                                          pruning rates into one token selector for a whole stage of
+                                                                                                                                                                                                          transformer blocks. Our training strategy is conducted as fine-
+                                                                             package token
+
+
+
+
+                                                                                                                                                     package token
+                                                                                             1                                                                       2                                    tuning on pre-trained ViTs. And because we use small epoch
+                                                       tokens decision                                                      tokens decision
+
+                  class token
+                                                                                                                                                                                                          numbers for inserting token selectors, our training effort is
+                                                                  non-informative                                                      non-informative
+                                                                                                                                                                                                          roughly 90% of that for training-from-scratch of backbone
+Fig. 1. The workflow of HeatViT on DeiT-S. The proposed token selector S                                                                                                                                  ViTs (without token selectors).
+conserves informative tokens conditioned on features from the previous layer.
+And non-informative tokens are averaged into one package token (blue).                                                                                                                                        TABLE I. Comparison between representative ViT pruning methods.
+heads in ViTs; and (ii) non-informative tokens identified in ear-                                                                                                                                                      Method
+                                                                                                                                                                                                                                    Design
+                                                                                                                                                                                                                                                 Method
+                                                                                                                                                                                                                                                              Design
+lier transformer blocks may still encode important information                                                                                                                                                                      Scheme                    Scheme
+when propagating to later blocks. Based on these, we design                                                                                                                                                           DyViT [41]       ¬         ATS [13]        ¬
+                                                                                                                                                                                                                        IA [36]        ­       PS-ViT [44]       ¬
+an effective token selector module that can be inserted before
+                                                                                                                                                                                                                       VTP [64]        ®       Evo-ViT [53]      ­
+transformer blocks to reduce token number (i.e., number of                                                                                                                                                            S2ViTE [10]    ¬®¯       UP-DeiT [55]     ®¯
+tokens) with negligible computational overhead. As shown in                                                                                                                                               ¬ – Static Token Pruning; ­ – Adaptive Token Pruning; ® – Head Pruning;
+Fig. 1, we incorporate different token-level redundancies from                                                                                                                                            ¯ – Token Channel Pruning.
+multiple attention heads to be more accurate in token scoring.                                                                                                                                               As summarized in Fig. 2, we evaluate HeatViT for mul-
+Furthermore, instead of completely discarding non-informative                                                                                                                                             tiple widely used ViT models on the ImageNet dataset, in-
+ones, we package them together into one informative token to                                                                                                                                              cluding DeiT-tiny (DeiT-T, HeatViT-T), DeiT-small (DeiT-S,
+preserve information for later transformer blocks.                                                                                                                                                        HeatViT-S), DeiT-base (DeiT-B, HeatViT-B) [45], LV-ViT-
+   For hardware implementation on edge FPGA devices, we                                                                                                                                                   small (LV-ViT-S, HeatViT-LV-S), and LV-ViT-medium (LV-
+design our token selector with linear layers, i.e., fully-                                                                                                                                                ViT-M, HeatViT-LV-M) [24]. These models are already well
+connected (FC) layers, instead of convolutional (CONV) lay-                                                                                                                                               condensed and thus more challenging to prune compared to
+ers, to reuse the GEMM (General Matrix Multiply) hardware                                                                                                                                                 larger ViT models. Compared to state-of-the-art ViT pruning
+component built for the backbone ViT (i.e., without token                                                                                                                                                 studies in Table I (pruning types are explained in detail
+selectors) execution. In addition, we always concatenate the                                                                                                                                              in Sec II-B), HeatViT achieves better accuracy-computation
+identified (and sparse) informative tokens and the packaged                                                                                                                                               trade-offs: Under a similar computation cost, HeatViT can
+informative token together to form a dense input of tokens to                                                                                                                                             achieve 0.7%∼8.9% higher accuracy; while under a similar
+avoid sparse computations on hardware. To improve the hard-                                                                                                                                               accuracy, HeatViT can reduce the computation cost by more
+ware efficiency, we further apply 8-bit quantization for weights                                                                                                                                          than 28.4%∼ 65.3%. Compared to the baseline hardware
+and activations, and propose polynomial approximations for                                                                                                                                                accelerator (16-bit and no token pruning), our implemen-
+the frequently used nonlinear functions in ViTs, including                                                                                                                                                tations of HeatViT on the Xilinx ZCU102 FPGA achieves
+GELU [20], Softmax [17], and Sigmoid [35]. Besides, we                                                                                                                                                    3.46×∼4.89×speedup with a trivial resource utilization over-
+introduce the regularization effect on quantization error into                                                                                                                                            head of 8%∼11% more DSPs and 5%∼8% more LUTs.
+the design of polynomial approximations to support more                                                                                                                                                   Compared to the optimized ARM CPU and NVIDIA GPU
+ambitious quantization. We design a proof-of-concept FPGA                                                                                                                                                 versions on the NVIDIA Jetson TX2 board with our token
+accelerator for ViTs based on our proposed HeatViT. We                                                                                                                                                    pruning, our FPGA implementations achieve 685×∼1695×
+implement the GEMM engine inspired by [14], [31] to exe-                                                                                                                                                  and 2.68×∼3.79× more speedups, 242.6×∼719.0× and
+cute the most computation-intensive multi-head self-attention                                                                                                                                             3.0×∼4.7× higher energy efficiency.
+module and feed-forward network in the backbone ViT, and                                                                                                                                                     Our contributions are summarized as follows:
+the classification network in our token selector. It is worth                                                                                                                                             •   Algorithm and hardware co-design for an effective and
+noting that only lightweight control logic is added to support                                                                                                                                                hardware-efficient token selector to enable efficient image-
+our adaptive token pruning by reusing the same hardware                                                                                                                                                       adaptive token pruning in ViTs.
+components built for the backbone ViT execution.                                                                                                                                                          •   A latency-aware multi-stage training strategy to learn the
+   To reduce inference latency on hardware while preserving                                                                                                                                                   effective insertion of token selectors in ViTs.
+model accuracy (typically within 0.5% or 1% accuracy loss),                                                                                                                                               •   A polynomial approximation of nonlinear functions inside
+we propose a latency-aware multi-stage training strategy to (i)                                                                                                                                               ViTs for more ambitious quantization and efficient FPGA-
+determine the transformer blocks for inserting token selectors                                                                                                                                                based implementations.
+
+
+
+                                                                                                                                                                                                      2
+•   An end-to-end acceleration framework, with both image-              Attention outputs from all the heads are concatenated and
+    adaptive pruning and 8-bit quantization, for ViT inference          linearly transformed.
+    on embedded FPGAs.                                                  B. Model Pruning on ViT
+•   Experiments to demonstrate superior pruning rates and infer-           State-of-the-art ViT pruning studies exploring the redun-
+    ence accuracy of HeatViT over state-of-the-art ViT pruning          dancy from three dimensions in ViTs are summarized below.
+    studies, as well as trivial hardware resource overhead.             Redundancy of the attention head. Attention head prun-
+                                                                        ing [10], [55], [56], [64] reduces weight redundancy on the
+           II. BACKGROUND AND R ELATED W ORK                            transformation matrices (WQ , WK , WV ) before MSA opera-
+A. Vision Transformer                                                   tion. Due to the parallel computing nature of the transformer
+                                                                        heads, these works directly prune some heads entirely and
+   Transformers are initially proposed to handle the learning
+                                                                        lead to significant accuracy drop, for example, 27% GMACs
+of long sequences in NLP tasks. Dosovitskiy et al. [11] and
+                                                                        reduction, but with 2.2% accuracy drop on DeiT-T in [10].
+Carion et al. [5] adapt the transformer architecture to image
+                                                                        It is an inefficient way of computation reduction because the
+classification and detection, respectively, and achieve com-
+                                                                        attention head usually contributes less than 43% of the total
+petitive performance against CNN counterparts with stronger
+                                                                        computation in several ViT architectures [27].
+training techniques and larger-scale datasets. DeiT [45] further
+                                                                        Redundancy of the token channel. Token channel [10], [55],
+improves the training pipeline with the aid of distillation,
+                                                                        [56] pruning executes feature-level pruning on the embedding
+eliminating the need for large-scale pretraining [57]. Inspired
+                                                                        of the token feature to diminish the redundancy of the fea-
+by the competitive performance and global receptive field of
+                                                                        ture representation. Since this pruning type is equivalent to
+transformer models, follow-up works design ViTs for different
+                                                                        structured pruning on the token embedding, i.e., removing the
+computer vision tasks including object detection, semantic
+                                                                        same embedding dimension for different tokens, it is difficult
+segmentation, 3D object animation, and image retrieval.
+                                                                        to guarantee an ideal pruning rate without significant accuracy
+   Fig. 3 illustrates three components in ViTs: patch embed-
+                                                                        deterioration.
+ding, transformer encoders, and classification output head.
+                                                                        Redundancy of the token number. Token pruning [10], [13],
+For patch embedding, an image X ∈ RH×W ×C is reshaped
+                                                     2                  [32], [36], [41], [44], [53], [56] aims at removing the non-
+into a sequence of 2D patches Xp ∈ RN ×(P ·C) , where
+                                                                        informative input data. According to [54], the accuracy of
+(H, W ) is original image resolution, C is channel number,
+                                                                        neural networks is more related to the object information,
+(P, P ) is the resolution of patches, and N = HW/P 2 is
+                                                                        but not the background information, implying the input-level
+the number of patches and also the effective input sequence
+                                                                        redundancy. There is often much higher redundancy along the
+length (i.e., number of tokens) to transformer encoders. Patch
+                                                                        token number dimension.
+embeddings are obtained by mapping Xp into D dimensions
+                                                2
+via a trainable linear projection E ∈ R(P ·C)×D : X0 =                  C. Computational Complexity Analysis
+[Xclass ; X1p E; X2p E; ...; XN
+                              p E]+Epos , where D is the constant          Given an input sequence N ×D, where N is the input
+latent vector size throughout transformer encoders, and Epos ∈          sequence length or the token number, and D is the embedding
+R(N +1)×D is learnable position embeddings. A learnable                 dimension [45] of each token, some works [36], [64] address
+embedding X00 = Xclass is prepended in patch embeddings                 the computational complexity of ViT as (12N D2 + 2N 2 D).
+X0 . Then X goes through a stack of L transformer encoders              However, D represents three physical dimensions: (i) Dch –
+for processing. The output X0L (class token) of the final (L-           channel size of a token, (ii) h – number of heads, and (iii)
+th) transformer encoder is fed to a classification output head          Dattns – sub-channel size for one head. The channel size of
+implemented by an MLP to obtain the final result. The MLP               the Query (Q), Key (K), and Value (V) matrices is HDattns .
+module uses two linear layers with a Gaussian Error Linear              As shown in Table II, the computational complexity of the
+Unit (GELU) activation layer in between.                                ViT can be written as [4N Dch (hDattns ) + 2N 2 (hDattns ) +
+   The l-th transformer encoder receives the patch embed-               8N Dch Df c ]. Compared with other prunable dimensions, di-
+dings Xl−1 as input. Fig. 3 illustrates a ViT encoder block,            rectly pruning tokens, N , will contribute to the reduction of
+consisting of a multi-head self-attention (MSA) module and              all operations linearly or even quadratically (N 2 in layers ­
+an MLP (FFN) module, both with LN (layer normalization)                 and ®), more compression benefits than other pruning types.
+applied before input. The encoder block operations are then:            Please note that since token pruning is equivalent to removing
+              X0 l−1 = MSA(LN(Xl−1 )) + Xl−1 ,                          information redundancy within the image data, it can be more
+                                                              (1)
+                  Xl = FFN(LN(X0 l−1 )) + X0 l−1 .                      freely integrated into the compression process on other model
+                                                                        dimensions (e.g., model quantization in our case).
+For h heads in MSA, LN(Xl−1 ) is split into h parts. For
+each head, the corresponding part in LN(Xl−1 ) is transferred           D. Static vs. Image-Adaptive Token Pruning
+into query Q, key K, and value V through three linear pro-                 There are two sub-branches in the token pruning of the ViT:
+jections WQ , WK , and WV , respectively. Then self-attention           static token pruning and image-adaptive token pruning. Static
+function [47] in each head is performed as:                             token pruning [10], [13], [32], [41], [44] reduces the number
+                                             √
+        Attention(Q, K, V) = Softmax(QKT / D)V.           (2)           of input tokens by a fixed ratio for different images, which
+
+
+
+                                                                    3
+                                                                                                                                                                   ATS-21/384
+                                                                                                                                                                   (17.4, 83.1)
+                                                                                                                                                                           DeiT-B
+                                                                                                                                                                        (17.6,81.8)
+
+                                                                                                                                    Model    GMACs     Top-1 Acc           Model              GMACs      Top-1 Acc
+                                                                                                                                HeatViT-T0    0.54      70.80%           HeatViT-S3             3.86         79.80%
+                                                                                                                                HeatViT-T1    0.90      72.10%         HeatViT-B0               6.10         80.10%
+                                                                                                                                HeatViT-T2    1.00      72.20%         HeatViT-B1             10.49          81.05%
+                                                                                                                                HeatViT-T3    1.29      76.87%       HeatViT-LV-S0              3.10         83.05%
+                                                                                                                                HeatViT-T4    1.30      77.02%       HeatViT-LV-S1              4.28         83.10%
+                                                                                                                                HeatViT-S0    1.80      78.50%      HeatViT-LV-M0               5.30         82.70%
+                                                                                                                                HeatViT-S1    2.01      79.00%      HeatViT-LV-M1               7.32         83.71%
+                                                                                                                                HeatViT-S2    2.64      79.34%
+
+
+
+
+Fig. 2. Comparison of HeatViT with prior pruning methods: Under a similar computation cost, HeatViT achieves 0.7%∼8.9% higher accuracy; while under
+a similar accuracy, HeatViT reduces the computation cost by more than 28.4%∼ 65.3%. Final HeatViT models are quantized into 8-bit fixed-point format.
+                                                                                     TABLE II. Computational complexity of one ViT block.
+                                                         Class                                             class        position
+                                                    (Bird, Grass, ..)                                     token         embedding                     Layer Module                Input Size           Computation             Output Size               #MACs
+        Head
+
+
+
+
+                                                                                                                    Feed                                                                                   Linear
+                                                                                          Fully-Connected
+                                                                                                                                                        ¬                         N × Dch                             N × hDattns N Dch hDattns
+                                                  Classification Head                                              Forward                                                                             Transformation
+                                                                                                                   Network                              ­        MSA          N × hDattns                Q × KT                  N ×N              N 2 hDattns
+                                                                                                 GELU
+                                                        Block L                                                                                         ®                          N ×N                 QK × V  T
+                                                                                                                                                                                                                              N × hDattns          N 2 hDattns
+                                                               Block2 ... Block L-1       Fully-Connected                                                                     N × hDattns                                       N × Dch
+        Transformer Encoders
+
+
+
+
+                                                                                                                                                        ¯                                                Projection                              N hDattns Dch
+                                                                                                                                                        °                         N × Dch                FC Layer               N × 4Df c          4N Dch Df c
+                                                                                                                                                                   FFN
+                                                                                                                                                        ±                         N × 4Df c              FC Layer               N × Dch            4N Df c Dch
+                                                         FFN
+                                                                                                             Multi-head
+                                                                                          Linear Projection Self-attention                                         Total MACs: 4N Dch hDattns +                       2N 2 hD   attns   + 8N Dch Df c
+                                                     LayerNorm
+
+                                                                                          Attention Pro                                                         Static Token Pruning                                Image-Adaptive Token Pruning
+                                                                                                                                                        Input       Stage 1         Stage 2        Stage 3            Input      Stage 1     Stage 2      Stage 3
+                                                                                                                                                                          30.0%          51.0%          65.7%                        35.2%       58.1%        72.4%
+                                                        MSA                                Softmax
+
+
+                                                     LayerNorm
+                                                                                                                                                                          30.0%          51.0%          65.7%                        40.8%       63.2%        78.5%
+                                                  Block 1
+                                                                                      Linear Transformation                heads
+                               Token Numbers: N
+
+
+
+
+                                                    Embedded
+        Patch Embedding
+
+
+
+
+                                                                                                                                                                                                                                     37.2%       60.2%        74.5%
+                                                     Tokens                                                                                                               30.0%         51.0%           65.7%
+
+                                                    Token Channels: D
+
+                                                                 0        1    2      3      4       5     6        7       8       9
+                                                            class token
+
+                                                                          Linear Projection of Flatten Patches                                       Fig. 4. Comparison between static token pruning and HeatViT image-adaptive
+                                                                                                                                                     token pruning.
+
+                                                                                                                                                     and delete the less informative tokens completely without the
+                                                                                                                                                     opportunity to correct evaluation errors. Moreover, there are
+                                                                Fig. 3. Overview of ViT
+                                                                                                                                                     no more details on how to determine the location, number,
+neglects the fact that the information of each image varies both                                                                                     and pruning rate of the pruning evaluation module specifically.
+in the region size and location, and thus restricts the image                                                                                        Hence, they often lead to a limited overall pruning rate (e.g.,
+pruning rate. In contrast, image-adaptive token pruning [36],                                                                                        35% GMACs reduction on DeiT-S [36]). Finally, none of these
+[53], [56] deletes redundant tokens based on the inherent                                                                                            studies have considered the efficient hardware implementa-
+image characteristics to achieve a per-image adaptive pruning                                                                                        tion on edge devices to support adaptive token pruning. For
+rate. Generally, smaller pruning rates are applied for complex                                                                                       example, [36] introduces a new operation, Argsort, which is
+and information-rich images while larger pruning rates for                                                                                           currently not compatible with many frameworks [39].
+simple and information-less ones. Ideally, it can achieve a
+larger overall pruning rate than the static one as Fig 4. How-                                                                                       E. Transformer Accelerators on FPGAs
+ever, existing adaptive token pruning studies do not consider                                                                                          Previous state-of-the-art FPGA accelerators on Transformer-
+the visual characteristics inside the ViT (token redundancy                                                                                          based models [29], [40] and [59] also leverage sparsity.
+in ViT, Sec III) –visual receptive field of different heads,                                                                                         However, they have three main limitations. (i) [29] depends
+
+
+
+                                                                                                                                               4
+           Input        Head 1         Head 2         Head 3          Head 4          Head 5         Head 6
+
+
+
+
+    Fig. 5. The information region detected by each head in DeiT-T.
+on block-circulant matrix-based weight representation in order                                         Layer Index of DeiT-S
+to replace the matrix-vector multiplication in FC layers with
+                                                                               Fig. 6. CKA between the final CLS token and other tokens measured after
+FFT/IFFT-based processing elements. However, [29] acceler-                     each transformer block (2 to 11).
+ates only the MSA part of the model and omits the FFN
+part (about 65% computation of the whole model). (ii) [40]                     B. Overview of HeatViT
+utilizes the block-wise weight pruning and [59] implements                        To develop a hardware-efficient image-adaptive token prun-
+the structure pruning (row-wise or column-wise) to compress                    ing framework, we first design an effective adaptive token
+weights to similar sizes (lower memory footprint). However,                    pruning module (also known as token selector) according
+the pruning granularity of both is coarse, resulting in se-                    to the vision redundancy in ViTs (Section IV). This module
+vere accuracy degradation at limited compression rates. For                    includes an attention-based multi-head token classifier and a
+example, [40] shows 2% accuracy drops under the 36%                            token packager, as shown in Fig. 7. To improve the pruning
+sparsity. (iii) These FPGA-based accelerators are mainly for                   rate and accuracy, the token classifier incorporates different
+transformers in the Natural Language Processing (NLP) tasks,                   token-level redundancies in multiple heads to more accurately
+not for computer vision ones. In addition, they all compress                   classify tokens and the token packager consolidates (instead of
+the model weights, which means that new substructures or                       discarding) non-informative tokens to one informative token to
+additional overhead is needed to support the specific sparse                   reserve information for later transformer blocks. To improve
+matrix multiplication. According to our Section III analysis,                  the hardware efficiency, we choose linear layers for the token
+the difference in input data type will introduce a unique                      selector to reuse the GEMM hardware component for the
+redundancy that motivates an effective compression space.                      backbone ViT, and always concatenate the classified sparse
+Experiments show that adaptive token pruning at the data level                 tokens into dense ones. Please note that it is challenging for
+can speed up the model inference with negligible accuracy                      CNN-based architecture to implement the data-level pruning,
+losses and little overhead for hardware implementations.                       because the kernel size of the convolution operation is fixed so
+                                                                               that the irregular input features cannot be directly concatenated
+   III. A NALYSIS OF T OKEN R EDUNDANCY IN V I T AND                           into dense ones to speedup the model inference. Moreover, we
+                 OVERVIEW OF H EAT V I T                                       deploy 8-bit fixed-point quantization to further compress the
+A. Token Redundancy in ViT                                                     model, and propose a polynomial approximation of nonlinear
+Token redundancy viewed by different attention heads.                          functions inside ViTs for FPGA-based efficient implemen-
+Assuming that the final class (CLS) token is strongly cor-                     tations and regularize the quantization errors. A proof-of-
+related with classification [62], we visualize the information                 concept hardware accelerator design is presented in Section V.
+regions detected by the CLS token in different attention heads                 To meet the target ViT inference speed on hardware while
+of DeiT-T, as shown in Fig. 5. It can be seen that each                        reserving the accuracy (typically within 1% accuracy loss), one
+head extracts the features of the image (multi-head visual                     also needs to carefully decide the number of token selectors
+receptive area of the image) independently and differently [21],               to insert in the backbone ViT, as well as the location and
+[34], [36], indicating that the heads contain distinct token-                  pruning rate of each token selector. To address this challenge,
+level redundancy. This inspires our token selector design with                 in Section VI, we propose a latency-aware multi-stage training
+multiple heads, which is elaborated in Section IV-A.                           strategy to learn all these parameters.
+Token redundancy viewed by different transformer blocks.
+                                                                                         IV. A DAPTIVE T OKEN P RUNING M ODULE
+Fig. 6 gives the centered kernel alignment (CKA) [28] that rep-
+resents the similarity between the tokens in each transformer                    As shown in Fig. 7, the proposed adaptive token selector is
+block and the final CLS token, showing a tendency from weak                    based on observations in Section III, including the attention-
+to strong. It tells us that it is inaccurate for each transformer              based multi-head token classifier and the token packager.
+block to encode or evaluate the image tokens, especially in the
+front blocks. Thus, pruning rates for these front blocks should                A. Attention-Based Multi-Head Token Classifier
+be lower to avoid ruling the informative tokens out. This also                 Multi-Head Token Classifier. Based on the multi-head visual
+inspires our token packager technique to provide chances to                    receptive area of the ViT, we propose a fine-grained structure
+make up for pruning mistakes (Section IV-B).                                   to evaluate token scores. As shown in Fig. 7, each head
+
+
+
+                                                                         5
+                                                                                                                                                                                                                                   ×h                                                                                                                      ×h
+
+
+
+
+                                                                    Token Classifier
+
+                                                                                       GumbleSoftmax
+
+                                                                                                          Decision Mask
+          Patch Partition
+
+
+
+
+                                                                                                                                                                                                                                                                                         Linear(dim/2, dim/4)
+                                                                                                                                                                                                                                                           Linear(dim, dim/2)
+                                                                                                                                                                                                        Linear(dim, dim)
+
+
+
+
+                                                                                                                                                                                                                                                                                                                              Linear(dim/4, 2)
+
+                                                                                                                                                                                                                                                                                                                                                 Softmax
+                                                                                                                                                                                                                                                                                 GELU
+
+
+
+
+                                                                                                                                                                                                                                                                                                                      GELU
+                                                                                                                                                              Average(
+
+
+
+
+                                                                                                                                                                                                                           GELU
+                                                                                                                          ⨂
+
+
+
+
+                                                                                                                                                              )
+                                                                                                                                                           Token Packager
+                                                                                                                      × "!                                                      ×"!"#
+                                                                                                                                                                                                                                                   Token Classifier
+                                          Token Classifier Module
+
+
+
+
+                                                                                                                                 Token Classifier Module
+                                                                                                                                                                                                                                                                                                                             Head score
+
+
+
+
+                                                                                                               Transformer
+
+
+
+
+                                                                                                                                                                               Transformer
+
+
+
+
+                                                                                                                                                                                                                                                                                                                Sigmoid
+                                                                                                                                                                                                                                         Pooling
+
+
+
+
+                                                                                                                                                                                                                                                                GELU
+                                                                                                                                                                                                                                                   FC
+
+
+
+
+                                                                                                                                                                                                                                                                                    FC
+                                                                                                                  Block
+
+
+
+
+                                                                                                                                                                                  Block
+                        …N
+             …
+
+
+
+
+                                                                                                                                                                                              …
+                                                                                                                                                                                                        D                            d                                          d
+                                                                                                                                                                                                                                            ×h                                   ×h                                                    ×h
+
+
+
+
+                                                                                                                                                                                                                                                                                             MLP
+                                                                                                                                                                                                                                                   MLP
+                                                                                                                                                                                                  N                                                                                                                                              ⨂
+                             Token
+                            Sequence                                                                            '()*+!                                                         '()*+!"#
+                                         Token Selector                                                                         Token Selector                                                         Input                       Split by              Local/Global                                            Token score Final token
+                                       Informative tokens                                              Non-informative tokens            Package token                    Class token                 feature                     each head                feature                                               by each head decision
+
+
+
+Fig. 7. HeatViT overview. Left: Transformer blocks split into multiple stages with token selectors inserted between them (One token selector includes one
+token classifier and one token packager). Right: Multi-head token classifier to identify informative tokens.
+
+focuses on extracting different features and respective fields                                                                                                                     Since deleted image tokens cannot appear in subsequent
+of an image, demonstrating that the importance of each token                                                                                                                       blocks, M passes on to the following blocks and will be
+towards each head is different. Hence, our multi-head classifier                                                                                                                   updated by applying M ← M M 0 . M 0 is the new mask
+generates a score-map vector for each input token, marking the                                                                                                                     generated in the next stage.
+information amount of each token in each head separately.
+   Let one head dimension be d=D/h. We split the input                                                                                                                             B. Token Packager
+X∈RN ×D into h subvectors {xi }hi=1 ∈RN ×d , and feed the                                                                                                                             To solve the problem in the Sec III, we apply a token pack-
+subvectors into an MLP network to obtain the representation                                                                                                                        aging step that summarizes non-informative tokens (predicted
+of local receptive field Eilocal and the representation of global                                                                                                                  by the classifier) into a package token instead of completely
+receptive field Eiglobal .                                                                                                                                                         discarding them. Assume there are T (evaluated by the classi-
+                                                                                                                                                                                   fier) non-informative tokens {x̂t }Tt=1 ∈RT ×D along with their
+                      Eilocal = MLP(xi ) ∈ RN ×d/2                                                                                                                       (3)
+                                                                                                                                                                                   token scores {s̃t }Tt=1 ∈RT ×2 , these tokens are compressed into
+             Eiglobal       = Average(MLP(xi )) ∈ R                                                                           1×d/2
+                                                                                                                                                                         (4)       one token through weighted averaging:
+                                                                                                                                                                                                           PT
+Pushing the feature Ei =concate(Eilocal , Eiglobal × N )∈RN ×d                                                                                                                                               t=1 x̂t ∗ s̃t [0]
+                                                                                                                                                                                                    P = P      T
+                                                                                                                                                                                                                               ∈ R1×D              (10)
+into another MLP network and one Softmax function, token                                                                                                                                                             s̃ [0]
+                                                                                                                                                                                                               t=1 t
+score maps {si }hi=1 ∈RN ×2 are produced. si is the token score
+                                                                                                                                                                                   where P is the package token; s̃t [0] is the keep score of x̂t ; ∗ is
+for attention head i and ×2 represents the keep and prune
+                                                                                                                                                                                   an element-wise multiplication. P will continue the subsequent
+probabilities respectively:
+                                                                                                                                                                                   calculations along with the informative ones, enabling the
+                  si = Softmax(MLP(Ei )) ∈ RN ×2                                                                                                                         (5)       model to correct scoring mistakes.
+Attention-Based Branch. Base on the attention mecha-                                                                                                                                  After image-adaptive removing a certain part of tokens and
+nism [23], we add an attention-based branch along the classi-                                                                                                                      the token packaging step, the sparse input matrix (all the in-
+fier backbone to synthesis the importance of each head:                                                                                                                            formative tokens and package token) will be concatenated into
+                         X   d      h                                                                                                                                            a new smaller-size dense matrix to complete the computation
+                           1                                                                                                                                                       in the following blocks, which speedup the model inference
+          X̄ = Concat(           xij      ) ∈ RN ×h       (6)
+                           d j=1      i=1                                                                                                                                          directly. And most of the component operations (FC layer,
+                                                                                                                                                                                   Softmax, GELU) have already been there in the backbone ViT
+                 A = Sigmoid(MLP(X̄))) ∈ RN ×h                                                                                                                           (7)
+                                                                                                                                                                                   blocks. Therefore, we can utilize our unified operation-level
+where X̄ is a head-wise statistic through its channel dimension                                                                                                                    optimization scheme of the ViT deployment on FPGA.
+D. In Eq. (7), we feed X̄ into an MLP network with the sig-
+moid to obtain the score vector A, evaluating the importance                                                                                                                                 V. V I T H ARDWARE ACCELERATOR D ESIGN WITH
+of each head. Then the overall token score is calculated by the                                                                                                                                          A DAPTIVE T OKEN P RUNING
+weighted average S with A:                                                                                                                                                            The hardware architecture of ViT accelerators in HeatViT is
+                      Ph                                                                                                                                                           illustrated in Fig. 8, including the accelerator design for
+                         i=1 si ∗ ai
+                 S̃ = P     h
+                                      ∈ RN ×2               (8)                                                                                                                    pruned ViTs with token selector and the computation flow
+                                a
+                            i=1 i                                                                                                                                                  in the General Matrix Multiply (GEMM) engine. Besides the
+ where S̃ is the token probability score. Then we apply the                                                                                                                        LayerNorm layer (less time consuming but more complex to
+Gumbel-Softmax for the token keep/prune decision mask:
+                                                                                                                                                                                   implement on the FPGA) that is left on the ARM CPU, all
+                M = GumbelSoftmax(S̃) ∈ {0, 1}N                                                                                                                          (9)       other components in HeatVit are implemented on the FPGA.
+
+
+
+                                                                                                                                                                               6
+                                                                                                                                          FPGA
+A. Challenges                                                                                                      Control Logic                     GEMM Engine
+  To implement ViT FPGA accelerator with our dynamic                                                                 Ping-Pong                     PE     PE   …      PE
+                                                                                   CPU                                 Buffer
+token pruning, we address the following challenges. (i) The
+                                                                                                                     Ping-Pong                                 …
+token selector module should be implemented with minimal                                                                                           PE     PE          PE
+                                                                                                                       Buffer
+
+
+
+
+                                                                                                                                                                …
+hardware overhead by adding miniature control logic and                          Memory
+
+
+
+
+                                                                                                                                                    …
+
+
+                                                                                                                                                           …
+
+
+
+                                                                                                                                                                      …
+                                                                                                                      Output
+reusing existing hardware for the backbone ViT. (ii) The                        Controller                            Buffer
+                                                                                                                                                   PE     PE   …      PE
+GEMM loop tiling should accommodate an additional tiling                                                          Token Selector
+dimension due to multi-head parallelism. (iii) ViTs use more                                                      Token Packaging
+nonlinear operations than CNNs, and we need to refine these                                                                                               Softmax
+                                                                              Off-Chip                            GumbleSoftmax
+operations for more aggressive quantization and efficient hard-              DDR Memory
+                                                                                                                  Token Classifier                        GELU
+ware implementations without losing accuracy.
+B. ViT Accelerator with Dynamic Token Selection
+                                                                        (a) ViT hardware accelerator architecture supporting dynamic token selection.
+    As displayed in Fig. 8(a), the input (tokens) and weight of
+each ViT layer are loaded from the off-chip DDR memory                                          Input             Weight             Output
+                                                                                               N Tokens            Ti                N Tokens
+to the on-chip buffers, and processed by the GEMM engine                                  Ti
+
+
+
+
+                                                                                                      Di/H
+                                                                                 head 1                      To                 To
+which we will implement motivated by [15], [31]. Outputs                                                                   Do                   Do out1
+are further processed with the activation function (Softmax or
+
+
+
+
+                                                                                  ...
+                                                                           Th
+
+
+
+
+                                                                                                                                                   ...
+                                                                                                                   Di/H
+GELU), and then stored from the on-chip output buffer back to
+                                                                                head Th
+the off-chip memory. Double buffering will be applied to over-                                                                                    outTh    Attention? N
+lap data transfer time with computation. The token selector for                                                                                                 Y
+
+
+
+
+                                                                                  ...
+
+
+
+
+                                                                                                                                                   ...
+pruning consists of FC layers and GELU activations, which                                                                                                    Concat    Sum
+
+also exist in the original ViTs, and thus can be managed by the                  head H
+                                                                                                                                                  outH
+same computation engine with negligible hardware overhead
+(Section V-C). Note LayerNorm is executed on the CPU.                    (b) GEMM loop tiling with an additional tiling from multi-head mechanism.
+    1) Loop Tiling in GEMM: We generalize loop tiling [58]                      Fig. 8. Hardware architecture of ViT accelerator in HeatViT.
+for GEMM engine to deal with relatively large ViT layers.
+The concurrency of MAC operations in matrix multiplications             and resource utilization analysis of ViT accelerators is sim-
+requires pipelining and loop unrolling, as well as array parti-         ilar to that of CNN accelerators [43], except that the head
+tioning of buffers. Fig. 8(b) shows detailed computation flow           dimension in ViTs needs to be additionally considered for
+in GEMM loop tiling for ViTs accommodating an additional                parallelism. Since the layers in token selectors can be managed
+tiling dimension from multi-head mechanism. Given a ViT                 by the same GEMM engine as for the existing ViT layers, this
+layer j from ¬∼± in Table II that performs one or h matrix              analysis also applies to token selectors.
+multiplications with its Nj tokens after pruning, we represent
+                                                                        C. Token Selection Flow
+input size as Nj × Di , weight matrix size as Di × Do , and
+output size as Nj × Do , where Di denotes Dch , Dattn , or                 Token selection contains token classification to determine
+N in the MHSA module, and Dch or 4Df c in the MLP                       informative and non-informative tokens using GumbelSoftmax
+module. Tiling is applied to Di and Do dimensions, with                 with a threshold value (usually 0.5), and token packaging
+tiling sizes Ti and To , respectively. For attention computations       to average the non-informative tokens to one that is then
+(Q × KT in ­ and QKT × V in ®), both input and                          consolidated into the informative tokens. The pruned token
+output are split into h groups. A control signal is used to             (input) sequences with sparsity will be reorganized as dense
+indicate whether current computations are attention-related.            ones, eliminating hardware overhead for indexing. Fig. 9
+Results from ­ and ® are kept in h groups, while results                describes the three steps to implement token selection in our
+from other layers are accumulated. To improve throughput,               ViT hardware accelerator: (1) calculating the exponent for each
+we optimize parallelism factors including Ti , To , and Th (an          token xi and the summation Sum of all these exponents;
+additional tiling dimension for h heads). Therefore, we will            (2) dividing each exponent by the sum and classifying the
+conduct comprehensive FPGA resource modeling for available              corresponding token as informative or not according to a
+computing and on-chip memory resources.                                 threshold; and (3) if the token is informative, concatenating
+    2) Throughput and Resource Utilization Analysis: The in-            it to the informative token sequence, otherwise adding it
+ference throughput (FPS) of ViT inference is determined by              to a temporary token T mp. Finally, T mp is averaged and
+the parallelism factors Ti , To and Th , which are bounded by           concatenated to the informative token sequence.
+the number of available computation (mainly DSPs) and on-
+chip memory (BRAMs) resources. The inference is executed                D. Polynomial Approximation of Nonlinear Functions
+layer-by-layer, and the FPS can be inferred through dividing               ViT models contain nonlinear functions including GELU,
+the total number of clock cycles required to process all the ViT        Softmax, and Sigmoid. (i) Some nonlinear operations in-
+layers with the working frequency on FPGAs. The throughput              side those functions, e.g., exponential function exp(x) and
+
+
+
+                                                                    7
+                                                                          TABLE III. Resource utilization for nonlinear functions between original
+                                                                                   (Orig.) and approximation (Aprx.) implementations.
+                                                                                               GELU          Sigmoid     Softmax
+                             For each token                                                 Aprx. Orig.     Aprx. Orig. Aprx. Orig.
+                                              N                                       FF     334   191116 1015 2334 1939 2464
+                                    ?
+                                                                                     LUT     438   160909 1512 2333 2364 2476
+                                                                                     DSP      4     139     0    3   2    3
+                         Y
+
+                   is Informative       Non-Informative
+
+
+
+                Concat
+
+                                                                                δA
+                                            Average (     )                     δx
+
+                    Concat
+
+                                                                                                                               The derivative of Aaprx
+                                                                                                                               The derivative of Aorig
+
+
+
+                    Fig. 9. Token selection flow.                                                              x
+error function erf(x) consume large amounts of computing                 Fig. 10. Regularization effect on quantization error of approximated GELU.
+resources when implemented with the built-in Xilinx Vitis                the built-in Xilinx Vitis HLS math library and our proposed
+HLS math library [51], and thus incurring difficulty for hard-           implementations. Our methods are more resource efficient than
+ware acceleration (Table III). (ii) To apply more aggressive             those using the HLS math library, with 1.5×∼572× resource
+quantization than CNN/RNN models, we need to add the                     improvement. Furthermore, for each model, we try multiple
+regularization effect on quantization error to these approximate         sets of token pruning ratios and there is no accuracy drops
+operations. Inspired by [26], we propose to explore algorithm-           between the approximate model and the original one.
+level polynomial approximation to implement GELU and
+Softmax functions, through which we introduce δ1 and δ2                  E. Regularization Effect on Quantization Error
+(both <1) to control the regularization effect. Since the Sig-
+                                                                            GELU and Softmax functions are abundant in transformer
+moid function is only present inside token selectors (a small
+                                                                         blocks, which inspires us to introduce the regularization effect
+number), we do not introduce a regularization effect for it.
+                                                                         of quantization error into the approximated functions for more
+   The erf(x) function is approximated using a second-order
+                                                                         aggressive quantization (e.g., 8-bit fixed-point quantization in
+polynomial as,
+                                                                         our case). Here we proof that our regularization works.
+ Lerf (x) = sign(x)·δ1 ·[a(clip(|x|, max = −b)+b)2 +1], (11)                GELU for activation data is: A=GELU(x). Quantization
+with the constants a = −0.2888, b = −1.769 and δ1 < 1.                   on x can be considered as adding a small error ∆e to x. We
+  The GELU function is then expressed as                                 examine the influence of ∆e on output A by computing the
+                           x
+                                      
+                                           x
+                                                                       GELU derivative ∂A  ∂x . Assuming that A changes by ∆e>0, we
+           GELUaprx (x) =      1 + Lerf √         ,  (12)                can obtain the absolute error of output A:
+                            2                2
+  The Softmax function is approximated as                                                                        ∂A
+                                                                                             Errorgelu (x) =           · ∆e.                  (15)
+                                  δ2 exp(x̃i )                                                                    ∂x
+            Softmaxaprx (xi ) = PN              ,    (13)                       ∂Aaprx
+                                                                         Since ∂x        is always < 1 (Fig. 10) for GELU, the total
+                                  j=1 exp(x̃j )                          quantization error is reduced after approximation.
+with x̃i = xi − xmax , xmax = maxi (xi ) and δ2 < 1.                        Softmax for activation data is: Ai = PδN2 exp(x̃          i)
+                                                                                                                                           . As a
+                                                                                                                             j=1 exp(x̃j )
+This subtraction ensures the numerical stability during the              similar process as GELU, we compute the Sof tmaxaprx
+approximation calculation, and all inputs can be decomposed              derivative ∂A
+                                                                                    ∂x :
+as x̃ = (− ln 2)z + p, where z is a non-negative integer and p                      δ2 exp(x̃i )
+is a real number in (− ln 2, 0]. exp(x̃) can then be calculated                     ∂ PN exp(x̃j )
+                                                                             ∂A  j=1∂ x̃j              = δ2 · Ai · (1 − Ai ), i = j
+as exp(p) >> z, where z = b−x̃/ ln 2c, p = x̃ + z ln 2, and                      =         δ2 exp(x̃i )                                   . (16)
+exp(p) is approximated as                                                    ∂x    ∂ PN  j=1 exp(x̃j )
+                                                                                             ∂ x̃i       = −δ2 · Ai · Aj ,        i 6= j
+           exp(p) = 0.3585(p + 1.353)2 + 0.344.               (14)       Assuming A0 changes by ∆e0 , the absolute error of all outputs
+Both δ1 and δ2 are regularization value (< 1) on quantization            with Equation (16) is:
+error, which can be constant (δ1 =0.5, δ2 =0.5 in our case).                                                    N
+                                                                                                                X −1
+   For the Sigmoid function, we adopt the piece-wise linear              Errorsoftmax = |δ2 ∆e0 A0 (1 − A0 )| +      | − δ2 ∆e0 A0 Ai |
+approximation (PLAN) from [46].                                                                                          i=1
+   Table III compares the resource utilization for these non-                              = 2δ2 |∆e0 | A0 (1 − A0 ) < ∆e0 ,
+linear functions between the original implementations using                                                                                              (17)
+
+
+
+                                                                     8
+since 0 ≤ A0 ≤ 1, 2A0 (1 − A0 ) is always smaller than 1                                  Algorithm 1: Latency-Aware Multi-Stage Training
+and 2δ2 A0 (1 − A0 ) is further reduced (δ2 < 1). So, the total                           with Image-Adaptive Token Pruning
+quantization error after Softmax approximation is < ∆e0 .                                  Input  : ViT blocks {Blocki }L i=1 ;
+                                                                                                      Accuracy drop constraint adrop ;
+      VI. L ATENCY-AWARE M ULTI -S TAGE T RAINING                                                     Initial pruning rate ρinit ;
+                     S TRATEGY                                                                        Target latency LatencyLimit.
+   Our strategy is as follows: (1) We propose latency-sparsity                             Output : Token selectors with pruning rates ρs1 , ..., ρsk .
+loss to take into account the latency characteristics of the                               //             Step1: Insert a token selector between each two
+                                                                                                          adjacent blocks and adjust the pruning rate ρi .
+hardware side during the training process. (2) We design a
+                                                                                      1    foreach i ∈ [L, L − 1, . . . , 4] do
+block-to-stage training pipeline to learn the number of token                         2        ρi = ρinit ;
+selectors to insert in the backbone ViT, their location and                           3        a, t ← Evaluate({Blockj (ρj )}L  j=1 );
+pruning rates. Please note that (i) the block-to-stage pipeline is                    4                   // a and t represent accuracy drop and latency of
+based on token pruning, and 8-bit quantization on weight and                                               the whole model.
+activation will lead to 2×∼2.4× speedup without accuracy                              5                   while a < adrop do
+                                                                                      6                       if t < LatencyLimit then
+drops; and (ii) our training strategy uses finetuning for each                        7                            Return the finalized token pruned ViT;
+selector, and the training effort of our pipeline is equivalent                       8                       else
+to the effort of training-from-scratch of the backbone ViT.                           9                            Decrease ti ;
+Relationship between Latency and Keep Ratio. In order to                             10                            ρi = latency sparsity table(ti );
+bridge the inference of ViT model to the actual latency bound                        11                            a, t ← Evaluate({Blockj (ρj )}L  j=1 );
+
+of hardware deployment, we build the latency-sparsity table
+for the target FPGA as Table IV. In this paper, we measure                                 //             Step2: Combine sequential selectors with similar
+the actual numbers from our FPGA implementation. Each time                                                pruning rates as one stage, keep the first
+                                                                                                          selector and retrain ViT.
+we only enter the KeepRatio tokens into one ViT block with
+                                                                                     12    ρs1 , ..., ρsk ← Combine ρ1 , ..., ρL ;
+a selector and test the corresponding latency.
+                                                                                     13    Retrain ViT[Block1 (ρ1 ), .., Blocki (ρs1 ), .., BlockL (ρsk )];
+TABLE IV. Tested latency of one DeiT block with different token keeping              14    if t < LatencyLimit then
+                      ratios on ZCU102 FPGA.
+                                                                                     15         Return the finalized token pruned ViT;
+       Keep Ratio          1.0     0.9     0.8     0.7     0.6     0.5               16    else
+    Latency     DeiT-T    1.034   0.945   0.881   0.764   0.702   0.636              17         Increase adrop or LatencyLimit;
+     (ms)       DeiT-S    3.161   2.837   2.565   2.255   1.973   1.682              18         Initialize the model and selectors from the end of the
+                                                                                                 last Step1;
+Latency-Sparsity Loss. ξratio is built as follows:                                   19         Go to the Step1 and repeat the training process.
+           Block(ρi ) = latency sparsity table(ρi )                       (18)
+                 L
+                 X                                                                                                           Stage 1    Stage 2      Stage 3
+                                                                                                                                                               100
+                        Block i (ρi ) ≤ LatencyLimit                      (19)
+                  i=1
+                                                                                                                                                               80
+
+
+
+
+                                                                                                                                                                    Token Sparsity (%)
+                         L               B N
+                                                                                           Accuracy (%)
+
+
+
+
+                         X             1 X X i,b 2
+              ξratio   =     (1 − ρi −         Dj )                       (20)                                                                                 60
+                         i=1
+                                       B   j=1                                                                Low Accuracy
+                                             b=1
+
+where Eq. (18) shows the look-up-table mapping to find the                                                                                                     40
+
+latency of one Block under the corresponding ratio ρi in
+Table IV. Eq. (19) guarantees that the inference speed of the                                                                                                  20
+
+whole model satisfies the given hardware latency requirement,
+with i being the block index, ρi being the corresponding                                                                                                       0
+
+pruning rate. Through Eq. (18) and (19), we obtain appropriate
+ρi and feed it to the latency-sparsity loss (20), where B is                         Fig. 11. Accuracy and token sparsity distribution after block-to-stage training.
+the training batch size, and M (Eq. (9)) is the token keep                           The insertion before the 2nd and 3rd blocks shows the pruning difficulty.
+decision. In order to achieve per-image adaptive pruning, we
+                                                                                     and proper locations for token selectors, based on the token
+set the average pruning rate of all images in one batch as the
+                                                                                     redundancy (Fig. 6). In ViTs, tokens can be more effectively
+convergence target of the Eq. (20).
+                                                                                     encoded in later blocks. Hence, we adopt progressive training
+Training Objective. It includes the standard cross-entropy loss
+                                                                                     on inserting the token selector from later blocks to front
+ξcls , distillation loss ξdistill , and latency-sparsity loss ξratio .
+                                                                                     ones. Each time we insert a token selector, we train the
+The former two are the same as the loss strategy used in DeiT.
+                                                                                     current selector and fine tune the other parts by decreasing
+            ξ = ξcls + λdistill ξdistill + λratio ξratio        (21)                 the latency of the current block until accuracy drops noticeably
+Block-to-Stage
+where            Training.
+       we set λdistill =0.5, Algorithm
+                             λratio =2 in1 all
+                                             presents   our training
+                                                our experiments.                     (> 0.5%). Since token pruning in the front 3 blocks leads to
+strategy to find the optimal accuracy-pruning rate trade-offs                        more severe accuracy drops, we stop the selector insertion
+
+
+
+                                                                                 9
+when reaching the fourth block. If the pruned model has
+satisfied the target latency, we end the training and finalize
+the pruned model; otherwise, continue the training and repeat
+the insertion. After all the insertions, if the adjacent selectors
+have a similar pruning rate (difference< 8.5%), we combine
+them as one pruning stage and solely keep the first selector
+of that stage, shown in Fig. 11. Finally, if the final latency of
+the whole model is lower than the target latency, we return
+the pruned model; otherwise, we will relax the accuracy or
+latency constraints and repeat the training.
+                VII. E XPERIMENTAL R ESULTS
+A. Experimental Setup                                                     Fig. 12. Comparison of different token selector structures. We use DeiT-T
+                                                                          (72.2%, 1.3 GMACs) as the baseline.
+   Our experiments include adaptive token pruning and hard-
+ware implementation for ViTs with different pruning settings.             16.1%∼42.6% for various backbones with negligible ≤ 0.75%
+Note that after token pruning we will apply 8-bit quantization            accuracy degradation, which surpasses existing methods on
+on weight and activation, and all the quantization processes              both accuracy and efficiency. To explore model scaling on
+do not lose accuracy, except for 1.2% on DeiT-T.                          ViT, we train more DeiT models with the embedding di-
+   1) Training Setup for ViT Pruning: The baseline models                 mension of 160/256/288/320 as our baselines. The accuracy
+with 32-bit floating-point precision are from the TorchVision             improvement of HeatViT is 4% (72.1% vs. 68.1% with 0.9
+library [12]. Our experiments are conducted on the ImageNet-              GMACs) over DeiT-T-160, 4.67% (76.87% vs. 72.20% with
+1K dataset with various transformers backbones, including                 1.3 GMACs) over DeiT-T, and 0.81% (79.34% vs. 78.53%
+DeiT-T, DeiT-S, DeiT-B, LV-ViT-S, and LV-ViT-M, as shown                  with 2.64 GMACs) over DeiT-S-288. Additionally, our method
+in Table V. We follow the training settings in DeiT. Training             can prune up to 23.1% on DeiT-T and 16.1% on DeiT-S
+on one selector insertion costs 30 epochs on 8 NVIDIA A100-               without any accuracy degradation.
+SXM4-40GB GPUs. The training effort on block-to-stage                        1) Operations in Token Selector: We compare different
+training is listed in Table V which illustrates that the training         selector structures with the same computation cost of 0.9
+effort of the entire block-to-stage pipeline is equivalent to the         GMACs in Fig. 12. MLP-based token selectors outper-
+train-from-scratch of the backbone ViT. Through our training              form convolution-based ones under different combinations.
+pipeline, we observe that 3∼4 token selectors are suitable for            In addition, MLP-based selectors bring more benefits than
+most of the models.                                                       convolution-based ones, since we reuse the GEMM on the
+                                                                          FC operation of original ViTs without opening additional
+      TABLE V. Training effort for ViTs with different backbones.
+                                                                          resources for the new computation design.
+                        Embed.                #Epochs for Training
+   Model    #Heads                  Depth                                    For the activation functions, GELU outperforms ReLU [1]
+                         Dim.                 Baseline       Ours
+   DeiT-T       3         192         12         300          270         and Hardswish [22] continuously. Even though ReLU and
+   DeiT-S       6         384         12         300          270         Hardswish can be directly deployed on FPGAs, the resource
+   DeiT-B      12         768         12         300          270
+  LV-ViT-S      6         384         16         400          390
+                                                                          utilization of GELU can be improved to 35×∼572× by the
+  LV-ViT-M      8         512         20         400          390         polynomial approximation (Section V-D).
+   2) Hardware Platform: Our hardware accelerator designs
+are evaluated on the Xilinx ZCU102 platform [52] with                     C. Hardware Results
+Zynq UltraScale+ MPSoC, containing 2520 DSPs, 912 BRAM                       Multiple hardware accelerators are designed according to
+blocks, and 274.1k LUTs. We use Vitis HLS to generate the                 the number of heads in a specific ViT. As shown in Table VI,
+FPGA accelerators. The synthesis and implementation of the                with the same total degree of computation parallelism, the
+designs are performed with the Xilinx Vitis 2020.1 tool [51].             resource utilization and power of DeiT-S and LV-ViT-S designs
+The working frequency is set to 150 MHz. The data in all                  are higher than those of DeiT-T ones, since DeiT-T has 3 heads
+models are represented in an 8-bit fixed-point format. The                while DeiT-S and LV-ViT-S all have 6 heads, requiring more
+hardware design for HeatViT is built based on state-of-the-art            BRAM space to accommodate data of all the attention heads.
+FPGA design for ViT [31] with the GEMM engine described                   This trend is similar for DeiT-B (12 heads).
+in Section V-B1. Additionally, the HeatViT hardware design                   Compared with the baseline hardware designs (16-bit and
+incorporates a token selector and polynomial approximation                no token pruning), the accelerators with token selector in
+of nonlinear functions explained in Section V-C and V-D.                  HeatViT framework utilize 9% more DSPs and 8% more LUTs
+                                                                          for DeiT-T, 8% more DSPs and 5% more LUTs for DeiT-S
+B. Accuracy and GMACs Results                                             and LV-ViT-S, 11% more DSPs and 6% more LUTs for DeiT-
+  Fig. 2 demonstrates that our models achieve better accuracy-            B. This demonstrates that the control flow to support adap-
+computation trade-offs compared to other pruned or scaled                 tive token pruning introduces negligible resource utilization
+models. Our HeatViT reduces the computation cost by                       overhead. After the token pruning, the frame rate increases
+
+
+
+                                                                     10
+                        TABLE VI. Hardware results under different pruning settings for various ViTs on ImageNet dataset.
+                              Keep Ratio       #GMACs                    Resource Utilization          Power       FPS         Energy Effi.
+        Design     Model                                    Bitwidth
+                             (Stage 1/2/3)   (Pruning Rate)          kLUT kFF BRAM36 DSP                (W)     (Accl. Rate)    (FPS/W)
+                                                                     115.6    101.5   288.5     1739
+                  DeiT-T        1/1/1         1.30 (1×)       16                                     8.012        78.3 (1×)        9.77
+                                                                     (42%)    (19%)   (32%)    (69%)
+       Baseline    DeiT-S       1/1/1         4.60 (1×)       16     130.3    102.8   492.5     1754              25.9 (1×)        2.57
+                                                                                                     10.095
+                  LV-ViT-S      1/1/1         6.55 (1×)       16     (48%)    (19%)   (54%)    (70%)              19.4 (1×)        1.92
+                                                                     144.5    103.9   664.3     1786
+                  DeiT-B        1/1/1         17.60 (1×)      16                                     11.041       11.2 (1×)        1.01
+                                                                     (53%)    (19%)   (73%)    (71%)
+                          0.85/0.79/0.51 1.00 (1.30×)         8                                             183.4 (2.34×)          19.4
+                                                                     137.6 126        355.5     1968
+                  DeiT-T  0.76/0.70/0.41 0.90 (1.44×)         8                                         9.453
+                                                                                                            198.8 (2.54×)          21.0
+                                                                     (50%) (23%)      (39%)    (78%)
+                          0.70/0.39/0.21 0.75 (1.74×)         8                                             271.2 (3.46×)          28.7
+                          0.90/0.84/0.61 3.86 (1.19×)         8                                              57.0 (2.20×)          5.33
+                  DeiT-S 0.70/0.39/0.21 2.64 (1.74×)          8                                              97.1 (3.75×)          9.08
+      HeatViT
+                          0.42/0.21/0.13 2.02 (2.27×)         8       145 100.4       338.5     1955        109.2 (4.22×)          10.2
+      with Token                                                                                     10.697
+                          0.90/0.84/0.61 5.49 (1.19×)         8      (53%) (18%)      (37%)    (78%)         62.8 (3.24×)          5.87
+       Selector
+                 LV-ViT-S 0.70/0.39/0.21 3.77 (1.74×)         8                                              72.8 (3.75×)          6.81
+                          0.42/0.21/0.13 2.88 (2.27×)         8                                              89.1 (4.59×)          8.33
+                          0.90/0.84/0.61 14.79 (1.19×)        8                                              36.1 (3.22×)          3.18
+                                                                     161.4 101.8      528.6     2066
+                  DeiT-B 0.70/0.39/0.21 10.11 (1.74×)         8                                      11.352 43.3 (3.87×)           3.81
+                                                                     (59%) (19%)      (58%)    (82%)
+                          0.42/0.21/0.13 7.75 (2.27×)         8                                              54.8 (4.89×)          4.83
+
+                                                                            quantization can contribute another 1.90× speedup. Second,
+                                                                            with token pruning, TX2 GPU achieves 647×∼814× speedup
+                                                                            with 12W power and TX2 CPU achieves 1.78×∼2.67×
+                                                                            speedup with 4W power. For the energy efficiency, our FPGA
+                                                                            implementation achieves 4.8 FPS/W∼28.7 FPS/W, which
+                                                                            is 242.6×∼719.0× higher than TX2 CPU and 3.0×∼4.7×
+                                                                            higher than TX2 GPU (with token pruning).
+
+                                                                                                  VIII. C ONCLUSION
+
+                                                                               In this paper, we have proposed a hardware-efficient image-
+                                                                            adaptive token pruning framework called HeatViT for ViT
+Fig. 13. Comparison of energy efficiency between HeatViT and TX2            inference acceleration on resource-constraint edge devices.
+CPU/GPU with the improvement breakdown of different techniques.
+                                                                            To improve the pruning rate and accuracy, we analyzed
+from 78.3 FPS to 142.7 FPS (1.82×) for DeiT-T, from 25.9                    the inherent computational patterns in ViTs and designed
+FPS to 57.6 FPS (2.22×) for DeiT-S, from 19.4 FPS to                        an effective token selector that can more accurately classify
+46.9 FPS (2.42×) for LV-ViT-S, and from 11.2 FPS to 28.9                    tokens and consolidates non-informative tokens. We also im-
+FPS (2.58×) for DeiT-B. Furthermore, we deploy the 8-bit                    plemented a proof-of-concept ViT hardware accelerator on
+fixed-point quantization on models to achieve another 1.90×                 FPGAs by heavily reusing the hardware components built
+speedup, ending up the final speedup with 3.46× (271.2 FPS)                 for the backbone ViT to support the adaptive token pruning
+for DeiT-T, 4.22× (109.2 FPS) for DeiT-S, 4.59× (89.1 FPS)                  module. Besides, we propose a polynomial approximation
+for LV-ViT-S, and 4.89× (54.8 FPS) for the DeiT-B.                          of nonlinear functions for ambitious (8-bit) quantization and
+   1) Comparisons with CPUs and GPUs: We also test DeiT-                    efficient hardware implementation. Finally, to meet both the
+T, DeiT-S, LV-ViT-S, and DeiT-B on Jetson TX2 with 4-core                   target inference latency and model accuracy, we proposed a
+ARM CPU and NVIDIA Pascal GPU, and compared them                            latency-aware multi-stage training strategy to learn the number
+with our FPGA (ZCU102) implementation. Since MSA and                        of token selectors to insert into the backbone ViT, and the
+FFN computations are reduced by token pruning, CPUs and                     location and pruning rate of each token selector. Experimental
+GPUs can also be accelerated. And TX2 CPU/GPU does not                      results demonstrate that HeatViT achieves superior pruning
+support low-bit computation, so we only present the full pre-               rate and accuracy compared to state-of-the-art pruning studies,
+cision model for them with adaptive token pruning as shown                  while incurring trivial amount of hardware resource overhead.
+in Fig. 13. All the results are normalized against the original
+model on TX2 CPU without token pruning. First, our final                                        ACKNOWLEDGEMENTS
+FPGA implementation achieves the highest 1827× ∼ 3013×
+speedup with 9.453W, 10.697W, and 11.352W power for                           This work is partly supported by NSF CCF-1901378;
+different designs. While the baseline FPGA design [31] (16-bit              NSERC Discovery Grant RGPIN-2019-04613, DGECR-2019-
+and no token pruning) achieves 373×∼870× speedup, token                     00120, Alliance Grant ALLRP-552042-2020; CFI John R.
+pruning can bring 1.82×∼2.58× speedup and ambitious 8-bit                   Evans Leaders Fund.
+
+
+
+                                                                       11
+                              R EFERENCES                                              [21] B. Heo, S. Yun, D. Han, S. Chun, J. Choe, and S. J. Oh, “Rethink-
+                                                                                            ing spatial dimensions of vision transformers,” in Proceedings of the
+ [1] A. F. Agarap, “Deep learning using rectified linear units (relu),” arXiv               IEEE/CVF International Conference on Computer Vision (ICCV), 2021.
+     preprint arXiv:1803.08375, 2018.                                                  [22] A. Howard, M. Sandler, G. Chu, L.-C. Chen, B. Chen, M. Tan, W. Wang,
+ [2] D. Bahdanau, K. H. Cho, and Y. Bengio, “Neural machine translation                     Y. Zhu, R. Pang, V. Vasudevan et al., “Searching for mobilenetv3,” in
+     by jointly learning to align and translate,” in International Conference               Proceedings of the IEEE/CVF International Conference on Computer
+     on Learning Representations (ICLR), 2015.                                              Vision, 2019, pp. 1314–1324.
+ [3] T. B. Brown, B. Mann, N. Ryder, M. Subbiah, J. Kaplan, P. Dhariwal,               [23] J. Hu, L. Shen, and G. Sun, “Squeeze-and-excitation networks,” in
+     A. Neelakantan, P. Shyam, G. Sastry, A. Askell, S. Agarwal, A. Herbert-                Proceedings of the IEEE/CVF Conference on Computer Vision and
+     Voss, G. Krueger, T. Henighan, R. Child, A. Ramesh, D. M. Ziegler,                     Pattern Recognition (CVPR), 2018, pp. 7132–7141.
+     J. Wu, C. Winter, C. Hesse, M. Chen, E. Sigler, M. Litwin, S. Gray,               [24] Z. Jiang, Q. Hou, L. Yuan, D. Zhou, Y. Shi, X. Jin, A. Wang, and
+     B. Chess, J. Clark, C. Berner, S. McCandlish, A. Radford, I. Sutskever,                J. Feng, “All tokens matter: Token labeling for training better vision
+     and D. Amodei, “Language models are few-shot learners,” in Advances                    transformers,” arXiv preprint arXiv:2104.10858, 2021.
+     in Neural Information Processing Systems (NeurIPS), vol. 33, 2020, pp.            [25] J. D. M.-W. C. Kenton and L. K. Toutanova, “Bert: Pre-training of deep
+     1877–1901.                                                                             bidirectional transformers for language understanding,” in Proceedings
+ [4] H. Cao, Y. Wang, J. Chen, D. Jiang, X. Zhang, Q. Tian, and M. Wang,                    of NAACL-HLT, 2019, pp. 4171–4186.
+     “Swin-unet: Unet-like pure transformer for medical image segmenta-                [26] S. Kim, A. Gholami, Z. Yao, M. W. Mahoney, and K. Keutzer, “I-bert:
+     tion,” arXiv preprint arXiv:2105.05537, 2021.                                          Integer-only bert quantization,” arXiv preprint arXiv:2101.01321, 2021.
+ [5] N. Carion, F. Massa, G. Synnaeve, N. Usunier, A. Kirillov, and                    [27] Z. Kong, P. Dong, X. Ma, X. Meng, W. Niu, M. Sun, B. Ren, M. Qin,
+     S. Zagoruyko, “End-to-end object detection with transformers,” in                      H. Tang, and Y. Wang, “Spvit: Enabling faster vision transformers via
+     European Conference on Computer Vision (ECCV). Springer, 2020,                         soft token pruning,” arXiv preprint arXiv:2112.13890, 2021.
+     pp. 213–229.
+                                                                                       [28] S. Kornblith, M. Norouzi, H. Lee, and G. Hinton, “Similarity of
+ [6] B. Chen, P. Li, C. Li, B. Li, L. Bai, C. Lin, M. Sun, J. Yan, and                      neural network representations revisited,” in International Conference
+     W. Ouyang, “Glit: Neural architecture search for global and local image                on Machine Learning (ICML). PMLR, 2019, pp. 3519–3529.
+     transformer,” in Proceedings of the IEEE/CVF International Conference
+                                                                                       [29] B. Li, S. Pandey, H. Fang, Y. Lyv, J. Li, J. Chen, M. Xie, L. Wan, H. Liu,
+     on Computer Vision, 2021, pp. 12–21.
+                                                                                            and C. Ding, “Ftrans: energy-efficient acceleration of transformers using
+ [7] H. Chen, Y. Wang, T. Guo, C. Xu, Y. Deng, Z. Liu, S. Ma, C. Xu,
+                                                                                            fpga,” in Proceedings of the ACM/IEEE International Symposium on
+     C. Xu, and W. Gao, “Pre-trained image processing transformer,” in
+                                                                                            Low Power Electronics and Design, 2020, pp. 175–180.
+     Proceedings of the IEEE/CVF Conference on Computer Vision and
+                                                                                       [30] C. Li, T. Tang, G. Wang, J. Peng, B. Wang, X. Liang, and X. Chang,
+     Pattern Recognition (CVPR), 2021, pp. 12 299–12 310.
+                                                                                            “Bossnas: Exploring hybrid cnn-transformers with block-wisely self-
+ [8] M. Chen, H. Peng, J. Fu, and H. Ling, “Autoformer: Searching
+                                                                                            supervised neural architecture search,” in Proceedings of the IEEE/CVF
+     transformers for visual recognition,” in Proceedings of the IEEE/CVF
+                                                                                            International Conference on Computer Vision (ICCV), 2021, pp. 12 281–
+     International Conference on Computer Vision (ICCV), 2021, pp. 12 270–
+                                                                                            12 291.
+     12 280.
+                                                                                       [31] Z. Li, M. Sun, A. Lu, H. Ma, G. Yuan, Y. Xie, H. Tang, Y. Li, M. Leeser,
+ [9] M. Chen, K. Wu, B. Ni, H. Peng, B. Liu, J. Fu, H. Chao, and H. Ling,
+                                                                                            Z. Wang, X. Lin, and Z. Fang, “Auto-vit-acc: An fpga-aware automatic
+     “Searching the search space of vision transformer,” in Advances in
+                                                                                            acceleration framework for vision transformer with mixed-scheme quan-
+     Neural Information Processing Systems (NeurIPS), vol. 34, 2021, pp.
+                                                                                            tization,” in International Conference on Field Programmable Logic and
+     8714–8726.
+                                                                                            Applications. Springer, 2022, pp. 289–300.
+[10] T. Chen, Y. Cheng, Z. Gan, L. Yuan, L. Zhang, and Z. Wang, “Chasing
+     sparsity in vision transformers: An end-to-end exploration,” in Advances          [32] Y. Liang, C. GE, Z. Tong, Y. Song, J. Wang, and P. Xie,
+     in Neural Information Processing Systems, 2021.                                        “EVit: Expediting vision transformers via token reorganizations,” in
+[11] A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn, X. Zhai,                      International Conference on Learning Representations, 2022. [Online].
+     T. Unterthiner, M. Dehghani, M. Minderer, G. Heigold, S. Gelly,                        Available: https://openreview.net/forum?id=BjyvwnXXVn
+     J. Uszkoreit, and N. Houlsby, “An image is worth 16x16 words: Trans-              [33] Z. Liu, Y. Wang, K. Han, W. Zhang, S. Ma, and W. Gao, “Post-training
+     formers for image recognition at scale,” in International Conference on                quantization for vision transformer,” in Advances in Neural Information
+     Learning Representations (ICLR), 2021.                                                 Processing Systems (NeurIPS), vol. 34, 2021, pp. 28 092–28 103.
+[12] Facebook, “Torchvision,” 2021, last accessed Sept 12, 2021. [Online].             [34] M. Mao, R. Zhang, H. Zheng, P. Gao, T. Ma, Y. Peng, E. Ding, and
+     Available: https://pytorch.org/vision/stable/models.html                               S. Han, “Dual-stream network for visual recognition,” in Advances in
+[13] M. Fayyaz, S. A. Kouhpayegani, F. R. Jafari, E. Sommerlade, H. R. V.                   Neural Information Processing Systems, 2021.
+     Joze, H. Pirsiavash, and J. Gall, “Ats: Adaptive token sampling for               [35] T. M. Mitchell, “Machine learning and data mining,” Communications
+     efficient vision transformers,” arXiv preprint arXiv:2111.15667, 2021.                 of the ACM, vol. 42, no. 11, pp. 30–36, 1999.
+[14] S. Fox, J. Faraone, D. Boland, K. Vissers, and P. H. Leong, “Training             [36] B. Pan, Y. Jiang, R. Panda, Z. Wang, R. Feris, and A. Oliva, “Ia-red2 :
+     deep neural networks in low-precision with high accuracy using fpgas,”                 Interpretability-aware redundancy reduction for vision transformers,” in
+     in 2019 International Conference on Field-Programmable Technology                      Advances in Neural Information Processing Systems, 2021.
+     (ICFPT), 2019, pp. 1–9.                                                           [37] A. Parikh, O. Täckström, D. Das, and J. Uszkoreit, “A decomposable
+[15] S. Fox, J. Faraone, D. Boland, K. Vissers, and P. H. Leong, “Training                  attention model for natural language inference,” in Proceedings of the
+     deep neural networks in low-precision with high accuracy using fpgas,”                 2016 Conference on Empirical Methods in Natural Language Process-
+     in 2019 International Conference on Field-Programmable Technology                      ing, 2016, pp. 2249–2255.
+     (ICFPT). IEEE, 2019, pp. 1–9.                                                     [38] G. Prato, E. Charlaix, and M. Rezagholizadeh, “Fully quantized trans-
+[16] C. Gong, D. Wang, M. Li, X. Chen, Z. Yan, Y. Tian, and V. Chandra,                     former for machine translation,” in Findings of the Association for
+     “Nasvit: Neural architecture search for efficient vision transformers with             Computational Linguistics: EMNLP 2020, 2020, pp. 1–14.
+     gradient conflict aware supernet training,” in International Conference           [39] S. Prillo and J. Eisenschlos, “Softsort: A continuous relaxation for the
+     on Learning Representations (ICLR), 2021.                                              argsort operator,” in International Conference on Machine Learning
+[17] I. Goodfellow, Y. Bengio, and A. Courville, Deep Learning. MIT Press,                  (ICML). PMLR, 2020, pp. 7793–7802.
+     2016, http://www.deeplearningbook.org.                                            [40] P. Qi, Y. Song, H. Peng, S. Huang, Q. Zhuge, and E. H.-M. Sha,
+[18] Y. Guo, Y. Zheng, M. Tan, Q. Chen, J. Chen, P. Zhao, and J. Huang,                     “Accommodating transformer onto fpga: Coupling the balanced model
+     “Nat: Neural architecture transformer for accurate and compact ar-                     compression and fpga-implementation optimization,” in Proceedings of
+     chitectures,” in Advances in Neural Information Processing Systems                     the 2021 on Great Lakes Symposium on VLSI, 2021, pp. 163–168.
+     (NeurIPS), vol. 32, 2019.                                                         [41] Y. Rao, W. Zhao, B. Liu, J. Lu, J. Zhou, and C.-J. Hsieh, “Dynamicvit:
+[19] K. Han, A. Xiao, E. Wu, J. Guo, C. Xu, and Y. Wang, “Transformer                       Efficient vision transformers with dynamic token sparsification,” in
+     in transformer,” in Advances in Neural Information Processing Systems,                 Advances in Neural Information Processing Systems, 2021.
+     2021.                                                                             [42] D. So, Q. Le, and C. Liang, “The evolved transformer,” in International
+[20] D. Hendrycks and K. Gimpel, “Gaussian error linear units (gelus),” arXiv               Conference on Machine Learning (ICML). PMLR, 2019, pp. 5877–
+     preprint arXiv:1606.08415, 2016.                                                       5886.
+
+
+
+
+                                                                                  12
+[43] M. Sun, Z. Li, A. Lu, Y. Li, S.-E. Chang, X. Ma, X. Lin, and Z. Fang,                  IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+     “Film-qnn: Efficient fpga acceleration of deep neural networks with                    2018, pp. 8739–8748.
+     intra-layer, mixed-precision quantization,” in Proceedings of the 2022            [64] M. Zhu, K. Han, Y. Tang, and Y. Wang, “Visual transformer pruning,”
+     ACM/SIGDA International Symposium on Field-Programmable Gate                           in KDD 2021 Workshop on Model Mining, 2021.
+     Arrays (FPGA), 2022, p. 134–145.                                                  [65] X. Zhu, W. Su, L. Lu, B. Li, X. Wang, and J. Dai, “Deformable detr: De-
+[44] Y. Tang, K. Han, Y. Wang, C. Xu, J. Guo, C. Xu, and D. Tao, “Patch                     formable transformers for end-to-end object detection,” in International
+     slimming for efficient vision transformers,” 2021.                                     Conference on Learning Representations (ICLR), 2020.
+[45] H. Touvron, M. Cord, M. Douze, F. Massa, A. Sablayrolles, and
+     H. Jégou, “Training data-efficient image transformers & distillation
+     through attention,” in International Conference on Machine Learning,
+     2021, pp. 10 347–10 357.
+[46] I. Tsmots, O. Skorokhoda, and V. Rabyk, “Hardware implementation of
+     sigmoid activation functions using fpga,” in 2019 IEEE 15th Interna-
+     tional Conference on the Experience of Designing and Application of
+     CAD Systems (CADSM), 2019, pp. 34–38.
+[47] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+     Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” in Advances
+     in Neural Information Processing Systems, 2017, pp. 5998–6008.
+[48] H. Wang, Z. Wu, Z. Liu, H. Cai, L. Zhu, C. Gan, and S. Han, “Hat:
+     Hardware-aware transformers for efficient natural language processing,”
+     in Proceedings of the 58th Annual Meeting of the Association for
+     Computational Linguistics (ACL), 2020, pp. 7675–7688.
+[49] W. Wang, E. Xie, X. Li, D.-P. Fan, K. Song, D. Liang, T. Lu, P. Luo,
+     and L. Shao, “Pyramid vision transformer: A versatile backbone for
+     dense prediction without convolutions,” in Proceedings of the IEEE/CVF
+     International Conference on Computer Vision (ICCV), 2021.
+[50] H. Wu, B. Xiao, N. Codella, M. Liu, X. Dai, L. Yuan, and L. Zhang,
+     “Cvt: Introducing convolutions to vision transformers,” arXiv preprint
+     arXiv:2103.15808, 2021.
+[51] Xilinx, “Vitis unified software platform,” 2022, last accessed April
+     21, 2022. [Online]. Available: https://www.xilinx.com/products/design-
+     tools/vitis/vitis-platform.html#development
+[52] Xilinx,       “Zcu102      evaluation     board      -     user    guide,”
+     2022, last accessed April 21, 2022. [Online]. Avail-
+     able:      https://www.xilinx.com/content/dam/xilinx/support/documents/
+     boards and kits/zcu102/ug1182-zcu102-eval-bd.pdf
+[53] Y. Xu, Z. Zhang, M. Zhang, K. Sheng, K. Li, W. Dong, L. Zhang,
+     C. Xu, and X. Sun, “Evo-vit: Slow-fast token evolution for dynamic
+     vision transformer,” arXiv preprint arXiv:2108.01390, 2021.
+[54] C. Yang, Z. Wu, B. Zhou, and S. Lin, “Instance localization for self-
+     supervised detection pretraining,” in Proceedings of the IEEE/CVF
+     Conference on Computer Vision and Pattern Recognition (CVPR), 2021,
+     pp. 3987–3996.
+[55] H. Yu and J. Wu, “A unified pruning framework for vision transformers,”
+     arXiv preprint arXiv:2111.15127, 2021.
+[56] S. Yu, T. Chen, J. Shen, H. Yuan, J. Tan, S. Yang, J. Liu, and Z. Wang,
+     “Unified visual transformer compression,” in International Conference
+     on Learning Representations, 2022.
+[57] L. Yuan, Y. Chen, T. Wang, W. Yu, Y. Shi, Z.-H. Jiang, F. E. Tay, J. Feng,
+     and S. Yan, “Tokens-to-token vit: Training vision transformers from
+     scratch on imagenet,” in Proceedings of the IEEE/CVF International
+     Conference on Computer Vision, 2021, pp. 558–567.
+[58] C. Zhang, G. Sun, Z. Fang, P. Zhou, P. Pan, and J. Cong, “Caffeine:
+     Toward uniformed representation and acceleration for deep convolutional
+     neural networks,” IEEE Transactions on Computer-Aided Design of
+     Integrated Circuits and Systems, vol. 38, no. 11, pp. 2072–2085, 2018.
+[59] X. Zhang, Y. Wu, P. Zhou, X. Tang, and J. Hu, “Algorithm-hardware
+     co-design of attention mechanism on fpga devices,” ACM Transactions
+     on Embedded Computing Systems (TECS), vol. 20, no. 5s, pp. 1–24,
+     2021.
+[60] Z. Zhao, Y. Liu, L. Chen, Q. Liu, R. Ma, and K. Yu, “An investigation
+     on different underlying quantization schemes for pre-trained language
+     models,” in CCF International Conference on Natural Language Pro-
+     cessing and Chinese Computing. Springer, 2020, pp. 359–371.
+[61] S. Zheng, J. Lu, H. Zhao, X. Zhu, Z. Luo, Y. Wang, Y. Fu, J. Feng,
+     T. Xiang, P. H. Torr et al., “Rethinking semantic segmentation from a
+     sequence-to-sequence perspective with transformers,” in Proceedings of
+     the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+     (CVPR), 2021, pp. 6881–6890.
+[62] D. Zhou, Y. Shi, B. Kang, W. Yu, Z. Jiang, Y. Li, X. Jin, Q. Hou, and
+     J. Feng, “Refiner: Refining self-attention for vision transformers,” 2021.
+[63] L. Zhou, Y. Zhou, J. J. Corso, R. Socher, and C. Xiong, “End-to-end
+     dense video captioning with masked transformer,” in Proceedings of the
+
+
+
+
+                                                                                  13
+

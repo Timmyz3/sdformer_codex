@@ -1,0 +1,17 @@
+# LoopTree
+- uid/来源: local_author_txt:LoopTree_TCASAI2024_author.txt
+- 全文出处: /workspace/survey_ab_fusion_20260910_stage/p0_local_txt/LoopTree_TCASAI2024_author.txt
+- 精读深度: 方法级（§II 融合层 tiling×retain/recompute；§III 层间映射选择空间；§IV 多面体分析流水线；§V–VI 验证与算例）
+- 可继承 A: 融合层数据流分析合同——层间选择：划分哪些 rank 成 tile、中间 fmap 保留或重算、per-tensor retain；分析链：Einsum/多面体推 tile 形 → 每 tile 动作计数（读写/计算/NoC hop）→ 聚合延迟（顺序或流水线 hidden-latency）/能量（Accelergy）/峰值占用/片外传输；显式 Buffet 编排假设。作 Stage B「同分母排程比较」方法论底座，≠ X。
+- 强对照 B: 相对只搜层内 Timeloop、或不支持 per-fmap 重算/per-tensor retain 的融合 DSE：同融合集下是否挖出更优缓冲–重算折中。
+- 可差分 X线索: 诚实：分析器本身非加速器 X。可差分用法：把 lifting 半步/RNE 与残差链 source→PED 写成「融合集+中间量 retain」，用同一套占用/传输计数对照 ordinary dense——工具借入≠标题 X。
+- 与 F1–F7 / Stage B 关系: 直接服务 Stage B 方法论（same-port schedule 的占用/传输分项）；F5（生存期/占用）可借用 retain-recompute 语言；F3 联合图可视为额外中间虚节点的 retain 选择；不抢 Stage B 实验档期，只提供分析词汇。
+- 不可搬用边界: 分析扩展 Timeloop+ISL+Accelergy；CNN/Transformer 层融合验证；假设重排不增延迟、Buffet 使流水停顿可忽略；非 SNN 时间维、无 spike/NRV 语义。
+- 可复用 idea 点:
+  - Tiling 决定 retain/recompute 可行空间：划 P/Q 产生卷积重叠→有保留/重算选择；划 C 无重叠→无该选择。
+  - Per-intermediate-fmap 与 per-tensor retain：文称可再降缓冲（重算约 +10% 算换 ~2× 缓冲；per-tensor retain 可至 ~10× 占用改善量级——作线索非本地合同）。
+  - 流水线延迟：先算顺序总延迟，再减可隐藏段的 min(hidden)；tile 算量随迭代因重用部分免重算而变。
+  - 唯一 tile 形只分析一次——适合 lifting 编译图上重复半步模式。
+  - 指标分离：延迟取 compute vs memory 之大者；能量=动作×单位能量——对齐「节点数≠周期」。
+  - 融合集外生：LoopTree 不替你选融哪些层——本地须先固定 r1→PED 合同再比。
+- 杀门建议: 分析假设（无限重排/零停顿）与 finite 背压现实冲突导致预测乐观；或只优化缓冲占用无同端口服务改善 → 停该分析布局用法，不杀 Stage B/lifting。

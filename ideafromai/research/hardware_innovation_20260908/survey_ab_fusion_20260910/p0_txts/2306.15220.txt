@@ -1,0 +1,1264 @@
+                                         S-TLLR: STDP-inspired Temporal Local Learning Rule for
+                                         Spiking Neural Networks
+
+                                         Marco P. E. Apolinario                                                                      mapolina@purdue.edu
+                                         School of Electrical and Computer Engineering
+                                         Purdue University
+
+                                         Kaushik Roy                                                                                  kaushik@purdue.edu
+arXiv:2306.15220v4 [cs.NE] 29 Oct 2024
+
+
+
+
+                                         School of Electrical and Computer Engineering
+                                         Purdue University
+
+
+
+                                                                                           Abstract
+
+                                                 Spiking Neural Networks (SNNs) are biologically plausible models that have been identiﬁed
+                                                 as potentially apt for deploying energy-eﬃcient intelligence at the edge, particularly for
+                                                 sequential learning tasks. However, training of SNNs poses signiﬁcant challenges due to
+                                                 the necessity for precise temporal and spatial credit assignment. Back-propagation through
+                                                 time (BPTT) algorithm, whilst the most widely used method for addressing these issues,
+                                                 incurs high computational cost due to its temporal dependency. In this work, we propose
+                                                 S-TLLR, a novel three-factor temporal local learning rule inspired by the Spike-Timing
+                                                 Dependent Plasticity (STDP) mechanism, aimed at training deep SNNs on event-based
+                                                 learning tasks. Furthermore, S-TLLR is designed to have low memory and time complexities,
+                                                 which are independent of the number of time steps, rendering it suitable for online learning
+                                                 on low-power edge devices. To demonstrate the scalability of our proposed method, we
+                                                 have conducted extensive evaluations on event-based datasets spanning a wide range of
+                                                 applications, such as image and gesture recognition, audio classiﬁcation, and optical ﬂow
+                                                 estimation. In all the experiments, S-TLLR achieved high accuracy, comparable to BPTT,
+                                                 with a reduction in memory between 5 − 50× and multiply-accumulate (MAC) operations
+                                                 between 1.3 − 6.6×. Our code is available at GitHub repository.
+
+
+
+                                         1   Introduction
+
+                                         Over the past decade, the ﬁeld of artiﬁcial intelligence has undergone a remarkable transformation,
+                                         driven by a prevalent trend of continuously increasing the size and complexity of neural network models.
+                                         While this approach has yielded remarkable advancements in various cognitive tasks (Brown et al., 2020;
+                                         Dosovitskiy et al., 2021), it has come at a signiﬁcant cost: AI systems now demand substantial energy and
+                                         computational resources. This inherent drawback becomes increasingly apparent when comparing the energy
+                                         eﬃciency of current AI systems with the remarkable eﬃciency exhibited by the human brain (Roy et al.,
+                                         2019; Gerstner et al., 2014; Christensen et al., 2022; Eshraghian et al., 2023). Motivated by this observation,
+                                         the research community has shown a growing interest in brain-inspired computing. The idea behind this
+                                         approach is to mimic key features of biological neurons, such as spike-based communication, sparsity, and
+                                         spatio-temporal processing.
+                                         Bio-plausible Spiking Neural Network (SNN) models have emerged as a promising avenue in this direction.
+                                         SNNs have already demonstrated their ability to achieve competitive performance compared to more tra-
+                                         ditional Artiﬁcial Neural Networks (ANNs) while signiﬁcantly reducing energy consumption per inference
+                                         when deployed in the right hardware (Davies et al., 2018; Roy et al., 2019; Sengupta et al., 2019; Neftci et al.,
+                                         2019; Christensen et al., 2022). One of the main advantages of SNNs lies in their event-driven binary sparse
+                                         computation and temporal processing based on membrane potential integration. These features make SNNs
+
+                                                                                                1
+Figure 1: Comparison of weight update computation of a feed-forward spiking layer for BPTT, STDP, and
+our proposed learning rule S-TLLR. The spiking layer is unrolled over time for the three algorithms while
+showing the signals involved in the weight updates. The top-down learning signal is shown in green, while
+the signals locally available to the layer are represented as red for the causal term and blue for non-causal
+terms. Also, note that the learning signal in BPTT relies on future time steps, whereas in S-TLLR, this
+signal is computed locally in time.
+
+
+
+
+well-suited for deploying energy-eﬃcient intelligence at the edge, particularly for sequential learning tasks
+(Ponghiran & Roy, 2022; Bellec et al., 2020; Christensen et al., 2022).
+Despite their promise, training SNNs remains challenging due to the necessity of solving precisely tempo-
+ral and spatial credit assignment problems. While traditional gradient-based learning algorithms, such
+as backpropagation through time (BPTT), are highly eﬀective, they incur a high computational cost
+(Eshraghian et al., 2023; Bellec et al., 2020; Bohnstingl et al., 2022). Speciﬁcally, BPTT has memory and
+time complexity that scales linearly with the number of time steps (T ), such as O(T n) and O(T n2 ), respec-
+tively, where n is the number of neurons, making it unsuitable for edge systems where memory and energy
+budgets are limited. This has motivated several studies that propose learning rules with approximate BPTT
+gradient computation with constant memory (Bellec et al., 2020; Bohnstingl et al., 2022; Quintana et al.,
+2023; Ortner et al., 2023; Xiao et al., 2022). However, most of those learning rules have a complexity that
+scales with the number of synapses (O(n2 )), as shown in Table 1, making them expensive for deep convolu-
+tional SNN models in practical scenarios (where n ≫ T ). Moreover, as most of those learning rules have been
+derived from BPTT, they only leverage causal relations between the timing of pre- and post-synaptic activ-
+ities, overlooking non-causal relations used in other learning mechanisms, such as Spike-Timing Dependent
+Plasticity (STDP) (Bi & Poo, 1998; Song et al., 2000).
+
+                                                     2
+Table 1: Comparison of S-TLLR with learning methods from the literature (Where n is the number of
+neurons and T total number of time steps) [Note that complexities are expressed in big O notation for one
+single layer]
+                                               Memory        Time       Temporal     Leverage
+                       Method
+                                              Complexity   Complexity     Local    Non-Causality
+             BPTT                                Tn           T n2         X             X
+             RTRL (Williams & Zipser, 1989)      n3            n4          X             X
+             e-prop (Bellec et al., 2020)        n2            n2          X             X
+             OSTL (Bohnstingl et al., 2022)      n2            n2          X             X
+             ETLP (Quintana et al., 2023)        n2            n2          X             X
+             OSTTP (Ortner et al., 2023)         n2            n2          X             X
+             OTTT (Xiao et al., 2022)            n             n2          X             X
+             S-TLLR (Ours)                       n             n2          X             X
+
+
+
+To overcome the above limitations, in this paper, we propose S-TLLR, a novel three-factor temporal local
+learning rule inspired by the STDP mechanism. Speciﬁcally, S-TLLR is designed to train SNNs on event-
+based learning tasks while incorporating both causal and non-causal relationships between the timing of
+pre- and post-synaptic activities for updating the synaptic strengths. This feature is inspired by the STDP
+mechanism from which we propose a generalized parametric STDP equation that uses a secondary activation
+function to compute the post-synaptic activity. Then, we take this equation to compute an instantaneous
+eligibility trace (Gerstner et al., 2018) per synapse modulated by a third factor in the form of a learning
+signal obtained from the backpropagation of errors through the layers (BP) or by using ﬁxed random feedback
+connections directly from the output layer to each hidden layer (Trondheim, 2016). Notably, S-TLLR exhibits
+constant (in time) memory and time complexity, making it well-suited for online learning on resource-
+constrained devices.
+In addition to this, we demonstrate through experimentation that including non-causal information in the
+learning process results in improved generalization and task performance. Also, we explored S-TLLR in the
+context of several event-based tasks with diﬀerent amounts of spatio-temporal information, such as image
+and gesture recognition, audio classiﬁcation, and optical ﬂow estimation. For all such tasks, S-TLLR can
+achieve performance comparable to BPTT and other learning rules, with signiﬁcantly lower memory and
+computation requirements.
+The main contributions of this work can be summarized as:
+
+      • We introduce a novel temporal local learning rule, S-TLLR, for spiking neural networks, drawing
+        inspiration from the STDP mechanism, while ensuring a memory complexity that scales linearly
+        with the number of neurons and remains constant over time.
+
+      • Demonstrate through experimentation the beneﬁts of considering non-causal relationships in the
+        learning process of spiking neural networks, leading to improved generalization and task performance.
+
+      • Validate the eﬀectiveness of the proposed learning rule across a diverse range of network topologies,
+        including VGG, ResNet, U-Net-like, and recurrent architectures.
+
+      • Investigate the applicability of S-TLLR in various event-based camera applications, such as image
+        and gesture recognition, audio classiﬁcation, and optical ﬂow estimation, broadening the scope of
+        its potential uses.
+
+2     Background
+
+2.1   Spiking Neural Networks (SNNs)
+
+To model the neuronal dynamics of biological neurons, we use the leaky integrate and ﬁre (LIF). The LIF
+model can be mathematically represented as follows:
+
+                                                       3
+                                   ui [t] = γ(ui [t − 1] − vth yi [t − 1]) + wij xj [t]                           (1)
+                                                   yi [t] = Θ(ui [t] − vth )                                      (2)
+
+where ui represents the membrane potential of the i-th neuron, and wij is the forward synaptic strength
+between the i-th post-synaptic neuron and the j-th pre-synaptic neuron. Additionally, γ is the leak factor
+that reduces the membrane potential over time, vth is the threshold voltage, and Θ is the Heaviside function.
+Thus, when ui reaches the vth , the neuron produces an output binary spike (yi ). This output spike triggers
+the reset mechanism, represented by the reset signal vth yi [t], which reduces the magnitude of ui .
+
+2.2   Spike-Timing Dependent Plasticity (STDP)
+
+STDP is a learning mechanism observed in various neural systems, from invertebrates to mammals, and
+is believed to play a critical role in the formation and modiﬁcation of neural connections in the brain in
+processes such as learning and memory (Gerstner et al., 2014). STDP describes how the synaptic strength
+(wij ) between two neurons can change based on the temporal order of their spiking activity. Speciﬁcally,
+STDP describes the phenomenon by which wij is potentiated if the pre-synaptic neuron ﬁres just before the
+post-synaptic neuron ﬁres, and wij is depressed if the pre-synaptic neuron ﬁres just after the post-synaptic
+neuron ﬁres. This means that STDP rewards causality and punishes non-causality. However, Anisimova et al.
+(2022) suggests that STDP favoring causality can be a transitory eﬀect, and over time, STDP evolves to
+reward both causal and non-causal relations in favor of synchrony. Such general dynamics of STDP can be
+described by the following equation:
+                                         (       ti −tj
+                                           αpre λpre     if ti ≥ tj (causal term)
+                           Φ(ti , tj ) =          tj −ti                                                 (3)
+                                           αpost λpost   if ti < tj (non-causal term)
+
+where Φ(ti , tj ) represents the magnitude of the change in the synaptic strength (∆wij ), ti and tj represent
+the ﬁring times of the post- and pre-synaptic neurons, αpre and λpre are strength and exponential decay
+factor of the causal term, respectively. Similarly, αpost and λpost parameterize the non-causal eﬀect. Note
+that when αpost < 0, STDP favors causality, whereas αpost > 0, STDP favors synchrony.
+Based on STDP, the change in the synaptic strengths at time t can be computed forward in time using local
+variables by the following learning rule (Gerstner et al., 2014):
+                                                   t                                     t−1
+                                                   X            ′                        X             ′
+                                                                                                  t−t
+                          ∆wij [t] = αpre yi [t]           λt−t      ′
+                                                            pre xj [t ] + αpost xj [t]           λpost yi [t′ ]   (4)
+                                                   t′ =0                                 t′ =0
+
+                                            wij [t + 1] = wij [t] + ∆wij [t]                                      (5)
+
+where yi [t] and xj [t] are binary values representing the existence of post- and pre-synaptic activity (spikes)
+at time t, respectively. Note that both summations in (4) can be computed forward in time as a recurrent
+equation of the form tr(xj )[t] = λpre tr(xj )[t − 1] + xj [t], where tr(xj )[t] is a trace of xj . Hence, (4) can be
+expressed as:
+                             ∆wij [t] = αpre yi [t]tr(xj )[t] + αpost xj [t](tr(yi )[t] − yi [t])                 (6)
+
+2.3   BPTT and three-factor (3F) learning rules
+
+BPTT is the algorithm by default used to train spiking neural networks (SNNs) as it is able to solve spatial
+and temporal credit assignment problems. BPTT calculates the gradients by unfolding all layers of the
+network in time and applying the chain rule to compute the gradient as:
+                                                           T
+                                             dL   X ∂L ∂y[t] ∂u[t]
+                                                =                                                                 (7)
+                                             dw   t
+                                                    ∂y[t] ∂u[t] ∂w
+
+
+                                                                    4
+Although BPTT can yield satisfactory outcomes, its computational requirements scale with time, posing
+a limitation. Moreover, it is widely acknowledged that BPTT is not a biologically plausible method, as
+highlighted in Lillicrap & Santoro (2019).
+In contrast, 3F learning rules (Gerstner et al., 2018) are a more biologically plausible method that uses the
+combination of inputs, outputs, and a top-down learning signal to compute the synaptic plasticity. The
+general idea of the 3F rules is based on that synapses are updated only if a signal called eligibility trace eij is
+present. This eligibility trace is computed based on general functions of the pre- and post-synaptic activity
+decaying over time. Such behavior is modeled in a general sense on the following recurrent equation:
+
+                                      eij [t] = βeij [t − 1] + f (yi [t])g(xj [t])                             (8)
+
+Here β is an exponential decay factor, f (yi [t]) and g(xj [t]) are element-wise functions of the post- and pre-
+synaptic activity, respectivetly. Then, the change of the synaptic strengths (wij ) is obtained by modulating
+eij with a top-down learning signal (δi ) as:
+                                                         X
+                                               ∆wij =          δi [t]eij [t]                                   (9)
+                                                           t
+
+3F learning rules have demonstrated their eﬀectiveness in training SNNs, as shown by Bellec et al. (2020).
+Additionally, it is possible to approximate BPTT using a 3F rule when the learning signal (δi [t]) is computed
+as ∂L[t]                                                                                ∂y[t] ∂u[t]
+    ∂y[t] (instantaneous error learning signal), and the eligibility trace approximates ∂u[t] ∂w , as discussed by
+Bellec et al. (2020) and Martín-Sánchez et al. (2022). However, it is important to note that 3F rules using
+eligibility traces formulated as (8) exhibit a memory complexity of O(n2 ), rendering them very expensive in
+terms of memory requirements for deep convolutional SNNs.
+
+3     Related Work
+
+3.1   Existing methods for training SNNs
+
+Several approaches to train SNNs have been proposed in the literature. In this work, we focus on sur-
+rogate gradients(Neftci et al., 2019; Li et al., 2021), and bio-inspired learning rules (Diehl & Cook, 2015;
+Thiele et al., 2018; Kheradpisheh et al., 2018; Bellec et al., 2020).
+Training SNNs based on surrogate gradient methods (Neftci et al., 2019; Li et al., 2021) extends the tradi-
+tional backpropagation through time (BPTT) algorithm to the domain of SNNs, where the non-diﬀerentiable
+ﬁring function is approximated by a continuous function during the backward pass to allow the propaga-
+tion of errors. The advantage of these methods is that they can exploit the temporal information of in-
+dividual spikes so that they can be applied to a broader range of problems than just image classiﬁcation
+(Paredes-Vallés & de Croon, 2021; Cramer et al., 2022). Moreover, such methods can result in models with
+low latency for energy-eﬃcient inference (Fang et al., 2021a). However, training SNNs based on surrogate
+gradients with BPTT incurs high computational and memory costs because BPTT’s requirements scale lin-
+early with the number of time steps. Hence, such methods can not be used for training online under the
+hardware constraints imposed by edge devices (Neftci et al., 2019).
+Another interesting avenue is the use of bio-inspired learning methods based on the principles of synaptic
+plasticity observed in biological systems, such as STDP (Bi & Poo, 1998; Song et al., 2000) or eligibility
+traces (Gerstner et al., 2014; 2018), which strengthens or weakens the synaptic connections based on the
+relative timing of pre- and post-synaptic spikes optionally modulated by a top-down learning signal. STDP
+methods are attractive for on-device learning as they do not require any external supervision or error signal.
+However, they also have several limitations, such as the need for a large number of training examples and
+the diﬃculty of training deep networks or complex ML problems (Diehl & Cook, 2015). In contrast, three-
+factor learning rules using eligibility traces (neuron local synaptic activity) modulated by an error signal,
+like e-prop (Bellec et al., 2020), can produce more robust learning overcoming limitations of unsupervised
+methods such as STDP. Nevertheless, such methods’ time and space complexity typically make them too
+costly to be used in deep SNNs (especially in deep convolutional SNNs).
+
+                                                           5
+3.2   Learning rules addressing the temporal dependency problem
+
+As discussed in the previous section, the training methods based on surrogate gradient using BPTT results
+in high-performance models. However, their major limitations are associated with high computational re-
+quirements that are unsuitable for low-power devices. Such limitations come from the fact that BPTT has
+to store a copy of all the spiking activity to exploit the temporal dependency of the data during training. In
+order to address the temporal dependency problem, several methods have been proposed where the compu-
+tational requirements are time-independent while achieving high performance. For instance, the Real-Time
+Recurrent Learning (RTRL) (Williams & Zipser, 1989) algorithm can compute exact gradients without the
+cost of storing all the intermediate states. Although it has not been originally proposed to be used on SNNs,
+it could be applied to them by combining with surrogate gradients (Neftci et al., 2019). More recently, other
+methods such as e-prop (Bellec et al., 2020), OSTL (Bohnstingl et al., 2022), and OTTT (Xiao et al., 2022),
+derived from BPTT, allows learning on SNNs using only temporally local information (information that can
+be computed forward in time). However, with the exception of OTTT, all of these methods have memory
+and time complexities of O(n2 ) or worse, as shown in Table 1, making them signiﬁcantly more expensive
+than BPTT, when used for deep SNNs in practical scenarios (where n ≫ T ). Moreover, since those methods
+(with the exception of RTRL) have been derived as approximations of BPTT, they only use causal relations
+in the timing between pre- and post- synaptic activity, leaving non-causal relations (as those used in STDP
+shown in Fig. 1) unexplored.
+
+3.3   Combining STDP and backpropagation
+
+As previously discussed, STDP has been used to train SNNs models in an unsupervised manner
+(Diehl & Cook, 2015; Thiele et al., 2018; Kheradpisheh et al., 2018). However, such approaches suﬀer from
+severe drawbacks, such as requiring a high number of timesteps (latency), resulting in low accuracy per-
+formance and being unable to scale for deep SNNs. So, to overcome such limitations, there have been
+some previous eﬀorts to use STDP in combination with backpropagation for training SNNs, by either us-
+ing STDP followed for ﬁne-tuning with BPTT (Lee et al., 2018) or modulating STDP with an error signal
+(Tavanaei & Maida, 2019; Hu et al., 2017; Hao et al., 2020). However, such methods either do not address
+the temporal dependency problem of BPTT or do not scale for deep SNNs or complex computer vision
+problems.
+
+4     STDP-inspired Temporal Local Learning Rule (S-TLLR)
+
+4.1   Overview of S-TLLR and its key features
+
+We propose a novel 3F learning rule, S-TLLR, which is inspired by the STDP mechanism discussed in
+Section 2.2. S-TLLR is characterized by its temporally local nature, leveraging non-causal relations in the
+timing of spiking activity while maintaining a low memory complexity O(n).
+Regarding memory complexity, a conventional 3F learning rule requires an eligibility trace (eij ) which involves
+a recurrent equation as described in (8). In such formulation, the eij is a state requiring a memory that
+scales linearly with the number of synapses (O(n2 )). For the S-TLLR, we dropped the recurrent term and
+considered only the instantaneous term (i.e. β = 0 in (8)). Instead of requiring O(n2 ) memory to store
+the state of eij , we need to keep track of only two variables (f (yi ) and g(xi )) with O(n) memory. Hence,
+eij [t] can be computed as the right-hand side of (6) which exhibits a memory complexity O(n). This low-
+memory complexity is a key aspect of S-TLLR since it enables the method to be used in deep neural models
+where methods such as Williams & Zipser (1989); Bellec et al. (2020); Bohnstingl et al. (2022); Ortner et al.
+(2023); Quintana et al. (2023) are considerably more resource-intensive.
+Finally, since BPTT is based on the propagation of errors in time, it only uses causal relations to compute
+gradients, that is, the relation between an output y[t] and previous inputs x[t], x[t − 1], . . . , x[0]. These
+causal relations are shown in Fig. 1 (red dotted line). Also, methods derived from BPTT (Bellec et al.,
+2020; Bohnstingl et al., 2022; Ortner et al., 2023; Quintana et al., 2023; Xiao et al., 2022) use exclusively
+causal relations. In contrast, we took inspiration from the STDP mechanisms, which use both causal and
+
+                                                       6
+non-causal relations in the spike-timing (Fig. 1, red and blue dotted lines), to formulate S-TLLR as a 3F
+learning rule with a learning signal modulating instantaneous eligibility trace signal as shown in Fig. 1.
+
+4.2     Technical details and implementation of S-TLLR
+
+As discussed in the previous section, our proposed method, S-TLLR has the form of a three-factor learning
+rule, ∆wij [t] = δi [t]eij [t], involving a top-down learning signal δi [t] and an eligibility trace, eij [t]. To compute
+eij [t], we use a generalized version of the STDP equation described in (4) that can use a secondary activation
+function to compute the postsynaptic activity.
+                                                   t                                             t−1
+                                                   X            ′                                X            ′
+                                                                                                          t−t
+                        eij [t] = αpre Ψ(ui [t])           λt−t      ′
+                                                            pre xj [t ] + αpost xj [t]                   λpost Ψ(ui [t′ ])   (10)
+                                                   t′ =0                                         t′ =0
+
+
+Here, Ψ is a secondary activation function that
+                                              R can diﬀer from the ﬁring function used in (2). We found
+empirically that using a function Ψ(u) with Ψ(u)du ≤ 1 yields improved results, speciﬁc Ψ functions are
+shown in Appendix A.3. Furthermore, (10) considers both causal (ﬁrst term on the right side) and non-
+causal (second term) relations between the timing of post- and pre-synaptic activity, which are not captured
+in BPTT (or its approximations (Bellec et al., 2020; Bohnstingl et al., 2022; Xiao et al., 2022)). The causal
+(non-causal) relations are captured as the correlation in the timing between the current post- (pre-) synaptic
+activity and the low-pass ﬁltered pre- (post-) synaptic activity. Note that (10) can be computed forward in
+time (expressing it in the form of (6)) and using only information locally available to the neuron as follows:
+
+                         eij [t] = αpre Ψ(ui [t])tr(xj )[t] + αpost yi [t](tr(Ψ(ui [t])) − Ψ(ui [t])                         (11)
+
+The learning signal, δi [t], is computed as the instantaneous error back-propagated from the top layer (L) to
+the layer (l), as shown in (12), and the synaptic update is done as shown in (13).
+                                                     
+                                                      ∂L(yL [t],y∗ )                if t ≥ Tl
+                                         (l)                    (l)
+                                                              ∂yi [t]
+                                        δi [t] =                                                                             (12)
+                                                     0                              otherwise
+                                                                          T
+                                                                          X
+                                               wij := wij + ρ                    δi [t]eij [t]                               (13)
+                                                                          t=Tl
+
+Here, ρ is the learning rate, T is the total number of time steps for the forward pass, Tl is the initial time
+step for which the learning signal is available, y ∗ is the ground truth label vector, y L [t] is the output vector
+of layer L at time t, and L is the loss function. Note that the backpropagation occurs through the layers and
+not in time, so the S-TLLR is temporally local. Depending on the task, good performance can be achieved
+even if the learning signal is available just for the last time step (Tl = T ).
+While our primary focus is on error-backpropagation to generate the learning signal, it is worth noting
+that employing random feedback connections, such as direct feedback alignment (DFA) (Trondheim, 2016;
+Frenkel et al., 2021), for this purpose is also feasible. In such cases, S-TLLR also exhibits spatial locality.
+We present some experiments in this direction in Appedix C.1. The S-TLLR algorithm for a multilayer
+implementation is shown in Algorithm 1.
+
+4.2.1    S-TLLR for models with recurrent synaptic connections
+
+A more general model of the LIF model includes explicit recurrent connections. Similar to the equation (1),
+the LIF model featuring explicit recurrent connections can be mathematically represented as:
+
+                                                                      ff           rec
+                           ui [t] = γ(ui [t − 1] − vth yi [t − 1]) + wij xj [t] + wik  yk [t − 1]                            (14)
+                                                     yi [t] = Θ(ui [t] − vth )                                               (15)
+
+                                                                      7
+Here, ui denotes the membrane potential of the i-th neuron. Moreover, wff ij represents the forward synaptic
+connection between the i-th post-synaptic neuron and the j-th pre-synaptic neuron, while wrec ik signiﬁes
+the recurrent synaptic connection between the i-th and k-th neurons in the same layer. Other terms remain
+consistent with the description in (1).
+The eligibility trace for the forward connections is computing following (10), however, since for the recurrent
+synaptic connections, the neuron outputs from a previous time step (t − 1) serve as inputs for the current
+time step (t) the eligibility trace change to encapsulated this behavior as follows:
+                                             t                                                        t−1
+                                             X           ′                                            X           ′
+                  erec
+                   ik [t] = αpre Ψ(ui [t])
+                                                      t−t
+                                                     λpre yk [t′ − 1] + αpost yk [t − 1]                      λt−t         ′
+                                                                                                               post Ψ(ui [t ])   (16)
+                                             t′ =1                                                    t′ =0
+
+
+Note that for models with explicit recurrent connections, memory requirements remain constant, thereby
+upholding temporal locality.
+
+4.3   Computational improvements
+
+Here we analyzed the computational improvements in terms of the number of multiply-accumulate (MAC)
+operations and memory requirements of S-TLLR with respect to BPTT. First, we started by expanding the
+BPTT terms by replacing (1) on (7). Assuming an SNN model with L layers and N neurons per layer, and
+appropriately factorizing the terms as described in Appendix B.1, we obtain the following expression for the
+gradients on the synaptic connections in layer l:
+                                                                                      ′
+                                             T                                     t
+                                  dL         X         ∂L               (l)
+                                                                                   X          ′   (l−1)
+                                  (l)
+                                        =            (l) ′
+                                                              Θ   ′
+                                                                      (uj [t′ ])          γ t −t yi       [t]                    (17)
+                                dwij         t′ =0 ∂yj [t ]                        t=0
+
+
+From (34), it can be observed that BPTT is not local in time as the updated at time step t′ depend on
+future time steps, as illustrated in Fig. 1. Therefore, the BPTT requires information on all the time steps,
+and consequently, its memory requirements scale linearly with the total number of time steps in the input
+sequence (T ). Then, the total memory required is estimated as follows:
+
+                                                                                L
+                                                                                X
+                                                MemBPTT = T ×                         N (l)                                      (18)
+                                                                                l=0
+
+
+To estimate the number of operations, speciﬁcally MAC operations, we exclude any element-wise operations.
+Referring to (34), we ascertain that the number of operations depends on both the number of inputs and
+outputs, resulting in a total of N (l) × N (l−1) operations. Additionally, we need to account for the operations
+involved in propagating the learning signals to the previous layer, equating to N (l) × N (l−1) . Consequently,
+the estimated number of operations can be calculated as follows:
+                                                                          L
+                                                                          X
+                                        MACBPTT = 2T ×                          N (l) × N (l−1)                                  (19)
+                                                                          l=1
+
+
+A similar analysis is done for S-TLLR. Based on the temporal locality of the method as expressed in (11),
+we can conclude that the memory requirements of S-TLLR can be computed as follows:
+                                                                                L
+                                                                                X
+                                               MemS-TLLR = 2 ×                        N (l)                                      (20)
+                                                                                l=0
+
+Here, the factor 2 is produced by the trace variables required to maintain the temporal information. For the
+number MACs, we ﬁrst must note that S-TLLR only updates the weights when the learning signal is present
+
+                                                                      8
+at time Tl , that is weights are updated T − Tl times. Additionally, we account for the operations required
+by the non-causal terms. Therefore, the number of operations for S-TLLR is:
+                                                            L
+                                                            X
+                                 MACS-TLLR = 3(T − Tl ) ×         N (l) × N (l−1)                     (21)
+                                                            l=1
+
+
+Based on the previous discussion, the improvements in memory (Smem ) and number of operations (SMAC )
+can be obtained as follows:                              PL
+                                        MemBPTT      T × l=0 N (l)    T
+                               Smem =             =      PL         =                            (22)
+                                        MemS-TLLR     2 × l=0 N (l)   2
+
+                                            2T × L         (l)
+                                                               × N (l−1)
+                                                  P
+                             MACBPTT                 l=1 N                     2T
+                    SMAC   =           =              PL                  =                           (23)
+                             MACS-TLLR   3(T − Tl ) × l=1 N (l) × N (l−1)   3(T − Tl )
+
+
+Algorithm 1 S-TLLR algorithm
+Require: x, y∗, w, T, Tl , ρ
+ 1: for t = 1, 2, . . . , T do
+ 2:   for l = 1, 2, . . . , L do
+ 3:      Update membrane potential u(l) [t] with (1)
+ 4:      Produce output spikes y (l) [t] with (2)
+ 5:      Update eligibility trace e(l) [t] with (11)
+ 6:   end for
+ 7:   if t ≥ Tl then
+ 8:      Initialize δ L = ∇yL [t] L(y L [t], y∗)
+ 9:      Initialize a(L) := 1
+10:      for l = L − 1, L − 2, . . . , 2 do
+11:        if learning signal produced by backpropagation then
+12:           δ (l) = a(l+1) ⊙ (w(l+1)⊤ δ (l+1) )
+13:           a(l) = δ (l) ⊙ Θ′ (u(l) [t]) {Θ′ is a surrogate gradient}
+14:        else if learning signal produced by random feedback then
+15:           δ (l) = B (l) δ (L) {B (l) is a ﬁxed random matrix}
+16:        end if
+17:      end for
+             (L)             (L−1)
+18:      ∆wij [t] = δiL yj         [t] {Last layer}
+             (l)     (l) (l−1)
+19:        ∆wij [t] = δi eij [t] {Hidden layers}
+20:     end if
+21:   end for
+22:   for l = 1, 2, . . . , L do
+        Update weights w(l) := w(l) + ρ T ∆w(l) [t]
+                                        P
+23:
+24:   end for
+25:   return w
+
+
+5     Experimental Evaluation
+
+5.1    Effects of non-causal terms on learning
+
+We performed ablation studies on the DVS Gesture, DVS CIFAR10, N-CALTECH101, and SHD datasets
+to evaluate the eﬀect of the non-causal factor (αpost ) on the learning process.
+For this purpose, we train a VGG9 model, described in Appedix A, ﬁve times with the same random seeds
+for 30, 30, and 300 epochs in the DVS Gesture, N-CALTECH101, and DVS CIFAR10 datasets, respectively.
+
+                                                      9
+Table 2: Eﬀects of including the non-causal terms in the eligibility traces during learning [Accuracy
+(mean±std) reported over 5 trials ]
+        Dataset     Model      T    Tl   (λpost , λpre , αpre )    αpost = 0       αpost = +1      αpost = −1
+  DVS Gesture        VGG9     20    15      (0.2, 0.75, 1)        94.61 ± 0.73%   94.01 ± 1.10%   95.07 ± 0.48%
+  DVS CIFAR10        VGG9     10     5       (0.2, 0.5, 1)        72.93 ± 0.94%   73.42 ± 0.50%   73.93 ± 0.62%
+  N-CALTECH101       VGG9     10    5        (0.2, 0.5, 1)        62.24 ± 1.22%   53.42 ± 1.50%   66.33 ± 0.86%
+  SHD                RSNN     100   10        (0.5, 1, 1)         77.09 ± 0.33%   78.23 ± 1.84%   74.69 ± 0.47%
+
+
+Similarly, a recurrent SNN (RSNN) model, described in Appedix A, was trained ﬁve times during 200 epochs
+on the SHD. To analyze the eﬀect of the non-causal term, we evaluate three values of αpost , −1, 0, and 1.
+According to (10), when αpost = 0, only causal terms are considered, while αpost = 1 (αpost = −1) means
+that the non-causal term is added positively (negatively). As shown in Table 2, for vision tasks, it can be
+seen that using αpost = −1 improves the average accuracy performance of the model with respect to only
+using causal terms αpost = 0. In contrast, for SHD, using αpost = 1 improves the average performance
+over using only causal terms, as shown in Table 2. This indicates that considering the non-causal relations
+of the spiking activity (either positively or negatively) in the learning rule helps to improve the network
+performance. An explanation for this eﬀect is that the non-causal term acts as a regularization term that
+allows better exploration of the weights space. Additional ablation studies are presented in Appedix C.3
+that support the improvements due to the non-causal terms.
+
+5.2     Performance comparison
+
+5.2.1    Image and Gesture Recognition
+
+We train VGG-9 and ResNet18 models during 300 epochs using the Adam optimizer with a learning rate
+of 0.001. The models were trained ﬁve times with diﬀerent random seeds. The baseline was set using
+BPTT, while the models trained using S-TLLR used the following STDP parameters (λpost , λpre , αpost , αpre ):
+(0.2, 0.75, −1, 1) for DVS Gesture and (0.2, 0.5, −1, 1) for DVS CIFAR10 and N-CALTECH101.
+The test accuracies are shown in Table 3. In all those tasks, S-TLLR shows a competitive performance
+compared to the BPTT baseline. In fact, for DVS Gesture and N-CALTECH101, S-TLLR outperforms the
+average accuracy obtained by the baseline trained with BPTT. Because of the small size of the DVS Gesture
+dataset and the complexity of the BPTT algorithm, the model overﬁts quickly resulting in lower performance.
+In contrast, S-TLLR avoids such overﬁtting eﬀect due to its simple formulation and by updating the weights
+only on the last ﬁve timesteps. Table 3 also includes results from previous works using spiking models
+on the same datasets. For DVS Gesture, it can be seen that S-TLLR outperforms previous methods such
+as Xiao et al. (2022); Shrestha & Orchard (2018); Kaiser et al. (2020), in some cases with signiﬁcantly less
+number of time-steps. In the case of DVS CIFAR10, S-TLLR demonstrates superior performance compared
+to the baseline with BPTT when the learning signal is utilized across all time steps (Tl = 0). Furthermore,
+S-TLLR surpasses the outcomes presented in Zheng et al. (2021); Fang et al. (2021b); Li et al. (2021), yet it
+lags behind others such as Xiao et al. (2022); Deng et al. (2022); Meng et al. (2022). However, studies such as
+Deng et al. (2022); Meng et al. (2022) showcase exceptional results primarily focused on static tasks without
+addressing temporal locality or memory eﬃciency during SNN training. Consequently, although serving as a
+reference, they do not fairly compare to S-TLLR. The most pertinent comparison lies with Xiao et al. (2022),
+which shares similar memory and time complexity with S-TLLR. Notably, S-TLLR (Tl = 0, αpost = −1)
+exhibits a performance deﬁcit of 0.67%. This diﬀerence is primarily attributed to the diﬀerence in batch
+size during training. While Xiao et al. (2022) uses a batch size of 128, we were constrained to 48 due to
+hardware limitations. To validate this point, we trained another model utilizing only causal terms: S-TLLR
+(Tl = 0, αpost = 0), equating it to Xiao et al. (2022) considering the selection of STDP parameters and
+secondary activation function (Ψ) in DVS CIFAR10 experiments. The comparison reveals that S-TLLR
+(αpost = −1) outperforms S-TLLR (αpost = 0) (equivalent to Xiao et al. (2022)) under the same conditions,
+further corroborating the advantages of including non-causal terms (αpost 6= 0) during training. Finally,
+when compared to BPTT, S-TLLR signiﬁes a 5× memory reduction. By using the learning signal for the
+
+                                                         10
+                       Table 3: Accuracy performance of methods on vision and audio datasets
+                                                                   Time-steps      Batch       Accuracy         # MAC1      Memory1
+                   Method                           Model
+                                                                      (T )          Size      (mean±std)         (×109 )     (MB)
+                                                             DVS CIFAR10
+ BPTT (Zheng et al., 2021)                        ResNet-19         10                 -          67.8%               -        -
+ BPTT (Fang et al., 2021b)                      PLIF (7 layers)     20                16          74.8%               -        -
+ TET (Deng et al., 2022)                           VGG-11           10               128      83.17 ± 0.15%           -        -
+ DSR (Meng et al., 2022)                           VGG-11           10               128      77.27 ± 0.24%           -        -
+ BPTT (Li et al., 2021)                           ResNet-18         10                 -      75.4 ± 0.05%            -        -
+ OTTTA (Xiao et al., 2022)                         VGG-9            10               128      76.27 ± 0.05%           -        -
+ BPTT (baseline)                                   VGG-9            10               48       75.44 ± 0.76%         6.82     18.12
+ S-TLLR (Ours, Tl = 5, αpost = −1 )                VGG-9            10               48       73.93 ± 0.62%         5.12     3.62
+ S-TLLR (Ours, Tl = 0, αpost = −1 )                VGG-9            10               48       75.6 ± 0.10%          10.26    3.62
+ S-TLLR (Ours, Tl = 0, αpost = 0 )                 VGG-9            10               48       74.8 ± 0.15%          6.82     3.62
+ BPTT (baseline)                                  ResNet18          10               48       72.68 ± 0.87%         7.13     28.14
+ S-TLLR (Ours, Tl = 5)                            ResNet18          10               48       71.94 ± 0.75%         5.12     5.62
+ S-TLLR (Ours, Tl = 0)                            ResNet18          10               48       74.5 ± 0.64%          10.24    5.62
+                                                              DVS Gesture
+ SLAYER (Shrestha & Orchard, 2018)              SNN (8 layers)      300                -      93.64 ± 0.49%           -        -
+ DECOLLE(Kaiser et al., 2020)                   SNN (4 layers)     1800               72      95.54 ± 0.16%           -        -
+ OTTTA (Xiao et al., 2022)                         VGG-9             20               16         96.88%               -        -
+ BPTT (baseline)                                   VGG-9             20               16      95.58 ± 1.08%         6.06     16.13
+ S-TLLR (Ours)                                     VGG-9             20               16      97.72 ± 0.38%         2.27     1.61
+ BPTT (baseline)                                  ResNet18           20               16      94.92 ± 0.38%         6.34     25.03
+ S-TLLR (Ours)                                    ResNet18           20               16      94.92 ± 0.61%         2.27     2.50
+                                                            N-CALTECH101
+ BPTT (She et al., 2022)                        SNN (12 layers)    10                 -           71.2%               -        -
+ BPTT (Kim et al., 2023)                          VGG-16            5                128         64.40%               -        -
+ BPTT (baseline)                                   VGG-9           10                16      65.92 ± 0.82%          22.81    20.15
+ S-TLLR (Ours)                                     VGG-9           10                16      66.058 ± 0.92%         17.22    4.03
+ BPTT (baseline)                                  ResNet18         10                16      60.89 ± 0.89%          6.34     31.31
+ S-TLLR (Ours)                                    ResNet18         10                16      61.65 ± 0.99%          4.27     6.26
+                                                                    SHD
+ ETLP (Quintana et al., 2023)                    ALIF-RSNN             100           128      74.59 ± 0.44%           -        -
+ OSTTP (Ortner et al., 2023)                     LIF-RSNN              100            -       77.33 ± 0.8%            -        -
+ BPTT (Bouanane et al., 2022)                    LIF-RSNN              100           128          83.41               -        -
+ BPTT (Cramer et al., 2022)                      LIF-RSNN              100            -         83.2 ± 1.3            -        -
+ BPTT (baseline)                                 LIF-RSNN              100           128       70.57 ± 0.96         0.054    0.961
+ S-TLLRBP (Ours)                                 LIF-RSNN              100           128      78.24 ± 1.84%         0.096    0.019
+ S-TLLRDFA (Ours)                                LIF-RSNN              100           128      74.60 ± 0.52%         0.096    0.019
+ 1
+     : # MAC and Memory are estimated for a batch size of 1 following the equations described in the Section 4.3.
+ 2
+     : Previous studies’ accuracy values are provided as reported in their respective original papers.
+
+
+
+
+last ﬁve time steps, it eﬀectively diminishes the number of multiply-accumulate (MAC) operations by 2.6×
+for DVS Gesture, and by 1.3× for DVS CIFAR10 and N-CALTECH101.
+
+5.2.2      Audio Classification
+
+In order to set a baseline, we train the same RSNN with the same hyperparameters using BPTT for ﬁve
+trials, and with the following STPD parameters (0.5, 1, 1, 1). As shown in Table 3, the model trained with
+S-TLLR outperforms the baseline trained with BPTT. The result shows the capability of S-TLLR to achieve
+high performance and generalization. One reason why the baseline does not perform well, as suggested in
+Cramer et al. (2022), is that RSNN trained with BPTT quickly overﬁts. This also highlights a nice property
+of S-TLLR. Since it has a simpler formulation than BPTT, it can avoid overﬁtting, resulting in a better
+generalization. However, note that works such as Cramer et al. (2022); Bouanane et al. (2022) can achieve
+better performance after carefully selecting the hyperparameters and using data augmentation techniques. In
+comparison with such works, our method still shows competitive performance with the advantage of having
+a 50× reduction in memory.
+
+                                                                     11
+Table 4: Comparison of the Average End-Point Error (AEE) on the MVSEC (Zhu et al., 2018b) dataset
+[AEE lower is better]
+                                        Training              OD1     IF1    IF2     IF3     AEE
+                     Models                          Type
+                                        Method                AEE     AEE    AEE     AEE     Sum
+             FSFNαpost = −0.2 (Ours)    S-TLLR      Spiking   0.50    0.76   1.19    1.00    3.45
+             FSFNαpost = 0.2 (Ours)     S-TLLR      Spiking   0.54    0.78   1.28    1.09    3.69
+             FSFNαpost = 0 (Ours)       S-TLLR      Spiking   0.50    0.77   1.25    1.08    3.60
+             FSFN (baseline)            BPTT        Spiking   0.45    0.76   1.17    1.02    3.40
+             Apolinario et al. (2023)   BPTT        Spiking   0.51    0.82   1.21    1.07    3.61
+             Kosta & Roy (2023)         BPTT        Spiking   0.44    0.79   1.37    1.11    3.78
+             Hagenaars et al. (2021)    BPTT        Spiking   0.45    0.73   1.45    1.17    3.80
+             Zero prediction            -           -         1.08    1.29   2.13    1.88    6.38
+
+
+Furthermore, we compared our results with Quintana et al. (2023); Ortner et al. (2023), which uses the same
+RSNN network structure with LIF and ALIF (LIF with adaptative threshold) neurons and temporal local
+learning rules. Table 3 shows that using S-TLLR with BP for the learning signal results in better performance
+than those obtained with other temporal local learning rules, with the advantage of having a linear memory
+complexity instead of squared. Moreover, using DFA to generate the learning signal results in competitive
+performance with the advantage of being local in both time and space.
+
+5.2.3   Event-based Optical Flow
+
+The optical ﬂow estimation is evaluated using the average endpoint error (AEE) metric that measures the
+Euclidean distance between the predicted ﬂow (ypred ) and ground truth ﬂow (ygt ) per pixel. For consistency,
+this metric is computed only for pixels containing events (P ), similar to Apolinario et al. (2023); Kosta & Roy
+(2023); Lee et al. (2020); Zhu et al. (2018a; 2019), given by the following expression:
+                                                 1 X pred
+                                        AEE =       kyi,j − ygt
+                                                             i,j k2                                        (24)
+                                                 P
+                                                    P
+
+
+For this experiment, we trained a Fully-Spiking FlowNet (FSFN) model, discussed in Appedix A, with S-
+TLLR using the following STDP parameters (λpost , λpre , αpre ) = (0.5, 0.8, 1) and αpost = [−0.2, 0.2, 0]. The
+models were trained during 100 epochs using the Adam optimizer with a learning rate of 0.0002, a batch size
+of 8, and with the learning signal obtained from the photometric loss just for the last time step (Tl = 9). As
+it is shown in Table 4, the FSFN model trained using S-TLLR with αpost = −0.2 shows a performance close
+to the baseline implementation trained with BPTT. Although we mainly compared our model with BPTT,
+to take things into perspective, we include results from other previous works. Among the spiking models, our
+model trained with S-TLLR has the second-best average performance (AEE sum) in comparison with such
+spiking models of similar architecture and size trained with BPTT (Apolinario et al., 2023; Kosta & Roy,
+2023; Hagenaars et al., 2021). The results indicate that our method achieves high performance on a complex
+spatio-temporal task, such as optical ﬂow estimation, with 5× less memory and a 6.6× reduction in the
+number of MAC operations by just updating the model in the last time step.
+
+6   Conclusion
+
+Our proposed learning rule, S-TLLR, can achieve competitive performance in comparison to BPTT on several
+event-based datasets with the advantage of having a constant memory requirement. In contrast to BPTT (or
+other temporal learning rules) with higher memory requirements O(T n) (or O(n2 )), S-TLLR memory is just
+proportional to the number of neurons O(n). Moreover, in contrast with previous works that are derived from
+BPTT as approximations, and therefore using only causal relations in the spike timing, S-TLLR explores a
+diﬀerent direction by leveraging causal and non-causal relations based on a generalized parametric STDP
+equation. We have experimentally demonstrated on several event-based datasets that including such non-
+causal relations can improve the SNN performance in comparison with temporal local learning rules using
+
+                                                        12
+just causal relations. Also, we could observe that tasks where spatial information is predominant, such as
+DVS CIFAR-10, DVS Gesture, N-CALTECH101, and MVSEC, beneﬁt from causality (αpost = −1). In
+contrast, tasks like SHD, where temporal information is predominant, beneﬁt from synchrony (αpost = 1).
+Moreover, by computing the learning signal just for the last few time steps, S-TLLR reduces the number of
+MAC operations in the range of 1.3× to 6.6×. In summary, S-TLLR can achieve high performance while
+being memory-eﬃcient and requiring only information locally in time, therefore enabling online updates.
+
+Acknowledgments
+
+This work was supported in part by the Center for Co-design of Cognitive Systems (CoCoSys), one of the
+seven centers in JUMP 2.0, a Semiconductor Research Corporation (SRC) program, and in part by the
+Department of Energy (DoE).
+
+
+References
+Arnon Amir, Brian Taba, David Berg, Timothy Melano, Jeﬀrey McKinstry, Carmelo Di Nolfo, Tapan Nayak,
+  Alexander Andreopoulos, Guillaume Garreau, Marcela Mendoza, Jeﬀ Kusnitz, Michael Debole, Steve
+  Esser, Tobi Delbruck, Myron Flickner, and Dharmendra Modha. A Low Power, Fully Event-Based Gesture
+  Recognition System. In 2017 IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+  volume 2017-January, pp. 7388–7397. IEEE, 7 2017. ISBN 978-1-5386-0457-1. doi: 10.1109/CVPR.2017.
+  781.
+
+Margarita Anisimova, Bas van Bommel, Rui Wang, Marina Mikhaylova, Jörn Simon Wiegert, Thomas G.
+ Oertner, and Christine E. Gee. Spike-timing-dependent plasticity rewards synchrony rather than causal-
+ ity. Cerebral Cortex, 33(1):23–34, 12 2022. ISSN 1047-3211. doi: 10.1093/CERCOR/BHAC050. URL
+ https://academic.oup.com/cercor/article/33/1/23/6535691.
+
+Marco P. E. Apolinario, Adarsh Kumar Kosta, Utkarsh Saxena, and Kaushik Roy. Hardware/Software co-
+ design with ADC-Less In-memory Computing Hardware for Spiking Neural Networks. IEEE Transactions
+ on Emerging Topics in Computing, pp. 1–13, 2023. ISSN 2168-6750. doi: 10.1109/TETC.2023.3316121.
+ URL https://ieeexplore.ieee.org/document/10260275/.
+
+Guillaume Bellec, Franz Scherr, Anand Subramoney, Elias Hajek, Darjan Salaj, Robert Legenstein, and
+ Wolfgang Maass. A solution to the learning dilemma for recurrent networks of spiking neurons. Nature
+ Communications, 11(1), 12 2020. ISSN 20411723. doi: 10.1038/s41467-020-17236-y.
+
+Guo-Qiang Bi and Mu-Ming Poo. Synaptic Modiﬁcations in Cultured Hippocampal Neurons: Depen-
+ dence on Spike Timing, Synaptic Strength, and Postsynaptic Cell Type. The Journal of Neuroscience,
+ 18(24):10464–10472, 12 1998. ISSN 0270-6474. doi: 10.1523/JNEUROSCI.18-24-10464.1998. URL
+ http://www.jneurosci.org/lookup/doi/10.1523/JNEUROSCI.18-24-10464.1998.
+
+Thomas Bohnstingl, Stanislaw Wozniak, Angeliki Pantazi, and Evangelos Eleftheriou. Online Spatio-
+ Temporal Learning in Deep Neural Networks. IEEE Transactions on Neural Networks and Learning
+ Systems, 2022. ISSN 21622388. doi: 10.1109/TNNLS.2022.3153985.
+
+Mohamed Sadek Bouanane, Dalila Cheriﬁ, Elisabetta Chicca, and Lyes Khacef. Impact of spiking neurons
+ leakages and network recurrences on event-based spatio-temporal pattern recognition. arXiv preprint, 11
+ 2022. URL https://arxiv.org/abs/2211.07761v1.
+
+Tom B Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan, Prafulla Dhariwal, Arvind Nee-
+  lakantan, Pranav Shyam, Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen
+  Krueger, Tom Henighan, Rewon Child, Aditya Ramesh, Daniel M Ziegler, Jeﬀrey Wu, Clemens Winter,
+  Christopher Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess, Jack Clark,
+  Christopher Berner, Sam Mccandlish, Alec Radford, Ilya Sutskever, and Dario Amodei. Language Models
+  are Few-Shot Learners. In Advances in Neural Information Processing Systems, pp. 1877–1901, 2020.
+
+                                                   13
+Dennis V Christensen, Regina Dittmann, Bernabe Linares-Barranco, Abu Sebastian, Manuel Le Gallo,
+  Andrea Redaelli, Stefan Slesazeck, Thomas Mikolajick, Sabina Spiga, Stephan Menzel, Ilia Valov, Gianluca
+  Milano, Carlo Ricciardi, Shi-Jun Liang, Feng Miao, Mario Lanza, Tyler J Quill, Scott T Keene, Alberto
+  Salleo, Julie Grollier, Danijela Marković, Alice Mizrahi, Peng Yao, J Joshua Yang, Giacomo Indiveri,
+  John Paul Strachan, Suman Datta, Elisa Vianello, Alexandre Valentian, Johannes Feldmann, Xuan Li,
+  Wolfram H P Pernice, Harish Bhaskaran, Steve Furber, Emre Neftci, Franz Scherr, Wolfgang Maass,
+  Srikanth Ramaswamy, Jonathan Tapson, Priyadarshini Panda, Youngeun Kim, Gouhei Tanaka, Simon
+  Thorpe, Chiara Bartolozzi, Thomas A Cleland, Christoph Posch, ShihChii Liu, Gabriella Panuccio, Mufti
+  Mahmud, Arnab Neelim Mazumder, Morteza Hosseini, Tinoosh Mohsenin, Elisa Donati, Silvia Tolu,
+  Roberto Galeazzi, Martin Ejsing Christensen, Sune Holm, Daniele Ielmini, and N Pryds. 2022 roadmap
+  on neuromorphic computing and engineering. Neuromorphic Computing and Engineering, 2(2):022501, 6
+  2022. doi: 10.1088/2634-4386/ac4a83.
+Benjamin Cramer, Yannik Stradmann, Johannes Schemmel, and Friedemann Zenke. The Heidelberg Spiking
+  Data Sets for the Systematic Evaluation of Spiking Neural Networks. IEEE Transactions on Neural
+  Networks and Learning Systems, 33(7):2744–2757, 7 2022. ISSN 2162-237X. doi: 10.1109/TNNLS.2020.
+  3044364.
+Mike Davies, Narayan Srinivasa, Tsung Han Lin, Gautham Chinya, Yongqiang Cao, Sri Harsha Cho-
+ day, Georgios Dimou, Prasad Joshi, Nabil Imam, Shweta Jain, Yuyun Liao, Chit Kwan Lin, Andrew
+ Lines, Ruokun Liu, Deepak Mathaikutty, Steven McCoy, Arnab Paul, Jonathan Tse, Guruguhanathan
+ Venkataramanan, Yi Hsin Weng, Andreas Wild, Yoonseok Yang, and Hong Wang. Loihi: A Neuromor-
+ phic Manycore Processor with On-Chip Learning. IEEE Micro, 38(1):82–99, 1 2018. ISSN 02721732. doi:
+ 10.1109/MM.2018.112130359.
+Shikuang Deng, Yuhang Li, Shanghang Zhang, and Shi Gu. Temporal Eﬃcient Training of Spiking Neural
+  Network via Gradient Re-weighting. In International Conference on Learning Representations (ICLR),
+  2022. URL https://github.com/Gus-Lab/temporal_.
+Peter U. Diehl and Matthew Cook. Unsupervised learning of digit recognition using spike-timing-dependent
+  plasticity. Frontiers in Computational Neuroscience, 9(AUGUST):99, 8 2015. ISSN 16625188. doi: 10.
+  3389/FNCOM.2015.00099/BIBTEX.
+Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weissenborn, Xiaohua Zhai, Thomas Un-
+  terthiner, Mostafa Dehghani, Matthias Minderer, Georg Heigold, Sylvain Gelly, Jakob Uszkoreit, and Neil
+  Houlsby. An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale. In International
+  Conference on Learning Representations, 2021.
+Jason K. Eshraghian, Max Ward, Emre O. Neftci, Xinxin Wang, Gregor Lenz, Girish Dwivedi, Mohammed
+  Bennamoun, Doo Seok Jeong, and Wei D. Lu. Training Spiking Neural Networks Using Lessons From Deep
+  Learning. Proceedings of the IEEE, 111(9):1016–1054, 9 2023. ISSN 0018-9219. doi: 10.1109/JPROC.
+  2023.3308088. URL https://ieeexplore.ieee.org/document/10242251/.
+Wei Fang, Zhaofei Yu, Yanqi Chen, Tiejun Huang, Timothée Masquelier, and Yonghong Tian. Deep Residual
+ Learning in Spiking Neural Networks. In Advances in Neural Information Processing Systems, pp. 21056–
+ 21069, 2021a.
+Wei Fang, Zhaofei Yu, Yanqi Chen, Timothée Masquelier, Tiejun Huang, and Yonghong Tian. Incorporating
+ Learnable Membrane Time Constant To Enhance Learning of Spiking Neural Networks. In Proceedings
+ of the IEEE/CVF International Conference on Computer Vision (ICCV), pp. 2661–2671, 2021b. URL
+ https://github.com/fangw.
+Charlotte Frenkel, Martin Lefebvre, and David Bol. Learning Without Feedback: Fixed Random Learning
+ Signals Allow for Feedforward Training of Deep Neural Networks. Frontiers in Neuroscience, 15:629892,
+ 2 2021. ISSN 1662453X. doi: 10.3389/FNINS.2021.629892/BIBTEX.
+Wulfram Gerstner, Werner M. Kistler, Richard Naud, and Liam Paninski. Neuronal Dynamics. Cambridge
+ University Press, Cambridge, 7 2014. ISBN 9781107060838. doi: 10.1017/CBO9781107447615. URL
+ https://www.cambridge.org/core/product/identifier/9781107447615/type/book.
+
+                                                   14
+Wulfram Gerstner, Marco Lehmann, Vasiliki Liakoni, Dane Corneil, and Johanni Brea. Eligibility Traces
+ and Plasticity on Behavioral Time Scales: Experimental Support of NeoHebbian Three-Factor Learning
+ Rules. Frontiers in Neural Circuits, 12, 7 2018. ISSN 1662-5110. doi: 10.3389/fncir.2018.00053. URL
+ https://www.frontiersin.org/article/10.3389/fncir.2018.00053/full.
+
+Jesse J Hagenaars, Federico Paredes-Vallés, and Guido C H E De Croon. Self-Supervised Learning of Event-
+  Based Optical Flow with Spiking Neural Networks. In Advances in Neural Information Processing Systems,
+  pp. 7167–7179, 2021.
+
+Yunzhe Hao, Xuhui Huang, Meng Dong, and Bo Xu. A biologically plausible supervised learning method
+  for spiking neural networks using the symmetric STDP rule. Neural Networks, 121:387–395, 1 2020. ISSN
+  0893-6080. doi: 10.1016/J.NEUNET.2019.09.007.
+
+Zhanhao Hu, Tao Wang, and Xiaolin Hu.           An STDP-Based Supervised Learning Algorithm
+  for Spiking Neural Networks.       In Lecture Notes in Computer Science (including subseries
+  Lecture Notes in Artificial Intelligence and Lecture Notes in Bioinformatics), volume 10635
+  LNCS, pp. 92–100. Springer Verlag, 3 2017.      doi: 10.1007/978-3-319-70096-0{\_}10.  URL
+  http://link.springer.com/10.1007/978-3-319-70096-0_10.
+
+Jacques Kaiser, Hesham Mostafa, and Emre Neftci. Synaptic Plasticity Dynamics for Deep Continuous Local
+  Learning (DECOLLE). Frontiers in Neuroscience, 14, 5 2020. ISSN 1662453X. doi: 10.3389/fnins.2020.
+  00424.
+
+Saeed Reza Kheradpisheh, Mohammad Ganjtabesh, Simon J. Thorpe, and Timothée Masquelier. STDP-
+  based spiking deep convolutional neural networks for object recognition. Neural Networks, 99:56–67, 3
+  2018. ISSN 0893-6080. doi: 10.1016/J.NEUNET.2017.12.005.
+
+Youngeun Kim, Yuhang Li, Abhishek Moitra, Ruokai Yin, and Priyadarshini Panda. Sharing leaky-integrate-
+  and-ﬁre neurons for memory-eﬃcient spiking neural networks. Frontiers in Neuroscience, 17:1230002, 7
+  2023. ISSN 1662453X. doi: 10.3389/FNINS.2023.1230002/BIBTEX.
+
+Adarsh Kumar Kosta and Kaushik Roy. Adaptive-SpikeNet: Event-based Optical Flow Estimation using
+ Spiking Neural Networks with Learnable Neuronal Dynamics. In 2023 IEEE International Conference on
+ Robotics and Automation (ICRA), pp. 6021–6027. IEEE, 5 2023. ISBN 979-8-3503-2365-8. doi: 10.1109/
+ ICRA48891.2023.10160551. URL https://ieeexplore.ieee.org/document/10160551/.
+
+Chankyu Lee, Priyadarshini Panda, Gopalakrishnan Srinivasan, and Kaushik Roy. Training deep spiking
+ convolutional Neural Networks with STDP-based unsupervised pre-training followed by supervised ﬁne-
+ tuning. Frontiers in Neuroscience, 12(AUG):435, 8 2018. ISSN 1662453X. doi: 10.3389/FNINS.2018.
+ 00435/BIBTEX.
+
+Chankyu Lee, Adarsh Kumar Kosta, Alex Zihao Zhu, Kenneth Chaney, Kostas Daniilidis, and Kaushik Roy.
+ Spike-FlowNet: Event-Based Optical Flow Estimation with Energy-Eﬃcient Hybrid Neural Networks. In
+ European Conference on Computer Vision (ECCV), volume 12374 of Lecture Notes in Computer Science,
+  pp. 366–382, 2020. doi: 10.1007/978-3-030-58526-6{\_}22.
+
+Hongmin Li, Hanchao Liu, Xiangyang Ji, Guoqi Li, and Luping Shi. CIFAR10-DVS: An event-stream
+ dataset for object classiﬁcation. Frontiers in Neuroscience, 11(MAY):309, 5 2017. ISSN 1662453X. doi:
+ 10.3389/FNINS.2017.00309/BIBTEX.
+
+Yuhang Li, Yufei Guo, Shanghang Zhang, Shikuang Deng, Yongqing Hai, and Shi Gu. Diﬀerentiable Spike:
+  Rethinking Gradient-Descent for Training Spiking Neural Networks. Advances in Neural Information
+  Processing Systems, 34:23426–23439, 12 2021.
+
+Timothy P Lillicrap and Adam Santoro. Backpropagation through time and the brain. Current Opin-
+  ion in Neurobiology, 55:82–89, 4 2019. ISSN 09594388. doi: 10.1016/j.conb.2019.01.011. URL
+  https://linkinghub.elsevier.com/retrieve/pii/S0959438818302009.
+
+                                                  15
+Guillermo Martín-Sánchez, Sander Bohté, and Sebastian Otte.          A Taxonomy of Recur-
+ rent Learning Rules.       Lecture Notes in Computer Science (including subseries Lecture
+ Notes in Artificial Intelligence and Lecture Notes in Bioinformatics), 13529 LNCS:478–
+ 490, 2022.     ISSN 16113349.      doi: 10.1007/978-3-031-15919-0{\_}40/FIGURES/7.  URL
+ https://link.springer.com/chapter/10.1007/978-3-031-15919-0_40.
+
+Qingyan Meng, Mingqing Xiao, Shen Yan, Yisen Wang, Zhouchen Lin, and Zhi-Quan Luo. Train-
+  ing High-Performance Low-Latency Spiking Neural Networks by Diﬀerentiation on Spike Represen-
+  tation. In 2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pp.
+  12434–12443. IEEE, 6 2022. ISBN 978-1-6654-6946-3. doi: 10.1109/CVPR52688.2022.01212. URL
+  https://ieeexplore.ieee.org/document/9878999/.
+
+Emre O. Neftci, Hesham Mostafa, and Friedemann Zenke. Surrogate Gradient Learning in Spiking Neural
+ Networks: Bringing the Power of Gradient-based optimization to spiking neural networks. IEEE Signal
+ Processing Magazine, 36(6):51–63, 11 2019. ISSN 15580792. doi: 10.1109/MSP.2019.2931595.
+
+Garrick Orchard, Ajinkya Jayawant, Gregory K. Cohen, and Nitish Thakor. Converting static image datasets
+ to spiking neuromorphic datasets using saccades. Frontiers in Neuroscience, 9(NOV):159859, 11 2015.
+ ISSN 1662453X. doi: 10.3389/FNINS.2015.00437/BIBTEX.
+
+Thomas Ortner, Lorenzo Pes, Joris Gentinetta, Charlotte Frenkel, and Angeliki Pantazi. Online Spatio-
+ Temporal Learning with Target Projection. In 2023 IEEE 5th International Conference on Artificial
+ Intelligence Circuits and Systems, 4 2023. URL https://arxiv.org/abs/2304.05124v2.
+
+Federico Paredes-Vallés and Guido C.H.E. de Croon. Back to Event Basics: Self-Supervised Learning of
+  Image Reconstruction for Event Cameras via Photometric Constancy. In Proceedings of the IEEE Com-
+  puter Society Conference on Computer Vision and Pattern Recognition, pp. 3445–3454. IEEE Computer
+  Society, 2021. ISBN 9781665445092. doi: 10.1109/CVPR46437.2021.00345.
+
+Wachirawit Ponghiran and Kaushik Roy. Spiking Neural Networks with Improved Inherent Recurrence
+ Dynamics for Sequential Learning. In Proceedings of the AAAI Conference on Artificial Intelligence,
+ volume 36, pp. 8001–8008, 6 2022. doi: 10.1609/aaai.v36i7.20771.
+
+Siyuan Qiao, Huiyu Wang, Chenxi Liu, Wei Shen, and Alan Yuille. Micro-Batch Training with Batch-Channel
+  Normalization and Weight Standardization. 3 2019. URL https://arxiv.org/abs/1903.10520v2.
+
+Fernando M. Quintana, Fernando Perez-Peña, Pedro L. Galindo, Emre O. Neftci, Elisabetta Chicca, and
+  Lyes Khacef. ETLP: Event-based Three-factor Local Plasticity for online learning with neuromorphic
+  hardware. 1 2023. URL https://arxiv.org/abs/2301.08281v2.
+
+Kaushik Roy, Akhilesh Jaiswal, and Priyadarshini Panda. Towards spike-based machine intelligence
+ with neuromorphic computing. Nature, 575(7784):607–617, 11 2019. ISSN 0028-0836. doi: 10.1038/
+ s41586-019-1677-2. URL http://www.nature.com/articles/s41586-019-1677-2.
+
+Abhronil Sengupta, Yuting Ye, Robert Wang, Chiao Liu, and Kaushik Roy. Going Deeper in Spiking Neural
+ Networks: VGG and Residual Architectures. Frontiers in Neuroscience, 13:95, 3 2019. ISSN 1662-453X.
+ doi: 10.3389/fnins.2019.00095.
+
+Xueyuan She, Saurabh Dash, and Saibal Mukhopadhyay. Sequence Approximation using Feedforward Spik-
+ ing Neural Network for Spatiotemporal Learning: Theory and Optimization Methods. In International
+ Conference on Learning Representations (ICLR), 2022.
+
+Sumit Bam Shrestha and Garrick Orchard. SLAYER: Spike Layer Error Reassignment in Time. Advances
+  in Neural Information Processing Systems, 31, 2018. URL https://bitbucket.org/bamsumit/slayer.
+
+Sen Song, Kenneth D. Miller, and L. F. Abbott. Competitive Hebbian learning through spike-timing-
+  dependent synaptic plasticity. Nature Neuroscience 2000 3:9, 3(9):919–926, 9 2000. ISSN 1546-1726. doi:
+  10.1038/78829. URL https://www.nature.com/articles/nn0900_919.
+
+                                                   16
+Amirhossein Tavanaei and Anthony Maida. BP-STDP: Approximating backpropagation using spike timing
+ dependent plasticity. Neurocomputing, 330:39–47, 2 2019. ISSN 0925-2312. doi: 10.1016/J.NEUCOM.
+ 2018.11.014.
+Johannes C. Thiele, Olivier Bichler, and Antoine Dupret. Event-based, timescale invariant unsupervised
+  online deep learning with STDP. Frontiers in Computational Neuroscience, 12:46, 6 2018. ISSN 16625188.
+  doi: 10.3389/FNCOM.2018.00046/BIBTEX.
+Arild Nøkland Trondheim. Direct Feedback Alignment Provides Learning in Deep Neural Networks. Advances
+  in Neural Information Processing Systems, 29, 2016.
+Ronald J. Williams and David Zipser. Experimental Analysis of the Real-time Recurrent Learning Algo-
+  rithm. Connection Science, 1(1):87–111, 1 1989. ISSN 0954-0091. doi: 10.1080/09540098908915631. URL
+  https://www.tandfonline.com/doi/full/10.1080/09540098908915631.
+Yujie Wu, Lei Deng, Guoqi Li, Jun Zhu, and Luping Shi. Spatio-temporal backpropagation for training
+  high-performance spiking neural networks. Frontiers in Neuroscience, 12(MAY):323875, 5 2018. ISSN
+  1662453X. doi: 10.3389/FNINS.2018.00331/BIBTEX. URL www.frontiersin.org.
+Mingqing Xiao, Qingyan Meng, Zongpeng Zhang, Di He, and Zhouchen Lin. Online Training Through Time
+ for Spiking Neural Networks. In 36th Conference on Neural Information Processing Systems (NeurIPS
+ 2022), 10 2022. URL http://arxiv.org/abs/2210.04195.
+Hanle Zheng, Yujie Wu, Lei Deng, Yifan Hu, and Guoqi Li.        Going Deeper With Directly-
+ Trained Larger Spiking Neural Networks. Proceedings of the AAAI Conference on Artificial Intel-
+ ligence, 35(12):11062–11070, 5 2021. ISSN 2374-3468. doi: 10.1609/AAAI.V35I12.17320. URL
+  https://ojs.aaai.org/index.php/AAAI/article/view/17320.
+Alex Zhu, Liangzhe Yuan, Kenneth Chaney, and Kostas Daniilidis. EV-FlowNet: Self-Supervised Optical
+  Flow Estimation for Event-based Cameras. In Robotics: Science and Systems XIV, pp. 62. Robotics:
+  Science and Systems Foundation, 6 2018a. ISBN 978-0-9923747-4-7. doi: 10.15607/RSS.2018.XIV.062.
+Alex Zihao Zhu, Dinesh Thakur, Tolga Ozaslan, Bernd Pfrommer, Vijay Kumar, and Kostas Daniilidis. The
+  Multivehicle Stereo Event Camera Dataset: An Event Camera Dataset for 3D Perception. IEEE Robotics
+  and Automation Letters, 3(3):2032–2039, 7 2018b. ISSN 2377-3766. doi: 10.1109/LRA.2018.2800793.
+Alex Zihao Zhu, Liangzhe Yuan, Kenneth Chaney, and Kostas Daniilidis. Unsupervised event-based learning
+  of optical ﬂow, depth, and egomotion. In Proceedings of the IEEE Computer Society Conference on
+  Computer Vision and Pattern Recognition, volume 2019-June, pp. 989–997. IEEE Computer Society, 6
+  2019. ISBN 9781728132938. doi: 10.1109/CVPR.2019.00108.
+
+
+A     Datasets and experimental setup
+
+We conducted experiments on various event-based datasets, including DVS Gesture (Amir et al., 2017),
+N-CALTECH101 (Orchard et al., 2015), DVS CIFAR-10 (Li et al., 2017), SHD (Cramer et al., 2022), and
+MVSEC (Zhu et al., 2018b). These datasets encompass a wide range of applications, such as image and ges-
+ture recognition, audio classiﬁcation, and optical ﬂow estimation. In this section, we outline the experimental
+setup employed in Section 5, covering SNN architectures, dataset preprocessing, and loss functions.
+
+A.1   Network architectures
+
+For experiments on image and gesture recognition, we use a VGG-9 model with the following structure: 64C3-
+128C3-AP2S2-256C3-256C3-AP2S2-512C3-512C3-AP2S2-512C3-512C3-AP2S2-FC. In this notation, ‘64C3’
+signiﬁes a convolutional layer with 64 output channels and a 3x3 kernel, ‘AP2S2’ represents average-pooling
+layers with a 2x2 kernel and a stride of 2, and ‘FC’ denotes a fully connected layer. In addition, instead of
+batch normalization, we use weight standardization Qiao et al. (2019) similar to Xiao et al. (2022). Also,
+the leak factor and threshold for the LIF models (1) are γ = 0.5 and vth = 0.8, respectively.
+
+                                                      17
+For experiments with the SHD dataset, we employ a recurrent SNN (RSNN) consisting of one recurrent layer
+with 450 neurons and a leaky integrator readout layer with 20 neurons, following a similar conﬁguration as
+in Ortner et al. (2023); Quintana et al. (2023). Both layers are conﬁgured with a leak factor of γ = 0.99,
+and the recurrent LIF layer’s threshold voltage is set to vth = 0.8.
+We utilize the Fully-Spiking FlowNet (FSFN) for optical ﬂow estimation, as introduced by Apolinario et al.
+(2023). The FSFN adopts a U-Net-like architecture characterized by performing binary spike computation
+in all layers. Notably, we enhance the model by incorporating weight standardization (Qiao et al., 2019) in
+all convolutional layers. Additionally, our training approach involves ten time steps without temporal input
+encoding, in contrast to Apolinario et al. (2023) that uses the encoding method proposed by Lee et al. (2020).
+Also, the leak factor and threshold of the LIF neurons used for our FSFN are 0.88 and 0.6, respectively.
+
+A.2   Data pre-processing
+
+Here we describe the data pre-processing for each dataset:
+
+      • DVS Gesture: the dataset contains 11 hand gesture categories from 29 subjects under 3 illumination
+        conditions recorded with a Dynamic Vision Sensor (DVS) with a resolution of 128×128 pixels. The
+        recordings were split into sequences of 1.5 seconds of duration, and the events were accumulated
+        into 20 bins (event frames), with each bin having a 75 ms time window. Then, the event frames
+        were resized to a size of 32 × 32, while maintaining the positive and negative polarities as channels.
+
+      • N-CALTECH: is a spiking version of the original frame-based CALTECH101 dataset. It was pro-
+        duced by recording the static images of the CALTECH101 dataset displayed on a LCD monitor
+        using an ATIS sensor (an event-based camera) while moving it. The recordings were wrapped into
+        ten bins with the same time window size for each bin (30 ms). Then, the event frames were resized
+        to a dimension of 60 × 45.
+
+      • DVS CIFAR10: is a spiking version of 10000 samples from the frame-based CIFAR10 dataset
+        recorded with a event-based camera at a resolution of 128×128 pixels. The recordings were wrapped
+        into ten bins with the same time window size for each bin. Then, the event frames were resized
+        to a dimension of 48 × 48. Additionally, a random crop with a padding of 4 was used for data
+        augmentation.
+
+      • SHD: is an audio-classiﬁcation dataset consisting of spoken digits ranging from 0 to 9 in both English
+        and German. The audio waveforms were converted into spike trains using an artiﬁcial model of the
+        inner ear auditory system. The events (spikes) in each sequence were wrapped into 100 bins, each
+        with a time window duration of 10 ms. No data augmentation techniques were used for SHD.
+
+      • MVSEC: is a event-based dataset used for training and evaluating optical ﬂow predictions. It con-
+        tains stereo event-based data collected in various environments, including indoor ﬂying and outdoor
+        driving, along with the corresponding ground truth optical ﬂow. The events between two consec-
+        utive grayscale frames were wrapped into ten bins, keeping the negative and positive polarities as
+        channels. Then, the event frames are fed to the SNN model sequentially, similar to the approach in
+        Apolinario et al. (2023).
+
+A.3   Loss functions and secondary activation functions (Ψ)
+
+For image, gesture, and audio classiﬁcation tasks, we utilized cross-entropy (CE) loss and computed the
+learning signal using (12) with ground truth labels (y∗ ). In contrast, for optical ﬂow, we employed a self-
+supervised loss based on photometric and smooth loss, as detailed in Equation (5) in Lee et al. (2020).
+Regarding the generation of the learning signal (δ), in the context of image and gesture recognition, it is
+exclusively generated for the ﬁnal ﬁve time steps (Tl = 5). For audio classiﬁcation, we employ Tl = 90, while
+for optical ﬂow, we use Tl = 1. This setting reduces the number of computations compared to BPTT by
+factors of 4×, 1.1×, and 10×, respectively.
+
+                                                      18
+Finally, we consider the following secondary activation functions for the computation of the eligibility traces
+(11):
+                                                               1
+                                       Ψ(ui [t]) =                                                         (25)
+                                                   (100|ui [t] − vth | + 1)2
+                                   Ψ(ui [t]) = 0.3 × max(1.0 − |ui [t] − vth |, 0)                            (26)
+                          Ψ(ui [t]) = 4 × sigmoid(ui [t] − vth )(1 − sigmoid(ui [t] − vth )                   (27)
+                                                                1
+                                        Ψ(ui [t]) =                                                           (28)
+                                                      1 + (10(ui [t] − vth ))2
+Here, max(a, b) returns the maximum between a and b, and | · | represents the absolute value function. These
+activation functions (25), (26), (27), and (28) are speciﬁcally used for SHD, DVS Gesture, DVS CIFAR10,
+and MVSEC, respectively.
+Note that the secondary activation function plays a role similar to that of the surrogate gradient in BPTT, so
+the selected secondary functions were adapted from previous works that utilized similar functions in BPTT
+schemes. Speciﬁcally, (25) was adapted from Ortner et al. (2023), (26) from Apolinario et al. (2023), (27)
+from Wu et al. (2018), and (28) from Hagenaars et al. (2021).
+
+A.4     Experiments Setup
+
+A.4.1    Experimental setup: effects of non-causal terms on learning
+
+For the experiments conducted on DVS Gesture, N-CALTECH101, and DVS CIFAR10 datasets, we trained
+a VGG9 model for 30, 30, and 300 epochs, respectively. In all these experiments, we utilized the Adam
+optimizer with a learning rate of 0.001. Additionally, the learning signal was presented only during the
+last ﬁve time steps, meaning the model was updated and the error computed ﬁve times per sample. For
+these experiments, the parameters λpost , λpre , and αpre were kept constant, while αpost was varied to
+simulate diﬀerent scenarios: the absence of non-causal terms (αpost = 0), the inclusion of non-causal terms
+(αpost = +1), and the subtraction of non-causal terms (αpost = −1). This approach allowed us to evaluate
+the impact of non-causal terms on the learning rule.
+For the experiments on the SHD dataset, we trained a recurrent spiking neural network (SNN) model for
+200 epochs. In this setup, we used the Adam optimizer with a learning rate of 0.0002 and a batch size of
+128. Similar to the previous experiments, αpost was varied among three values (−1, 0, and +1) to assess the
+eﬀect of non-causal terms while keeping all other parameters constant.
+
+B     Computational analysis of BPTT and S-TLLR
+
+In Section 4.3, we discussed the computational improvements of S-TLLR over BPTT. Here, we further
+detailed the procedure for obtaining (34), and present an example of real GPU memory usage with BPTT
+and S-TLLR.
+
+B.1     BPTT analysis
+
+To analyze BPTT, we follow a similar analysis as Bellec et al. (2020). Here, we will utilize a three-layer
+feedforward SNN as illustrated in Fig. B. Our analysis is based on a regression problem with the target
+denoted as y ∗ across T time steps, and our objective is to compute the gradients for the weights of the ﬁrst
+layer (w(1) ). The Mean Squared Error (MSE) loss function (L) is deﬁned as follows:
+                                                          T
+                                                  1 ∗ X (3) 2
+                                            L=      ky −     y [t]k2                                          (29)
+                                                  2      t=0
+
+
+Here y (3) [t] is the output of the third layer (last layer) at the time step (t). Then, the gradients with respect
+to w(1) can be computed as follows:
+
+                                                          19
+Figure 2: Comparison of weight update computation of three feed-forward spiking layers for BPTT and
+S-TLLR. The spiking layers are unrolled over time for both algorithms while showing the signals involved in
+                                                              ∂L
+the weight updates. The top-down learning signal for BPTT ( ∂y[t] ) is shown in green, note that at time step
+                                                                                                     ∂L
+t this learning signal depends on future time steps. In contrast, for S-TLLR the learning signal ([ ∂y[t] ]local )
+and all the variables involved are computed with information available only the time step t.
+
+
+
+                                                        T
+                                                       X ∂L ∂u(1) [t]
+                                               dL
+                                                 (1)
+                                                     =                                                            (30)
+                                              dw       t=0
+                                                           ∂u(1) [t] ∂w(1)
+
+                          ∂L
+If we expand the term   ∂u(1) [t]
+                                  ,   we obtain the following expression:
+
+                                ∂L          ∂L ∂y (1) [t]          ∂L       ∂u(1) [t + 1]
+                                        =                     +                                                   (31)
+                              ∂u(1) [t]   ∂y (1) [t] ∂u(1) [t] ∂u(1) [t + 1] ∂u(1) [t]
+
+                                                           ∂L
+Note that the right-hand side contains the term        ∂u(1) [t+1]
+                                                                    that could be further expanded. If we apply   (31)
+                                                         ∂L
+recursively, replace it on (30), and factorize the     ∂y(1) [t]
+                                                                 terms, we obtain the following expression:
+
+                                                                 ′
+                                T X  T                            t −t
+                        dL     X           ∂L ∂y (1) [t′ ] Y ∂u(1) [t′ − k] ∂u(1) [t]
+                             =                                   (                      )                         (32)
+                       dw(1)   t=0 t′ =t
+                                         ∂y (1) [t′ ] ∂u(1) [t′ ] k=0 ∂u(1) [t′ − k − 1] ∂w(1)
+
+By doing a change of variables between t and t′ , we can rewrite (32) as:
+
+                                                             ′   ′
+                                 T                             t  t −t
+                        dL     X       ∂L ∂y (1) [t′ ] X Y ∂u(1) [t′ − k] ∂u(1) [t]
+                             =                                   (                      )                         (33)
+                       dw(1)   t′ =0
+                                     ∂y (1) [t′ ] ∂u(1) [t′ ] t=0 k=0 ∂u(1) [t′ − k − 1] ∂w(1)
+
+
+                                                            20
+Further replacing the LIF equation (1) on (33), we obtain:
+
+                                                                                      ′
+                                            T                            t
+                                  dL      X       ∂L           (1) ′
+                                                                        X      ′
+
+                                    (1)
+                                        =         (1) ′
+                                                        Θ ′
+                                                            (u    [t ])     γ t −t y (0) [t]                       (34)
+                                 dw       t′ =0
+                                                ∂y [t ]                 t=0
+
+
+                                                                                  ′
+                                                                                 t
+                                      (1)            ∂L                (1) ′
+                                                                                X      ′
+                                 ∆w           ′
+                                            [t ] =              Θ ′
+                                                                    (u    [t ])     γ t −t y (0) [t]               (35)
+                                                   ∂y (1) [t′ ]                 t=0
+
+
+The total update of the weight for the ﬁrst layer is shown in (34) where at each time step, the synaptic updated
+is represented by (35). Here, it can be seen that the contribution of any time step (t′ ) has two components,
+               Pt′     ′
+Θ′ (u(1) [t′ ]) t=0 γ t −t y (0) [t] that at time-step t′ depends only on previous information (0, 1, ..., t′ − 1, t′ ),
+and an learning signal ( ∂y∂L                                                               ′      ′
+                                  (1) [t′ ] ) depends on information of future time steps (t + 1, t + 2, ..., T ). Those
+
+components are visualized in Fig. B. Since the error signal depends on future time steps it can not be
+computed locally in time, that is with information available only at the time step (t′ ). Therefore, BPTT is
+not a temporal local learning rule.
+
+B.2   Example of real GPU memory usage
+
+This section shows the substantial memory demands associated with BPTT and their correlation with the
+number of time steps (T ). To illustrate this point, we employ a simple regression problem utilizing a synthetic
+dataset (x, y ∗ ), where x denotes a vector of dimension 1000 and y ∗ represents a scalar value. The batch size
+used is 512. The structure of the SNN model comprises ﬁve layers, structured as follows: 1000FC-1000FC-
+1000FC-1000FC-1FC. In addition, the loss is computed solely for the ﬁnal time step as L = (y[T ]−y ∗ )2 . This
+evaluation is conducted on sequences of varying lengths (10, 25, 50, 100, 200, and 300). To simplify, these
+sequences are generated by repeating the same input (x) multiple times. Throughout these experiments, we
+utilized an NVIDIA GeForce GTX 1060 and recorded the peak memory allocation. The obtained results
+are visualized in Fig. B.2. These results distinctly highlight how the memory usage of BPTT scales linearly
+with the number of time steps (T ), while S-TLLR remains constant.
+
+C     Additional experiments on the effects of STDP parameters on learning
+
+C.1   Effects of causality and non-causality factors using DFA
+
+In Section 5.1 of the main text, we examined the impact of introducing non-causal terms in the computation
+of the instantaneous eligibility trace (10) when using error-backpropagation (BP) to generate the learning
+signal. In this section, we conduct a similar experiment, but this time, we employ direct feedback alignment
+(DFA) for the learning signal generation.
+As in Section 5.1, we vary the values of αpost , including −1, 0, and 1, to assess the eﬀect of non-causal
+terms. Interestingly, when the learning signal is produced via random feedback with DFA, there is no
+signiﬁcant diﬀerence observed when including non-causal terms or not. For example, in the RSNN model,
+using αpost = 1 yields slightly better performance, as depicted in Fig. C.1, but the diﬀerence is marginal.
+Similarly, for the VGG9 model, the performance of αpost = 1 and αpost = 0 is comparable and superior to
+αpost = −1, as shown in Fig. C.1. This suggests that a more precise learning signal, such as BP, may be
+necessary to fully exploit the beneﬁts of non-causal terms.
+
+C.2   Effects of λpre on the learning
+
+In this section, we explore the impact of using a λpre value diﬀerent from the leak parameter γ of the LIF
+model (1) on the S-TLLR eligibility trace (10). This parameter, which controls the decay factor of the
+input trace, oﬀers an opportunity to optimize the model’s performance. While previous works aiming to
+approximate BPTT Xiao et al. (2022); Bellec et al. (2020); Bohnstingl et al. (2022) set λpre equal to the leak
+
+                                                                 21
+Figure 3: GPU memory usage for BPTT and S-TLLR for a ﬁve-layer fully connected SNN models with a
+diﬀerent number of time steps (T ).
+
+
+
+
+Figure 4: Evaluating the eﬀect of αpost on DVS Gesture and SHD datasets using DFA for learning signal
+generation. Constant STDP parameters for DVS Gesture are (λpost , λpre , αpre ) = (0.2, 0.75, 1), and for SHD,
+they are (λpost , λpre , αpre ) = (0.5, 1, 1). The solid purple line represents the median value, and the dashed
+black line represents the mean value averaged over ﬁve trials.
+
+
+
+
+                                                      22
+Figure 5: Eﬀects of using a decaying factor, λpre , diﬀerent from the leak spiking parameter (γ = 0.5) to
+compute the causal term on the eligibility trace, with constant parameters (λpost , αpost , αpre ) = (0.2, −1, 1)
+when the learning signal is generated using BP. Plots are based on ﬁve trials. The solid purple line represents
+the median value, and the dashed black line represents the mean value.
+
+
+factor (γ), our experiments, as depicted in Fig. C.1, suggest that using a slightly higher λpre can lead to
+improved average accuracy performance.
+
+C.3   Ablation studies on the secondary activation function (Ψ)
+
+In this section, we present ablation studies on the secondary activation function using the DVS Gesture,
+NCALTECH101, and SHD datasets, with the same conﬁgurations used for experiments on Table 2. The
+results are presented in Table 5, where it can be seen that independent of Ψ function using a non-zero αpost
+result in better performance than using αpost = 0.
+
+
+Table 5: Ablation studies on the secondary activation function Ψ [Accuracy (mean±std) reported over 5
+trials ]
+  Ψ function Model        T    Tl (λpost , λpre , αpre )   αpost = 0    αpost = +1     αpost = −1
+                                             DVS128 Gesture
+  (25)          VGG9     20 15        (0.2, 0.75, 1)     73.61 ± 2.92% 81.89 ± 5.13% 65.45 ± 2.92%
+  (26)          VGG9     20 15        (0.2, 0.75, 1)     94.61 ± 0.73% 94.01 ± 1.10% 95.07 ± 0.48%
+  (27)          VGG9     20 15        (0.2, 0.75, 1)     94.46 ± 0.45% 94.46 ± 0.45% 95.85 ± 0.66%
+                                              NCALTECH101
+  (25)          VGG9     10    5       (0.2, 0.5, 1)     35.11 ± 0.40% 37.19 ± 1.17% 28.53 ± 0.56%
+  (26)          VGG9     10    5       (0.2, 0.5, 1)     63.34 ± 0.96% 54.07 ± 2.37% 66.05 ± 0.92%
+  (27)          VGG9     10    5       (0.2, 0.5, 1)     62.24 ± 1.22% 53.42 ± 1.50% 66.33 ± 0.86%
+                                                    SHD
+  (25)          RSNN 100 10             (0.5, 1, 1)      77.09 ± 0.33% 78.23 ± 1.84% 74.69 ± 0.47%
+  (26)          RSNN 100 10             (0.5, 1, 1)      76.25 ± 0.44% 76.28 ± 0.25% 74.40 ± 0.59%
+  (27)          RSNN 100 10             (0.5, 1, 1)      75.22 ± 0.79% 76.29 ± 0.25% 74.46 ± 0.65%
+
+
+
+
+                                                       23
+

@@ -1,0 +1,299 @@
+                                                Hardware Efficient Accelerator for Spiking
+                                              Transformer With Reconfigurable Parallel Time
+                                                            Step Computing
+                                                                                     Bo-Yu Chen and Tian-Sheuan Chang
+                                                             Institute of Electronics, National Yang Ming Chiao Tung University, Hsinchu, Taiwan
+                                                                                  Email: {brent0503.ee11, tschang}@nycu.edu.tw
+
+
+                                                                                                               Beyond above model developments, hardware accelerators
+arXiv:2503.19643v1 [cs.AR] 25 Mar 2025
+
+
+
+
+                                            Abstract—This paper introduces the first low-power hardware
+                                         accelerator for Spiking Transformers, an emerging alternative      for SNNs also become popular in providing low-cost and
+                                         to traditional artificial neural networks. By modifying the base   low-power implementations. However, current designs only
+                                         Spikformer model to use IAND instead of residual addition,
+                                         the model exclusively utilizes spike computation. The hardware     consider CNN models [7], [8], and none have considered
+                                         employs a fully parallel tick-batching dataflow and a time-step    transformer models. Compared to ANN accelerators, due to
+                                         reconfigurable neuron architecture, addressing the delay and       the additional time steps in spiking neural networks (SNNs),
+                                         power challenges of multi-timestep processing in spiking neural    accelerators for SNNs require more time for inference com-
+                                         networks. This approach processes outputs from all time steps in   pared to traditional ANN accelerators. Thus, SpinalFlow [9]
+                                         parallel, reducing computation delay and eliminating membrane
+                                         memory, thereby lowering energy consumption. The accelerator       has proposed a serial tick-batching dataflow that processes
+                                         supports 3x3 and 1x1 convolutions and matrix operations through    different time steps of the same layer successively and then
+                                         vectorized processing, meeting model requirements. Implemented     changes to other layers to reduce the buffer size of the
+                                         in TSMC’s 28nm process, it achieves 3.456 TSOPS (tera spike op-    membrane. However, this serial approach needs to access
+                                         erations per second) with a power efficiency of 38.334 TSOPS/W     weight and membrane SRAM repeatedly for different time
+                                         at 500MHz, using 198.46K logic gates and 139.25KB of SRAM.
+                                                                                                            steps. To solve this problem, accelerators [10], [7] uses
+                                         Keywords : Spiking Neural Networks, Vision Transformers, Deep      systolic arrays to compute SNNs simultaneously in both spa-
+                                         Learning, Hardware Design                                          tial and temporal domains. However, they require additional
+                                                                                                            buffers to temporarily store and transfer values such as inputs,
+                                                               I. I NTRODUCTION                             weights, and membrane potentials. Furthermore, each time
+                                            Spiking neural networks (SNNs) have become popular re-          step can only be computed after receiving information from
+                                         cently as an alternative to artificial neural networks (ANNs)      the previous time step, making it impossible to process all
+                                         due to its binary spike operation and high sparsity to solve the   time steps in parallel and incurring long latency. Although
+                                         high energy computation and memory bandwidth in ANNs. An           Sibrain [8] can parallelize the calculation of membrane values
+                                         SNN operation in a time step integrates its incoming spikes,       at each time step, it still requires the sequential transmission
+                                         fires a spike if the summation of input accumulation and           of membrane information from the previous time step to the
+                                         current membrane potential exceeds the threshold or keeps          next in order to generate the output spikes.
+                                         it to the membrane potential if smaller. These SNNs have              Addressing the above issues, this paper presents a low-
+                                         been successfully applied to convolutional neural networks         power hardware accelerator for spiking vision transformers.
+                                         (CNN) [1], [2] as well as transformers [3], [4], [5], [6], which   For the model, we propose an all-spike computation spiking
+                                         can achieve competitive performance to ANN [6].                    transformer, Spike-IAND-Former, by replacing residual addi-
+                                            For studies to apply spiking neural networks (SNNs) to          tions with IAND operations to reduce area cost and power
+                                         Transformer, Li et al. [4] proposed the first work that combines   consumption. For the hardware, to solve the extra latency
+                                         Transformer with SNNs. However, the sequence pooling in            and power due to multiple time steps, we propose a fully
+                                         their proposed architecture involves a significant amount of       parallel tick-batching flow instead of a serial one to process
+                                         floating-point multiplication, division, and exponential oper-     different time steps at the same time, which can be recon-
+                                         ations in the Softmax computation, and thus the algorithm          figured to support different parallelism as well. The hardware
+                                         still relies on the traditional attention mechanism. Zhou et       architecture adopts a vectorized processing dataflow to support
+                                         al. [5], [6] proposed Spikformer, which combines SNNs with         different computational patterns like convolution and matrix
+                                         self-attention. By using binary-spike-forms of Q, K, and V         multiplication in the model. The final implementation can
+                                         for matrix operations, Spikformer avoids negative values and       achieve 38.334 TSOPS/W power efficiency when operated at
+                                         eliminates Softmax to reduce computational complexity, as          500MHz, exceeding existing designs.
+                                         shown in the Fig. 1. However, Spikformer only reduces the             The rest of the paper is organized as follows. Section II
+                                         computational complexity of self-attention. It still needs non-    shows the modified spiking transformer. Section III presents
+                                         spike calculation due to the residual summation.                   the proposed hardware design. Section IV shows the experi-
+mental results. Finally, this paper is concluded in Section V.
+
+        II. H ARDWARE F RIENDLY S PIKING V ISION
+                    T RANSFORMER
+   The adopted model is based on Spikformer [5], [6] as shown
+in Fig. 1 that effectively addresses the non-spike computation
+issue in self-attention and achieves comparable performance to
+ANN. However, the residual summation in this model causes
+non-spike computations (values are no longer 0/1) in the                                Fig. 2. Spike-IAND-Former
+convolution layers due to the addition operations. This not only
+limits the energy efficiency advantages of SNN Transformers
+but also complicates their deployment and optimization on                           III. P ROPOSED H ARDWARE
+SNN hardware instead of simple AND gates for multiplication.
+   To solve this non-spike computation, we adopt the element-       A. Overview
+wise-IAND [11] as the operator in the residual block to
+address the non-spike computation issues that the model may
+encounter. The IAND operation is x ∗ (1 − ConvBN (x)),
+where x is the input, and ConvBN is convolution and BN
+operations as in Fig. 1. Since both x and ConvBN(x) are spike,
+their multiplication can be simplified as an AND operation.
+
+
+
+
+                                                                                  Fig. 3. The proposed system architecture
+
+
+                                                                       Fig. 3 illustrates the proposed system architecture. The
+                                                                    system accesses weights and inputs from off-chip memory
+       Fig. 1. Spikformer [5] and its non-spike computation part.   through the memory controller and stores them into weight
+                                                                    SRAMs and spike SRAMs. Each PE block can process four
+   The proposed model is shown in the Fig. 2, denoted               time steps of an input spike channel in parallel, while each
+as Spike-IAND-Former, with leaky integrate-and-fire (LIF)           PE array is responsible for computing the operations for each
+neurons. The threshold of LIF neurons is set to 0.5, and the        time step on the input channel to complete 3x3 convolution,
+leakage term is set to 0.25. The model mainly includes the          1x1 convolution, and matrix multiplications. A total of 12 PE
+Spiking Tokenizer, Spike-IAND-Former Block, and Classifica-         blocks can simultaneously process four time steps on 12 input
+tion Head. The Spiking Tokenizer is responsible for generating      channels. The accumulator is responsible for accumulating the
+convolutional spiking patch embeddings and downsampling             outputs of the four time steps across the 12 channels and
+the image size. In the Spiking Tokenizer, the first convolu-        storing the results in temp SRAMs, then accumulating these
+tional layer is designated as the encoding layer [12], which        with the results already stored in temp SRAMs to produce
+is responsible for converting the 8-bit image input signals         the output of one output channel. The unrolled LIF neurons
+into spike signals within the time steps. In other words,           convert the output of the output channel into output spikes and
+it transforms the high-precision data in the spatial domain         can generate output for four time steps simultaneously. The
+into spike signals in the temporal domain. The Spike-IAND-          results are saved in spike temp SRAMs and then transferred
+Former Block functions similarly to the Transformer residual        back to off-chip memory through the memory controller. The
+block in a traditional ViT, but we chose to use element-wise-       8-bit image input is split into bitplanes for computations to
+IAND [11] as the operator in the residual block to address the      reuse the spike input PE blocks.
+non-spike computation issues that the model may encounter.             The proposed design adopts the proposed fully parallel tick-
+The Classification Head is used for classifying the final results   batching data flow. A typical data flow in ANN accelerators
+of the model. This model can achieve competitive performance        will use layer-by-layer processing to execute a model. How-
+to ANN with time steps equal to 4 and have slightly lower           ever, this is not suitable for SNN due to multiple time step
+performance for a single time step, as shown in the result          in a layer execution. Thus, [9] proposed the tick-batching
+section. Thus, our design will consider to support up to four       data flow that processes all time steps in a layer before
+time steps.                                                         proceeding to the next layer. But the flow in [9] processes
+                                                                    Fig. 5. The proposed reconfigurable unrolled LIF neuron. The MUX selector
+                                                                    input (from left to right) will be set to 111/101/000 for the time step=4/2/1,
+                                                                    respectively.
+
+
+                   Fig. 4. The proposed PE array
+
+
+
+time step one-by-one, which will need to access weight buffers
+repeatedly for different time steps and needs extra SRAM
+buffers for membrane potential. These extra accesses consume
+significant power and easily offset the benefits of spiking                            Fig. 6. Data flow of 3x3 convolution
+computation [13]. Thus, we propose a fully parallel tick-
+batching data flow. In the SNN operations, the multiplication
+between input and weight has no data dependency between             reduces hardware computation delay while also avoiding the
+time steps. This allows parallel processing of input for all time   need to access membrane memory. As a result, the inference
+steps. However, the neuron output of each time step depends         time of our SNN accelerator can be as short as that of an ANN
+on the membrane potential of previous time steps. To resolve        accelerator. This neuron can be configured to support different
+this data dependency, we unroll the LIF neuron loop for all         time steps with three multiplexers to control how to propagate
+time steps. Specifically, for the Spiking-IAND-former model         data to neighbor neurons for different time steps.
+with four time steps, we will use four times parallelism in
+our PE block and unrolled LIF neurons for four time-step            D. Data Flow
+inputs. This approach brings the benefit of lower latency and          1) Data Flow of 3x3 Convolution: Fig. 6 shows the data
+lower power with area increase. The area increase due to this       flow of PE arrays for 3x3 convolutions. As shown in the
+parallelism has a small overhead due to spike operations as         figure, we divide the 8x9 PE array into three 8x3 PE arrays
+shown in the result section. However, this can reduce the           to facilitate understanding the operation of the 3x3 convo-
+required latency by four. Besides, the buffer of the membrane       lution, where the input signals are broadcasting horizontally,
+potential is eliminated, which occupies more area than the area     the weights are broadcasting vertically and the partial sum
+overhead due to multi-bit values. The access to the weight          is accumulated diagonally. With this, each clock cycle can
+SRAM is also reduced to once instead of four since all time         produce eight elements of the output channel.
+steps can share the same weight.
+B. PE Blocks
+                                                                                                 TABLE I
+   Each PE block is composed of four PE arrays, and each                R ESULT OF DIFFERENT MODELS ON I MAGE N ET, A-B ( E . G . 8-384)
+                                                                       DENOTES LAYER NUMBERS AND EMBEDDEDING DIMENSIONS . 400E
+PE array consists of 8x9 PEs. As shown in Fig. 4, eight
+                                                                                           DENOTES 400 EPOCHES .
+input spike signals broadcast horizontally, and nine weights
+broadcast vertically. When performing the 3x3 convolution, the               Methods               Architecture        Time step     Accuracy
+data is accumulated in the direction indicated by the red arrows             ANN [5]               Trans.-8-512            1          80.80
+in Fig. 4, and the result is sent to the accumulator to complete        Hybrid training [2]         ResNet-34             250         61.48
+the summation of 12 channels. For the 1x1 convolution and              Spiking ResNet [3]           ResNet-34             350         71.61
+matrix multiplication, the data is accumulated in the direction
+                                                                         STBP-tdBN [14]         Spiking-ResNet-34          6          63.72
+indicated by the black arrows in Fig. 4.
+                                                                          Spikformer [5]               8-384               4          70.24
+C. Reconfigurable Unrolled LIF Neuron                                                                  8-512               4          73.38
+                                                                                                       8 768               4          74.81
+   Fig. 5 shows the proposed unrolled LIF neuron architecture.         Spike-IAND-former               8-384               4          70.32
+By unrolling the LIF neuron to simultaneously compute four                                             8-512               4          73.45
+time steps, we achieve spatial-temporal parallel acceleration.                                         8-768               4          74.89
+                                                                                                    8-768 400E             4          74.97
+This approach of parallel processing outputs of all time steps
+                                                              TABLE II
+                         C OMPARISON WITH OTHER DESIGNS . N ORMALIZED AREA AND POWER ARE SCALED TO 28 NM .
+
+                                           This work     SpinalFlow [9]   TCAS II’21 [15]    [16]   VSA [13]     [17]   BW-SNN [18]
+  Technology                                  28nm           28nm             28nm          28nm     40nm      65nm        90nm
+  Voltage (V)                                  0.9              -              0.81          0.9       0.9       0.9         0.6
+  Frequency (MHz)                              500            200              500           650       500      250          10
+  Network architecture in SNN              Transformer       CNN              CNN           CNN       CNN       CNN        CNN
+  Reconfigurable                               Yes            Yes              Yes           Yes       Yes       Yes         No
+  Spatial-Temporal Processing                  Yes             No               No           Yes       No        No          No
+  Weight Precision (bits)                       8              8                8             8      binary       8        binary
+  PE number                                   3456            128                -          1148      2304        -         8208
+  SRAM (KB)                                  139.25           585              240           143     230.31     384        12.75
+  Peak Throughput (GSOPS)                     3456            51.2            1150           746      2304      1020       64.46
+  Area (KGE) (logic only)                    198.46             -             54.72           -      114.98       -          225
+  Area eff. (GSOPS/KGE)                      17.414             -            21.016           -      20.038       -        0.286
+  Normalized area efficiency (GSOPS/KGE)     17.414             -            21.016           -      28.625       -         0.92
+  Core power (mW)                            90.153          162.4            149.3         20.22    88.968    181.6       0.625
+  Power eff. (TSOPS/W)                       38.334          0.315            7.702         36.89     25.9     5.616      103.14
+  Normalized power efficiency (TSOPS/W)      38.334             -             6.238         36.89      37      13.037     147.342
+
+
+
+   2) Data Flow of 1x1 Convolution and matrix multiplication:         design. In particular, using unrolled LIF reduces weights
+For the 1x1 convolution data flow, it broadcasts the inputs           access amounts from weight SRAMs by 43.2%. This also
+horizontally, and the weights vertically and accumulates the          eliminates the need and the power of the membrane SRAM.
+partial sum horizontally. Note that the each input is different,      Thus, the memory only accounts for 43% of the total power,
+but this is acceptable due to simple spike input. The 8x9 PE          while the remaining logic operations account for 57% of the
+array is capable of performing 1x1 convolution on one column          total power.
+of 9 different 8x8 input channels simultaneously. In our data            To the best of our knowledge, we are the first to develop
+flow, it takes eight cycles to complete the 1x1 convolution for       an SNN accelerator for Vision Transformers. Table II shows
+the 9 different 8x8 input channels. The matrix multiplication         the performance of our hardware and a comparison with other
+uses the same flow as this one.                                       SNN designs. Compared to the other design [16] that support
+                                                                      spatial-temporal parallel processing, the use of unrolled LIF
+                IV. E XPERIMENTAL R ESULT                             reduces weights access amounts from SRAMs by 43.2% while
+A. Simulation Results of the Proposed Model                           also eliminating the need for accessing membrane SRAM,
+   The proposed model has been implemented by Pytorch. The            resulting in better power efficiency. [18] is a five-layer
+model training adopts the AdamW optimizer with the batch              SNN ASIC that is specifically designed to reduce power
+size set to 256, and the cosine annealing learning rate starting      consumption by minimizing memory accesses. Nevertheless,
+from 5 × 10−4 for 400 epochs.                                         that design has a very low area efficiency and cannot be used
+   Table I presents a comparison between our model and other          for different models.
+models [2], [3], [14], [5] on the ImageNet dataset. From the
+table, we can see that our model achieves more accurate results                               V. C ONCLUSION
+compared to other state-of-the-art models, even with the same
+or fewer time steps. The accuracy of CIFAR-10 is 95.69 for the           This paper proposes a hardware-efficient spiking trans-
+same configuration of the model. Based on this, the required          former accelerator. The proposed design solves the non-spike
+time step can be decreased to 2 or 1 with a progressive time          computation problem in spiking transformers by replacing
+step reduction [19] to 92.93 and 91.34, respectively.                 residual addition with element-wise-IAND to make the whole
+                                                                      model spike I/O only. The diverse layer types, 3x3 convolution,
+B. Hardware Implementation and Comparisons                            1x1 convolution, and matrix multiplication, in this vision spik-
+   The proposed design was developed using Verilog and syn-           ing transformer are supported by a reconfigurable vectorwise
+thesized with the Synopsys Design Compiler using the TSMC             data flow. The long computation delay due to multiple time
+28nm CMOS technology. Power consumption was measured                  steps in SNN is solved by the proposed reconfigurable LIF
+using Synopsys PrimeTime PX. The proposed design achieves             architecture for spatial-temporal parallel processing to reduce
+a peak performance of 3456GSOPS (giga spike operations per            delay, avoid the need of membrane memory and thus reduce
+second) with 198.46K gate count and 139.25KB SRAM and                 power consumption. The design implemented in a TSMC
+90.153mW when operated at the 500MHz clock frequency.                 28nm CMOS process only requires 198.46K logic gates and
+When tested on CIFAR-10 with a time step of 4, it achieves a          139.25KB of SRAM to achieve a throughput of 3456GSOPS
+processing capability of 46.72 frames per second. The lower           (giga spike operations per second). Its power efficiency reaches
+power is contributed by the high sparsity of the model (73.88%        up to 38.334TSOPS/W (tera spike operations per second/W)
+zeros in average for the activation map) and our low power            when operating at a frequency of 500MHz.
+                               R EFERENCES
+ [1] P. U. Diehl and M. Cook, “Unsupervised learning of digit recognition
+     using spike-timing-dependent plasticity,” Frontiers in computational
+     neuroscience, vol. 9, p. 99, 2015.
+ [2] N. Rathi, G. Srinivasan, P. Panda, and K. Roy, “Enabling deep spiking
+     neural networks with hybrid conversion and spike timing dependent
+     backpropagation,” arXiv preprint arXiv:2005.01807, 2020.
+ [3] Y. Hu, H. Tang, and G. Pan, “Spiking deep residual networks,” IEEE
+     Transactions on Neural Networks and Learning Systems, vol. 34, no. 8,
+     pp. 5200–5205, 2021.
+ [4] Y. Li, Y. Lei, and X. Yang, “Spikeformer: a novel architecture for
+     training high-performance low-latency spiking neural network,” arXiv
+     preprint arXiv:2211.10686, 2022.
+ [5] Z. Zhou, Y. Zhu, C. He, Y. Wang, S. Yan, Y. Tian, and L. Yuan,
+     “Spikformer: when spiking neural network meets transformer,” arXiv
+     preprint arXiv:2209.15425, 2022.
+ [6] Z. Zhou, K. Che, W. Fang, K. Tian, Y. Zhu, S. Yan, Y. Tian, and L. Yuan,
+     “Spikformer v2: Join the high accuracy club on ImageNet with an SNN
+     ticket,” arXiv preprint arXiv:2401.02020, 2024.
+ [7] J.-J. Lee and P. Li, “Reconfigurable dataflow optimization for spatiotem-
+     poral spiking neural computation on systolic array accelerators,” in
+     2020 IEEE 38th International Conference on Computer Design (ICCD).
+     IEEE, 2020, pp. 57–64.
+ [8] Y. Chen, W. Ye, Y. Liu, and H. Zhou, “Sibrain: a sparse spatio-temporal
+     parallel neuromorphic architecture for accelerating spiking convolution
+     neural networks with low latency,” IEEE Transactions on Circuits and
+     Systems I: Regular Papers, 2024.
+ [9] S. Narayanan, K. Taht, R. Balasubramonian, E. Giacomin, and P.-
+     E. Gaillardon, “Spinalflow: an architecture and dataflow tailored for
+     spiking neural networks,” in 2020 ACM/IEEE 47th Annual International
+     Symposium on Computer Architecture (ISCA). IEEE, 2020, pp. 349–
+     362.
+[10] J.-J. Lee, W. Zhang, and P. Li, “Parallel time batching: systolic-array
+     acceleration of sparse spiking neural computation,” in 2022 IEEE
+     International Symposium on High-Performance Computer Architecture
+     (HPCA). IEEE, 2022, pp. 317–330.
+[11] W. Fang, Z. Yu, Y. Chen, T. Huang, T. Masquelier, and Y. Tian,
+     “Deep residual learning in spiking neural networks,” Advances in Neural
+     Information Processing Systems, vol. 34, pp. 21 056–21 069, 2021.
+[12] Y. Wu, L. Deng, G. Li, J. Zhu, Y. Xie, and L. Shi, “Direct training
+     for spiking neural networks: faster, larger, better,” in Proceedings of the
+     AAAI conference on artificial intelligence, vol. 33, no. 01, 2019, pp.
+     1311–1318.
+[13] H.-H. Lien, C.-W. Hsu, and T.-S. Chang, “Vsa: reconfigurable vector-
+     wise spiking neural network accelerator,” in 2021 IEEE International
+     Symposium on Circuits and Systems (ISCAS). IEEE, 2021, pp. 1–5.
+[14] H. Zheng, Y. Wu, L. Deng, Y. Hu, and G. Li, “Going deeper with
+     directly-trained larger spiking neural networks,” in Proceedings of the
+     AAAI conference on artificial intelligence, vol. 35, no. 12, 2021, pp.
+     11 062–11 070.
+[15] Q. Chen, G. He, X. Wang, J. Xu, S. Shen, H. Chen, Y. Fu, and L. Li,
+     “A 67.5 µj/prediction accelerator for spiking neural networks in image
+     segmentation,” IEEE Transactions on Circuits and Systems II: Express
+     Briefs, vol. 69, no. 2, pp. 574–578, 2021.
+[16] C. Xie, Z. Shao, Z. Chen, Y. Du, and L. Du, “An energy-efficient
+     spiking neural network accelerator based on spatio-temporal redundancy
+     reduction,” IEEE Transactions on Very Large Scale Integration (VLSI)
+     Systems, 2023.
+[17] L. Kang, X. Yang, C. Zhang, S. Yu, R. Dou, W. Li, C. Shi, J. Liu, N. Wu,
+     and L. Liu, “A 24.3 µj/image snn accelerator for dvs-gesture with ws-
+     los dataflow and sparse methods,” IEEE Transactions on Circuits and
+     Systems II: Express Briefs, vol. 70, no. 11, pp. 4226–4230, 2023.
+[18] P.-Y. Chuang, P.-Y. Tan, C.-W. Wu, and J.-M. Lu, “A 90nm 103.14
+     tops/w binary-weight spiking neural network cmos asic for real-time
+     object classification,” in 2020 57th ACM/IEEE Design Automation
+     Conference (DAC). IEEE, 2020, pp. 1–6.
+[19] S. S. Chowdhury, N. Rathi, and K. Roy, “One timestep is all you need:
+     Training spiking neural networks with ultra low latency,” arXiv preprint
+     arXiv:2110.05929, 2021.
+

@@ -1,0 +1,1004 @@
+                                                  A Composable Dynamic Sparse Dataflow Architecture for
+                                                      Efficient Event-based Vision Processing on FPGA
+                                                                              Yizhao Gao                                                                  Baoheng Zhang
+                                                                        yzgao@eee.hku.hk                                                               bhzhang@eee.hku.hk
+                                                                      University of Hong Kong                                                         University of Hong Kong
+                                                                            Hong Kong                                                                       Hong Kong
+
+                                                                              Yuhao Ding                                                             Hayden Kwok-Hay So
+                                                                       yhding@eee.hku.hk                                                                  hso@eee.hku.hk
+arXiv:2401.05626v1 [cs.AR] 11 Jan 2024
+
+
+
+
+                                                                     University of Hong Kong                                                          University of Hong Kong
+                                                                           Hong Kong                                                                        Hong Kong
+
+                                         ABSTRACT                                                                                    CCS CONCEPTS
+                                         Event-based vision represents a paradigm shift in how vision infor-                         • Computer systems organization → Reconfigurable comput-
+                                         mation is captured and processed. By only responding to dynamic                             ing; Neural networks; Data flow architectures; • Computing
+                                         intensity changes in the scene, event-based sensing produces far                            methodologies → Object recognition.
+                                         less data than conventional frame-based cameras, promising to
+                                         springboard a new generation of high-speed, low-power machines                              KEYWORDS
+                                         for edge intelligence. However, processing such dynamically sparse                          event-based vision, event camera, sparse DNN accelerator, subman-
+                                         input originated from event cameras efficiently in real time, par-                          ifold sparse convolution, dataflow accelerator, FPGA
+                                         ticularly with complex deep neural networks (DNN), remains a
+                                                                                                                                     ACM Reference Format:
+                                         formidable challenge. Existing solutions that employ GPUs and                               Yizhao Gao, Baoheng Zhang, Yuhao Ding, and Hayden Kwok-Hay So. 2024.
+                                         other frame-based DNN accelerators often struggle to efficiently                            A Composable Dynamic Sparse Dataflow Architecture for Efficient Event-
+                                         process the dynamically sparse event data, missing the opportuni-                           based Vision Processing on FPGA. In Proceedings of the 2024 ACM/SIGDA
+                                         ties to improve processing efficiency with sparse data. To address                          International Symposium on Field Programmable Gate Arrays (FPGA ’24),
+                                         this, we propose ESDA, a composable dynamic sparse dataflow                                 March 3–5, 2024, Monterey, CA, USA. ACM, New York, NY, USA, 12 pages.
+                                         architecture that allows customized DNN accelerators to be con-                             https://doi.org/10.1145/3626202.3637558
+                                         structed rapidly on FPGAs for event-based vision tasks. ESDA is a
+                                         modular system that is composed of a set of parametrizable modules                          1   INTRODUCTION
+                                         for each network layer type. These modules share a uniform sparse                           Event-based vision systems are bio-inspired systems that represent
+                                         token-feature interface and can be connected easily to compose an                           a paradigm shift from conventional frame-based vision systems [16].
+                                         all-on-chip dataflow accelerator on FPGA for each network model.                            Instead of capturing the entire field of view as dense matrices
+                                         To fully exploit the intrinsic sparsity in event data, ESDA incor-                          of pixel values like in a conventional camera, an event camera
+                                         porates the use of submanifold sparse convolutions that largely                             only produces a spiking event when a substantial change in light
+                                         enhance the activation sparsity throughout the layers while sim-                            intensity local to each pixel is detected. Despite the fundamentally
+                                         plifying hardware implementation. Finally, a network architecture                           different way of sensing, substantial progress has been made in
+                                         and hardware implementation co-optimizing framework that al-                                recent years to perform a wide range of vision tasks such as object
+                                         lows tradeoffs between accuracy and performance is also presented.                          classification, object detection, and tracking utilizing deep neural
+                                         Experimental results demonstrate that when compared with ex-                                network models [49].
+                                         isting GPU and hardware-accelerated solutions, ESDA achieves                                   However, deploying event-based vision systems with deep learn-
+                                         substantial speedup and improvement in energy efficiency across                             ing models in near-sensor or edge-computing contexts remains a
+                                         different applications, and it allows much wider design space for                           great challenge. On the one hand, off-the-shelf GPU platforms and
+                                         real-world deployments.                                                                     dense DNN accelerators that are optimized to operate on dense
+                                                                                                                                     input from conventional cameras can rarely exploit the sparsity
+                                                                                                                                     in event-based inputs. As a result, if blindly employed to accel-
+                                                                                                                                     erate event camera output, these systems struggle to deliver the
+                                                                                                                                     promised energy efficiency and performance benefits due to a large
+                                         Permission to make digital or hard copies of part or all of this work for personal or       amount of wasted computation. On the other hand, some sparse
+                                         classroom use is granted without fee provided that copies are not made or distributed       DNN accelerators have previously been proposed to address the
+                                         for profit or commercial advantage and that copies bear this notice and the full citation
+                                         on the first page. Copyrights for third-party components of this work must be honored.      need for event vision processing [1, 31]. Yet, these designs primarily
+                                         For all other uses, contact the owner/author(s).                                            concentrate on optimizing sparse computation at the matrix multi-
+                                         FPGA ’24, March 3–5, 2024, Monterey, CA, USA                                                plication or single layer level, often through a reusable processing
+                                         © 2024 Copyright held by the owner/author(s).
+                                         ACM ISBN 979-8-4007-0418-5/24/03.                                                           engine for various layers. Such an approach may lead to consid-
+                                         https://doi.org/10.1145/3626202.3637558                                                     erable latency and energy overhead, mainly due to the recurrent
+FPGA ’24, March 3–5, 2024, Monterey, CA, USA                                         Yizhao Gao, Baoheng Zhang, Yuhao Ding, and Hayden Kwok-Hay So
+
+
+input/output operations involving weights and intermediate acti-         intensity changes as events asynchronously with high temporal
+vations. Consequently, these designs are suboptimal for real-time        resolution. Events are usually encoded in Address Event Representa-
+fast-reacting systems intended to exploit the low latency sensing        tion (AER) format. Typically each event can be written as [𝑥, 𝑦, 𝑝, 𝑡]
+and high temporal resolution benefits of event cameras.                  where 𝑥, 𝑦 points to the location of the event, 𝑡 is the timestamp
+   To address these challenges, we introduce ESDA, a system based        and 𝑝 is the polarity of changes. Commercial event cameras nowa-
+on FPGA that can efficiently accelerate Event-based vision pro-          days can support 720 × 1280 spatial resolution with 1 µs temporal
+cessing with a composable dynamic Sparse Dataflow Architecture.          resolution [14]. Compared with traditional frame-based cameras,
+ESDA is a modular system that allows parametrizable modules              event cameras have several advantages, including: (1) high tem-
+for each network layer to be connected together to form a cus-           poral resolution allowing capturing fast events that conventional
+tomized all-on-chip system on FPGA. Employing the all-on-chip            cameras may miss; (2) high dynamic range enabling them to capture
+dataflow architecture is a key design choice towards low latency         scenes with varying lighting conditions; (3) high efficiency in terms
+and power consumption by minimizing the off-chip communication           of data processing and transmission. As an emerging technology,
+of weight and activation. In contrast to prior dataflow architectures    event-based vision has shown great potential in areas like robot-
+that handle dense frame-based input, ESDA exclusively streams            ics, autonomous vehicles, high-speed tracking, scientific imaging,
+the spatially sparse features from the event-based input across the      low-power embedded systems, etc [16].
+different dataflow modules by using a unified sparse token-feature          Figure 1 shows a sample from event-based dataset DvsGesture [2]
+interface. Through the straightforward cascading of dataflow mod-        to illustrate the working principle of the event camera. In this sam-
+ules corresponding with the model definition, a sparse accelerator       ple, a man is rotating his arm counter-clockwise. As the event cam-
+can be rapidly constructed to speed up the application. Furthermore,     era exclusively responds to changes in scene intensity, it captures
+to take full advantage of the sparse dataflow approach, ESDA also        only the movements of the person as a sequence of events. The up-
+integrates submanifold sparse convolution [23] at the algorithmic        per figure shows the scatter plots of events in 3D spatial-temporal
+level. Submanifold convolution can effectively maintain high spa-        space. The below four images show the 2D feature representations
+tial sparsity of feature activations of the models by constraining       constructed from events in a short time interval. It’s a common
+the spatial activation locations, which also helps to derive simpler     practice to use these 2D representations to serve as the DNN input.
+hardware implementation.                                                 Prior research works have introduced many different 2D represen-
+   To facilitate design space exploration, we also develop a network     tation algorithms like event histogram [36], time-surface [26, 44],
+model and hardware architecture co-optimization framework that           learnable MLP kernels [21], and etc. It’s worth noting that ESDA can
+leverages the sparsity statistics from a given event-based vision        seamlessly integrate with different 2D representation algorithms.
+task or dataset to perform accuracy and hardware efficiency trade-       As long as the resulting feature is spatially sparse, it can benefit
+offs. Given the capacity of today’s FPGA edge device, the search         from the sparse architecture of ESDA.
+framework can identify many efficient models that fit on-chip while
+achieving good performance and accuracy. To this end, the main
+contribution of this work can be summarized as:
+                                                                         2.2    Hardware Acceleration of Event-based
+     • We proposed a novel composable sparse dataflow architec-
+                                                                                Vision
+        ture for DNN inference in event-based vision applications        From a system perspective, fully unlocking the potential of the
+        that effectively harness the inherent sparsity in event camera   event-based approaches cannot be achieved without considering
+        data.                                                            efficient hardware processing. Previous efforts have mainly been
+     • We implemented ESDA on embedded FPGA platforms and                devoted to two directions. On the one hand, due to the similar neu-
+        established a set of sparsity-aware co-optimization flow, en-    romorphic working principle, many research works have integrated
+        abling the customization of DNN accelerators for each spe-       event cameras with bio-inspired neuromorphic computing devices.
+        cific application or dataset.                                    Typically, these works seek to accelerate Spiking Neural Networks
+     • We showcased a substantial end-to-end hardware speedup            (SNNs) on customized hardware such as TruthNorth [38], Loihi [10],
+        and energy-efficiency improvement through extensive eval-        SpiNNaker [15], and etc. However, training SNN for some complex
+        uation on multiple event-based datasets.                         event-based vision tasks itself can also be challenging. Moreover,
+   In the next section, background and related work about neuro-         despite deployment on neuromorphic hardware like TrueNorth, the
+morphic vision systems and processing will first be provided. The        latency for network inference remains substantial, e.g. 105 ms on
+detailed design of ESDA will be discussed in Section 3. Experiment       DVS Gesture Recognition.
+results are shown in Section 4 and we will conclude in Section 5.           On the other hand, some domain-specific architectures for event-
+The artifact associated with this work is open-sourced and available     based vision tasks have been proposed, such as optical flow cal-
+at [17].                                                                 culation [3, 32, 33], object tracking [18, 19, 29, 30], feature recog-
+                                                                         nition [25, 34], etc. In recent years, the event-based vision has
+2 BACKGROUND AND RELATED WORK                                            seen significant advancements through integrating deep neural
+                                                                         networks (DNNs) in its processing pipeline [49]. However, accel-
+2.1 Event-based Vision                                                   erators originally designed for frame-based DNN models struggle
+Event cameras, also known as Neuromorphic Cameras or Dynamic             to efficiently process event-based inputs with the required effi-
+Vision Sensors, are designed to mimic the functioning of the human       ciency. Many sparse DNN accelerators have primarily emphasized
+retina. Instead of capturing full frames, they detect and report light   element-wise weight sparsity or activation sparsity induced by the
+A Composable Dynamic Sparse Dataflow Architecture for Efficient Event-based Vision Processing on FPGA                     FPGA ’24, March 3–5, 2024, Monterey, CA, USA
+
+
+                                                               Events in 3D spatial-temporal space
+    X
+
+
+
+
+Y
+
+
+
+
+                                                                                                                                                                                    Time
+ Constructing sparse 2D
+representations for DNN                                                                                                                                       Each event is
+  input with a certain                                                                                                                                   represented in [x, y, p, t]
+   amount of events                                                                                                                                            AER format
+
+
+
+Figure 1: Working principle of event camera. The event camera only captures the light intensity change as spiking events in
+AER format ([x, y, ±1, timestamp]). This figure shows a recording sample from DvsGesture dataset where a man is rotating his
+left arm counter-clockwise. Due to the dynamic nature of event cameras, only the motions of the man are captured. For vision
+tasks like object recognition, a certain amount of events are usually grouped to form a 2D representation as DNN input.
+
+
+ReLU [7, 22, 42, 50]. These approaches differ significantly from the                          Event                                   Programmable Logic
+intrinsic spatial sparsity in event data. While some accelerators can                        Parsing                            token               token
+leverage spatial sparsity, they often target at point cloud [13, 28] or                                  bitmap                stream              stream
+
+
+
+
+                                                                                                                                                               Conv Block N
+                                                                                                                                         Conv Block 1
+
+
+
+
+                                                                                                                                                                                        Pooling & FC
+                                                                                          Construct 2D
+
+
+
+
+                                                                                                                   Tokenizer
+dynamic spatial pruning networks [9, 20], which are also different
+                                                                                            Feature
+in terms of the source and pattern of sparsity.                                                                                                          ...
+   Thus, there is a growing need for specialized accelerators to effec-                                                        feature                                        feature
+                                                                                           Sparsify &                          stream
+tively leverage the unique spatial sparsity characteristics of event-                       Serialize    feature                                                              stream
+based data to unlock its advantages in real-time energy-efficient                          Processing
+DNN inference. Prior work like NullHop [1, 31] has proposed an ar-                           System                                                     Result
+chitecture that uses a binary bitmap to represent layer-wise sparse
+activation to skip the computation of zeros. Other solutions like                         Figure 2: Overall architecture of an ESDA accelerator.
+PFF [40] have also explored treating the event-based input sparsity
+as a bit-level sparsity by using Binary Neural Networks. In this
+work, we aim to achieve low-latency and energy-efficient process-                     (𝑦 ∗𝑊 𝑖𝑑𝑡ℎ + 𝑥), refers to the left-to-right, top-to-bottom streaming
+ing of event-based DNN models by proposing an all-on-chip sparse                      order of spatial locations, which also corresponds to the 1D memory
+dataflow architecture on FPGA. The framework is also highly com-                      layout order of a 2D dense matrix. In other words, the module itself
+posable, allowing the customization of accelerators for different                     should maintain the correct output order so that different modules
+event-based models and datasets.                                                      can be pipelined.
+                                                                                         The functionality of each dataflow module is separated into:
+3 METHODOLOGY                                                                         (1) 𝑓𝑇 to resolve the new output token based on previous input
+3.1 Design Principle of Sparse Dataflow                                               token information; (2) 𝑓𝐹 to compute the output features at new
+                                                                                      output token locations by using some temporal neighboring fea-
+ESDA is built upon distinct sparse dataflow modules that share a                      tures. Depending on the algorithm requirement, different numbers
+unified token-feature interface. The framework enables seamless                       of temporal neighboring data might be needed, specified as 𝑁 in
+customization of a sparse accelerator by cascading various modules                    Eqn. 1. Each module in ESDA is designed as a flexible hardware
+aligned with the model’s architecture. By definition, ESDA only                       template, where many hardware design parameters like bitwidth,
+streams spatially sparse features along with their coordinate tokens                  parallel factor, buffer size, etc., can be specified at compile time.
+through the dataflow modules. Eqn. 1 shows the design principle                          Figure 2 shows an illustrative accelerator diagram for the event-
+for an ESDA dataflow module using a unified sparse token-feature                      based object classification task. The processing system, or CPU, is
+interface:                                                                            responsible for event streaming and 2D representation construction.
+          tokenout [𝑖] = 𝑓𝑇 (tokenin [ 𝑗], ..., tokenin [ 𝑗 − 𝑁 ])                    While the accelerator on the programmable logic reads the sparse
+        featureout [𝑖] = 𝑓𝐹 (featurein [ 𝑗], ..., featurein [ 𝑗 − 𝑁 ])     (1)        input features following the left-to-right, top-to-bottom ordering
+           s.t. 𝑟𝑎𝑣𝑒𝑙 (tokenout [𝑖]) > 𝑟𝑎𝑣𝑒𝑙 (tokenout [𝑖 − 1])                       to align with our dataflow requirement. A binary bitmap is used to
+                                                                                      mark the non-zero locations and generate the token stream. The
+where each 𝑡𝑜𝑘𝑒𝑛[𝑖] (written in [.𝑥, .𝑦, .𝑒𝑛𝑑]) marks the spatial loca-               tokenized sparse feature then propagates through each convolution
+tion of the current feature vector 𝑓 𝑒𝑎𝑡𝑢𝑟𝑒 [𝑖]. The flag .𝑒𝑛𝑑 denotes                block. Finally, the accelerator returns the classification outputs back
+whether it’s the end of the stream. The 𝑟𝑎𝑣𝑒𝑙 order, calculated as                    to the processing system.
+ FPGA ’24, March 3–5, 2024, Monterey, CA, USA                                             Yizhao Gao, Baoheng Zhang, Yuhao Ding, and Hayden Kwok-Hay So
+
+
+                                      x = A * k5 + B * k8      x              enforces input and output non-zero locations to be identical. This
+                                                                              means that for positions that are originally zeros, e.g. "x" in the
+                                   Standard Conv
+                                                                              Figure 3.a, the output remains zeros. While for those non-zeros
+                 A                                                            output locations, e.g. "y" in the figure, the feature is calculated by
+                 B       C           k0 k1 k2                                 using the similar weighted sum algorithm as standard convolution.
+Height
+
+
+
+
+         D                           k3 k4 k5
+             E                                                                In this way, submanifold convolution prevents the "dilation" effect
+                                     k6 k7 k8                Output Feature
+                     F                                                        of standard convolution by restricting the possible non-zero output
+                                      Weight        x=0        x
+                     G                                                        locations.
+             Width                                                               When convolution stride 𝑠 is larger than 1, an output location
+          Input Feature             Sparse Conv                               of sparse convolution is non-zero if the corresponding input 𝑠 × 𝑠
+                                        y= F * k4 + G * k7          y         stride grid contains any non-zeros. For instance, the "x" in Figure 3.b
+                                                                              remains zero because its corresponding 2×2 grid of the inputs are all
+         (a) Standard vs. Submanifold Sparse Convolution when stride is 1     zeros. This is in contrast to standard convolution which generates
+    2x2 grids with non-zeros
+                                                                              non-zero outputs whenever the convolution kernel meets any non-
+                                                               x = C * k1
+                                                                              zeros. Thus, sparser output features can be expected by using sparse
+                 A                  Standard Conv                             convolution if the stride size is smaller than the kernel size, which
+                                                                     x
+                 B       C                                                    is a common configuration.
+         D                            k0 k1 k2
+                                                             Output Feature
+                                                                                 Submanifold sparse convolution also comes with a simpler hard-
+             E                        k3 k4 k5
+                                                                              ware implementation. For example, in the stride-1 case where the
+                     F                k6 k7 k8
+                     G                                                x       input-output sparse locations are the same, the input tokens can
+                                       Weight
+                                                                              simply be queued in a FIFO and reused for the output. Consequently,
+          Input Feature             Sparse Conv                    x=0        the abstract module function can be written as:
+         (b) Standard vs. Submanifold Sparse Convolution when stride is 2                           tokenout [𝑖] = tokenin [𝑖]
+                                                                                                                                                   (2)
+                                                                                      featureout [𝑖] = 𝑓𝐹 (featurein [𝑖], ..., featurein [𝑖 − 𝑁 ])
+ Figure 3: Compare standard convolution with submanifold
+                                                                              In this way, the hardware can co-iterate input/output tokens and
+ sparse convolution. The gray/green locations in the figure
+                                                                              features, while saving the additional logic to generate potential
+ mean non-zero pixels. (a) When stride 𝑠 = 1, the input and
+                                                                              output locations during runtime.
+ output location of submanifold convolution is restricted to
+ be identical. In the "x" location, standard convolution leads to             3.3    Sparsify the Architecture: Composable
+ a valid non-zero output while submanifold convolution does
+ not. (b) When stride 𝑠 > 1 (2 in the figure), an output location
+                                                                                     Sparse Dataflow Modules
+ is non-zero if the corresponding input 𝑠 × 𝑠 grid contains
+ non-zeros.                                                                          input                  token reg                   output
+                                                                                     token                [.x, .y, .end]                token
+                                                                                                feature
+                                                                                     input       buffer                                   output
+    In the following section, we will first discuss how ESDA incor-                                                                      feature
+                                                                                    feature
+ porates submanifold sparse convolution, which is used to enhance
+ the model’s sparsity while simplifying the dataflow design (𝑓𝑇 , 𝑓𝐹
+ and 𝑁 in Eqn. 1). In Section 3.3, we will show the detailed micro-                                       static weight
+ architecture of some commonly used dataflow modules.
+                                                                                              Figure 4: Convolution 1 × 1 Module.
+ 3.2         Sparsify the Algorithm: Submanifold Sparse
+             Convolution                                                      3.3.1 1 × 1 Convolution Module. 1 × 1 convolution, also known
+The input of a DNN model for event-based vision tasks is typically            as point-wise convolution, only operates locally by iterating each
+a spatially sparse 2D feature/representation generated by a certain           sparse location and updating its features. Benefiting from this prop-
+amount of events. Although input features can be highly sparse (e.g.          erty, the input and output tokens can simply be relayed using a
+<%1 in ASL-DVS dataset), using standard convolution can easily                token register. Figure 4 shows the hardware diagram of the 1 × 1
+leads to much denser intermediate features because of the “dilation"          convolution module. The feature vector at the current location
+effect of convolution. Figure 3 shows the example of sparse input             [.𝑥, .𝑦] is first read into an input feature buffer and then multiplied
+features convoluted with a 3 × 3 kernel. The output feature of                with the weight matrix in the static buffer. Since the convolution
+standard convolution is much denser than the input feature, which             layers are spatially mapped on the accelerator, the weights will be
+can diminish the opportunities brought by the sparsity.                       synthesized into Read-Only Memory using Block RAM (BRAM)
+    To address this, ESDA incorporates submanifold sparse convolu-            and initialized during bitstream download. The computation of the
+tion [23] to better enhance the spatial sparsity of a model. Figure 3         output feature vector can be implemented as a Matrix-Vector mul-
+illustrates the operation of submanifold sparse convolution. When             tiplication unit as illustrated in Figure 4. The size of the PE array,
+the convolution stride 𝑠 is 1, the submanifold sparse convolution             which can also be regarded as the parallel factor (PF) on channel
+A Composable Dynamic Sparse Dataflow Architecture for Efficient Event-based Vision Processing on FPGA                        FPGA ’24, March 3–5, 2024, Monterey, CA, USA
+
+
+dimension, is exposed as a hardware template parameter. These                                                                token FIFO
+                                                                                               input                                                        output
+parallel factors can also affect the BRAM usage by partitioning the                            token                                                        token
+weights buffer to match the bandwidth requirement for the MAC                                                         tail              head
+                                                                                                             ready            Control          valid
+array. Note that the batch normalization layer can be folded into
+the convolution layer, and the activation function is omitted from                                                       feature buffer
+                                                                                                                                                             kernel
+the diagram for simplicity.                                                                               window                  2               6 4 2      offset
+                                                                                                         center at            4
+                                                                                                        head token      6
+                                                                                                                                                             output
+                                                                                               input                                                        feature
+             input                                    token                 output            feature                   [tail.x, tail.y%3]
+
+
+
+
+                                                              Computation
+                                                               3x3 Conv
+             token                                                          token
+                                             kernel offset
+                            SLB
+
+
+
+
+                                                                                                  Figure 7: Sparse Line Buffer Module (stride=1).
+          input                                   feature                    output
+         feature                                                            feature
+                                                                                          3.3.4 Sparse Line Buffer with Stride Equal to 1. The Sparse Line
+                                                                                          Buffer (SLB) mainly comprises a 𝑘 rows data buffer (𝑘 being the
+                Figure 5: Convolution 3 × 3 Module.                                       kernel size), a token FIFO, and a small bitmap to record current non-
+                                                                                          zero spatial locations in the buffer. When stride 𝑠 = 1, submanifold
+3.3.2 𝑘 × 𝑘 Convolution Module (𝑘 > 1). Different from 1 × 1                              convolution enforces the input and output non-zero locations to
+convolution that directly operates on non-zero positions locally,                         be identical. As a result, a simple token FIFO is used to set up a
+when the convolution kernel size 𝑘 is larger than 1, the computation                      queue for the output tokens. Due to the deterministic streaming
+is the weighted summation of neighboring features. In ESDA, 𝑘 ×                           order of the sparse sliding window algorithm (left-to-right and
+𝑘 convolution is implemented by cascading a Sparse Line Buffer                            top-to-bottom as discussed in Eqn. 1), we can simply use the token
+module and a 𝑘 × 𝑘 convolution computation module as shown in                             FIFO’s head and tail tokens to control the read and write operations
+Figure 5. The Sparse Line Buffer designs can be slightly different for                    of SLB.
+different convolution strides (usually 1 or 2), while the computation                         Specifically, the FIFO’s head token should represent the next
+module remains the same. As shown in Figure 3, the weighted                               spatial location for weighted sum computation, while the FIFO’s
+sum of spatial kernels can also be sparse (e.g., "y" only requires                        tail token indicates the most recently received input location. The
+𝐹 ∗ 𝑘4 + 𝐺 ∗ 𝑘7). To leverage this type of sparsity, an additional                        offset between the head and tail token can be used to determine
+kernel offset stream is used to denote the sparse neighboring offset                      whether the buffer already contains all the data required for the
+within the 𝑘 × 𝑘 kernel.                                                                  next output (center at head token). If the current head token is ℎ, the
+                                                                                          required input window would be [ℎ.𝑥 −𝑢, ℎ.𝑥 +𝑢] × [ℎ.𝑦 −𝑢, ℎ.𝑦 +𝑢],
+     input                           token reg                                  output    where 𝑢 = (𝑘 − 1)/2 is the kernel radius. Since our dataflow adheres
+     token                        [.x, .y, .end]                                token     to the top-to-bottom, left-to-right ordering, when the tail token 𝑡
+                                                                                 output   points to a location with ravel order larger than [ℎ.𝑥 + 𝑢, ℎ.𝑦 + 𝑢],
+                                  kernel 1
+                       kernel 0
+
+
+                                                 kernel 8
+
+
+
+
+              static                                                    …       feature   it signifies that all the required data are already in the buffer. The
+                                             …
+              weight                                                                      head token is valid to be sent out, and the corresponding features
+    kernel                                                                                are streamed for computation.
+    offset                                                                                    In terms of the ready signal, new tokens and features are only al-
+    input                                                                                 lowed to be written into the SLB if the input still lies in the currently
+   feature                                                                                buffered rows/region. When the new input is beyond the buffered
+                                                                                          rows, SLB will first output the buffered tokens before accepting
+Figure 6: Depthwise Convolution 3 × 3 Computation Module.                                 new inputs. This approach is inherently free from deadlock as the
+                                                                                          arrival of a new token from subsequent rows indicates that tokens
+3.3.3 𝑘 × 𝑘 Convolution Computation Module (𝑘 > 1). Figure 6                              from preceding rows (≤ 𝑡 .𝑦 − 𝑢 − 1) are all valid for output. This is
+shows the diagram of the 3 × 3 depthwise convolution module,                              because the ravel order of 𝑡 should be larger than [ℎ.𝑥 + 𝑢, ℎ.𝑦 + 𝑢]
+which is widely used in many mobile networks [43, 45, 46]. For                            when ℎ.𝑦 ≤ 𝑡 .𝑦 − 𝑢 − 1. Those valid tokens will be popped out one
+each non-zero output location marked by the current token register,                       by one, and buffers will be cleaned up to allow new input data to
+the weighted sum of sparse neighboring features is controlled by the                      be buffered. In summary, the control signals ready 𝑟 and valid 𝑣 can
+additional kernel offset stream. The kernel offset marks the relative                     then be written as:
+spatial locations of the current input features in the computation                           𝑣 = ( (𝑡 .𝑥 − ℎ.𝑥 ≥ 𝑢 ) ∧ (𝑡 .𝑦 − ℎ.𝑦 ≥ 𝑢 ) ) ∨ (𝑡 .𝑦 − ℎ.𝑦 ≥ 𝑢 + 1)
+window, which also serves as the index of the weights buffer. After                          𝑟 = (𝑡 .𝑦 − ℎ.𝑦 ≤ 𝑢 )                                                    (3)
+performing the weighted sum for all non-zero kernel offsets, the
+                                                                                             𝑢 = (𝑘 − 1)/2
+final results will be streamed out as the output features. Other types
+of convolution, such as full convolution, only differ slightly in the                     where ℎ, 𝑡 stands for head and tail tokens. 𝑢 is the radius of the
+PE organization, while having identical token interfaces and sparse                       kernel. 𝑘 refers to kernel size.
+weighted sum operations. Like the 1 × 1 convolution module, the                              As mentioned before, the kernel offset stream is used to denote
+hardware template also incorporates the channel dimension parallel                        each non-zero location within the 𝑘 × 𝑘 window. This information
+factor as a configurable variable.                                                        is obtained by querying a bitmap that marks whether a spatial
+FPGA ’24, March 3–5, 2024, Monterey, CA, USA                                                     Yizhao Gao, Baoheng Zhang, Yuhao Ding, and Hayden Kwok-Hay So
+
+
+location in the buffer is currently non-zero or not. Figure 7 shows                      input                 token reg
+                                                                                                                                              sink
+an example diagram of an SLB for 3 × 3 convolution with stride                           token              [.x, .y, .end]
+equal to 1. The snapshot shows the kernel window center at the
+                                                                                                                                              PE
+head token, where the features on kernel offset 2, 4, 6 are non-zeros.
+
+
+
+
+                                                                                                                                                                 argmax
+In this case, the features at 2, 4, 6 will be outputted along with the               input                                                    PE                          output
+kernel offsets for downstream weighted sum computation.                             feature                                                                                class
+                                                                                                             …
+                                                                                                                                              PE
+
+                   token.y%2==0                                                                                                      static weight
+                                      Odd FIFO                                                      Global Pooling
+   input                                            Token           output
+   token           tail               Even FIFO     Merge           token
+              ready                  Control                valid                                   Figure 9: Pooling and FC Module.
+
+           window center          feature buffer                     kernel
+           at new token          1                          8 4 1
+                                                                     offset        tokens until it encounters a token with the .𝑒𝑛𝑑 = 𝑡𝑟𝑢𝑒 flag. The
+               merge as          4
+               new token             8                               output        features are aggregated into a single vector based on the pooling
+  input                                                             feature        algorithm (maximum or average). Finally, the pooling results are
+ feature                       [tail.x, tail.y%3]
+                                                                                   fed into a linear classifier layer to compute the final prediction.
+                                                                                   Figure 9 shows an example diagram of a global average pooling
+        Figure 8: Sparse Line Buffer Module (stride=2).
+                                                                                   layer combined with a fully connected classifier.
+
+3.3.5 Sparse Line Buffer with Stride Equal to 2. When using the
+stride 𝑠 = 2 in a convolution layer, the output feature map will be                  input                           token                   token                        output
+
+
+
+
+                                                                                                                              DW Conv 3x3
+downsampled. As illustrated in Figure 3b, the sparse convolution                     token                          stream                  stream
+
+
+
+
+                                                                                                         Conv 1x1
+
+
+
+
+                                                                                                                                                      Conv 1x1
+                                                                                                                                                                          token
+will recalculate the non-zero coordinates (tokens). For each 2 × 2
+input stride grid, if it contains any non-zero pixels, it will generate
+a valid non-zero output. In this case, the Sparse Line Buffer module                                                feature                 feature                        output
+                                                                                     input                          stream                  stream                        feature
+                                                                                                  Fork
+with stride equal to 2 (SLB s2) adopts two token FIFOs to buffer
+tokens from even and odd rows, respectively. A Token Merge unit is                  feature
+positioned at the head of the two FIFOs to calculate the new output                                                     feature FIFO
+tokens, which can be written as:
+                   ℎ_𝑒2 = [ℎ_𝑒.𝑥/2, ℎ_𝑒.𝑦/2, ℎ_𝑒.𝑒𝑛𝑑]                                            Figure 10: Chaining a Residual Block.
+                   ℎ_𝑜2 = [ℎ_𝑜.𝑥/2, ℎ_𝑜.𝑦/2, ℎ_𝑜.𝑒𝑛𝑑]                        (4)
+       tokenout =(𝑟𝑎𝑣𝑒𝑙 (ℎ_𝑒2) > 𝑟𝑎𝑣𝑒𝑙 (ℎ_𝑜2)) ? ℎ_𝑜2 : ℎ_𝑒2                       3.3.7 Chaining Modules into a Block. Many DNN models are built
+                                                                                   upon convolution blocks with residual connections [24]. Thanks
+where the ℎ_𝑜 and ℎ_𝑒 are the head tokens from odd and even token                  to the autonomous sparse iteration capabilities of all the modules
+FIFOs, respectively. When a new output token is generated, the                     in ESDA, building convolution blocks by chaining the dataflow
+tokens in the corresponding 2 × 2 grid will all be popped out from                 modules is straightforward. Figure 10 shows an example of building
+FIFOs.                                                                             an inverted residual block MBConv with stride being 1. MBConv
+   Similar to the case with stride being 1, the tail token 𝑡 can help              is commonly employed in efficient models like MobileNetV2 [43],
+determine whether the new output token already sees sufficient                     EfficientNet [46], MnasNet [45], etc. Although ESDA mainly uses
+data in the buffer. The control logic is similar to Eqn. 3, with the               MBConv blocks in the following experiments, similar approaches
+head token ℎ being the tokenout in Eqn. 4. Figure 8 demonstrated                   can be applied to other models like ResNet [24], ShuffleNet [48], etc.
+an example diagram of an SLB s2 module for 3 × 3 convolution,                      Figure 10 illustrates a convolution block incorporating an identity
+where the dark blue and green positions within the 2 × 2 stride grid               shortcut, with all layer strides set to 1. Leveraging the principles
+signify a valid output. The token merge units will pop the dark blue               of submanifold convolution, the input and output tokens remain
+and green tokens from both token FIFOs and stream out the new                      identical across all the layers within this block. Thus, the input
+token. The SLB s2 module then outputs the corresponding features                   feature stream can simply be forked into two separate streams. One
+and kernel offsets (1, 4, 8) for downstream computation.                           stream goes to the residual functional layers, while the other is
+   In typical Deep Neural Network (DNN) model designs, the kernel                  used for the identity shortcut. The features in the shortcut branch
+stride values are commonly set to either 1 or 2. If using an even                  are buffered in a FIFO and will be merged at the output of the last
+larger stride size (𝑠 > 2), the SLB can be designed similarly by                   1 × 1 convolution layer.
+splitting 𝑠 number of token FIFO channels.
+3.3.6 Pooling and FC Module. For the object classification task,
+                                                                                   3.4     Customize Accelerator with
+a model usually uses a global pooling layer followed by a fully                            Algorithm/Hardware Co-optimization
+connected layer to generate predictions. In the sparse dataflow of                 The highly parameterized and composable sparse dataflow mod-
+ESDA, the global pooling layer will iterate through all the non-zero               ules in ESDA empower us to customize all-on-chip accelerators
+A Composable Dynamic Sparse Dataflow Architecture for Efficient Event-based Vision Processing on FPGA                    FPGA ’24, March 3–5, 2024, Monterey, CA, USA
+
+
+for different models or applications by spatially mapping distinct                                                      DNN Model Spec
+                                                                                        [x y p t]                                                      Hardware
+                                                                                                                        Sparsity Statistic
+network components on FPGA. Moreover, this flexibility allows us                           …                                                 Hardware Constraints
+                                                                                                                             Latency         Optimizer
+to trade off between accuracy, resource consumption, and perfor-
+                                                                                      Event-based       DNN Model       Resource Utilization
+mance. However, it’s essential to recognize that the design space                                        Training
+                                                                                        datasets
+can be vast for this problem. To address this challenge, ESDA incor-
+porates an algorithm/hardware co-optimization flow to automate                                                      Model & Hardware Config
+this process.                                                                                                                                    HLS Module Templates
+                                                                                                                             template <int IC, int OC, int H, int W, int PF>
+3.4.1 Sparsity-awared Hardware Optimization. In a dataflow accel-                                                            void conv_1x1(hls::stream<F> & in_f,
+
+erator, the throughput is usually bounded by the slowest module                                            Hardware                        hls::stream<F> & out_f,
+                                                                                                                                           hls::stream<T> & in_token,
+                                                                                         FPGA              Generation                      hls::stream<T> & out_token,
+in the pipeline. Thus, finding a load-balanced hardware resource                                                                           const ap_int<WW> w_buffer[OC][IC]
+                                                                                       deployment                            ){…}
+configuration for different modules is critical. To approach the opti-
+mal configuration, ESDA adopts a static optimization strategy that
+hinges on application-wise sparsity statistics. More precisely, for                                 Figure 11: Optimization flow of ESDA.
+each application/dataset, we collect the spatial and kernel sparsity
+ratios (𝑆𝑠 and 𝑆𝑘 ) from all the samples in the dataset. The degree of
+spatial sparsity within the feature activation reflects the total num-                previous research works have explored integrating Neural Archi-
+ber of iterations in each dataflow module, while the kernel sparsity                  tecture Search into the deployment process to facilitate the model
+indicates the averaged number of weighted sum operations occur-                       performances while satisfying the hardware constraints.
+ring within convolution layers. Using the sparsity statistics, we                        Inspired by these concepts, we develop a simple two-step greedy
+can estimate the average latency and resource utilization for each                    search algorithm to identify efficient models for deployment. Ini-
+dataflow module. Take the depthwise 3 × 3 convolution as an exam-                     tially, our software randomly samples a pool of model architectures
+ple. The latency, the number of BRAM, and the DSP consumption                         built upon the MBConv convolution block. The search space en-
+can be estimated as:                                                                  compasses variations in: (1) the number of blocks; (2) the stride of
+                                                                                      the block; (3) the number of channels in each layer. The models are
+                𝑙𝑎𝑡 = (𝐻 × 𝑊 × 𝑆𝑠 ) × (9 × 𝑆𝑘 ) × (𝐶/𝑃𝐹 )
+                                                                                      sampled within a coarse-defined model size range according to the
+              𝑏𝑟𝑎𝑚 = ⌈(𝐵 × 9 × 𝐶)/16K/𝑃𝐹 ⌉ × 𝑃𝐹                            (5)        available on-chip buffer size. Also, the total down-sampling ratio
+                  𝑑𝑠𝑝 = 𝑃𝐹                                                            of each model remains fixed. These sampled models, along with
+                                                                                      the sparsity statistic, are fed into the hardware optimizer, which
+where 𝐻,𝑊 is the input height and width in the current layer, 𝐶                       searches for the optimal hardware mapping of each model and
+is the number of channels, and 𝑃𝐹 is the channel parallel factor. 𝐵                   estimates its performance. Running the hardware optimizer for
+is the bitwidth of the quantized weight and we assume one BRAM                        each model typically takes only several seconds/minutes to com-
+can store 16 Kb data. The (𝐻 × 𝑊 × 𝑆𝑠 ) term reflects the averaged                    plete. This means that for each dataset, we can effortlessly sample
+number of iterations on the spatial dimension of this layer and (9 ×                  hundreds of models.
+𝑆𝑘 ) × (𝐶/𝑃𝐹 ) estimates the averaged cycles needed for computing                        Once all the hardware performance profiles for all the models
+an output. The constant weight buffer is also partitioned to satisfy                  are collected, the software selects the top-k highest throughput
+the on-chip bandwidth requirement determined by the parallelism                       models for training and finally chooses the model with the best
+factor 𝑃𝐹 .                                                                           accuracy. This approach allows us to identify models that fit the
+    Using the similar approaches, we can formulate the latency and                    application constraints while balancing between accuracy and hard-
+resource utilization for the remaining modules. Since all the layers                  ware performance. Note that the current simple model search algo-
+are pipelined, we can estimate the theoretical throughput by deter-                   rithm does not leverage any sophisticated reinforcement learning
+mining the maximum latency across all layers. Thus, the overall                       or other meta-learning algorithms. Nevertheless, the possibility of
+hardware optimization problem can be written as:                                      integrating other Neural Architecture Search algorithms presents
+        min       𝑙𝑎𝑡                                                                 an exciting direction for future exploration. Figure 11 provides a
+         s.t. 𝑙𝑎𝑡𝑖 ≤ 𝑙𝑎𝑡, 𝑖 in all layers                                             summary of the co-optimization process in ESDA.
+            ∑︁                                                             (6)
+               𝑟𝑖 𝑗 ≤ 𝑅 𝑗 , 𝑖 in all layers, j in [BRAM, DSP]                         4 EVALUATIONS
+                                                                                      4.1 Experiment Setup
+              𝑖
+where 𝑟𝑖 𝑗 means the 𝑗 type resource consumed for layer 𝑖. 𝑅 is the
+total resource of each kind available. The current framework mainly                   We evaluated ESDA on five different event-based gestures or ob-
+concerns BRAM and DSP resources on FPGA, and the proposed                             ject recognition datasets: DvsGesture [2], RoShamBo17 [35], ASL-
+optimization program will be solved by an open-sourced mixed                          DVS [5], N-MNIST and N-Caltech101 [41]. DvsGesture contains 10
+integer programming solver.                                                           classes of human body gestures captured by DVS128 camera and
+                                                                                      RoShamBo17 records hand gestures playing rock-scissors-paper
+3.4.2 Searching for Efficient Models. For an all-on-chip accelerator,                 games. ASL-DVS is a large-scale event-based American sign lan-
+the weights of all the layers should be placed on-chip using BRAM.                    guage letters recognition dataset recorded by DAVIS240C event
+In application scenarios with tight hardware resource constraints,                    camera. N-Caltech101 and N-MNIST datasets slightly differ from
+deploying larger models like ResNet [24] might be infeasible. Many                    previous datasets that were directly shot in real scenes. Instead,
+           FPGA ’24, March 3–5, 2024, Monterey, CA, USA                                                                                                                                                                  Yizhao Gao, Baoheng Zhang, Yuhao Ding, and Hayden Kwok-Hay So
+
+
+                                                 N-Caltech101                                                          DvsGesture                                                    ASL-DVS                                                 N-MNIST                                    RoShamBo17
+Spatial Sparsity (% of NZs)
+
+
+
+                          1.0                                                              1.0                                                          1.0                standard (99.7%)                              1.0                                             1.0
+                                                                                                                                                                           submanifold (99.6%)
+                          0.8                                                              0.8                                                          0.8                                                              0.8                                             0.8
+                          0.6                                                              0.6                                                          0.6                                                              0.6                                             0.6
+                          0.4                                                              0.4                                                          0.4                                                              0.4                                             0.4
+                          0.2                             standard (74.3%)                 0.2                             standard (94.2%)             0.2                                                              0.2                       standard (98.7%)      0.2                   standard (99.4%)
+                                                          submanifold (75.1%)                                              submanifold (95.6%)                                                                                                     submanifold (98.7%)                         submanifold (99.4%)
+                          0.0                                                              0.0                                                          0.0                                                              0.0                                             0.0
+                                180 × 240
+                                            90 × 120
+                                                       45 × 60
+                                                                 23 × 30
+                                                                           12 × 15
+                                                                                     6×8
+
+
+                                                                                                 128 × 128
+                                                                                                             64 × 64
+                                                                                                                        32 × 32
+                                                                                                                                  16 × 16
+                                                                                                                                            8×8
+                                                                                                                                                  4×4
+
+
+                                                                                                                                                              180 × 240
+                                                                                                                                                                          90 × 120
+                                                                                                                                                                                     45 × 60
+                                                                                                                                                                                               23 × 30
+                                                                                                                                                                                                         12 × 15
+                                                                                                                                                                                                                   6×8
+
+
+                                                                                                                                                                                                                               34 × 34
+
+                                                                                                                                                                                                                                         17 × 17
+
+                                                                                                                                                                                                                                                       8×8
+
+                                                                                                                                                                                                                                                                4×4
+
+
+                                                                                                                                                                                                                                                                           64 × 64
+
+                                                                                                                                                                                                                                                                                     32 × 32
+
+                                                                                                                                                                                                                                                                                               16 × 16
+
+                                                                                                                                                                                                                                                                                                         8×8
+
+                                                                                                                                                                                                                                                                                                               4×4
+          Figure 12: Compare the spatial sparsity between standard and submanifold convolution on different event-based vision datasets.
+          The x-axis of each subplot is the spatial resolution of the feature activation. Accuracy results of two different models in floating
+          point precision are also written in the legends.
+
+
+          both are recaptured from static image-based Caltech101 [12] and                                                                                                                        the intrinsic spatial sparsity present in event-based datasets while
+          MNIST [27] datasets by using an actuated pan-tilt event-camera                                                                                                                         having similar accuracy performances compared with standard
+          platform. All the datasets are preprocessed with a similar method                                                                                                                      convolution, making it a highly promising candidate for hardware
+          that first clips event recordings with a fixed time interval and then                                                                                                                  acceleration.
+          generates histogram representation with two channels (positive and
+          negative events). Except for the RoShamBo17 dataset, we directly
+          use their preprocessed histogram format.
+             For hardware experiments, we implement ESDA on an embed-
+          ded FPGA board ZCU102 with a Zynq UltraScale+ MPSoC device                                                                                                                             4.3               Compare ESDA with Dense Dataflow
+          (XCZU9EG) using Vitis HLS and Vivado Design Flow. End-to-end                                                                                                                          To demonstrate the effectiveness of the sparse dataflow modules,
+          hardware performances are measured with on-board testing after                                                                                                                        we individually synthesized all the MBConv convolution blocks of
+          synthesis, place, and route. Models are trained using PyTorch and                                                                                                                     the MobileNetV2 network and evaluated their performance across
+          MinkowskiEngine [8] sparse DNN library. Weights and activations                                                                                                                       various input sparsity ratios. The hardware configuration of each
+          are quantized into 8 bits by using HAWQ-V3 [47] framework in our                                                                                                                      block aligns with the overall optimization result of the entire Mo-
+          training pipeline. The hardware optimization program in Eqn. 6                                                                                                                        bileNetV2 architecture. To evaluate the overhead for supporting
+          is solved by a mixed-integer geometric programming solver de-                                                                                                                         dynamic sparse control logic, we implement a dense baseline with
+          veloped in AGNA [11] with SCIP [4] and GPkit [6] optimization                                                                                                                         a similar sliding-window-based dataflow that uses a standard line
+          frameworks.                                                                                                                                                                           buffer design. The dense baseline eliminates all token stream inter-
+                                                                                                                                                                                                faces and dynamic logic components, maintaining identical parallel
+           4.2                         Performance of Submanifold Convolution                                                                                                                   factors, bitwidths, and other design parameters in alignment with
+          Figure 12 shows the spatial statistics from different datasets. The                                                                                                                   the sparse implementations.
+          sparsity ratios are measured on different feature resolutions through-                                                                                                                   Figure 13 presents the speedup ratio of ESDA modules over the
+          out the network. For example, the N-MNIST dataset has the input                                                                                                                       dense baseline using C/RTL co-simulation latency. The inputs con-
+          resolution being 34 × 34. Through the downsample stages of the                                                                                                                        sist of randomly generated data with varying spatial sparsity ratios,
+          network, the resolution will change to 17 × 17, 8 × 8, and finally 4 × 4.                                                                                                             ranging from 10% to 90%. The results demonstrate that dynamic
+          We can see that submanifold sparse convolution can significantly                                                                                                                      sparse dataflow architecture can effectively leverage sparsity in
+          improve sparsity compared to standard convolution. Even though                                                                                                                        general. With an input non-zero ratio of 10%, the sparse designs
+          all the input data are very sparse (1.1% to 23.1%), the dilation effect                                                                                                               achieve significant speedups of 4.5 − 11× compared to the dense
+          (shown in Figure 3) of standard convolution can easily lead to very                                                                                                                   baselines. Moreover, the speedup shows a nearly linear increase as
+          dense features throughout the network. In ASL-DVS dataset, using                                                                                                                      sparsity grows.
+          submanifold sparse convolution can lead to as much as 3.4× sparser                                                                                                                       However, it is worth noting that the overhead of supporting
+          features than standard convolution.                                                                                                                                                   dynamic sparse computation does exist. Specifically, when the input
+              To compare the accuracy performances of two different types of                                                                                                                    is nearly dense (greater than 70% NZ), certain blocks like blk_0 to
+          convolution, we trained MobileNetV2 models with both convolu-                                                                                                                         blk_5 exhibit slower performance than the dense baseline. These
+          tion methods on N-Caltech101, DvsGesture, and ASL-DVS. Since                                                                                                                          blocks typically have large spatial resolutions and smaller channels,
+          N-MNIST and RoShamBo17 have smaller input resolutions, we use                                                                                                                         making them more susceptible to overhead. Fortunately, it turns out
+          a customized network architecture instead. The accuracy results                                                                                                                       that these larger resolution layers in the early stages of a network
+          (written in the legends of Figure 12) show that for most datasets,                                                                                                                    typically have higher sparsity (usually below 40% NZ) as shown in
+          submanifold sparse convolution achieves similar or higher accuracy                                                                                                                    Figure 12. As a result, despite potential slowdowns with very dense
+          compared with standard convolution. In summary, submanifold                                                                                                                           input, these modules can still attain notable speedup with highly
+          sparse convolution showcases its ability to effectively leverage                                                                                                                      sparse inputs.
+  A Composable Dynamic Sparse Dataflow Architecture for Efficient Event-based Vision Processing on FPGA                                    FPGA ’24, March 3–5, 2024, Monterey, CA, USA
+
+          12
+                                                                                                                                                                               NZ 10%
+                                                                                                                                                                               NZ 30%
+          10                                                                                                                                                                   NZ 50%
+                                                                                                                                                                               NZ 70%
+          8                                                                                                                                                                    NZ 90%
+                                                                                                                                                                               Dense
+Speedup
+
+
+
+
+          6
+          4
+          2
+          1
+          0               blk_0     blk_1   blk_2     blk_3     blk_4   blk_5         blk_6       blk_7   blk_8    blk_9 blk_10 blk_11 blk_12 blk_13 blk_14 blk_15 blk_16
+
+  Figure 13: Speedup of ESDA sparse dataflow architecture over sliding-window-based dense dataflow architecture with different
+  input sparsity ratios (randomly generated). The sparse and dense designs use identical hardware configurations like Parallel
+  Factor, Bitwidth, etc. blk_x refers to different convolution blocks in MobileNetV2.
+
+               (a) Latency Speedup of MobileNetV2           (b) Latency Speedup of ESDA-Net
+                      GPU dense                                  GPU dense                                   baseline, ESDA delivers 3.3 − 23.0× speedup on MobileNetV2 and
+                                                                              54.8X
+
+                      GPU sparse                                 GPU sparse                                  9.4 − 54.8× speedup on customized models. An interesting observa-
+                      ESDA                                       ESDA                         33.7X
+                                              23.0X
+
+
+
+
+          101                                         101                                                    tion is that the latency performance of sparse GPU implementation
+                                    18.6X
+Speedup
+
+
+
+
+                                                                 9.4X
+
+
+
+
+                                                                                                             lags behind the dense GPU baseline. This discrepancy primarily
+                                                                                                             comes from the way that GPUs handle sparsity in submanifold con-
+                     3.3X
+
+
+
+
+                                                                                                             volutions. It stores the sparse input coordinates in a hash table and
+          100                                         100
+                                                              0.6X
+
+
+                                                                         0.6X
+
+
+                                                                                         0.4X
+
+
+
+
+                                                                                                             breaks the original computation into a fine-grained sparse gather-
+                                            0.3X
+                                  0.3X
+                   0.3X
+
+
+
+
+                                                                                                             scatter flow for each spatial kernel (marked as k0-k8 in Figure 3). In
+               N-Caltech101 DvsGesture ASL-DVS           N-Caltech101 DvsGesture ASL-DVS                     scenarios with relatively small batch sizes, this additional overhead
+          (c) Throughput Speedup of MobileNetV2 (d) Throughput Speedup of ESDA-Net                           can have an adverse impact on performance.
+                      GPU dense                                  GPU dense                                      As for throughput performances, ESDA surpasses the dense GPU
+                      GPU sparse                                 GPU sparse
+                      ESDA                                       ESDA                                        baseline in most cases, with the exception being MobileNetV2 on N-
+                                                                              8.2X
+
+
+
+
+          101                                         101                                                    Caltech101. The smaller speedup ratio is attributed to the fact that
+                                    4.6X
+
+
+
+
+                                                                                              4.5X
+Speedup
+
+
+
+
+                                              3.3X
+
+
+
+
+                                                                                                             current ESDA is mainly optimized for batch-1 low-latency inference.
+                                                                         2.4X
+                                  1.9X
+
+
+
+
+                                                                                         1.7X
+
+
+
+
+                                                                                                             This design choice is driven by its primary focus on near-sensor
+                                            1.2X
+
+
+
+
+                                                              1.1X
+                                                              1.0X
+
+
+
+
+          100                                         100                                                    or edge systems, where latency performance is vital. Neverthe-
+                   0.5X
+                   0.5X
+
+
+
+
+                                                                                                             less, our customized models searched by the co-optimization flow
+                                                                                                             also demonstrate better speedup performances than MobileNetV2,
+               N-Caltech101 DvsGesture ASL-DVS           N-Caltech101 DvsGesture ASL-DVS
+                                                                                                             which highlights the advantages and effectiveness of the frame-
+                                                                                                             work. Last but not least, ESDA demonstrates an average of 5.8×
+  Figure 14: Compare ESDA with an embedded GPU plat-
+                                                                                                             and 3.3× improvement of energy efficiency (measured in Joules per
+  form (NVIDIA Jetson Xavier NX). For GPU performances,
+                                                                                                             inference) when compared with GPU dense and sparse implemen-
+  we tested both dense DNN implementation using PyTorch
+                                                                                                             tations, respectively, across the benchmarks. This underscores the
+  (baseline) and submanifold sparse DNN implementation us-
+                                                                                                             low-power capability of our sparse architecture for event-based
+  ing MinkowskiEngine. And we compared both MobileNetV2
+                                                                                                             vision DNN inference.
+  and the customized models searched by ESDA.
+
+                                                                                                             4.5     Compare ESDA with Other Related Works
+  4.4             Compare ESDA with Embedded GPU                                                             Table 1 provides the detailed hardware implementation results of
+  Figure 14 shows the comparison between ESDA and an embedded                                                ESDA and other related works on different datasets. The hardware
+  GPU platform (NVIDIA Jetson Xavier NX) on three event-based                                                performances of ESDA were measured on a ZCU102 FPGA board
+  datasets: N-Caltech101, DvsGesture, and ASL-DVS. For GPU im-                                               with the programmable logic (PL) running at 187 MHz. The power
+  plementation, we tested the performance of (1) dense DNN im-                                               was measured during runtime using the built-in power monitor
+  plementation using PyTorch and (2) submanifold sparse DNN im-                                              controlled by the PMBus. For N-Caltech101, DvsGesture, and ASL-
+  plementation using MinkowskiEngine [8] library. In addition, we                                            DVS datasets, we implement two models: MobileNetV2 (with the
+  evaluated the MobileNetV2 (with width-multiplier being 0.5) as well                                        width-multiplier being 0.5) and the customized models. Note that
+  as the customized ESDA-Net (the models searched by using ESDA                                              the customized models are all named EDSA-Net in Table 1 for
+  optimization flow for each dataset). The latency and throughput                                            brevity but the model for each dataset is different.
+  performances of GPU use batch size 1 and 128 respectively.                                                    In general, ESDA demonstrates superior performance in terms of
+     In terms of latency performance, ESDA exhibits a substantial                                            overall system efficiency and effectiveness. Across all the datasets,
+  speedup over both dense and sparse GPU implementations for all                                             ESDA achieves ultra-low latency (0.15 ms to 7.12 ms), significantly
+  the model-dataset combinations. In comparison to the dense GPU                                             boosting the real-time performance of event-based DNN inference.
+FPGA ’24, March 3–5, 2024, Monterey, CA, USA                                                             Yizhao Gao, Baoheng Zhang, Yuhao Ding, and Hayden Kwok-Hay So
+
+
+                                                                  Table 1: System Performance
+
+                                                                                                                             Energy            Implementation
+                                                                  Bit-     Acc     Latency     Throughput      Power
+                  Dataset       Resolution         Modela                                                                  Efficiency               Detailsb
+                                                                 width     (%)      (ms)          (fps)         (W)
+                                                                                                                            (mJ/inf)    DSP BRAM           FF     LUT
+                                                 ESDA-Net            8       72.4      3.09           323         1.81         5.61     1792    1278     115K     154K
+               N-Caltech101      180 × 240
+                                               MobileNetV2           8       71.6      7.12           140         2.10        14.96     1992    1600     198K     207K
+                                                 ESDA-Net            8       92.5      0.66          1526         1.58         1.03     1532     848      97K     128K
+                DvsGesture       128 × 128
+    ESDA                                       MobileNetV2           8       93.9      1.19           839         1.73         2.06     1636    1134     104K     140K
+    (Ours)                                       ESDA-Net            8       99.5      0.71          1406         1.60         1.14     1494     917      97K     131K
+                 ASL-DVS         180 × 240
+                                               MobileNetV2           8       99.3      1.08           927         1.75         1.88     1416    1069     108K     144K
+                 N-MNIST          34 × 34        ESDA-Net            8       98.9      0.15          6657         1.55         0.23     1525     978      93K     121K
+               RoShamBo17         64 × 64        ESDA-Net            8       99.6      0.98          1016         1.40         1.38     1282     765      72K      95K
+   NullHop     RoShamBo17         64 × 64      RoshamboNet           16      99.3       10            160         0.27         1.69      657     802     139K     266K
+      PPF             -           60 × 40        PFF-BNN             1        87       7.71            -            -            -       12      223      16K     42K
+    Asynet     N-Caltech101      180 × 240          VGG            FP32      74.5      80.4            -            -            -                    CPU
+  TrueNorth     DvsGesture        64 × 64           SNN          Tenary 94.6           105             -          0.18         18.7     Samsung 28 nm LPP CMOS process
+     Loihi      DvsGesture        32 × 32           SNN              9       90.5     11.43            -            -            -            Intel 14 nm process
+  a ESDA-Net refers to the customized network for each dataset. b If written in 4 columns, the designs are implemented on FPGA.
+
+
+
+
+As mentioned before, the current implementation of ESDA only sup-                             We also compare ESDA with neuromorphic hardware solutions.
+ports batch size 1 inference, and the throughput is calculated using                       TrueNorth [38] and Loihi [10] are well-known SNN chips, and they
+1/latency. Nevertheless, ESDA still achieves over 1000 fps through-                        both have been used to accelerate event-based gesture recogni-
+put for most datasets except N-Caltech101. The performance of                              tion on the DvsGesture dataset [2, 37]. In terms of latency, ESDA
+N-Caltech101 dataset is slightly lower than the others because it                          achieves 160× and 17.4× speedup over TrueNorth and Loihi, re-
+has a larger spatial resolution and denser input. On the other hand,                       spectively. At the same time, ESDA also exhibits 18× better energy
+ESDA also showcases notable low power and high energy efficiency                           efficiency compared with TrueNorth. In essence, ESDA attains rapid
+features. The power consumption of the FPGA fabric ranges from                             and energy-efficient DNN acceleration for event-based vision with-
+1.4 W to 2.1 W across different datasets, with the average energy                          out relying on traditional neuromorphic techniques, which paves
+per inference spanning from 0.23 mJ to 14.96 mJ. In summary, ESDA                          the way to future efficient event-based systems.
+provides a promising solution for low-power DNN acceleration on
+edge event-based vision systems.                                                           5    CONCLUSION
+   ESDA also demonstrates better system performances compared                              In this work, we have presented ESDA, a novel composable dy-
+to other prior FPGA accelerators, NullHop [1, 31] and PPF [40]. Both                       namic sparse dataflow architecture for efficient event-based vision
+are FPGA DNN accelerators that have been applied to event-based                            DNN inference. ESDA confronts the challenge of low-latency and
+vision tasks. On the RoShamBo17 dataset, ESDA achieves 10.2×                               low-power processing of event-based data by focusing on its in-
+speedup in latency and 6.4× speedup in throughput while also                               herent sparsity. This is made possible by synergizing algorithmic
+having better accuracy performance. In terms of power efficiency,                          advancements through submanifold sparse convolution with novel
+although NullHop exhibits lower power consumption, which may                               architectural solutions realized through the sparse dataflow de-
+be attributed to its lower clock frequency (60 MHz), ESDA outper-                          sign. The flexibility and programmability of the ESDA are also
+forms it in terms of energy efficiency (1.38 mJ/inf vs 1.69 mJ/inf).                       supercharged by the highly modular dataflow design as well as the
+PPF is a binary neural network FPGA accelerator for event-based                            sparsity-aware design optimization flow for FPGA platforms. Exten-
+pedestrian detection. Since PPF did not release their datasets, we                         sive experiments show the ESDA achieves up to 54.8× speedup than
+can not compare with them directly. With similar input resolution                          the embedded GPU as well as 10.2× speedup compared to NullHop.
+on the RoShamBo17 dataset, ESDA has significant latency speedup                            In addition, ESDA also shows 160× speedup and 17.4× better energy
+over PPF (0.98 ms vs 7.71 ms).                                                             efficiency compared to SNN hardware platform TrueNorth. The
+   Asynet [39] is an asynchronous event-based submanifold sparse                           ability to effectively exploit sparsity in ESDA opens up new possibil-
+convolution network implemented on CPU. Despite the attractive                             ities for real-time, energy-efficient DNN inference for event-based
+asynchronous feature of Asynet, the overhead of asynchronous com-                          vision applications.
+putation can be high, which involves updating the kernel maps and
+feature vectors incrementally for each event. On the N-Caltech101
+dataset, ESDA achieves 26× speedup compared with Asynet with
+                                                                                           ACKNOWLEDGMENTS
+only around 2% lower accuracy. When implementing Asynet on                                 This work was supported in part by the Research Grants Council
+customized hardware, one can expect a significant amount of ran-                           (RGC) of Hong Kong under the Research Impact Fund project R7003-
+dom memory access for fetching and updating non-zero features.                             21 and the Theme-based Research Scheme (TRS) Project T45-701-
+Otherwise, the accelerator shall buffer all the intermediate features                      22-R. This work was supported by AI Chip Center for Emerging
+on-chip, which can easily overwhelm the available resources.                               Smart Systems (ACCESS), sponsored by InnoHK funding, Hong
+                                                                                           Kong SAR.
+A Composable Dynamic Sparse Dataflow Architecture for Efficient Event-based Vision Processing on FPGA                             FPGA ’24, March 3–5, 2024, Monterey, CA, USA
+
+
+REFERENCES                                                                                        JPROC.2014.2304638
+ [1] Alessandro Aimar, Hesham Mostafa, Enrico Calabrese, Antonio Rios-Navarro,               [16] G. Gallego, T. Delbruck, G. Orchard, C. Bartolozzi, B. Taba, A. Censi, S. Leuteneg-
+     Ricardo Tapiador-Morales, Iulia-Alexandra Lungu, Moritz B. Milde, Federico                   ger, A. J. Davison, J. Conradt, K. Daniilidis, and D. Scaramuzza. 2022. Event-Based
+     Corradi, Alejandro Linares-Barranco, Shih-Chii Liu, and Tobi Delbruck. 2019.                 Vision: A Survey. IEEE Transactions on Pattern Analysis and Machine Intelligence
+     NullHop: A Flexible Convolutional Neural Network Accelerator Based on Sparse                 44, 01 (jan 2022), 154–180. https://doi.org/10.1109/TPAMI.2020.3008413
+     Representations of Feature Maps. IEEE Transactions on Neural Networks and               [17] Yizhao Gao, Yuhao Ding, Baoheng Zhang, and Hayden Kwok Hay So. 2023. ESDA:
+     Learning Systems 30, 3 (2019), 644–656. https://doi.org/10.1109/TNNLS.2018.                  A Composable Dynamic Sparse Dataflow Architecture for Efficient Event-based
+     2852335                                                                                      Vision Processing on FPGA. (12 2023). https://doi.org/10.25442/hku.24784221.v1
+ [2] Arnon Amir, Brian Taba, David Berg, Timothy Melano, Jeffrey McKinstry,                  [18] Yizhao Gao, Song Wang, and Hayden Kwok-Hay So. 2022. REMOT: A Hardware-
+     Carmelo Di Nolfo, Tapan Nayak, Alexander Andreopoulos, Guillaume Garreau,                    Software Architecture for Attention-Guided Multi-Object Tracking with Dynamic
+     Marcela Mendoza, et al. 2017. A low power, fully event-based gesture recogni-                Vision Sensors on FPGAs. In Proceedings of the 2022 ACM/SIGDA International
+     tion system. In Proceedings of the IEEE conference on computer vision and pattern            Symposium on Field-Programmable Gate Arrays (Virtual Event, USA) (FPGA ’22).
+     recognition. 7243–7252.                                                                      Association for Computing Machinery, New York, NY, USA, 158–168. https:
+ [3] Myo Tun Aung, Rodney Teo, and Garrick Orchard. 2018. Event-based Plane-fitting               //doi.org/10.1145/3490422.3502365
+     Optical Flow for Dynamic Vision Sensors in FPGA. In 2018 IEEE International             [19] Yizhao Gao, Song Wang, and Hayden Kwok-Hay So. 2023. A Reconfigurable
+     Symposium on Circuits and Systems (ISCAS). 1–5. https://doi.org/10.1109/ISCAS.               Architecture for Real-Time Event-Based Multi-Object Tracking. ACM Trans.
+     2018.8351588                                                                                 Reconfigurable Technol. Syst. (apr 2023). https://doi.org/10.1145/3593587 Just
+ [4] Ksenia Bestuzheva, Mathieu Besançon, Wei-Kun Chen, Antonia Chmiela, Tim                      Accepted.
+     Donkiewicz, Jasper van Doornmalen, Leon Eifler, Oliver Gaul, Gerald Gamrath,            [20] Yizhao Gao, Baoheng Zhang, Xiaojuan Qi, and Hayden Kwok-Hay So. 2023.
+     Ambros Gleixner, Leona Gottwald, Christoph Graczyk, Katrin Halbig, Alexander                 DPACS: Hardware Accelerated Dynamic Neural Network Pruning through
+     Hoen, Christopher Hojny, Rolf van der Hulst, Thorsten Koch, Marco Lübbecke,                  Algorithm-Architecture Co-Design. In Proceedings of the 28th ACM International
+     Stephen J. Maher, Frederic Matter, Erik Mühmer, Benjamin Müller, Marc E.                     Conference on Architectural Support for Programming Languages and Operating
+     Pfetsch, Daniel Rehfeldt, Steffan Schlein, Franziska Schlösser, Felipe Serrano,              Systems, Volume 2 (Vancouver, BC, Canada) (ASPLOS 2023). Association for Com-
+     Yuji Shinano, Boro Sofranac, Mark Turner, Stefan Vigerske, Fabian Wegscheider,               puting Machinery, New York, NY, USA, 237–251. https://doi.org/10.1145/3575693.
+     Philipp Wellner, Dieter Weninger, and Jakob Witzig. 2021. The SCIP Optimization              3575728
+     Suite 8.0. Technical Report. Optimization Online. http://www.optimization-              [21] Daniel Gehrig, Antonio Loquercio, Konstantinos G Derpanis, and Davide Scara-
+     online.org/DB_HTML/2021/12/8728.html                                                         muzza. 2019. End-to-end learning of representations for asynchronous event-
+ [5] Yin Bi, Aaron Chadha, Alhabib Abbas, Eirina Bourtsoulatze, and Yiannis An-                   based data. In Proceedings of the IEEE/CVF International Conference on Computer
+     dreopoulos. 2019. Graph-based object classification for neuromorphic vision                  Vision. 5633–5643.
+     sensing. In Proceedings of the IEEE/CVF international conference on computer vision.    [22] Ashish Gondimalla, Noah Chesnut, Mithuna Thottethodi, and T. N. Vijaykumar.
+     491–501.                                                                                     2019. SparTen: A Sparse Tensor Accelerator for Convolutional Neural Networks.
+ [6] Edward Burnell, Nicole B Damen, and Warren Hoburg. 2020. GPkit: A Human-                     In Proceedings of the 52nd Annual IEEE/ACM International Symposium on Microar-
+     Centered Approach to Convex Optimization in Engineering Design. In Pro-                      chitecture (Columbus, OH, USA) (MICRO ’52). Association for Computing Ma-
+     ceedings of the 2020 CHI Conference on Human Factors in Computing Systems.                   chinery, New York, NY, USA, 151–165. https://doi.org/10.1145/3352460.3358291
+     https://doi.org/10.1145/3313831.3376412                                                 [23] Benjamin Graham, Martin Engelcke, and Laurens Van Der Maaten. 2018. 3d
+ [7] Yu-Hsin Chen, Tien-Ju Yang, Joel Emer, and Vivienne Sze. 2019. Eyeriss v2: A                 semantic segmentation with submanifold sparse convolutional networks. In
+     Flexible Accelerator for Emerging Deep Neural Networks on Mobile Devices.                    Proceedings of the IEEE conference on computer vision and pattern recognition.
+     IEEE Journal on Emerging and Selected Topics in Circuits and Systems 9, 2 (2019),            9224–9232.
+     292–308. https://doi.org/10.1109/JETCAS.2019.2910232                                    [24] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep residual
+ [8] Christopher Choy, JunYoung Gwak, and Silvio Savarese. 2019. 4d spatio-temporal               learning for image recognition. In Proceedings of the IEEE conference on computer
+     convnets: Minkowski convolutional neural networks. In Proceedings of the                     vision and pattern recognition. 770–778.
+     IEEE/CVF conference on computer vision and pattern recognition. 3075–3084.              [25] Michael Hofstätter, Martin Litzenberger, Daniel Matolin, and Christoph Posch.
+ [9] Steven Colleman, Thomas Verelst, Linyan Mei, Tinne Tuytelaars, and Marian                    2011. Hardware-accelerated address-event processing for high-speed visual object
+     Verhelst. 2021. Processor Architecture Optimization for Spatially Dynamic Neural             recognition. In 2011 18th IEEE International Conference on Electronics, Circuits,
+     Networks. In 2021 IFIP/IEEE 29th International Conference on Very Large Scale                and Systems. 89–92. https://doi.org/10.1109/ICECS.2011.6122221
+     Integration (VLSI-SoC). 1–6. https://doi.org/10.1109/VLSI-SoC53125.2021.9607013         [26] Xavier Lagorce, Garrick Orchard, Francesco Galluppi, Bertram E. Shi, and Ryad B.
+[10] Mike Davies, Narayan Srinivasa, Tsung-Han Lin, Gautham Chinya, Yongqiang                     Benosman. 2017. HOTS: A Hierarchy of Event-Based Time-Surfaces for Pattern
+     Cao, Sri Harsha Choday, Georgios Dimou, Prasad Joshi, Nabil Imam, Shweta Jain,               Recognition. IEEE Transactions on Pattern Analysis and Machine Intelligence 39, 7
+     Yuyun Liao, Chit-Kwan Lin, Andrew Lines, Ruokun Liu, Deepak Mathaikutty,                     (2017), 1346–1359. https://doi.org/10.1109/TPAMI.2016.2574707
+     Steven McCoy, Arnab Paul, Jonathan Tse, Guruguhanathan Venkataramanan,                  [27] Yann LeCun, Corinna Cortes, and CJ Burges. 2010. MNIST handwritten digit
+     Yi-Hsin Weng, Andreas Wild, Yoonseok Yang, and Hong Wang. 2018. Loihi: A                     database. ATT Labs [Online]. Available: http://yann.lecun.com/exdb/mnist 2 (2010).
+     Neuromorphic Manycore Processor with On-Chip Learning. IEEE Micro 38, 1                 [28] Yujun Lin, Zhekai Zhang, Haotian Tang, Hanrui Wang, and Song Han. 2021.
+     (2018), 82–99. https://doi.org/10.1109/MM.2018.112130359                                     PointAcc: Efficient Point Cloud Accelerator. In MICRO-54: 54th Annual IEEE/ACM
+[11] Yuhao Ding, Jiajun Wu, Yizhao Gao, Maolin Wang, and Hayden Kwok-Hay So.                      International Symposium on Microarchitecture (Virtual Event, Greece) (MICRO
+     2023. Model-Platform Optimized Deep Neural Network Accelerator Generation                    ’21). Association for Computing Machinery, New York, NY, USA, 449–461. https:
+     through Mixed-Integer Geometric Programming. In 2023 IEEE 31st Annual Inter-                 //doi.org/10.1145/3466752.3480084
+     national Symposium on Field-Programmable Custom Computing Machines (FCCM).              [29] A. Linares-Barranco, F. Gómez-Rodríguez, V. Villanueva, L. Longinotti, and T.
+     83–93. https://doi.org/10.1109/FCCM57271.2023.00018                                          Delbrück. 2015. A USB3.0 FPGA event-based filtering and tracking framework
+[12] Li Fei-Fei, R. Fergus, and P. Perona. 2004. Learning Generative Visual Models                for dynamic vision sensors. In 2015 IEEE International Symposium on Circuits and
+     from Few Training Examples: An Incremental Bayesian Approach Tested on 101                   Systems (ISCAS). 2417–2420. https://doi.org/10.1109/ISCAS.2015.7169172
+     Object Categories. In 2004 Conference on Computer Vision and Pattern Recognition        [30] Alejandro Linares-Barranco, Fernando Perez-Peña, Diederik Paul Moeys, Fran-
+     Workshop. 178–178. https://doi.org/10.1109/CVPR.2004.383                                     cisco Gomez-Rodriguez, Gabriel Jimenez-Moreno, Shih-Chii Liu, and Tobi Del-
+[13] Yu Feng, Gunnar Hammonds, Yiming Gan, and Yuhao Zhu. 2022. Crescent:                         bruck. 2019. Low Latency Event-Based Filtering and Feature Extraction for
+     Taming Memory Irregularities for Accelerating Deep Point Cloud Analytics. In                 Dynamic Vision Sensors in Real-Time FPGA Applications. IEEE Access 7 (2019),
+     Proceedings of the 49th Annual International Symposium on Computer Architecture              134926–134942. https://doi.org/10.1109/ACCESS.2019.2941282
+     (New York, New York) (ISCA ’22). Association for Computing Machinery, New               [31] Alejandro Linares-Barranco, Antonio Rios-Navarro, Salvador Canas-Moreno,
+     York, NY, USA, 962–977. https://doi.org/10.1145/3470496.3527395                              Enrique Piñero Fuentes, Ricardo Tapiador-Morales, and Tobi Delbruck. 2021.
+[14] Thomas Finateu, Atsumi Niwa, Daniel Matolin, Koya Tsuchimoto, Andrea                         Dynamic Vision Sensor Integration on FPGA-Based CNN Accelerators for High-
+     Mascheroni, Etienne Reynaud, Pooria Mostafalu, Frederick Brady, Ludovic                      Speed Visual Classification. In International Conference on Neuromorphic Systems
+     Chotard, Florian LeGoff, Hirotsugu Takahashi, Hayato Wakabayashi, Yusuke                     2021 (Knoxville, TN, USA) (ICONS 2021). Association for Computing Machinery,
+     Oike, and Christoph Posch. 2020. 5.10 A 1280×720 Back-Illuminated Stacked                    New York, NY, USA, Article 21, 7 pages. https://doi.org/10.1145/3477145.3477167
+     Temporal Contrast Event-Based Vision Sensor with 4.86µm Pixels, 1.066GEPS               [32] Min Liu and Tobi Delbruck. 2017. Block-matching optical flow for dynamic
+     Readout, Programmable Event-Rate Controller and Compressive Data-Formatting                  vision sensors: Algorithm and FPGA implementation. In 2017 IEEE International
+     Pipeline. In 2020 IEEE International Solid- State Circuits Conference - (ISSCC). 112–        Symposium on Circuits and Systems (ISCAS). 1–4. https://doi.org/10.1109/ISCAS.
+     114. https://doi.org/10.1109/ISSCC19947.2020.9063149                                         2017.8050295
+[15] Steve B. Furber, Francesco Galluppi, Steve Temple, and Luis A. Plana. 2014. The         [33] Min Liu and Tobi Delbruck. 2022. EDFLOW: Event Driven Optical Flow Camera
+     SpiNNaker Project. Proc. IEEE 102, 5 (2014), 652–665. https://doi.org/10.1109/               With Keypoint Detection and Adaptive Block Matching. IEEE Transactions on
+                                                                                                  Circuits and Systems for Video Technology 32, 9 (2022), 5776–5789. https://doi.
+FPGA ’24, March 3–5, 2024, Monterey, CA, USA                                                                Yizhao Gao, Baoheng Zhang, Yuhao Ding, and Hayden Kwok-Hay So
+
+
+     org/10.1109/TCSVT.2022.3156653                                                               William J. Dally. 2017. SCNN: An Accelerator for Compressed-Sparse Con-
+[34] Min Liu, Wei-Tse Kao, and Tobi Delbruck. 2019. Live demonstration: A real-                   volutional Neural Networks. In Proceedings of the 44th Annual International
+     time event-based fast corner detection demo based on fpga. In Proceedings of                 Symposium on Computer Architecture (Toronto, ON, Canada) (ISCA ’17). Associa-
+     the IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops.                tion for Computing Machinery, New York, NY, USA, 27–40. https://doi.org/10.
+     0–0.                                                                                         1145/3079856.3080254
+[35] Iulia-Alexandra Lungu, Federico Corradi, and Tobi Delbrück. 2017. Live demon-         [43]   Mark Sandler, Andrew Howard, Menglong Zhu, Andrey Zhmoginov, and Liang-
+     stration: Convolutional neural network driven by dynamic vision sensor playing               Chieh Chen. 2018. Mobilenetv2: Inverted residuals and linear bottlenecks. In
+     RoShamBo. In 2017 IEEE International Symposium on Circuits and Systems (ISCAS).              Proceedings of the IEEE conference on computer vision and pattern recognition.
+     1–1. https://doi.org/10.1109/ISCAS.2017.8050403                                              4510–4520.
+[36] Ana I Maqueda, Antonio Loquercio, Guillermo Gallego, Narciso García, and              [44]   Amos Sironi, Manuele Brambilla, Nicolas Bourdis, Xavier Lagorce, and Ryad
+     Davide Scaramuzza. 2018. Event-based vision meets deep learning on steering                  Benosman. 2018. HATS: Histograms of averaged time surfaces for robust event-
+     prediction for self-driving cars. In Proceedings of the IEEE conference on computer          based object classification. In Proceedings of the IEEE conference on computer vision
+     vision and pattern recognition. 5419–5427.                                                   and pattern recognition. 1731–1740.
+[37] Riccardo Massa, Alberto Marchisio, Maurizio Martina, and Muhammad Shafique.           [45]   Mingxing Tan, Bo Chen, Ruoming Pang, Vijay Vasudevan, Mark Sandler, Andrew
+     2020. An efficient spiking neural network for recognizing gestures with a dvs                Howard, and Quoc V Le. 2019. Mnasnet: Platform-aware neural architecture
+     camera on the loihi neuromorphic processor. In 2020 International Joint Conference           search for mobile. In Proceedings of the IEEE/CVF conference on computer vision
+     on Neural Networks (IJCNN). IEEE, 1–9.                                                       and pattern recognition. 2820–2828.
+[38] Paul A Merolla, John V Arthur, Rodrigo Alvarez-Icaza, Andrew S Cassidy, Jun           [46]   Mingxing Tan and Quoc Le. 2019. Efficientnet: Rethinking model scaling for
+     Sawada, Filipp Akopyan, Bryan L Jackson, Nabil Imam, Chen Guo, Yutaka Naka-                  convolutional neural networks. In International conference on machine learning.
+     mura, et al. 2014. A million spiking-neuron integrated circuit with a scalable               PMLR, 6105–6114.
+     communication network and interface. Science 345, 6197 (2014), 668–673.               [47]   Zhewei Yao, Zhen Dong, Zhangcheng Zheng, Amir Gholami, Jiali Yu, Eric Tan,
+[39] Nico Messikommer, Daniel Gehrig, Antonio Loquercio, and Davide Scaramuzza.                   Leyuan Wang, Qijing Huang, Yida Wang, Michael Mahoney, et al. 2021. Hawq-v3:
+     2020. Event-based Asynchronous Sparse Convolutional Networks. European                       Dyadic neural network quantization. In International Conference on Machine
+     Conference on Computer Vision. (ECCV). http://rpg.ifi.uzh.ch/docs/ECCV20_                    Learning. PMLR, 11875–11886.
+     Messikommer.pdf                                                                       [48]   Xiangyu Zhang, Xinyu Zhou, Mengxiao Lin, and Jian Sun. 2018. Shufflenet: An ex-
+[40] Fernando Cladera Ojeda, Anthony Bisulco, Daniel Kepple, Volkan Isler, and                    tremely efficient convolutional neural network for mobile devices. In Proceedings
+     Daniel D. Lee. 2020. On-Device Event Filtering with Binary Neural Net-                       of the IEEE conference on computer vision and pattern recognition. 6848–6856.
+     works for Pedestrian Detection Using Neuromorphic Vision Sensors. In 2020             [49]   Xu Zheng, Yexin Liu, Yunfan Lu, Tongyan Hua, Tianbo Pan, Weiming Zhang,
+     IEEE International Conference on Image Processing (ICIP). 3084–3088. https:                  Dacheng Tao, and Lin Wang. 2023. Deep learning for event-based vision: A
+     //doi.org/10.1109/ICIP40778.2020.9191148                                                     comprehensive survey and benchmarks. arXiv preprint arXiv:2302.08890 (2023).
+[41] Garrick Orchard, Ajinkya Jayawant, Gregory K Cohen, and Nitish Thakor. 2015.          [50]   Xuda Zhou, Zidong Du, Qi Guo, Shaoli Liu, Chengsi Liu, Chao Wang, Xuehai
+     Converting static image datasets to spiking neuromorphic datasets using saccades.            Zhou, Ling Li, Tianshi Chen, and Yunji Chen. 2018. Cambricon-S: Addressing Ir-
+     Frontiers in neuroscience 9 (2015), 437.                                                     regularity in Sparse Neural Networks through A Cooperative Software/Hardware
+[42] Angshuman Parashar, Minsoo Rhu, Anurag Mukkara, Antonio Puglielli, Rang-                     Approach. In 2018 51st Annual IEEE/ACM International Symposium on Microar-
+     harajan Venkatesan, Brucek Khailany, Joel Emer, Stephen W. Keckler, and                      chitecture (MICRO). 15–28. https://doi.org/10.1109/MICRO.2018.00011
+

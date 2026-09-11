@@ -1,0 +1,1260 @@
+                                                  SegFold: Accelerating Sparse GEMM with a
+                                                       Fine-Grained Dynamic Dataflow
+                                                                          Xinrui Wu, Hanyu Wang, Jason Cong, and Tony Nowatzki
+                                                                                      University of California, Los Angeles, USA
+                                                                                      {alicewu,hanyuwang,cong,tjn}@cs.ucla.edu
+
+
+                                            Abstract—Generalized sparse matrix-matrix multiplication               While the SpGEMM design space has been well formalized
+                                         (SpGEMM) is critical in many domains. Existing CPUs and                and explored (e.g. [7], [10], [11], [28], [31], [47]), the con-
+                                         GPUs, as well as specialized accelerators, rely on static dataflows    ventional taxonomy ignores a key dimension of dynamism,
+                                         (e.g., inner product, outer product, Gustavson, etc.). Each static
+                                                                                                                leading to lost opportunities in achieving high data reuse and
+arXiv:2606.26701v1 [cs.AR] 25 Jun 2026
+
+
+
+
+                                         dataflow sacrifices some data reuse opportunities and imposes
+                                         constraints on load balance.                                           good load balance across processing elements (PEs)—both of
+                                            To address this inefficiency, we extend the typical SpGEMM          which are key to high efficiency.
+                                         dataflows by considering dynamism. Specifically, we add fine-             Prior accelerators typically adopt one of three dataflows
+                                         grained dynamic scheduling to optimize reuse and reduce                to process each tile: inner product, outer product, or Gus-
+                                         resource contention. We also develop dynamic remapping of
+                                         partially completed work to improve load balance and paral-            tavson. Recent designs such as Spada [24], Trapezoid [49],
+                                         lelism. These ideas are formalized into a specific dataflow called     and Flexagon [28] can select among these per tile, but the
+                                         Segment. To demonstrate Segment, we codesign a SpGEMM                  scheduling within each tile remains static. Additionally, each
+                                         accelerator called SegFold. SegFold includes a memory controller       of the three dataflows makes different tradeoffs. Inner product
+                                         that identifies fine-grained reuse opportunities in a local window     reuses partial sums but sacrifices input locality and requires
+                                         of the stationary input array and exploits them through dynamic
+                                         work assignment. It also incorporates a merge network that             balanced row-column intersections. Outer product reuses in-
+                                         routes inputs to appropriate processing elements (PEs) for             puts but sacrifices output reuse and requires balanced input
+                                         computation while dynamically remapping the work assigned to           nonzeros. Gustavson sacrifices reuse on one of the two inputs
+                                         each PE to balance load. Across diverse densities and matrix sizes,    and imposes some load balance constraints on both nonzeros
+                                         SegFold achieves a geometric-mean 1.95× speedup over state-            and intersections. The best approach depends on the sparsity
+                                         of-the-art SpGEMM accelerators and 5.3× over the best static
+                                         dataflow configuration, demonstrating that adding dynamism to          pattern of the dataset [28], [45], [48], and even depends on
+                                         the dataflow design space unlocks reuse and load-balance gains         sparsity within active tiles [24].
+                                         that no static scheduling choice can achieve in isolation.                Our key insight is that higher reuse and better load balance
+                                            Index Terms—SpGEMM, accelerator, dataflow, sparsity                 can be achieved by introducing temporal and spatial dynamism
+                                                                                                                into the dataflow for processing a single tile. First, instead of
+                                                                I. I NTRODUCTION                                choosing a static ordering of rows and columns to process, a
+                                            Generalized      sparse       matrix-matrix       multiplication    dataflow with dynamic scheduling can choose different fine-
+                                         (SpGEMM) is rapidly becoming the algorithmic backbone of               grained execution orders on different tiles to improve reuse
+                                         workloads with dual-side sparsity, where both operands are             and reduce resource contention. A dataflow with dynamic
+                                         sparse. Such dual-side sparsity arises not only in traditional         mapping can also re-partition storage dynamically to optimize
+                                         domains—e.g., graph analytics, scientific simulation,                  for high PE utilization. These degrees of dynamism show that
+                                         optimization, and economic modeling—but also in modern                 the current dataflow taxonomies are incomplete.
+                                         machine learning, including pruned or structurally sparse                 In this work, we propose a new dynamic dataflow and
+                                         DNN inference and sparse attention in large language models.           codesign an efficient accelerator. Our dataflow, called Seg-
+                                            SpGEMM is a difficult workload to execute efficiently,              ment, uses dynamic scheduling to select a set of elements
+                                         as the computations are fundamentally data-dependent at a              and rows from input matrices to multiply in each cycle; this
+                                         fine-grain, resulting in a host of challenges from irregular           dynamic ordering enables Segment to achieve the benefits of
+                                         memory access, data-dependent control, load imbalance, and             both outer product and Gustavson dataflows. Segment further
+                                         excessive bandwidth use. These challenges are particularly             balances load through dynamic mapping of partial sums across
+                                         severe for unstructured sparsity, which is our focus. The              PEs; PEs redistribute partial sums across the array based on
+                                         vector execution models on CPUs and GPUs are not well-                 intersection patterns while preserving column ordering. Both
+                                         suited for these data-dependent computations, and thus a wide          aspects enable high utilization.
+                                         design space of specialized sparse matrix accelerators has been           To implement this novel dataflow, we develop our mi-
+                                         explored (e.g. [14], [16], [17], [23], [32], [33], [36], [38], [41]–   croarchitecture named SegFold. SegFold comprises three key
+                                         [44], [53], [55], [56]). However, prior accelerators still have        strategies: the memory controller (for dynamic scheduling),
+                                         large headroom for improvement, as they either require high            the adaptive merge network (for dynamic mapping), and
+                                         hardware overhead or do not achieve high utilization.                  the folding mechanism (for virtualizing hardware resources).
+                                                                                  TABLE I: Taxonomy of SpGEMM accelerators.
+For dynamic scheduling, the memory controller maintains an
+active window to monitor multiple input rows and assign             Accelerator       Scheduling           Reconfigurability to
+resources to maximize reuse within the window on-the-fly. The                                              Balance Load & Comp.
+merge network enables dynamic mapping by redistributing             TPU [21]          –                    –
+each computation to an available PE based on the current            ExTensor [17]     IP                   –
+                                                                    SIGMA [39]        IP                   Reconfigurable reduction network
+distribution of partial sums. Finally, output rows vary in          OuterSpace [33]   OP                   None
+length: long rows can overflow a single physical PE row,            SpArch [54]       OP                   Data-dependent comparator arrays
+while short rows leave neighboring PE rows underutilized. We        MatRaptor [43]    Gust                 Comparator queues
+                                                                    Gamma [51]        Gust                 None
+implement a folding mechanism that maps overflow portions           Flexagon [28]     IP/OP/Gust           Reconfigurable distribution, merge,
+of long output rows onto neighboring physical PE rows whose                                                and reduction networks
+resident output rows are shorter, improving utilization without     Trapezoid [49]    IP/Gust              Reconfigurable distribution, merge,
+                                                                                      (spatial/temporal)   and reduction networks
+requiring each logical row to fit within one PE row.                Spada [24]        Window/Tile-         Neighboring-lane work stealing
+   We created a detailed cycle-level simulator for SegFold, and                       size Adaptive
+implemented its major components in RTL for resource eval-          SegFold (ours)    Sub-tile Dynamic     Sub-tile scheduling & Reconfig-
+                                                                                      dataflow             urable merge network
+uation. We evaluate SegFold on a diverse set of matrices with
+different sizes and sparsity levels. We compare SegFold against     Static Dataflow Definitions. Inner product (order M ) N ) K)
+state-of-the-art SpGEMM accelerators that support multiple          performs dot products between rows of A and columns of B.
+static dataflows [28] or adaptive static dataflows [24]. Overall,   Outer product (order K ) M ) N ) performs cross products
+SegFold achieves a geometric-mean speedup of 1.95× over             between column vectors from A and row vectors from B.
+Spada and 5.3× over the best Flexagon dataflow configuration.       Gustavson (order M ) K ) N ) performs row products between
+   To summarize, our main contributions are:                        elements Am,k and the corresponding k row from B. Figure 1
+   • A novel dataflow aspect: dynamic scheduling that re-           shows an example of these dataflows, which we discuss further
+      orders work in an active window to maximize data reuse.       in §II-C to elucidate their limitations.
+   • A novel dataflow aspect: dynamic mapping that dis-
+                                                                    B. Dataflow in Prior Work
+      tributes partial sums across PEs to balance load while
+      preserving column ordering.                                      SpGEMM accelerators span a diverse design space, charac-
+   • A codesigned efficient microarchitecture with significant      terized by their dataflow strategies and degrees of hardware
+      speedups over conventional static dataflows across a          reconfigurability (see Table I). Early versions of TPU [9],
+      range of input matrices and sparsity levels.                  [21] use weight-stationary systolic arrays optimized for dense
+                                                                    workloads, without sparsity support.
+                      II. BACKGROUND                                   In the sparse domain, most prior accelerators adopt a static
+A. SpGEMM Dataflow Design Space                                     dataflow. Architectures like ExTensor adopt a fixed inner-
+   We use A, B to denote the input of SpGEMM, and C for             product dataflow [17]. SIGMA builds upon this by incorpo-
+the output. The arithmetic representation for SpGEMM is:            rating a reconfigurable reduction network [39]. Outer-product
+                          P                                         accelerators, such as OuterSpace [33] and SpArch [54], exploit
+                 Cm,n = k Am,k × Bk,n ,                  (1)        sparsity using mechanisms like specialized memory hierarchy
+  where both A and B are sparse. The iteration space                or comparator arrays. Gustavson-inspired designs, including
+                                                                    MatRaptor [43] and Gamma [51], focus on row-/column-wise
+ S = {(m, n, k) | 0 ≤ m < M, 0 ≤ n < N, 0 ≤ k < K},                 intersections through comparator queues; Gamma and Zed [6]
+can be broken into multiplications and additions as:                additionally include a matrix-preprocessing step that groups
+                                                                    similar rows of the stationary matrix to improve reuse on the
+                   Tm,n,k = Am,k × Bk,n ,                    (2)    streaming matrix.
+                                                                       Recent efforts like Flexagon [28], Trapezoid [49], Sp-
+                             P
+                      Cm,n = k Tm,n,k .                      (3)
+                                                                    MARD [46], SparGD [45], and SPARM [26] support multiple
+   T is the product of A and B elements paired by the shared        dataflows (inner-product, outer-product, Gustavson), employ-
+index k; C is the reduction of T along the K dimension.             ing reconfigurable distribution, merge, and reduction fabrics
+   The major aspects of SpGEMM’s dataflow design are:               for greater flexibility across different matrices.
+  1) Tiling strategy for M , N and K.                                  Spada [24] develops a window-adaptive (WA) dataflow
+  2) Scheduling of all dimensions (M , N , K plus tiling            that supports a spectrum of execution modes by adjusting
+     subdimensions) onto spatial and temporal axes.                 window height and width at tile granularity to realize the
+  3) Fusion of the computation in Eq. 2 and Eq. 3.                  input and output reuse benefits of different dataflows under
+   Our work focuses on the second and third aspects – i.e.,         varying sparse patterns. It uses local dynamism: neighboring
+the scheduling and fusion of work at a fine-grain within a tile.    lanes can opportunistically process each other’s elements when
+In this paper, we discuss three representative dataflows—inner      idle, providing some degree of dynamic load balancing within
+product, outer product, and Gustavson. We next explain how          the merge network. However, the overall scheduling remains
+each dataflow uses different scheduling and fusion strategies.      statically determined by the tiled loop structure.
+                            Data Reuse                        e       f     Data Reuse                          v      w       Data Reuse
+                            b is used twice                                 c, d are used twice by                             s are used twice by v, w
+                            because of the                                  e, f;
+                            reduction on K                                  e, f are also used
+                                                                            twice by c, d
+
+
+
+     a       b              Computations          c           u             Computations              s         t              Computations
+                            2 MUL                 d                         4 MUL                                              2 MUL
+                            1 ADD
+
+                                                                            Computations                                       Computations
+                            Computations                                    4 MUL                                              2 MUL
+                            1 MUL                             i   j         1 ADD                                              1 ADD
+
+
+                                                                                                                               Data Reuse (across
+                            Data Reuse (across                              Data Reuse (across                                 iteration)
+                            iteration)                g                     iteration)                                         t could possibly be reused
+                            a could possibly be                             u could possibly be                                if output is stationary
+     a                      reused if A is            h       u             reused if output is                 t
+                                                                                                                               v, w could possibly be
+                            stationary                                      stationary                                         reused in the next iteration
+
+
+         (a) Example of Inner Product                     (b) Example of Outer Product                      (c) Example of Gustavson
+            Fig. 1: Comparison of classic dataflows. Every two consecutive blocks in a column (top vs bottom) are two sequential snapshots.
+
+
+   Within this continuum, SegFold introduces a dynamic                       Imbalanced Load & Computation. Static scheduling exac-
+dataflow that adapts at sub-tile granularity. Unlike Spada’s                 erbates imbalance in load and computation, especially when
+window-size adaptation, SegFold dynamically reorders work                    there is non-uniformity in the data. For inner product, static
+selection (S ELECTA in §III-A) within an active window based                 scheduling always computes between a row vector and a col-
+on instantaneous reuse opportunities, and uses a reconfig-                   umn vector. The actual number of intersections is determined
+urable merge network to dynamically remap partial sums                       by the nonzero positions in the two vectors. As shown in
+(S EGMENT BC in §III-B) based on output sparsity patterns                    Fig. 1(a), the number of multiplications and additions varies
+discovered on-the-fly.                                                       across iterations. For outer product, static scheduling causes
+                                                                             each iteration to generate an entire matrix as a partial sum.
+C. Limitations of Static Scheduling: Low Data Reuse and                      The number of multiplications depends on the nonzeros in the
+Imbalanced Load & Computation                                                column and row. The number of additions depends entirely
+Data Reuse. The scheduling order of M , N , and K deter-                     on the positions of sparse values in A and B. As shown
+mines the reuse of A, B, and C. Input reuse and output reuse                 in Fig. 1(b), there is only one addition across the matrix,
+are both governed by where K sits in the loop nest. The further              while other positions have zero additions. For Gustavson, the
+outward K is placed (relative to M or N ), the more reuse of B               computation imbalance is similar to that of outer product.
+or A, respectively. Conversely, the further inward K is placed,              Additionally, static scheduling causes load imbalance across
+the more reuse of C.                                                         A rows, which further harms the reuse of B rows, as shown
+   For inner product, K is in the innermost loop; therefore,                 in Fig. 1(c).
+only outputs are reused, as shown in a single iteration in
+                                                                             D. Motivation for Dynamic Dataflow
+Fig. 1(a). However, there is possible data reuse of A across
+iterations if we consider A to be stationary. For outer product,                Static scheduling fixes the execution order and resource as-
+K is in the outermost loop, so both A and B exhibit good                     signment ahead of time, leaving it unable to react to variations
+data reuse. However, each iteration generates an entire TM,N,k ,             in nonzero distribution or rebalance work at runtime. As a
+meaning that revisiting the same output entry is distant in                  result, no static dataflow can simultaneously maximize reuse
+the loop nest. The upper bound (dense) distance between two                  on all three operands. We propose a dataflow that integrates
+outputs that must be accumulated is M × N , and this distance                dynamic scheduling to adapt work selection within a tile and
+varies based on the occupancy of A and B.                                    dynamic mapping to redistribute partial sums across PEs at
+   For Gustavson, K is in the middle loop and N is in                        runtime, broadening the achievable reuse–utilization tradeoff.
+the innermost loop. This allows A to be fully reused. The
+                                                                                                     III. S EGMENT DATAFLOW
+output reuse is less distant than in outer product, since each
+iteration generates only a row of the partial sum. The upper                   Compared to prior dataflows that follow a fixed loop order
+bound (dense) distance between two accumulated outputs is                    and iterate strictly over static loop bounds, we propose a new
+N . However, this dataflow sacrifices the potential for good                 dynamic dataflow, which we call Segment. Segment dataflow
+reuse of B and still faces the variable intermediate output                  uses an active window to reorganize iteration over Am,k to
+sizes. Therefore, no single static schedule can simultaneously               maximize reuse and load balance. To enable efficient manage-
+maximize reuse of all inputs and outputs.                                    ment of irregular intersections, we maintain partial results in a
+compressed, ordered coordinate space mapped to PEs. We use              Algorithm 1: S ELECTA: Dynamic (m, k) Selection
+the term segment because it represents the bounded path that             Input: A bitmask, B-row metadata, hardware state; Wmax
+an element takes through this coordinate space from injection                    window size; Rmax PE-row capacity
+to accumulation.                                                         Output: Selected (m, k) pairs, corresponding partial B rows
+   Figure 2(d) summarizes the algorithm. It introduces two key           // Inter-tile: sliding window over K
+                                                                    1    while |Wk | < Wmax and H AS M ORE K() do
+components that add dynamism:                                       2        Wk ← Wk ∪ {next k};
+  1) S ELECTA: dynamically selects and reorders (m, k) pairs,       3    end
+     breaking static m–k nesting to increase B reuse and spa-            // Intra-tile: greedy mk-dynamic
+     tial parallelism, while allowing partial B-row processing               selection
+                                                                    4    selected ← ∅; usedM ← ∅;
+     to absorb row-wise irregularity. Each invocation produces
+                                                                    5    foreach k ∈ Wk do
+     up to Rmax (the PE-row capacity) pairs, where multiple         6        if |selected| ≥ Rmax then break;
+     pairs may share the same k to enable B-row reuse but           7        foreach parallel m s.t. A[m, k] = 1 do
+     no two share the same m to avoid C-row contention.             8             if m ∈
+                                                                                       / usedM and |selected| < Rmax then
+  2) S EGMENT BC: performs on-the-fly B–C intersections             9                 selected ← selected ∪ {(m, k)};
+                                                                   10                 usedM ← usedM ∪ {m};
+     across segments, exploiting spatial/temporal locality in
+                                                                   11             end
+     C to improve reuse of C and reduce irregular reduction        12        end
+     overhead. It consumes the selected pairs and their partial    13    end
+     B rows from S ELECTA and routes each Bk,n element to                // Inter-tile: Retire completed ks and
+     find or create its position in a coordinate space of C.                 refill window
+                                                                   14    foreach k ∈ Wk s.t. A LL D ONE(k) do
+   The main advantage of Segment dataflow is its ability to        15        Wk ← Wk \ {k};
+simultaneously exploit reuse across all three operands while       16    end
+increasing parallelism by combining multiple granularities         17    return selected;
+within a unified execution model. Specifically, it captures
+element-wise reuse of A, row-wise reuse of B across different
+A elements, and tensor-wise reuse of C across different            elements that maximizes row-wise intersection—the number
+partial-sum iterations. In addition, Segment dataflow provides     of m indices sharing the same k—which directly increases
+element-wise flexibility in C reductions by allowing elements      reuse of the corresponding B row.
+within the tensor to move dynamically, thereby redistribut-           Algorithm 1 formalizes S ELECTA: it selects (m, k) pairs
+ing the reductions to allow parallelization. Canonical sparse      from the input metadata based on the runtime hardware state.
+dataflows do not provide this combination of properties. IP        The flexibility in S ELECTA originates from the associativity
+only exploits element-wise reuse of C; OP enables row-wise         of the reduction over the K dimension, which allows intersec-
+reuse of A and B but suffers from poor C reuse and high            tions in Eq. 2 to be computed in any order without violating
+irregular reductions; Gustavson achieves element-wise reuse        the accumulation rule in Eq. 3. Based on this observation,
+of A and row-wise reuse of C, but misses opportunities for         S ELECTA performs two levels of reordering: intra-tile reorder-
+reusing B and still incurs significant reduction irregularities    ing, which maximizes the number of A entries selected within
+on C.                                                              each k column, and inter-tile reordering, which maximizes the
+   SegFold realizes this dataflow through S ELECTA and S EG -      number of k columns considered concurrently.
+MENT BC, as illustrated in Fig. 2(d). Matrix A is processed
+at element-wise granularity, while matrix B is processed at        Intra-tile Reordering. Unlike prior dataflows that follow
+row-wise granularity. In each iteration, S ELECTA examines         either an m-prior or a k-prior order, S ELECTA decides the set
+the active window over A and greedily selects (m, k) pairs         of (m, k) pairs using an mk-dynamic order. More specifically,
+that maximize row-wise reuse of B. The selected A elements         we simultaneously consider the following two criteria. First,
+are then broadcast together with their corresponding B rows        we greedily maximize the number of pairs that share the same
+to exploit element-wise reuse. For each Bk,n element, S EG -       k, as shown in Algorithm 1 line 5. Second, we avoid selecting
+MENT BC dynamically routes it within a row of the tensor-          pairs with different k values but the same m index, as shown
+wise C, either accumulating it into an existing partial sum or     in Algorithm 1 line 8, because they update the same output
+inserting a new entry. Across consecutive iterations, reductions   row and can create reduction conflicts when their generated
+for C elements are redistributed dynamically to mitigate           partials share column positions.
+register pressure and improve load balance.                           We use the A pattern in Fig. 2 to demonstrate the advantages
+                                                                   of our algorithm over conventional ones. Gustavson dataflow
+A. S ELECTA: row-wise intersection with reordering K               (Fig. 2(a)) follows an m-prior order and chooses A0,2 , A1,1 ,
+  Because matrix B is processed at row-wise granularity,           A2,0 and A3,0 . This restricts the potential reuse of the first
+dimension N is placed in the innermost loop, as shown in           B row, corresponding to the two elements highlighted in the
+Fig. 2(d). This inherently maximizes the reuse of A. The           yellow box. Outer product (Fig. 2(b)) follows a k-prior order
+nonzero positions of A determine which rows of B are               and selects A2,0 , A3,0 , A1,1 and A3,1 . Nevertheless, A3,0 and
+accessed in each iteration. S ELECTA therefore picks a set of A    A3,1 have the same m index, so their products target the
+                                                                                        N
+
+           Baselines: static/fixed dataflow                                    0    1       2   3
+                                                                                                       1     Input: A, B input matrices
+                                                                           0
+                                                                                                       2     Output: C matrix
+                Fail to               Conflict             Optimal
+                                                                       K   1
+               reuse B                 on C                choices
+                                                                                                       3 while HasMoreA() do
+                 K                      K                    K             2
+                                                                                                       4      selectedA = SelectA(A, hardware) // Choose a batch of (m,k) pairs
+           0     1   2            0     1    2         0     1     2               Matrix B            5      foreach (m, k) in selectedA do
+       0                      0             X      0                                                   6           foreach n in NonZeroIndices(B[k,:]) do
+                                                                                                       7                segmentBC = SegmentBC (m,k,n);
+       1                      1             X      1        skip
+   M                                                                                                   8           end
+       2                      2                    2                                                   9           UpdateHasMoreA(selectedA, segmentBC);
+       3   X X                3                    3        skip
+                                                                                                       10     end
+                                                                                                       11 end
+           Matrix A                Matrix A            Matrix A             Matrix C
+       (a) m-prior order       (b) k-prior order             (c) mk-dynamic order                                                     (d) Segment Dataflow
+Fig. 2: SegFold Dataflow Example. A batch of (m, k) pairs is chosen by S ELECTA, and S EGMENT BC(m, k, n) is invoked over B[k, :] nonzeros for ordered
+processing in the virtual coordinate space. Reuse benefits over two iterations are shown in pink. Tick marks indicate the A elements selected for each spatial
+iteration under different dataflows.
+
+same output row and may contend when the corresponding                                          for C and (2) reduce each Tm,n,k in place into the partial sum
+                                                                                                  ∗ 1
+B rows contribute to overlapping n, which we do not know                                        Cm,n   .
+beforehand. Meanwhile, our algorithm selects A0,2 , A1,2 ,                                         Let (x, y) ∈ X × Y denote the virtual coordinate at
+A2,0 , and A3,0 , exploiting B reuse while avoiding reduction                                   which a nonzero element of C is allocated for reduction,
+conflicts in C.                                                                                 where |X| is the number of non-empty rows in C and |Y |
+Inter-tile Reordering. Instead of choosing (m,k) pairs from                                     is the maximum number of nonzeros in any row of C. We
+a fixed tile, S ELECTA maintains a sliding window over the K                                    refer to V = X × Y as the virtual coordinate space; each
+dimension. A k value in the window is marked as complete                                        occupied virtual coordinate holds a distinct C element. As
+                                                                                                                                    ∗
+and replaced by a new one once all A–B intersections for that                                   new Tm,n,k are deposited into Cm,n     , the virtual coordinate
+k have been processed.                                                                          space evolves over time: newly created C entries are inserted,
+                                                                                                shifting existing entries to maintain ordering. In the V space
+   For example, in Fig. 3, the                      K
+                                                                                                and the algorithm description, we do not distinguish T from
+third column of A and the cor-
+                                                                                                B, since the dynamics depend only on the n indices. We use
+responding third k slice of B
+                                                                                                ft to denote the mapping from the dense Cartesian space to
+(shown transposed in the fig-
+                                                                                                the V space at time step t:
+ure) each participate in only
+                                             t            t+1
+one effective intersection. Once                                                                                                ft (m, n) = (x, y).                               (4)
+that intersection completes, the Fig. 3: Example active window of
+window advances from k = S ELECTA, shown in red for two                                         ft (m, n) indicates the compressed virtual location that stores
+                                                                                                                    ∗
+{0, 1, 2} to k = {0, 1, 3}. This time steps.                                                    the partial sum Cm,n     at time t.
+enables k-level pipelining across different (m, k) tiles.                                          To preserve both correctness and maximize locality, we
+   Moreover, using an entire B row as the intersection gran-                                    constrain the mapping ft with the following properties:
+ularity increases reuse of the triggering A element across the                                    1) Injectivity. ft is injective: partial sums for distinct (m, n)
+loaded B row, but it also reduces the available parallelism                                          pairs are assigned to distinct virtual coordinates (x, y).
+across different B rows, because it requires the dataflow to                                      2) Row saturation. Within each virtual row, nonzeros oc-
+finish an entire row of length N before moving on to the                                             cupy consecutive y positions, left to right (no gaps).
+next intersection. To alleviate this limitation, we relax the                                     3) Column ordering. Within each virtual row, column
+requirement of fully loading a B row before processing and                                           indices strictly increase from left to right. That is, ∀m,
+instead allow the hardware to operate on partial B rows.                                             if ft (m, n1 ) = (x, y1 ) and ft (m, n2 ) = (x, y2 ) with
+Concretely, we decompose the N dimension into smaller                                                n1 < n2 , then y1 < y2 .
+segments and interleave segments from multiple B rows. A                                          4) Time ascending. Entries in a virtual row only move
+single active window tracks the progress of each B row                                               “forward” over time. For each x, if ft (m, n) = (x, y)
+within the window, enabling higher inter-row parallelism while                                       and ft′ (m, n) = (x, y ′ ) with t < t′ , then y ≤ y ′ .
+preserving the reuse benefits of row-wise intersection.                                            Fig. 4 illustrates how the mapping f is updated in the walk-
+                                                                                                through example from Fig. 2(c). The numbers in the boxes
+B. S EGMENT BC: on-the-fly element-wise redistribution                                          show the column index n in the dense Cartesian space. At
+                                                                                                time step t, the bottom row of ft contains {0, 2} (Fig. 4(a)).
+   The sparse patterns of both T and C are highly irregular                                     When new B elements arrive and intersect with matching
+and data-dependent, making it impractical to materialize a                                      A elements, they generate partial sums with column indices
+large intermediate tensor T and then reduce it afterward.                                       {0, 1}. Because the partial sum with column index 1 has not
+Therefore, Segment dataflow performs on-the-fly element-wise
+redistribution to (1) generate and maintain compressed indices                                      1 Here   we use * to denote the intermediate result accumulated so far.
+  Appeared   1 3          New inter-                   Virtual                         PE communicates with its nearest neighbors, forming a mesh
+  partials   1 3           sections 0 1               exceeds
+            0 2                                                                        network across the 2D PE array. At the PE-row level, each
+   before t 0 2           from t to t' 0 1            physical      0 1 2 3            PE row has a dedicated row shifter that shifts and streams the
+        1        3              1        3                 1        3                  partial B row horizontally into the PEs. Across PE rows, a
+   PE       PE       PE    PE       PE       PE       PE       PE       PE
+                                                                                       vector multicast network routes B segments to the appropriate
+        1        3              0        1        3        0        1        3
+   PE       PE       PE    PE       PE       PE       PE       PE       PE             PE rows, enabling flexible and conflict-free global redistri-
+                                                                                       bution. Together, these components provide both fine-grained
+        0        2              0        2                 0        2        3
+   PE       PE       PE    PE       PE       PE       PE       PE       PE             local communication and high-bandwidth global redistribution
+        0        2              0        1        2        0        1        2         essential for SegFold’s dynamic dataflow.
+   PE       PE       PE    PE       PE       PE       PE       PE       PE
+                                                                                          To enable high intra-tile reuse, SegFold employs an on-
+    (a) V space at t       (b) V space at t'          (c) Folded V space               chip cache to store tiles of A and B. §IV-B describes the
+Fig. 4: Example of on-the-fly update of the mapping from the C column                  memory controller, which is the key component realizing
+indices to the V space. Example from Figure 2(c).                                      the Segment dataflow. As shown in Figure 5, this unit is
+                                                                                       connected to the on-chip metadata buffer and to the Index-to-
+previously appeared in the V space, the mapping is updated to                          PE Mapper (IPM)—a lookup table that maps each incoming
+{0, 1, 2} to satisfy the column-ordering property (Fig. 4(b)).                         B element’s column index to its starting PE position in the
+   With the definition of the V space, we formally define                              merge network (§IV-A2), enabling it to perform the S ELECTA
+segment as the displacement, measured in virtual coordinate                            scheduling algorithm and S EGMENT BC mapping algorithm
+positions, that a B element traverses before reaching its final                        respectively. It ensures that the PE array will receive a steady,
+position in the PE array. The name S EGMENT BC reflects that                           reuse-optimized supply of matrix tiles and minimizes off-chip
+an element enters the V space as B carrying B’s metadata and                           memory accesses.
+leaves as C with its value and metadata updated. Specifically,
+                                                                                       A. PE Row
+for a B element with column index n that enters the array and
+is eventually accumulated into row m of C:                                                Figure 5(b) illustrates a representative PE row containing
+                                                                                       four PEs. Each PE integrates an arithmetic logic unit (ALU)
+             displacement = ∥ftin (m, n) − ftout (m, n)∥,                        (5)   for local computation, a FIFO buffer that stores matched-but-
+where tin and tout denote the times when the element enters                            not-yet-consumed B values, and a router with four physical
+and is consumed, respectively. The displacement arises be-                             ports to its neighbors. Although the router supports four-
+cause the V space mapping f evolves over time: as new A–                               way connectivity, only one direction is active at any time,
+B intersections are discovered on-the-fly, newly formed C ∗                            determined by the folding mechanism (§IV-D).
+entries are inserted into the virtual coordinate space, shifting                          Initially, the router’s active direction is rightwards, consis-
+existing entries and potentially increasing the distance from                          tent with the default column-ordering rule of the V space map-
+ftin to the final position ftout . Additionally, the initial mapping                   ping. Here, the PE row behaves as a simple right-propagating
+ftin may be approximate due to hardware constraints (§IV-A2).                          merge network, forming the baseline for our design. The
+   The optimization goal of S EGMENT BC is to minimize                                 folding technique (§IV-D) modifies these active directions.
+segment displacement, since longer displacements cause more                               We first introduce our PE-to-Virtual-Coordinate mapping.
+network contention. We employ a dynamic mapping strategy                               Each PE in a row holds exactly one virtual coordinate position
+that determines where B elements are placed and how they                               of the output matrix C. Concretely, PE p in row r stores the
+                                                                                                        ∗
+traverse the array; we discuss data traversal in §IV-A1 and                            partial sum Cm,n     whose V space coordinate is (r, p), along
+mapping in §IV-A2.                                                                     with the Cartesian column index n that maps to this position.
+                                                                                       A PE row therefore represents one virtual row of C, with PEs
+                 IV. S EG F OLD M ICROARCHITECTURE                                     ordered left-to-right by increasing column index. When a B
+   Figure 5 presents a high-level overview of the SegFold                              element with column index b enters a PE row, it is injected
+microarchitecture. SegFold adopts a two-dimensional array of                           at the starting position determined by the IPM (§IV-A2) and
+processing elements (PEs), following the architectural prin-                           traverses rightward through the merge network, comparing b
+ciples of prior spatial accelerators [3], [21], [37], [49]. In                         against each PE’s stored column index c until it finds a match
+terms of the stationarity taxonomy [31], SegFold is effectively                        (b = c, triggering accumulation) or a gap (b < c, triggering
+row-stationary at the PE-row granularity, where each row                               insertion).
+owns an entire virtual row of C for its lifetime, but only                                Each PE row also has a dedicated connection to a small local
+approximately output-stationary at the PE level, since outputs                         memory containing: (i) the IPM, which the merge network
+may be remapped between PEs by spatial folding or spad                                 keeps up-to-date as C entries shift, and (ii) a scratchpad
+spills. This two-level view captures SegFold’s tradeoff: strict                        (spad) holding overflow C values. All PEs within a row share
+stationarity at the finest grain is sacrificed for the flexibility to                  this memory interface; therefore, we limit accesses to avoid
+rebalance load at runtime.                                                             contention.
+   To efficiently orchestrate data movement, SegFold integrates                           1) Adaptive Merge Network: We refer to the PEs’ local
+a hybrid on-chip interconnect. At the single-PE level, each                            interconnect as a merge network. Each PE contains a merger
+                                      DRAM                           Load/Store C                                                                      Shared bus within a PE row to Load/Store C
+                                    Data Cache                                                                                Row-Local Memory
+                                                                                           PE             PE         PE           queue IPM                       PE               PE                PE        PE
+                                Memory Controller
+
+
+
+
+                                                                Broadcast A
+                           Mapping Lookup Table                                                                      >>         PSUM SPAD                         SW            SW                   SW        SW
+
+                                                                                           PE             PE         PE
+                                                                                                                             (b) PE row                                (c) PE
+                                                                                                                     >>
+                      Active                 Active
+
+
+
+
+                                                                                                                                                                                   MUX
+                                                                                                                                                            MUX
+                      window                 window                                        PE             PE         PE
+
+
+
+
+                                                                         Multicast B
+                                                                                                                     >>                                      <                      <
+                                   A                  B
+                                                                                                                                                       PE
+                                                                                                                                                             +                PE
+                                                                                                                                                                                    +
+                               Metadata Scratchpad
+                                                                                           PE             PE         PE
+                                                                                                                                                                   *                     *
+                                                                                                                     >>
+
+
+
+
+                                                                                                                                                                         FIFO
+
+
+
+
+                                                                                                                                                                                              FIFO
+                                                 (a) Overview
+
+
+
+
+                                                                                                                                                 MUX
+
+
+
+
+                                                                                                                                                                        MUX
+                                   Fig. 5: SegFold µarch overview. PEs communicate over a local network, and share a row-level memory.
+
+
+                                                                                                                                                                                977
+        1         3            4                            1                          3              4
+  PE0       PE1          PE2           PE3            PE0                     PE1               PE2            PE3
+                                                                                                                                              433                                                             null1111
+        2                                                                              2
+  (a) Merger at PE0, b > c (case 1)                   (b) Merger at PE1, b < c (case 2)                                     LUT 2 1 1                         655                               null9 9                  null
+                                                                                                                                                                                                                           1313
+        b will be sent to PE1                          3, 4 will be pushed to the right
+                                                                                                                            000         322         544                866               108 8            null
+                                                                                                                                                                                                            1010    null
+                                                                                                                                                                                                                      1212   null
+                                                                                                                                                                                                                               1414
+        1                      3             4              1                          2              3              4                                                              matrix     PE
+  PE0       PE1          PE2           PE3            PE0                     PE1               PE2            PE3                                                                  col idx   col idx
+                  2                                                                    1                                  Fig. 7: Index to PE mapper (IPM) using binary search. Each level is in its
+  (c) Merger at PE1, b = c (case 3)                   (d) Merger at PE1, b > c (case 2)                                   own look up table (LUT) for pipelining.
+   b matches and consumes at PE1                      pushes will result in duplicated c
+Fig. 6: Example of on-the-fly intersection where the indices of B are >, <,
+=, and conflicting with the C index.                                                                                      column indices to the left of ftin satisfy c < b. Figure 6(d)
+                                                                                                                          shows a scenario that violates this, and is prohibited by our
+(the local component of the merge network) that compares the                                                              dataflow.
+incoming B element’s column index against the C-column in-                                                                   2) Index to PE Mapper (IPM): To avoid the prohibited
+dex stored at this V space position. Based on this comparison,                                                            scenario in Fig. 6(d), the key challenge is to construct a
+the merger decides whether to forward b to a neighbor or retain                                                           mapping that (i) guarantees a legal ftin for every segment and
+it locally for accumulation.                                                                                              (ii) simultaneously minimizes the traversal distance required.
+   Figure 6 illustrates how the merge network determines the                                                              Achieving both goals increases PE utilization by enabling
+final virtual position ftout in S EGMENT BC for each incoming                                                             more pipelined segment injections from different B rows,
+B element. We use the red boxes to denote the Cartesian                                                                   while also reducing merge-network latency and contention.
+column index of the incoming B element and the pink boxes                                                                    We will now use s as shorthand for ftin (where the B
+to denote the Cartesian column index of the C ∗ element stored                                                            element enters the network). As discussed, a starting point
+at the PE.                                                                                                                s is legal if all C ∗ -column indices that appear to the left of
+   Consider a PE row where the C ∗ -column indices {1, 3, 4}                                                              s are strictly smaller than b, i.e., ∀i < s, ci < b. Due to
+are stored at positions y = {0, 1, 2}. A B element with column                                                            row saturation and the column-ordering property, the ci values
+index b = 2 arrives at ftin = 0. At each position, the merger                                                             stored in the merges are guaranteed to be strictly ordered from
+compares b and c (we use lower case to represent column                                                                   left to right without gaps. This monotonicity allows us to
+indices), leading to one of these cases:                                                                                  perform a binary search over the ci values to determine the
+                                               ∗
+    • Fig. 6(a): b > c. Because the C -column indices are
+                                                                                                                          rightmost legal starting point for b.
+      strictly monotonic, the final position ftout must lie to the                                                           Figure 7 shows an example of an IPM with multiple lookup
+      right of y. The element is therefore forwarded to y+1.                                                              tables (LUTs), looking up a B element with column index 11.
+    • Fig. 6(b): b < c. If we eventually reach a position y                                                               In the first level, it is greater than 9 and will go to the right
+      with a larger c, because monotonicity ensures that no                                                               branch. In the second and third level, as both keys are showing
+      match exists further to the right, the network shifts all                                                           null, it will go to the left branch. Finally, it reaches a leaf with
+      C ∗ -column indices to the right by one slot. This creates                                                          value 8. Therefore, this b element will be mapped to the 8th
+      an empty slot at y: the final virtual position ftout .                                                              merger and traverse the adaptive merge network.
+    • Fig. 6(c): b = c. A match is found at position y, which                                                             Row-wise Mapping. Computing a separate mapping for every
+      becomes ftout .                                                                                                     b element in a B row would be prohibitively expensive in
+   Together, these cases ensure that each B element success-                                                              hardware, since it would require the IPM to support a number
+fully finds its final virtual position ftout , provided that the C ∗ -                                                    of simultaneous reads proportional to the number of PEs. To
+reduce this overhead, we instead compute the mapping only           a configuration that preserves performance while capping
+for the first nonzero element of each B row. This optimization      metadata overhead.
+is valid because, under the row mapping, each element’s start
+                                                                    C. Vector Multicast Network
+point s increments by 1, matching the increment of its column
+index b. Combined with the column-ordering property, this              SegFold employs a vector multicast network [50] for load-
+guarantees that if the first mapped element of a row satisfies      ing B rows. Each PE row is responsible for processing at
+the legality condition ∀i < s, ci < b, the remaining elements       most one B row at a time. Because elements within a B row
+automatically satisfy it as well.                                   must be mapped to a consecutive set of mergers—with the
+                                                                    head position determined dynamically—we incorporate a row
+IPM Updates. When a PE updates its c value, it notifies the
+                                                                    shifter that realigns the incoming B elements to the appropri-
+IPM. Because the LUT has a limited number of write ports,
+                                                                    ate consecutive positions. Furthermore, S ELECTA may choose
+multiple updates to the same entry are queued and applied
+                                                                    multiple distinct k values simultaneously, enabling several B
+serially, so the IPM may not always reflect the most recent
+                                                                    rows to be active in the same cycle. As shown in Fig. 5(a),
+c value. Due to the time-ascending property of these updates,
+                                                                    the network for B must multicast multiple B rows into the
+an out-of-date LUT can only map a b element to a position to
+                                                                    PE rows; we therefore use a vectorized crossbar to provide
+the left of its true most-recent legal starting point. This does
+                                                                    the multicast bandwidth from the memory backend to the PE
+not violate correctness, since the merge network still identifies
+                                                                    rows. Because streaming multiple vectors increases complexity
+the correct match, but it may increase the segment length. We
+                                                                    at the network ports, a key design parameter is the number of
+quantify the gap between fully up-to-date c indices and the
+                                                                    B rows that can be multicast in parallel. Our design allows up
+LUT-based mapping with bounded write bandwidth in §VI-C.
+                                                                    to 4 vector multicasts, which balances area/energy efficiency
+                                                                    and performance.
+B. Memory Controller
+                                                                    D. Folding: Mapping Segments to PEs in Space and Time
+   The memory controller in SegFold realizes the scheduling
+logic of the Segment dataflow: it maintains an active window           The final V space representation of C will exhibit highly
+over B rows, filters rows by intersection, and tracks partial-      irregular row lengths, and each virtual position may require a
+row progress, while also serving the underlying load/store          different number of MAC operations. To maximize utilization
+requests for A, B, and C. Since the goal of S ELECTA is             and bandwidth, we do not constrain the V space row length
+to choose multiple A values from the same column, A is              to be less than the physical length of a PE row. Instead, we
+stored in a column-major format. In contrast, B is processed        introduce two complementary techniques—spatial folding and
+at row granularity, so it is stored in a row-major format.          temporal folding—that effectively map an irregular V space
+Only nonzero elements of both matrices are stored. Because          onto a regular 2D PE array.
+accesses typically touch consecutive elements within a column       Spatial folding addresses the mismatch between the irregular,
+of A or a row of B, the memory controller includes a                variable-length rows in V space and the fixed physical width
+coalescing unit that merges fine-grain requests before issuing      of the PE array. A long virtual row of C may extend beyond
+them to the cache and DRAM.                                         the capacity of a single PE row, while a short row may leave
+   As discussed in §III-A, the active window tracks a bounded       many PEs idle. To avoid underutilization, SegFold allows each
+set of K values for both A and B. The metadata for A is a           logical row of outputs to fold across multiple PE rows.
+compact bitmask recording consumption status. The S ELECTA             Consider a PE array with R rows and P columns, indexed
+logic scans this A-side bitmask over the active window each         by coordinates (r, p) for 0 ≤ r < R, 0 ≤ p < P . Each
+cycle to avoid m-index conflicts among already-selected pairs       router maintains a direction configuration, which specifies
+and to maximize the nonzero k-index within a single column.         which of the four output ports will be used to place the
+The bitmask read and window scan are O(W ) in the window            next logical column of the V space row. When an on-the-fly
+size; for our default W = 32, the entire scan completes within      intersection generates a new virtual column j in an occupied
+a single cycle as a modest combinational circuit.                   physical position (r, p), the router at (r, p) examines its four
+   For B, we use a doubly compressed sparse-row format              neighboring PEs in the following priority: {right, up, down,
+(DCSR) [1], augmented with an extra start pointer per active        and left}. Right is always the first priority to first realize the
+row to track unprocessed elements. The second level of              default merge network configurations.
+compression skips empty rows in O(1) during scheduling,                Formally, it selects the first coordinate
+which is critical for highly sparse matrices where many rows
+                                                                      (r′ , p′ ) ∈ (r, p + 1), (r − 1, p), (r + 1, p), (r, p − 1) (6)
+                                                                                  
+in the active window contribute no nonzero intersections with
+the selected A columns and would otherwise be enumerated            whose occupancy bit satisfies Or′ ,p′ = 0. If such a neighbor
+explicitly.                                                         exists, the router sets Or′ ,p′ ← 1, forwards the virtual column
+   Supporting intra-window reordering of k means that a larger      j to that PE, and updates its direction configuration to point to
+window enables more B rows to be processed in parallel.             (r′ , p′ ) for the next placement. In the example of Fig. 4(c), the
+However, a larger window increases metadata size and update         fourth element with index 3 in the bottom row is folded to the
+traffic. In §VI-D, we evaluate different window sizes and select    upper PE with an updated router configuration. Because each
+              TABLE II: SegFold Hardware Configuration
+                                                                           The memory hierarchy uses an on-chip cache backed by off-
+               Parameter                           Value                chip HBM2 DRAM, with details in Table II. Off-chip memory
+                PE array                             16 × 16            is modeled using Ramulator2 [25] configured with an HBM2
+     Per-row hardware (×16 rows)         shifter, spad bank, LUT bank   at 2 Gbps. All hardware components are simulated on a cycle-
+         Active B window size                           32
+    Cache size, associativity, line size    1.5 MiB, 16-way, 128 B      by-cycle basis to ensure timing accuracy.
+                 DRAM                         HBM2-8Gb, 2 Gbps          Baselines. We compare to two state-of-the-art accelerators.
+                                                                           Flexagon [28] is a reconfigurable accelerator capable of
+router exposes only its highest-priority free neighbor as the           supporting multiple canonical dataflows. The on-chip com-
+active direction, the spatial footprint of the V space row grows        ponents of Flexagon are modeled using the open-source
+smoothly: horizontally when possible, and folding vertically            STONNE simulator [30], integrated with the same Ramulator-
+when the row exceeds the local PE-row capacity. Through                 based memory backend for consistency. Since Flexagon was
+this mechanism, spatial folding enables irregular, long V space         originally designed as a 1D array accelerator, it is extended
+rows to occupy additional PE rows when necessary, while                 to a 2D configuration for fair comparison. This extension
+allowing shorter rows to leave unused PEs available for other           duplicates the on-chip cache while maintaining a shared off-
+work, thereby improving overall array utilization.                      chip DRAM. To match the compute resources of SegFold,
+Temporal folding handles overflow and imbalance in the C                Flexagon’s 1D array of 128 PEs is scaled into a 2D array
+reductions. While spatial folding effectively manages irregular         of 2 × 128 PEs. On-chip bandwidth is preserved by scaling
+row lengths and maps them onto the regular PE mesh, it does             both the reduction network and distribution network to 128
+not guarantee that the number of nonzeros in a virtual row              elements per cycle for each 1D array. The original Flexagon
+is always bounded by the total PE-array capacity. To support            network remains unchanged along the second dimension; the
+rows that exceed this capacity, each PE row is equipped with            2D extension is achieved by tiling along M to distribute the
+a spad that stores overflow virtual rows.                               workload evenly across the two PE arrays.
+   When a PE needs to accommodate a new partial sum, it can                Spada [24] is a runtime-adaptive SpGEMM accelerator that
+overwrite its local ci register in place and spill the previous         dynamically adjusts its window to the sparsity of matrix A. We
+partial sum into the spad. This mechanism not only supports             use its open-source simulator unchanged as our baseline. For
+rows that are longer than the physical array, but also helps            the non-square evaluation (Fig. 9(a)), we additionally integrate
+mitigate reduction imbalance: partial sums that are likely to           Spada with the same Ramulator2 HBM2 memory backend
+complete early can be offloaded to the spad, allowing PEs to            used by SegFold to ensure a fair memory-system comparison.
+be reused for other work while preserving correctness.                  Area and Energy. We employ the ASAP7 7nm standard-cell
+                                                                        library as the target technology for RTL synthesis [2]. We
+E. Scalability                                                          use Design Compiler to elaborate all RTL sources and invoke
+   SegFold’s control complexity scales linearly with array size         compile_ultra for timing-driven optimization. We report
+in the dominant terms. The merge network traversal within               the post-synthesis timing, area, resources, and power.
+each PE row is O(P ) in the worst case, where P is the                  Workloads. We select fifteen matrices from SuiteSparse [8]
+number of PEs per row; however, the expected traversal is               as our baseline benchmark suite for the overall and non-square
+much shorter because the IPM provides a near-optimal starting           comparisons, covering a range of application domains, matrix
+position via O(log P ) binary search, whose latency could be            sizes, aspect ratios, and sparsity levels. The ablation studies
+amortized through pipelining. The IPM itself uses a tree-               in §VI-C draw from a slightly different subset to expose
+structured lookup table whose depth grows as log P , and                mechanism-specific behavior. Throughout, we report density as
+whose total storage scales as O(P ) entries per row. The spad           nnz/(M ×N ). These matrices are characterized in Table III.
+for overflow C values scales linearly with the number of PE             Across all experiments, the matrices span dimensions from
+rows (R), as each row maintains an independent spad. Overall,           hundreds to tens of thousands of rows and densities across
+scaling the array from P to 2P PEs per row doubles the                  more than two orders of magnitude. The test set includes
+merge network width and IPM size, but does not change the               both square and non-square matrices to capture the shape
+asymptotic complexity of the control logic.                             impact of matrix multiplication. The benchmark suite exercises
+                                                                        a representative range of irregular access patterns. Unless
+                        V. M ETHODOLOGY
+                                                                        otherwise specified, we use the transpose of the matrix as B
+Simulation Infrastructure. We evaluate SegFold using a                  for matrix multiplication.
+cycle-level microarchitectural simulator. Hardware parameters           Tiling. Tiling is applied along the Cartesian dimensions M
+are summarized in Table II. To maintain a hardware cost com-            and N . Tile sizes are statically determined based on the
+parable to state-of-the-art sparse accelerators [28], SegFold           distribution of nonzero values in the corresponding C tiles.
+instantiates a 16 × 16 2D PE array. The design meets timing             To accommodate the tiling, when a virtual row of C exceeds
+at 1 GHz. The memory controller uses a fixed active-window              the physical PE-row capacity, overflow values are spilled to
+size of 32, chosen to balance performance against metadata              the per-row spad. Because the spad is sized to accommodate
+and storage overhead.                                                   the expected maximum overflow, which is determined by the
+          TABLE III: SuiteSparse matrices used in our evaluation.
+                                                                          B. Non-square Performance
+ Matrix               M         N      Density    Application domain         Figure 9(a) compares SegFold against Spada on non-square
+ fv1                9604     9064     9.79e−4     2D/3D problem           SuiteSparse matrices. These non-square comparisons are done
+ flowmeter0         9669     9669     7.21e−4     Model reduction         by multiplying each matrix by its own transpose. SegFold
+ delaunay n13       8192     8192     7.32e−4     Undirected graph
+ ca-GrQc            5242     5242     1.05e−3     Undirected graph        outperforms Spada on tall matrices, achieving 1.42× geomean
+ ca-CondMat        23133    23133     3.49e−4     Undirected graph        speedup over Spada, where its dynamic dataflow effectively
+ poisson3Da        13514    13514     1.93e−3     CFD                     exploits the elongated row structure. On wide matrices, how-
+ bcspwr06           1454     1454     2.51e−3     Power network
+ tols4000           4000     4000     5.49e−4     CFD                     ever, SegFold falls behind: two out of three tested matrices
+ rdb5000            5000     5000     1.18e−3     CFD                     underperform Spada. The cause is how SegFold handles the
+ gemat1             4929    10595     8.92e−4     Power network           K dimension: because we do not tile along K within a tile,
+ lp woodw           1098     8418     4.06e−3     Linear programming
+ pcb3000            3960     7732     1.88e−3     Circuit simulation      a large K relative to M creates load imbalance across A
+ Franz6             7576     3016     1.99e−3     Combinatorial problem   rows. Transposing the matrices does not help here because
+ Franz8            16728     7176     8.36e−4     Combinatorial problem   we are already computing A × A⊤ (a self-transpose multiply).
+ psse1             14318    11028     3.63e−4     Power network
+                                                                          However, there are cases where transposition could provide
+                                                                          critical optimization.
+                                                                             As shown in Fig. 9(b), Direction 1 computes AM,K
+                                                                                                                           real ×S
+                                                                                                                                   K,N
+                                                                                                                                       ,
+tile dimensions along M and N and the anticipated density of
+                                                                          where M ̸= K and K = N while Direction 2 computes
+C, spills are infrequent under our default tiling configuration.                            ⊤
+                                                                          S M,K × AN,K real   , where M = K and K ̸= N . They are
+                           VI. E VALUATION                                arithmetically equivalent up to an output transpose, effectively
+   We evaluate SegFold’s end-to-end performance against                   swapping which operand drives S ELECTA. Transposing the
+Spada and Flexagon, perform a per-component ablation, study               wide matrices recovers 2.4–3.0× over Direction 1, confirming
+sensitivity to key hardware parameters and input sparse pat-              that the M/K ratio has a significant impact on SegFold’s per-
+terns, and report post-synthesis area and power.                          formance: when an operand has its reduction-side dimension
+                                                                          K much larger than its output-side dimension, making it the
+A. Overall Performance                                                    second operand places its short axis along the multiplication’s
+   Fig. 8 shows that SegFold achieves a 1.95× geometric-                  output dimension N . The dataflow then iterates along the
+mean speedup over Spada and a 5.3× geometric-mean speedup                 short N rather than the long K, improving the efficiency of
+over the best-performing Flexagon configuration across all                S ELECTA’s scan. Conversely, on tall matrices Direction 1 is
+workloads. The much larger 5.3× speedup over Flexagon                     already favorable. Selecting the multiplication direction can
+reflects the limitation of static dataflows: Flexagon must                often be decided in advance, yielding several-fold speedups.
+commit to a single dataflow—inner-product, outer-product, or              C. Ablation Studies
+Gustavson—per tile, and even its best per-tile choice cannot
+simultaneously exploit reuse on all three operands. SegFold’s               We isolate the effects of two components of SegFold: (i)
+dynamic scheduling sidesteps this by reordering work within               the dynamic scheduling and (ii) the dynamic mapping.
+each tile based on the runtime nonzero pattern.                             1) Effect of Dynamic Scheduling: To understand the impact
+   On highly sparse matrices with structured, non-uniform                 of SegFold’s dynamic dataflow, we perform an experiment
+nonzero distributions, SegFold achieves 1.08× to 5.75×                    with fixed k iteration order, making the dataflow resemble
+speedups over Spada. The advantage comes from SegFold’s                   a constrained outer-product scheme: instead of dynamically
+two core dynamic mechanisms operating within a tile: (1)                  reordering k within the active window, we process k in a
+S ELECTA dynamically reorders (m, k) pairs in the active win-             predetermined sequence. The final result shows this reduces
+dow to maximize B-row reuse and avoid C-row contention,                   normalized performance to 0.670 ± 0.065 of the baseline,
+and (2) S EGMENT BC dynamically remaps partial sums across                indicating that dynamic k reordering is important for exposing
+PEs based on the evolving V space state. Spada, in contrast,              segment-level parallelism and keeping PEs busy.
+adapts only its window size at tile granularity while keeping               2) Effect of Dynamic Mapping: To isolate the effect of
+the scheduling within each window static, leaving sub-tile                dynamic mapping, we compare SegFold’s LUT-based mapping
+reuse and load-balance opportunities unexploited. This gap is             against two alternatives, both using the same dataflow and
+amplified on highly sparse matrices, where SegFold’s dynamic              hardware resources but with different mapping logic:
+scheduling can skip whole empty regions of the iteration space            1) Zero-Offset mapping: the head of the B row is always
+outright (e.g., k columns with no A/B-nonzeros), while Spada                 mapped to the beginning of the PE row (ftin (m, n) = 0).
+must still follow its static loop over the entire window even             2) Ideal-Network mapping: an oracle mapper that always
+when most of it contributes no work. The one exception is                    finds the optimal placement with no stale-index overhead.
+ca-GrQc, on which SegFold underperforms Spada (0.59×):                      Figure 10 reports the speedup of each mapping method
+its scale-free graph structure produces a few extremely dense             across 16 SuiteSparse matrices, normalized to the zero-offset
+rows that overwhelm SegFold’s per-row PE allocation, while                baseline. SegFold’s LUT-based mapper achieves a geometric-
+Spada’s tile-level adaptation handles them better.                        mean speedup of 1.20× over the zero-offset policy. Matrices
+                               Fig. 8: Speedup over Spada and static dataflow implementations on SuiteSparse matrices. Sparsity patterns shown below.
+
+
+                             Spada       SegFold            Dir1: M=K     Dir2: N=K                                Base      + SegmentBC          + Spatial Folding                + IPM LUT      + SelectA
+                             Tall (M > K) 4
+                                                                                                                        7.1x 4.9x 4.3x
+                    Wide (M < K)                                                                               4
+          2                1.95×              2.99×                                                                                      3.1x 2.9x 2.8x 2.8x                          3.1x
+speedup
+
+
+
+
+                                                   2.44×2.39×                                                                                                2.7x 2.5x 2.5x
+
+
+
+
+                                                                                             speedup
+                                 1.41×1.21×                                                                                                                                 2.2x 2.2x
+                                            2                                                                  2
+          1           0.83×                                  0.57×0.64×0.70×
+            0.17×0.27×
+          0                                           0                                                        0
+                       d b at 6 8 se                         d b at 6 8 se
+                    woo pc gm F F ps                      woo pc gm F F ps                                        wr Qc ols at 18 od cb fv1 olmstk03 ros d2qMean
+                                                                                                               bcp Gr t gem stk wo p
+                          (a) SegFold vs Spada            (b) Default vs Transposed                                                                      Geo
+                                                                                                        Fig. 11: Speedup break down of the different dynamic mechanisms.
+Fig. 9: Nonsquare SuiteSparse matrices. (a) SegFold vs. Spada speedup,
+normalized to Spada. (b) Effect of multiplication direction on SegFold
+throughput, normalized to nonsquare matrix as A.                                                                          N=256, d=0.05              N=512, d=0.05                         N=1024, d=0.05
+                                                                                                                          N=256, d=0.1               N=512, d=0.1                          N=1024, d=0.1
+                                                                                           Normalized Cycles
+
+
+
+
+                                                                                                               4                                                           4
+                                   Zero-Offset     Ideal-Network     SegFold (Ours)
+
+
+
+
+                                                                                                                                                           (norm. to 32)
+                                                                                              (norm. to 4)
+
+
+
+
+                    2.0
+                                                                                                               2                                                           2
+                                       1.53x
+                                      1.42x
+
+
+
+
+                                     1.33x
+ (vs Zero-Offset)
+
+
+
+
+                                   1.33x
+
+
+
+                                   1.32x
+
+
+                                   1.23x
+                                  1.28x
+
+
+
+
+                    1.5
+                                                                                  1.20x
+
+
+
+
+                                                                                                                    1        2       4        8      16                        1       4     8 16 32 64
+                                 1.22x
+                                 1.11x
+     Speedup
+
+
+
+
+                                1.06x
+                           1.14x
+
+
+
+                                1.14x
+
+
+
+
+                               1.05x
+                               1.13x
+
+
+
+
+                               1.04x
+                               1.01x
+
+
+
+
+                                                                                                                             Crossbar Width                                          Window Size
+                                                                                                                                    (a)                                                     (b)
+                    1.0                                                                     Fig. 12: Hardware-parameter sensitivity studies across three matrix sizes (N =
+                                                                                            256, 512, 1024) and two density levels (d = 0.05, 0.1). (a) Crossbar Width
+                                                                                            sweep, normalized to BRL= 4. (b) Window Size sweep, normalized to W= 32.
+                                                                                            Color encodes matrix size, marker encodes density (+: d = 0.05, ×: d = 0.1).
+                    0.5
+                       o
+                 stk03
+                 Co18
+                 Gr nd
+
+                  flo 3
+                 stkwr
+
+
+
+
+                    fv1
+                 wo2q
+                   olmd
+                   po b
+                   rd s
+                       b
+                    ros
+                   ge s
+                 de Qc
+                      w
+
+
+
+
+                      i
+
+                   tol
+                    l1
+
+
+
+
+                                                                                            indicating that dynamic scheduling plays a critical role in han-
+                     o
+                   pc
+                   d
+                   p
+                bc
+
+
+
+
+                                                                                            dling highly irregular sparse matrices. S EGMENT BC, spatial
+Fig. 10: Speedup of different mapping methods (Zero-Offset, Ideal-Network,
+SegFold) on SuiteSparse matrices, normalized to Zero-Offset.                                folding, and the IPM LUT provide additional gains, with their
+                                                                                            relative benefits depending on the matrix’s structural properties
+with more irregular sparsity patterns (e.g., pcb3000, olm5000,                              and output sparsity patterns.
+flowmeter0) benefit most from dynamic scheduling, as the
+LUT-based mapper adapts to instantaneous PE occupancy                                       D. Sensitivity Studies
+and avoids long segment traversals. Compared to the ideal                                      We study SegFold’s sensitivity along two axes: hardware
+oracle mapping, SegFold’s LUT-based scheduling incurs only                                  parameters and input characteristics.
+a 1.2% average overhead, demonstrating that our hardware                                       1) Hardware Parameter Sensitivity: To understand how
+approximation closely tracks the theoretical optimum.                                       hardware parameters shape SegFold’s performance, we per-
+Attribution Summary. To quantify the contribution of each                                   form two sensitivity studies across three matrix sizes
+dynamic mechanism in both the dataflow and microarchi-                                      {256, 512, 1024} and two density levels {0.05, 0.1}: (i) vary-
+tecture, we conduct an incremental ablation study across                                    ing the bandwidth of the vector multicast network that delivers
+12 SuiteSparse matrices. Figure 11 shows the performance                                    B rows, and (ii) varying the active-window size.
+breakdown of SegFold, achieving a geometric-mean speedup                                    Vector Multicast Bandwidth. As shown in Fig. 5(a), Seg-
+of 3.1× over the base configuration. Across different spar-                                 Fold’s global network routes B rows from memory to PE rows
+sity patterns, each dynamic mechanism contributes to the                                    through a vector multicast network. To observe sensitivity,
+overall speedup, with S ELECTA delivering the largest gain—                                 we vary the network multicast width from 1 to 16 B rows
+       SegFold (Ours)                  Spada   Flexagon (OP only)   Flexagon (Gust only)                              Swap ratio: cyc(dA, dB) / cyc(dB, dA) at K=1024
+                                                                                                                    0.256                                         1.00
+
+
+       (lower is better)
+                                                                                                                    0.128                                    1.00 0.92
+          Cycle/MAC
+
+
+
+
+                                                                                                                                                                                   ratio (1.0 = symmetric)
+                                                                                                                    0.064                               1.00 1.00 0.75
+
+
+
+
+                                                                                                density of A (dA)
+                           10   1
+                                                                                                                    0.032                          1.00 0.97 0.99 0.71
+                                                                                                                    0.016                     1.00 0.88 0.87 0.96 0.74    100
+                                                                                                                    0.008                1.00 0.79 0.70 0.73 0.90 0.84
+                                    0.050.07 0.1 0.150.2 0.3 0.40.5           1.0                                   0.004           1.00 0.86 0.70 0.67 0.76 1.03 1.04
+                                                     density                                                        0.002       1.00 0.96 0.93 0.77 0.73 0.86 1.24 1.33
+Fig. 13: Per-simulation efficiency (cycles per MAC, lower is better) on
+synthetic square matrices across densities, comparing Flexagon (OP and                                              0.001 1.00 0.98 0.95 0.87 0.95 0.90 1.03 1.51 1.68    6 × 10   1
+Gustavson), Spada, and SegFold.
+
+
+
+
+                                                                                                                     0.0 1
+                                                                                                                     0.0 2
+                                                                                                                     0.0 4
+                                                                                                                     0.0 8
+                                                                                                                     0.0 6
+                                                                                                                     0.0 2
+                                                                                                                     0.1 4
+                                                                                                                     0.2 8
+                                                                                                                         56
+                                                                                                                         0
+                                                                                                                         0
+                                                                                                                         0
+                                                                                                                         0
+                                                                                                                         1
+                                                                                                                         3
+                                                                                                                         6
+                                                                                                                         2
+                                                                                                                     0.0
+per cycle, keeping all other parameters fixed. As shown in
+                                                                                                                                      density of B (dB)
+Fig. 12, performance improves noticeably from 1 to 4 rows                                                           Fig. 14: Asymmetric-sparsity sensitivity at K = 1024.
+per cycle across all matrix sizes and densities, but the marginal                          dense GEMM, and the dynamic-mapping overhead is dimin-
+benefit beyond 4 rows per cycle quickly diminishes. At higher                              ished when the matrix is dense, since the V space mapping
+density (d = 0.1), the sensitivity is more pronounced for                                  is essentially static—every position is occupied, leaving no
+larger matrices, as increased nonzero density creates more                                 shifts or skip decisions for the merge network to make, while
+contention on the network. Based on this trend and the                                     baselines have the static overhead introduced by isolating the
+associated area/wiring cost, we choose a bandwidth of 4 B                                  multiplication and reduction phases. For sparsity levels beyond
+rows per cycle.                                                                            the figure’s range, SegFold’s speedup over Spada increases.
+Window Size of Active B Rows. As discussed in §IV-B,                                       Asymmetric Sparsity. SegFold treats A and B asymmet-
+the active window over B rows controls how many k values                                   rically, raising the question of whether sparsity differences
+and B rows can be reordered and scheduled in parallel. We                                  between A and B influence whether A × B or A⊤ × B ⊤
+sweep window sizes from 1 to 64, and report the normalized                                 is faster. To understand this, we sweep (dA , dB ) pairs over
+cycles in Fig. 12. Performance improves substantially as the                               synthetic matrices with size 1024 and report the swap ratio
+window grows up to 32, but shows little further gain beyond                                cyc(dA , dB )/cyc(dB , dA ) in Fig. 14: ratios < 1 (blue) favor
+32, consistently across both density levels. At higher density                             placing the sparser matrix as operand A, while ratios > 1 (red)
+(d = 0.1), the benefit of increasing window size is slightly                               favor placing the denser one there. Since the upper triangle is
+more pronounced, as denser matrices expose more reordering                                 the reciprocal of the lower, we focus on the lower-right half
+opportunities. We therefore adopt a window size of 32 as our                               (dA ≤ dB ). Most of this region is blue: having the sparser
+default configuration, as it offers a good trade-off between                               matrix as operand A is faster because S ELECTA’s fine-grained
+benefit and metadata/storage overhead.                                                     scheduling on A leverages high sparsity better than the coarse-
+   2) Input Sensitivity: To understand how input characteris-                              grained loader on B can.
+tics affect SegFold’s performance, we perform two sensitivity                                 However, in the red corner where the disparity in density
+studies with the synthetic matrices: (i) varying the density of                            between A and B becomes very large, having the denser
+the two input matrices from highly sparse to entirely dense;                               matrix as the first operand becomes faster. When A’s sparsity
+and (ii) varying the relative sparsity of the two input matrices                           is extreme, a substantial fraction of A’s rows contain no
+to create asymmetric sparsity patterns.                                                    nonzeros, yet each row still triggers a S ELECTA iteration
+Density Sweep. We test synthetic matrices of sizes 256 to                                  with its associated scheduling and pipeline overhead; the fine-
+1024 with densities ranging from 0.05 to 1.0. Figure 13 reports                            grained selection that benefits sparse A in the common case
+the average cycles per MAC across the three accelerators.                                  now operates over many empty rows and produces no useful
+As density increases, SegFold’s per-MAC efficiency stays                                   work. Swapping the operands places the denser matrix in
+roughly flat through mid densities and then drops sharply at the                           operand A—every row is occupied, so no iteration is wasted—
+fully dense end, while Spada’s degrades sharply once density                               while the very sparse matrix moves to operand B, where
+exceeds 0.4. This transition reflects bandwidth saturation in                              the coarse-grained, demand-driven loader simply skips empty
+Spada’s row-sequential 16-channel memory. Flexagon’s outer-                                rows at no cost. The crossover from blue to red occurs once the
+product (OP) dataflow shows the biggest improvement with                                   density ratio dB /dA grows large enough (in our experiments,
+increasing density, as its static dataflow can better exploit                              around 32× to 64×) that the per-row S ELECTA overhead
+reuse opportunities when more nonzeros are present, and the                                saved by the swap exceeds the fine-grained sparsity benefit
+fixed control overhead is amortized. This also explains why                                lost on A.
+SegFold’s speedup over Flexagon is relatively large on the
+SuiteSparse matrices, which are generally sparser than the                                 E. RTL Results
+synthetic ones. Notably, in the fully dense case, SegFold                                    Table IV reports the post-synthesis RTL estimates of power
+outperforms all the baselines: its 2D array natively supports                              and area for SegFold. We synthesize all modules using the
+TABLE IV: Power and area of SegFold. Left: ASAP7 7 nm synthesis at 1 GHz.
+Right: estimated 28 nm scaling at 1 GHz (with pipeline modifications).      a tile static. SegFold’s dynamic scheduling is orthogonal: it
+                                                                            operates at sub-tile granularity, reordering operations inside a
+                            ASAP7 7 nm                Est. 28 nm            tile based on runtime sparsity, and could therefore compose
+Component                      Area    Power             Area      Power    with any of these inter-tile ordering schemes.
+                              [µm2 ]    [mW]            [µm2 ]      [mW]
+                                                                            Flexibility and Dynamism in Related Domains. EIE [15]
+PE (×256)                    26,304      59.1       ∼231,400        ∼342
+Switch (×256)                10,967      27.1        ∼87,700        ∼156    is a SpMV accelerator that mitigates load imbalance with
+FIFO Buffer (×256)          105,600     263.4       ∼887,000       ∼1,574   large input queues. Cerebrus [20] is a SpMV accelerator that
+Scratchpad (×16)             16,025      34.3       ∼134,600        ∼208
+Mem Controller (×1)           1,603       1.8        ∼13,470         ∼11    can support multiple dataflow patterns. ZeNa [22] is a sparse
+Total                        160,499    385.7     ∼1,354,200       ∼2,290   CNN accelerator that uses work-stealing queues to perform
+                        (0.160 mm2 )             (∼1.35 mm2 )               load balancing at a tile level. Graph processing accelerators
+                                                                            face similar sparsity patterns and encounter the same load-
+                                                                            balance and reuse challenges. PolyGraph [4] uses offline
+ASAP7 7 nm standard-cell library [2] at 1 GHz. For the 2D                   preprocessing, which aims to improve both load balance and
+mesh, we synthesize a single PE, switch, and FIFO buffer,                   locality. HATS [29] uses bounded depth-first search ordering
+and scale their results to a 16 × 16 grid. Each PE row includes             to improve locality. AWB-GCN [12] is a graph convolution
+a spad for overflow C entries; these are synthesized per                    accelerator, which dynamically load balances rows among
+bank and scaled by 16 rows. The global memory controller                    PEs, and further splits pathologically long rows. These graph
+is synthesized separately. At 7 nm, the total design occupies               accelerators all exploit locality in settings where the output
+0.160 mm2 and consumes 385.7 mW. To enable comparison                       structure is known ahead of time; SegFold faces the additional
+with prior work synthesized at older technology nodes, we                   challenge of discovering the output nonzero pattern on-the-
+also provide estimated 28 nm numbers by applying standard                   fly during SpGEMM execution, requiring runtime locality
+area (∼8×) and power (∼5.5×) scaling factors, with additional               decisions rather than offline preprocessing.
+pipeline stages inserted to meet 1 GHz timing at 28 nm.                     Comparison with Preprocessing-Based Approaches. Build-
+   For comparison, Flexagon [28] reports a total area (without              ing on the Gustavson-style preprocessing designs introduced in
+cache) of 1.35 mm2 and power consumption of 856 mW at                       §II, we contrast SegFold’s runtime approach with offline pre-
+28 nm. When scaled to the same 28 nm technology node,                       processing in more detail. Gamma [51] and Zed [6] use offline
+SegFold’s estimated area of ∼1.35 mm2 is comparable, while                  preprocessing to reorder rows of the stationary matrix, group-
+providing the additional hardware for dynamic scheduling                    ing rows with similar sparsity patterns to improve streaming-
+(merge network, scratchpads) that enables the performance                   matrix reuse under a Gustavson dataflow. This preprocessing
+gains shown above. The estimated 28 nm power of ∼2.3 W                      must be performed once per matrix and amortized across
+assumes conservative vectorless 50% switching activity; real                repeated SpGEMM invocations. In contrast, SegFold achieves
+sparse workloads exhibit lower activity factors, which would                similar reuse benefits—grouping A columns with overlapping
+substantially reduce dynamic power.                                         nonzero patterns via S ELECTA—entirely at runtime, with
+              VII. A DDITIONAL R ELATED W ORK                               no preprocessing step. This makes SegFold particularly ad-
+                                                                            vantageous for workloads where the sparse matrices change
+Reconfigurable Architectures. Reconfigurable architec-                      frequently (e.g., dynamic graphs or iterative solvers), as the
+tures [13], [35], [37] are inherently programmable and can                  cost of preprocessing cannot be amortized. For static matrices
+support different dataflows. Prior architectures have explored              used repeatedly, preprocessing-based approaches may offer
+specialization for sparsity, such as SPU [5] for sparse inner-              complementary benefits, and combining offline reordering
+product joins, and Capstan [18], [40] for parallel indirect                 with SegFold’s runtime scheduling is a promising direction
+memory access in Gustavson. To our knowledge, dynamic                       for future work.
+dataflow optimizations have not been explored on a recon-
+figurable architecture, and they would likely be costly given                                    VIII. C ONCLUSION
+coarse-grain reconfigurable primitives.
+                                                                               This work introduces Segment, a novel dynamic dataflow
+Dynamic Prediction. Dynaflow [48] predicts the best                         for SpGEMM that simultaneously optimizes data reuse and
+dataflow for dataflow-flexible accelerators like those above,               load balance, overcoming limitations of conventional static
+using ML techniques trained on dataset sparsity patterns.                   dataflows. Through the co-designed SegFold accelerator, we
+SparseAdapt [34] is a runtime system for a flexible recon-                  demonstrate that fine-grained dynamic scheduling and remap-
+figurable design called Transmuter [35], which can change                   ping of work across PEs can significantly improve perfor-
+microarchitectural policies depending on sparse data patterns.              mance and utilization across diverse sparsity patterns and
+Tile-Ordering Strategies. Inter-tile ordering strategies such               matrix sizes. Our results—a 1.95× geometric-mean speedup
+as Hilbert or Z-order traversals—used in CUBE [52] and                      over the best dynamic baseline and 5.3× over the best static
+Mosaic [27]—and the sliding-window tiling in Spahet [19]                    baseline—highlight the value of incorporating dynamism into
+optimize the order in which tiles are visited to improve cross-             sparse-matrix accelerators, providing a new pathway for effi-
+tile cache locality, but leave the scheduling of work within                cient execution of irregular workloads.
+                              R EFERENCES                                        [18] O. Hsu, A. Rucker, T. Zhao, V. Desai, K. Olukotun, and F. Kjolstad,
+                                                                                      “Stardust: Compiling sparse tensor algebra to a reconfigurable dataflow
+ [1] A. Buluç and J. R. Gilbert, “On the representation and multiplication           architecture,” in Proceedings of the 23rd ACM/IEEE International
+     of hypersparse matrices,” in 2008 IEEE International Symposium on                Symposium on Code Generation and Optimization, ser. CGO ’25.
+     Parallel and Distributed Processing (IPDPS), 2008, pp. 1–11.                     New York, NY, USA: Association for Computing Machinery, 2025, p.
+ [2] L. T. Clark, V. Vashishtha, L. Shifren, A. Gujja, S. Sinha, B. Cline,            628–643. [Online]. Available: https://doi.org/10.1145/3696443.3708918
+     C. Ramamurthy, and G. Yeric, “ASAP7: A 7-nm FinFET predictive               [19] H. Huang, P. Yao, Z. An, Y. Sun, A. Hu, P. Xu, L. Zheng,
+     process design kit,” Microelectronics Journal, vol. 53, pp. 105–115,             X. Liao, and H. Jin, “SpaHet: A software/hardware co-design for
+     2016.                                                                            accelerating heterogeneous-sparsity based sparse matrix multiplication,”
+ [3] N. Corp, “NVIDIA GPU programming guide, v2.2.1, November, 2004.”                 in Proceedings of the 61st ACM/IEEE Design Automation Conference,
+ [4] V. Dadu, S. Liu, and T. Nowatzki, “PolyGraph: Exposing the value                 ser. DAC ’24. New York, NY, USA: Association for Computing
+     of flexibility for graph processing accelerators,” in 2021 ACM/IEEE              Machinery, 2024. [Online]. Available: https://doi.org/10.1145/3649329.
+     48th Annual International Symposium on Computer Architecture (ISCA),             3655944
+     2021, pp. 595–608.                                                          [20] S. Hwang, D. Baek, J. Park, and J. Huh, “Cerberus: Triple mode
+ [5] V. Dadu, J. Weng, S. Liu, and T. Nowatzki, “Towards general                      acceleration of sparse matrix and vector multiplication,” ACM Trans.
+     purpose acceleration by exploiting common data-dependence forms,”                Archit. Code Optim., vol. 21, no. 2, May 2024. [Online]. Available:
+     ser. MICRO ’52. New York, NY, USA: ACM, 2019, pp. 924–939.                       https://doi.org/10.1145/3653020
+     [Online]. Available: http://doi.acm.org/10.1145/3352460.3358276             [21] N. P. Jouppi, C. Young, N. Patil, D. Patterson, G. Agrawal, R. Bajwa,
+ [6] P. Dangi, Z. Bai, R. Juneja, D. Wijerathne, and T. Mitra, “ZeD:                  S. Bates, S. Bhatia, N. Boden, A. Borchers, R. Boyle, P.-l. Cantin,
+     A generalized accelerator for variably sparse matrix computations in             C. Chao, C. Clark, J. Coriell, M. Daley, M. Dau, J. Dean, B. Gelb, T. V.
+     ML,” in Proceedings of the 2024 International Conference on Parallel             Ghaemmaghami, R. Gottipati, W. Gulland, R. Hagmann, C. R. Ho,
+     Architectures and Compilation Techniques, ser. PACT ’24. New York,               D. Hogberg, J. Hu, R. Hundt, D. Hurt, J. Ibarz, A. Jaffey, A. Jaworski,
+     NY, USA: Association for Computing Machinery, 2024, p. 246–257.                  A. Kaplan, H. Khaitan, D. Killebrew, A. Koch, N. Kumar, S. Lacy,
+     [Online]. Available: https://doi.org/10.1145/3656019.3689905                     J. Laudon, J. Law, D. Le, C. Leary, Z. Liu, K. Lucke, A. Lundin,
+ [7] S. Dave, R. Baghdadi, T. Nowatzki, S. Avancha, A. Shrivastava, and               G. MacKean, A. Maggiore, M. Mahony, K. Miller, R. Nagarajan,
+     B. Li, “Hardware acceleration of sparse and irregular tensor computa-            R. Narayanaswami, R. Ni, K. Nix, T. Norrie, M. Omernick,
+     tions of ML models: A survey and insights,” Proceedings of the IEEE,             N. Penukonda, A. Phelps, J. Ross, M. Ross, A. Salek, E. Samadiani,
+     vol. 109, no. 10, pp. 1706–1752, 2021.                                           C. Severn, G. Sizikov, M. Snelham, J. Souter, D. Steinberg, A. Swing,
+ [8] T. A. Davis and Y. Hu, “The university of florida sparse matrix                  M. Tan, G. Thorson, B. Tian, H. Toma, E. Tuttle, V. Vasudevan,
+     collection,” ACM Transactions on Mathematical Software, vol. 38, no. 1,          R. Walter, W. Wang, E. Wilcox, and D. H. Yoon, “In-datacenter
+     pp. 1:1–1:25, 2011.                                                              performance analysis of a tensor processing unit,” in Proceedings of
+                                                                                      the 44th Annual International Symposium on Computer Architecture,
+ [9] J. Dean, “Recent advances in artificial intelligence via machine learning
+                                                                                      ser. ISCA ’17. New York, NY, USA: ACM, 2017, pp. 1–12. [Online].
+     and the implications for computer system design,” in 2017 IEEE Hot
+                                                                                      Available: http://doi.acm.org/10.1145/3079856.3080246
+     Chips 29 Symposium, 2017.
+                                                                                 [22] D. Kim, J. Ahn, and S. Yoo, “Zena: Zero-aware neural network accel-
+[10] J. Gao, W. Ji, F. Chang, S. Han, B. Wei, Z. Liu, and Y. Wang,
+                                                                                      erator,” IEEE Design & Test, vol. 35, no. 1, pp. 39–46, 2017.
+     “A systematic survey of general sparse Matrix-Matrix multiplication,”
+     ACM Comput. Surv., vol. 55, no. 12, Mar. 2023. [Online]. Available:         [23] K. Koul, M. Strange, J. Melchert, A. Carsello, Y. Mei, O. Hsu, T. Kong,
+     https://doi.org/10.1145/3571157                                                  P.-H. Chen, H. Ke, K. Zhang et al., “Onyx: A programmable accelerator
+[11] H. N. Genc, H. Kim, P. Ganesh, and Y. S. Shao, “Stellar: An                      for sparse tensor algebra,” in 2024 IEEE Hot Chips 36 Symposium
+     automated design framework for dense and sparse spatial accelerators,”           (HCS). IEEE Computer Society, 2024, pp. 1–91.
+     in Proceedings of the 2024 57th IEEE/ACM International Symposium            [24] Z. Li, J. Li, T. Chen, D. Niu, H. Zheng, Y. Xie, and M. Gao,
+     on Microarchitecture, ser. MICRO ’24. IEEE Press, 2024, p. 409–422.              “Spada: Accelerating sparse matrix multiplication with adaptive
+     [Online]. Available: https://doi.org/10.1109/MICRO61859.2024.00038               dataflow,” in Proceedings of the 28th ACM International Conference
+[12] T. Geng, A. Li, R. Shi, C. Wu, T. Wang, Y. Li, P. Haghi, A. Tumeo,               on Architectural Support for Programming Languages and Operating
+     S. Che, S. Reinhardt, and M. C. Herbordt, “AWB-GCN: A graph                      Systems, Volume 2, ser. ASPLOS 2023. New York, NY, USA:
+     convolutional network accelerator with runtime workload rebalancing,”            Association for Computing Machinery, 2023, p. 747–761. [Online].
+     in 2020 53rd Annual IEEE/ACM International Symposium on Microar-                 Available: https://doi.org/10.1145/3575693.3575706
+     chitecture (MICRO), 2020, pp. 922–936.                                      [25] H. Luo, Y. C. Tuğrul, F. N. Bostancı, A. Olgun, A. G. Yağlıkçı, and
+[13] G. Gobieski, S. Ghosh, M. Heule, T. Mowry, T. Nowatzki, N. Beckmann,             O. Mutlu, “Ramulator 2.0: A modern, modular, and extensible DRAM
+     and B. Lucia, “RipTide: A programmable, energy-minimal dataflow                  simulator,” 2023. [Online]. Available: https://arxiv.org/abs/2308.11030
+     compiler and architecture,” in 2022 55th IEEE/ACM International Sym-        [26] S. Luo, B. Wang, Y. Shi, X. Zhang, Q. Xue, and S. Ma, “Sparm: A sparse
+     posium on Microarchitecture (MICRO), 2022, pp. 546–564.                          matrix multiplication accelerator supporting multiple dataflows,” in 2024
+[14] A. Gondimalla, N. Chesnut, M. Thottethodi, and T. N. Vijaykumar,                 IEEE 35th International Conference on Application-specific Systems,
+     “SparTen: A sparse tensor accelerator for convolutional neural                   Architectures and Processors (ASAP), 2024, pp. 122–130.
+     networks,” in Proceedings of the 52nd Annual IEEE/ACM International         [27] S. Maass, C. Min, S. Kashyap, W. Kang, M. Kumar, and T. Kim,
+     Symposium on Microarchitecture, ser. MICRO ’52. New York, NY,                    “Mosaic: Processing a trillion-edge graph on a single machine,”
+     USA: Association for Computing Machinery, 2019, p. 151–165.                      in Proceedings of the Twelfth European Conference on Computer
+     [Online]. Available: https://doi.org/10.1145/3352460.3358291                     Systems, ser. EuroSys ’17. New York, NY, USA: Association
+[15] S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. A. Horowitz, and                    for Computing Machinery, 2017, p. 527–543. [Online]. Available:
+     W. J. Dally, “Eie: efficient inference engine on compressed deep neural          https://doi.org/10.1145/3064176.3064191
+     network,” in Proceedings of the 43rd International Symposium on             [28] F. Muñoz Martı́nez, R. Garg, M. Pellauer, J. L. Abellán, M. E.
+     Computer Architecture, ser. ISCA ’16. IEEE Press, 2016, p. 243–254.              Acacio, and T. Krishna, “Flexagon: A multi-dataflow sparse-sparse
+     [Online]. Available: https://doi.org/10.1109/ISCA.2016.30                        matrix multiplication accelerator for efficient DNN processing,”
+[16] X. He, S. Pal, A. Amarnath, S. Feng, D.-H. Park, A. Rovinski, H. Ye,             in Proceedings of the 28th ACM International Conference on
+     Y. Chen, R. Dreslinski, and T. Mudge, “Sparse-TPU: Adapting systolic             Architectural Support for Programming Languages and Operating
+     arrays for sparse matrices,” in Proceedings of the 34th ACM interna-             Systems, Volume 3, ser. ASPLOS 2023. New York, NY, USA:
+     tional conference on supercomputing, 2020, pp. 1–12.                             Association for Computing Machinery, 2023, p. 252–265. [Online].
+[17] K. Hegde, H. Asghari-Moghaddam, M. Pellauer, N. Crago, A. Jaleel,                Available: https://doi.org/10.1145/3582016.3582069
+     E. Solomonik, J. Emer, and C. W. Fletcher, “ExTensor: An accelerator        [29] A. Mukkara, N. Beckmann, M. Abeydeera, X. Ma, and D. Sanchez,
+     for sparse tensor algebra,” in Proceedings of the 52nd Annual IEEE/ACM           “Exploiting locality in graph analytics through hardware-accelerated
+     International Symposium on Microarchitecture, ser. MICRO-52. New                 traversal scheduling,” in MICRO. IEEE, 2018, pp. 1–14.
+     York, NY, USA: Association for Computing Machinery, 2019, p.                [30] F. Muñoz-Martı́nez, J. L. Abellán, M. E. Acacio, and T. Krishna,
+     319–333. [Online]. Available: https://doi.org/10.1145/3352460.3358275            “STONNE: Enabling cycle-level microarchitectural simulation for DNN
+       inference accelerators,” in 2021 IEEE International Symposium on          [45] B. Wang, S. Ma, S. Luo, L. Wu, J. Zhang, C. Zhang, and T. Li,
+       Workload Characterization (IISWC), 2021, pp. 201–213.                          “SparGD: A sparse GEMM accelerator with dynamic dataflow,” ACM
+[31]   N. Nayak, T. O. Odemuyiwa, S. Ugare, C. Fletcher, M. Pellauer,                 Trans. Des. Autom. Electron. Syst., vol. 29, no. 2, Jan. 2024. [Online].
+       and J. Emer, “TeAAL: A declarative framework for modeling sparse               Available: https://doi.org/10.1145/3634703
+       tensor accelerators,” in Proceedings of the 56th Annual IEEE/ACM          [46] B. Wang, S. Ma, Y. Zhao, S. Luo, L. Wu, J. Zhang, D. Li,
+       International Symposium on Microarchitecture, ser. MICRO ’23.                  T. Li, and Z. Chen, “SpMARD: A sparse-sparse matrix multiplication
+       New York, NY, USA: Association for Computing Machinery, 2023,                  accelerator with reconfigurable dataflow for DNN workloads,” ACM
+       p. 1255–1270. [Online]. Available: https://doi.org/10.1145/3613424.            Trans. Archit. Code Optim., Aug. 2025, just Accepted. [Online].
+       3623791                                                                        Available: https://doi.org/10.1145/3747847
+[32]   E. Nurvitadhi, A. Mishra, and D. Marr, “A sparse matrix vector multiply   [47] Y. N. Wu, P.-A. Tsai, A. Parashar, V. Sze, and J. S. Emer, “Sparseloop:
+       accelerator for support vector machine,” in 2015 International Confer-         An analytical approach to sparse tensor accelerator modeling,” in
+       ence on Compilers, Architecture and Synthesis for Embedded Systems             Proceedings of the 55th Annual IEEE/ACM International Symposium on
+       (CASES), Oct 2015, pp. 109–116.                                                Microarchitecture, ser. MICRO ’22. IEEE Press, 2023, p. 1377–1395.
+[33]   S. Pal, J. Beaumont, D. Park, A. Amarnath, S. Feng, C. Chakrabarti,            [Online]. Available: https://doi.org/10.1109/MICRO56248.2022.00096
+       H. Kim, D. Blaauw, T. Mudge, and R. Dreslinski, “OuterSPACE:              [48] S. Yadav and B. Asgari, “DynaFlow: An ML framework for dynamic
+       An outer product based sparse matrix multiplication accelerator,” in           dataflow selection in SpGEMM accelerators,” IEEE Computer Architec-
+       2018 IEEE International Symposium on High Performance Computer                 ture Letters, vol. 24, no. 1, pp. 189–192, 2025.
+       Architecture (HPCA), Feb 2018, pp. 724–736.                               [49] Y. Yang, J. S. Emer, and D. Sanchez, “Trapezoid: A versatile accelerator
+[34]   S. Pal, A. Amarnath, S. Feng, M. O’Boyle, R. Dreslinski, and                   for dense and sparse matrix multiplications,” in 2024 ACM/IEEE 51st
+       C. Dubach, “SparseAdapt: Runtime control for sparse linear algebra on          Annual International Symposium on Computer Architecture (ISCA),
+       a reconfigurable accelerator,” in MICRO-54: 54th Annual IEEE/ACM               2024, pp. 931–945.
+       International Symposium on Microarchitecture, ser. MICRO ’21.             [50] P. Yao, L. Zheng, Y. Huang, Q. Wang, C. Gui, Z. Zeng, X. Liao, H. Jin,
+       New York, NY, USA: Association for Computing Machinery, 2021,                  and J. Xue, “ScalaGraph: A scalable accelerator for massively parallel
+       p. 1005–1021. [Online]. Available: https://doi.org/10.1145/3466752.            graph processing,” in 2022 IEEE International Symposium on High-
+       3480134                                                                        Performance Computer Architecture (HPCA), 2022, pp. 199–212.
+[35]   S. Pal, S. Feng, D.-h. Park, S. Kim, A. Amarnath, C.-S. Yang,             [51] G. Zhang, N. Attaluri, J. S. Emer, and D. Sanchez, “Gamma: Leveraging
+       X. He, J. Beaumont, K. May, Y. Xiong, K. Kaszyk, J. M. Morton,                 Gustavson’s algorithm to accelerate sparse matrix multiplication,” ser.
+       J. Sun, M. O’Boyle, M. Cole, C. Chakrabarti, D. Blaauw, H.-S. Kim,             ASPLOS 2021. New York, NY, USA: Association for Computing
+       T. Mudge, and R. Dreslinski, “Transmuter: Bridging the efficiency              Machinery, 2021. [Online]. Available: https://doi.org/10.1145/3445814.
+       gap using memory and dataflow reconfiguration,” in Proceedings                 3446702
+       of the ACM International Conference on Parallel Architectures and         [52] M. Zhang, Y. Wu, K. Chen, X. Qian, X. Li, and W. Zheng, “Exploring
+       Compilation Techniques, ser. PACT ’20. New York, NY, USA:                      the hidden dimension in graph processing,” in Proceedings of the 12th
+       Association for Computing Machinery, 2020, p. 175–190. [Online].               USENIX Conference on Operating Systems Design and Implementation,
+       Available: https://doi.org/10.1145/3410463.3414627                             ser. OSDI’16. USA: USENIX Association, 2016, p. 285–300.
+[36]   A. Parashar, M. Rhu, A. Mukkara, A. Puglielli, R. Venkatesan,             [53] S. Zhang, Z. Du, L. Zhang, H. Lan, S. Liu, L. Li, Q. Guo, T. Chen, and
+       B. Khailany, J. Emer, S. W. Keckler, and W. J. Dally, “SCNN: An                Y. Chen, “Cambricon-X: An accelerator for sparse neural networks,” in
+       accelerator for compressed-sparse convolutional neural networks,” in           2016 49th Annual IEEE/ACM International Symposium on Microarchi-
+       Proceedings of the 44th Annual International Symposium on Computer             tecture (MICRO), 2016, pp. 1–12.
+       Architecture, ser. ISCA ’17. New York, NY, USA: ACM, 2017, pp. 27–        [54] Z. Zhang, H. Wang, S. Han, and W. J. Dally, “Sparch: Efficient
+       40. [Online]. Available: http://doi.acm.org/10.1145/3079856.3080254            architecture for sparse matrix multiplication,” in 2020 IEEE Interna-
+[37]   R. Prabhakar, Y. Zhang, D. Koeplinger, M. Feldman, T. Zhao,                    tional Symposium on High Performance Computer Architecture (HPCA).
+       S. Hadjis, A. Pedram, C. Kozyrakis, and K. Olukotun, “Plasticine:              IEEE, 2020, pp. 261–274.
+       A reconfigurable architecture for parallel paterns,” ser. ISCA ’17.       [55] K. Zhong, Z. Zhu, G. Dai, H. Wang, X. Yang, H. Zhang, J. Si, Q. Mao,
+       New York, NY, USA: ACM, 2017, pp. 389–402. [Online]. Available:                S. Zeng, K. Hong et al., “Feasta: A flexible and efficient accelerator
+       http://doi.acm.org/10.1145/3079856.3080256                                     for sparse tensor algebra in machine learning,” in Proceedings of
+[38]   E. Qin, G. Jeong, W. Won, S.-C. Kao, H. Kwon, S. Srinivasan, D. Das,           the 29th ACM International Conference on Architectural Support for
+       G. E. Moon, S. Rajamanickam, and T. Krishna, “Extending sparse tensor          Programming Languages and Operating Systems, Volume 3, 2024, pp.
+       accelerators to support multiple compression formats,” in 2021 IEEE            349–366.
+       International Parallel and Distributed Processing Symposium (IPDPS).      [56] X. Zhou, Z. Du, Q. Guo, S. Liu, C. Liu, C. Wang, X. Zhou, L. Li,
+       IEEE, 2021, pp. 1014–1024.                                                     T. Chen, and Y. Chen, “Cambricon-S: Addressing irregularity in sparse
+[39]   E. Qin, A. Samajdar, H. Kwon, V. Nadella, S. Srinivasan, D. Das,               neural networks through a cooperative software/hardware approach,” in
+       B. Kaul, and T. Krishna, “SIGMA: A sparse and irregular GEMM                   2018 51st Annual IEEE/ACM International Symposium on Microarchi-
+       accelerator with flexible interconnects for DNN training,” in 2020 IEEE        tecture (MICRO), 2018, pp. 15–28.
+       International Symposium on High Performance Computer Architecture
+       (HPCA), 2020, pp. 58–70.
+[40]   A. Rucker, M. Vilim, T. Zhao, Y. Zhang, R. Prabhakar, and K. Olukotun,
+       “Capstan: A vector RDA for sparsity,” 2021.
+[41]   L. Song, Y. Chi, L. Guo, and J. Cong, “Serpens: A high bandwidth
+       memory based accelerator for general-purpose sparse matrix-vector mul-
+       tiplication,” in Proceedings of the 59th ACM/IEEE design automation
+       conference, 2022, pp. 211–216.
+[42]   L. Song, Y. Chi, A. Sohrabizadeh, Y.-k. Choi, J. Lau, and J. Cong,
+       “Sextans: A streaming accelerator for general-purpose sparse-matrix
+       dense-matrix multiplication,” in Proceedings of the 2022 ACM/SIGDA
+       International Symposium on Field-Programmable Gate Arrays, 2022,
+       pp. 65–77.
+[43]   N. Srivastava, H. Jin, J. Liu, D. Albonesi, and Z. Zhang, “MatRaptor:
+       A sparse-sparse matrix multiplication accelerator based on row-wise
+       product,” in 2020 53rd Annual IEEE/ACM International Symposium on
+       Microarchitecture (MICRO), 2020, pp. 766–780.
+[44]   N. Srivastava, H. Jin, S. Smith, H. Rong, D. Albonesi, and Z. Zhang,
+       “Tensaurus: A versatile accelerator for mixed sparse-dense tensor com-
+       putations,” in 2020 IEEE International Symposium on High Performance
+       Computer Architecture (HPCA). IEEE, 2020, pp. 689–702.
+                              A PPENDIX                                       Software Dependencies:
+                                                                           • OS: Ubuntu 22.04 or later (other Linux distributions are
+Abstract                                                                     expected to work).
+   We release the complete SegFold artifact, consisting of a               • Toolchain: GCC 10+ (C++20), CMake ≥ 3.15.
+
+cycle-accurate C++ simulator, real-world and synthetic bench-              • Python ≥ 3.8 with numpy, scipy, matplotlib, pandas, and
+
+mark suites, RTL source with synthesis reports, and automated                pyyaml.
+scripts that regenerate every figure and table in the paper. Con-          • Docker (optional, for a self-contained environment).
+
+cretely, the artifact contains: (i) csegfold, a simulator that                Data Sets: The experiments use 20 sparse matrices from
+faithfully models SegFold’s microarchitecture and dynamic                  the SuiteSparse Matrix Collection (https://sparse.tamu.edu/),
+dataflow, (ii) a curated set of sparse matrices drawn from                 fetched automatically by a provided download script. Synthetic
+the SuiteSparse collection, (iii) SystemVerilog RTL and corre-             matrices for sensitivity studies are generated at runtime.
+sponding area/power/timing reports for all hardware modules,
+and (iv) end-to-end automation that builds the simulator, runs             Installation
+all experiments, and produces publication-ready plots.
+                                                                           Native build.
+Artifact Check-List (Meta-Information)                                     1) Build the simulator and run a smoke test:
+•   Algorithm: Segment dataflow for SpGEMM with fine-grained                   ./scripts/setup.sh
+    dynamic scheduling and work remapping.                                 2) Download benchmark matrices:
+•   Program: csegfold — cycle-accurate C++ simulator.
+•   Compilation: CMake ≥ 3.15, GCC 10+ (C++20 required). Ra-                   python3 scripts/download_matrices.py
+    mulator2 is pulled automatically during the build via CMake
+    FetchContent.                                                          Docker (alternative). A pre-configured container is also avail-
+•   Binary: csegfold/build/csegfold, compiled from source.                 able:
+•   Data set: ∼20 SuiteSparse matrices (∼50 MB, auto-downloaded),
+    covering the 15-matrix baseline suite plus the additional matrices     docker compose build
+    used in ablation studies; synthetic matrices are created on-the-fly.   docker compose run artifact \
+•   Hardware: Commodity server — ≥4 CPU cores and ≥64 GB                     ./scripts/run_all.sh
+    RAM (16+ cores and 256 GB RAM recommended for full paral-
+    lelism).
+•   Run-time environment: Linux (tested on Ubuntu 22.04+), Python          Experiment Workflow
+    ≥ 3.8. A Docker image is also available.
+•   Metrics: Simulated cycle counts and speedup relative to prior              A single command reproduces every experiment:
+    accelerators.
+•   Output: Per-experiment CSV files and PDF/PNG plots corre-              ./scripts/run_all.sh
+    sponding to Figures 8–12.
+•   Experiments: 209 individual simulation runs, completing in ∼2          Outputs are placed in output/ae_<timestamp>/. Each
+    hours on a 16-core machine.                                            figure or table can also be generated independently via a
+•   How much disk space required? ∼2 GB (source, benchmarks,               standalone script:
+    and generated outputs).                                                •   ./scripts/run_figure_overall.sh → Figure 8
+•   How much time is needed to prepare the workflow? ∼5 minutes            •   ./scripts/run_figure_nonsquare.sh → Figure 9
+    for building the simulator and downloading matrices.                   •   ./scripts/run_figure_mapping.sh → Figure 10
+•   How much time is needed to complete experiments? ∼2 hours              •   ./scripts/run_figure_breakdown.sh → Figure 11
+    at 16 cores; runtime scales roughly linearly with core count.          •   ./scripts/run_figure_crossbar_width.sh → Fig-
+•   Publicly available? Yes.                                                   ure 12(a)
+•   Code licenses? MIT License.                                            •   ./scripts/run_figure_window_size.sh            →
+•   Archived? Yes (GitHub + Zenodo) DOI: 10.5281/zen-                          Figure 12(b)
+    odo.19453259.                                                          •   ./scripts/run_k_reordering.sh → §IV-C ablation re-
+                                                                               sult
+Description
+   How to Access: The artifact is hosted on GitHub:                        Evaluation and Expected Results
+https://github.com/PolyArch/SegFold-AE                                        Because the simulator is fully deterministic, the CSV out-
+   and also Zenodo:                                                        puts should be bit-identical to the reference files shipped
+https://doi.org/10.5281/zenodo.19453259                                    in expected_results/. The generated plots faithfully
+   Hardware Dependencies:                                                  reproduce Figures 8–12 of the paper.
+• CPU: 4 cores minimum, 16+ cores recommended.                                In addition, the hardware/ directory ships SystemVerilog
+• RAM: 64 GB minimum, 256 GB recommended. Memory-                          RTL for every SegFold module together with synthesis reports
+  intensive experiments (breakdown and mapping ablation)                   (area, power, and timing) produced by Synopsys Design
+  may consume up to 50 GB per process.                                     Compiler targeting the ASAP 7nm standard cell library. These
+• Disk: 2–5 GB.                                                            correspond directly to the hardware cost analysis in the paper.
+Experiment Customization
+   Every experiment script supports --jobs N for paral-
+lelism control, --config PATH for alternative configura-
+tions, and --timeout SEC for per-run time limits. A single
+matrix can be evaluated directly:
+./csegfold/build/csegfold \
+  --config configs/segfold.yaml \
+  --mtx-file benchmarks/data/suitesparse/
+    ca-GrQc/ca-GrQc.mtx
+

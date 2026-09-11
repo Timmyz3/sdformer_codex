@@ -3,7 +3,7 @@
 **日期:** 2026-09-06（Asia/Shanghai）  
 **给谁看:** ismd-nemo 上的人 / 下次 scp 全包读者  
 **box 源:** `/workspace/ideafromai/`  
-**ismd 目标（惯例）:** `/home/zhumd/work/ideafromai/`  
+**ismd 目标（惯例）:** `/home/zhumd/work/sdformer_codex/ideafromai/`  
 **相关 RTL 树（另包）:** box `/workspace/sdformer_c1c2star_grokbot/` ↔ ismd `/home/zhumd/work/sdformer_c1c2star_grokbot/`  
 **分工:** idea/调研 = 调研 bot；独立树 RTL/OpenROAD = iscas_ssh（**勿**改 nts07）
 

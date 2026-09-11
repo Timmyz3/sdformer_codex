@@ -12,7 +12,7 @@
 - `codex_cards/` — paste-ready Card A (OP-STW) / Card B (HBG-RP)
 
 ## Server path (ismd-nemo)
-`/home/zhumd/work/ideafromai/`
+`/home/zhumd/work/sdformer_codex/ideafromai/`
 
 ## Related isolated RTL skeleton (separate tree)
 `/home/zhumd/work/sdformer_c1c2star_grokbot/`

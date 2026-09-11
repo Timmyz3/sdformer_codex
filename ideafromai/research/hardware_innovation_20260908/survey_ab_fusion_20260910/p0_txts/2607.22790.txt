@@ -1,0 +1,558 @@
+                                           The Sparsity Tax: Weight Sparsity Trade-offs in
+                                         Event-Driven SIMD and SIMT Neuromorphic Cores
+                                                                         Mattias Westerink, Sameed Sohail, Berend-Jan van der Zwaag,
+                                                                                   Sabih Gerez and Amirreza Yousefzadeh
+                                                                                     University of Twente, Enschede, NL
+
+
+                                            Abstract—Event-driven neuromorphic inference exploits acti-
+                                         vation sparsity by updating neuron state only on spikes. However,
+                                         weight sparsity introduces irregular gather-style updates that
+                                         undermine lockstep Single Instruction Multiple Data (SIMD)
+                                         execution. We call the resulting overheads in control, metadata,
+                                         and memory activity the sparsity tax. This paper quantifies that
+                                         tax by comparing three closely related accelerators integrated
+                                         into one neuromorphic core: (i) baseline lockstep SIMD, (ii)
+                                         bitmap-gated Sparse-SIMD that selectively disables lanes without
+                                         compressing weights, and (iii) a Single Instruction Multiple
+                                         Threads (SIMT) style design with per-PE address generation
+arXiv:2607.22790v1 [cs.AR] 24 Jul 2026
+
+
+
+
+                                         and run-length coded sparse weights. Using an RTL-to-gates
+                                         flow in GF22FDX+ and activity-driven energy estimation, we
+                                         evaluate event-driven neural network inference across varying
+                                         post-training pruning levels. Results show that total core area
+                                         changes are insignificant because SRAM dominates area, while
+                                         performance and energy strongly depend on how sparsity is
+                                         handled: SIMD and Sparse-SIMD exhibit near-constant through-
+                                         put, Sparse-SIMD achieves limited energy savings due to bitmap
+                                         and dense-storage overheads, and SIMT provides the strongest
+                                         energy scaling and substantial speedups at high sparsity, albeit
+                                         with sublinear gains due to metadata reads, load imbalance, and
+                                         sparsity-independent phases. The hardware code for the proposed
+                                         architectures and experiments is publicly accessible for research
+                                         purposes1 .
+
+                                                                 I. I NTRODUCTION
+                                            Event-driven neural processing leverages activation sparsity
+                                         by performing computations only when neurons fire, rather
+                                                                                                                   Fig. 1. A) A layer of a neural network. When one input neuron activates
+                                         than updating all neurons at every time step [1]–[7]. When an             and fires an event (EV1 in this figure), all output neurons must be updated,
+                                         input event occurs, it typically triggers updates in multiple             each with their corresponding weights (Pi ← Pi + Wi × Ai ), where
+                                         postsynaptic neurons, each requiring a multiply-accumulate                P represents the partial sum and i is the index of the output neuron. B)
+                                                                                                                   An SIMD (Single Instruction, Multiple Data) processor features a shared
+                                         (MAC) operation to adjust a running state or partial sum                  control unit. The instruction controller fetches and decodes the instructions.
+                                         (e.g., Pi ← Pi + Wi · A). As shown in Fig. 1(A), a single                 The Address Generation Unit (AGU) generates data memory addresses for
+                                         active input can drive updates across several output neurons.             load/store instructions. C) A SIMT (Single Instruction, Multiple Threads)
+                                                                                                                   processor uses a sparse weight matrix and features individual AGUs for
+                                         These updates can be organized as a sequence of compact                   each processing thread. However, the instruction controller is shared, as all
+                                         “event kernels” that operate over contiguous neuron-state                 processing elements execute the same instructions.
+                                         entries. Importantly, although the activity is temporally sparse,
+                                         the per-event computation is often very regular, making it
+                                         naturally amenable to data-parallel vectorization inside each
+                                         neuromorphic core. These updates align neatly with a Single               common to reduce memory usage and avoid unnecessary com-
+                                         Instruction, Multiple Data (SIMD) organization (see Fig. 1(B))            putations [8]–[11]. When an event’s outgoing weight vector
+                                         where a shared control unit broadcasts a single instruction               is sparse, the update process becomes an irregular gather-
+                                         stream, while multiple Processing Elements (PEs) execute the              accumulate operation: only a subset of output neurons needs to
+                                         same operation on different neuron-state lanes.                           be updated, and these neurons may not be contiguous. In tra-
+                                            However, this regularity breaks down when weight sparsity              ditional SIMD architectures, leveraging this sparsity presents
+                                         is introduced. Sparsifying weights has become increasingly                a challenge. The system is forced to either (i) maintain a dense
+                                                                                                                   representation, wasting energy by performing multiplications
+                                           1 https://github.com/MW-SAND/neuromorphic-flos-co-processor/tree/main   and accumulations (MACs) on zeros, or (ii) compress the
+weights, which incurs additional costs related to irregular          variant that introduces lightweight sparsity gating, and a SIMT
+control and addressing to skip the zeros. The main issue arises      variant that enables stronger sparsity exploitation by giving
+from the fact that decisions about skipping zeros and selecting      PEs greater autonomy in address generation. In this section, we
+target indices depend on individual processing elements. Each        will offer more detailed information about these accelerators.
+PE would require its own predicate or control mechanism
+                                                                     A. SIMD architecture
+to determine whether to participate in the computation or
+skip it. This situation undermines the primary advantage                The SIMD accelerator consists of a configurable array
+of SIMD, which is shared control that allows for uniform             of processing elements that operate in an SIMD (Single
+execution. It introduces what we call the “sparsity tax”: the        Instruction, Multiple Data) fashion, with no dataflow between
+extra energy, area, and latency costs associated with trying to      the PEs, as illustrated in Fig. 1(B). Control is managed by
+regain efficiency in the presence of sparsity.                       an instruction controller, which selects the next instruction
+   Although several neuromorphic processors utilize SIMD to          to execute (providing efficient branch and loop support) and
+minimize controlling overhead [12]–[17], to our knowledge,           translates each instruction into control signals for the PEs.
+none of those effectively exploit unstructured weight sparsity.         The Address Generation Unit is responsible for preparing
+One effective method to address irregular sparsity is by adopt-      the proper addresses for data memory. Memory access occurs
+ing a SIMT (Single Instruction, Multiple Threads) execution          in lockstep. The memory is organized with a single wide port,
+model. In this model, each processing element functions like a       meaning each read or write operation uses a single address. As
+lightweight thread with its own address generation and steering      a result, only one address calculator and one address decoder
+capabilities for each lane. Fig. 1(C) illustrates this approach:     are utilized in the memory system. All PEs will access the
+the weights for events are stored in a sparse format that            same line of memory to perform SRAM operations. In theory,
+includes explicit indices and values. Each PE is equipped with       this allows data memory to be implemented using a single
+a dedicated AGU (labeled AGU1-AGU8) to retrieve the correct          large SRAM block. However, in practice, multiple SRAM
+neuron-state entry corresponding to the compressed weight.           blocks are tiled together to create such memory, as a single
+It’s important to note that some control logic (instruction Con-     large SRAM block is slow and not energy-efficient.
+troller in Fig. 1) will still be shared, since all the PEs execute      Instruction Set Architecture (ISA) overview: The ISA is
+the same instructions for updating the neuron state with the         designed to cover the dominant operations in quantized neural
+incoming event. This organization enhances scalability in the        network inference. It includes arithmetic instructions (Add,
+presence of irregular sparsity, as the lanes can track distinct      Mul, Max, Shift), where Max supports ReLU/pooling, and
+indices without requiring the entire vector to remain structured     Shift supports common rescaling steps in integer-only quan-
+and dense. However, employing SIMT is not without its costs.         tized inference. Memory transfer uses Read/Write instructions
+Supporting per-thread address generation, metadata movement          that reference base addresses plus a compact immediate offset.
+(e.g., indices), and the potential for execution imbalance can       A specialized Branch instruction executes instruction ranges
+introduce overhead. These overheads may counteract or even           N times using indexed loop counters, enabling compact loop
+outweigh the theoretical benefits of skipping zeros—especially       nests for multi-dimensional layers.
+in cases of moderate sparsity, when index widths are large              Instruction Controller and Address Generation Unit: The
+relative to weight precision, or when memory energy con-             Instruction Controller is programmed with tasks that define
+sumption is more significant than the arithmetic operations in-      start and end instruction ranges, implementing nested loops
+volved. However, advanced neural network architectures such          sufficient for common neural network inference. Loop accel-
+as Transformers can be extensively sparsified, with pruning of       eration is implemented similarly to the loop controller in [12].
+over 90% of weights without significant accuracy loss [18].          For each memory access instruction, the Address Generation
+Thus, leveraging weight sparsity in a neuromorphic processor         Unit determines the next memory address by adding the base
+has become essential.                                                address to a product of the loop indexes.
+   In this work, we quantify the trade-offs behind this sparsity
+tax by systematically comparing SIMD and SIMT neuromor-
+phic core units under sparse event-driven workloads. Using
+the execution models in Fig. 1(B) and Fig. 1(C) as concrete
+architectural baselines, we provide fair area, power, and per-
+formance comparisons across sparsity regimes, isolating when
+sparsity is a net win and when its control and metadata costs
+dominate. Collectively, these results provide practical guidance
+for the design of next-generation event-driven processors.
+                                                                                Fig. 2. Architecture of the Processing Elements
+               II. P ROPOSED A RCHITECTURES
+   We propose three closely related accelerator architectures           Processing Element: Processing elements operate in INT16
+for event-driven neural-network updates that can be integrated       and INT4 formats, with a register file structured into 8×16-
+into a neuromorphic core: an SIMD design, a Sparse-SIMD              bit and 8×4-bit registers as illustrated in Fig. 2. Each PE is
+connected to the SRAM data memory through a dedicated                defaults to ’1’. Additionally, the instruction controller tem-
+16-bit data read/write interface, sharing an address line with       porarily overrides conditional disablement when an instruction
+other PEs. Due to the 16-bit width of the SRAM data port,            targets R7, ensuring that the bitmap can be updated reliably.
+it can read four 4-bit weights simultaneously, minimizing               Implication:
+weight-fetch overhead and eliminating the need for additional           • Memory footprint implication: In this scheme, sparse
+unpack instructions. Each PE can perform various operations,              weights are not stored in a compressed format. Conse-
+including addition, multiplication, finding the maximum value,            quently, zeros need to be stored in memory, just like
+and shifting. The modular arithmetic unit structure enhances              in standard SIMD mode. Additionally, the bitmap used
+extensibility. A zero-gating mechanism has been implemented               to disable certain instructions also consumes memory.
+to skip arithmetic operations when one of the operands is                 Consequently, the overall memory consumption is always
+zero. This mechanism enables exploiting sparsity within the               higher than in normal SIMD mode. However, the number
+Arithmetic Logic Unit (ALU). However, it cannot eliminate                 of memory accesses is reduced for sparse weights.
+the energy and time consumption associated with memory and              • Performance      implication: “Bitmap-gated Sparse-
+register file access, which are dominant.                                 SIMD” balances potential energy savings from skipping
+B. Sparse-SIMD architecture (bitmap-gated SIMD)                           reads, writes, and computations on zero weights
+                                                                          against the added instruction overhead of bitmap
+   The baseline SIMD design struggles to effectively exploit
+                                                                          loading, shifting, and control. This overhead decreases
+unstructured weight sparsity because all Processing Elements
+                                                                          throughput when sparsity is modest or when bitmaps
+share the same control signals and memory address stream.
+                                                                          require frequent refreshing.
+Consequently, a “skip if weight == 0” approach cannot be
+applied to memory access. However, with minimal additional
+                                                                     C. SIMT-style co-processor (per-PE address generation for
+control, we have developed a Sparse-SIMD architecture that
+                                                                     sparse weights)
+can dynamically disable individual PEs and their correspond-
+ing memory accesses for specific instructions issued by the             To move beyond the basic “enable/disable in lockstep”
+instruction controller. This allows an instruction from the          approach and fully leverage sparse formats that bypass runs
+instruction controller to be executed in a few PEs while the         of zeros, the third design introduces a SIMT-style extension.
+others remain fully disabled. In this architecture, each PE can      In this design, processing elements continue to execute a
+have its own dedicated portion of data memory (an SRAM               shared instruction stream, but each PE can utilize distinct base
+row), and its port can be enabled or disabled independently.         addresses and has its own dedicated address calculator, as
+   The key difference between Sparse-SIMD and regular                illustrated in Fig. 1(C). In SIMT execution, all PEs perform
+SIMD is that instructions can be selectively disabled for            the same instructions (neuron updates) but operate on different
+individual PEs. For the PEs that do execute the instructions,        addresses. However, the PEs are no longer aligned on the
+they operate on the same long word of memory (one address,           same loop iteration in Fig. 1(A). This allows PEs to jump
+similar to the illustration in Fig. 1(B)). This capability enables   directly from one non-zero weight to another without pausing
+energy savings by eliminating redundant operations. However,         their operations, thereby enhancing throughput and energy
+this does not enhance performance, as skipping instructions          efficiency, especially in high-sparsity scenarios. Finally, sparse
+simply turns off the PEs.                                            weights can be stored in a compressed format, resulting in
+   Bitmap-driven conditional execution: To disable memory            significant memory savings when sparsity is high.
+access when weights are zero, we store sparsity metadata                Sparse encoding and ISA support: This design uses 4-bit
+as a bitmap in data memory. Among encodings, a bitmap                run-length coding (RLC) to encode sparse matrices. In this
+is attractive because its bits can be used directly as clock-        method, we encode the number of zero weights (4b RLC)
+enable signals for SRAM rows, registers, and arithmetic units,       that follow each non-zero weight. Therefore, each non-zero
+with relatively small control overhead. To avoid widening            4b weight is now followed by a 4b RLC code. When sparsity
+the instruction format, this design dedicates R7 as a “clock-        exceeds 50%, this encoding reduces the memory footprint.
+enable register”. Operations involving R7 remain enabled,               We chose 4-bit run-length coding (RLC) as a simple
+allowing the bitmap to be updated/shifted even under con-            hardware-oriented sparse format that matches the INT4 weight
+ditional execution. Therefore, R7 of each PE indicates the           precision used in this work and exposes the metadata/control
+status (skip/execute) of the next 16 instructions and must be        trade-offs of interest without requiring complex pointer struc-
+periodically updated with new data once every 16 instructions.       tures. The goal is not to claim that RLC is universally
+   Microarchitectural changes: The instruction controller            optimal, but to provide a concrete, sparse encoding for a fair
+monitors whether conditional disablement is active and pro-          architectural comparison. Other formats, such as CSR/CSC,
+duces a clock-enable mode signal for the processing elements.        coordinate encoding, or block sparsity, would change the
+When conditional disablement is active, each PE sends the            metadata-to-weight ratio and address-generation behavior but
+least significant bit (LSB) of register R7 as an enable signal       would not change the central question studied here: whether
+to its corresponding SRAM row and to the internal PE gating.         sparse execution is better handled through lockstep gating or
+When conditional disablement is inactive, the PE enable              per-PE sparse traversal.
+                          TABLE I                                                       III. E XPERIMENTAL RESULTS
+  M ICROARCHITECTURAL COMPARISON OF THE THREE ACCELERATOR
+                         VARIANTS .                                     A. Experimental Setup
+Feature                SIMD     Sparse-SIMD            SIMT                System architecture and RISC-V: To evaluate the proposed
+Instruction stream     Shared      Shared              Shared           SIMD, Sparse-SIMD, and SIMT extensions in a realistic
+Address generation     Shared   Shared AGU          Per-PE AGU          control setting (without requiring a custom software stack),
+Weight storage         Dense       Bitmap           Sparse RLC          we integrated these accelerators into a platform built around
+Per-PE enable            No     Bitmap-driven       Autonomous
+                                                                        a NEORV32 [19] RISC-V processor. The RISC-V core acts
+Skip zero updates        No        Partial               Yes
+Sparse work skipping     No          No                  Yes            as a lightweight runtime controller that (i) parses input-
+Main overhead          Dense       Bitmap       Metadata + divergence   event packets, (ii) programs accelerator base addresses and
+                        zeros     overhead                              instructions, and (iii) triggers accelerator tasks for partial-sum
+                                                                        updates and activation/quantization steps. This setup allows all
+                                                                        experiments to be driven from compact C programs compiled
+   Address Generation Unit per PE: The main architectural               for the embedded RISC-V.
+addition is an AGU in each PE. The Address Generation Unit                 We used the clock frequency of 500 MHz for our experi-
+in each processing element uses the RLC value to compute the            ments and included (in addition to the RISC-V and accelerator)
+next partial sum address. Additionally, this unit can disable its       banked SRAM-based instruction and data memory that stores
+corresponding PE and the SRAM blocks when there is no                   runtime variables, network weights, and intermediate partial
+work to process.                                                        sums. The accelerator is logically loosely coupled to NE-
+   Control-flow behavior under divergence: When per-PE en-              ORV32 through memory-mapped registers, while completion
+ablement is active, some processing elements may finish their           signaling is handled via the NEORV32 FIRQ CFS interrupt
+tasks earlier than others, while the remaining PEs continue to          mechanism. In contrast, the accelerator is tightly coupled to the
+update their partial sums. Once all PEs have completed their            data memory: it directly drives the SRAM control signals and
+tasks, the instruction controller will stop the current task and        exchanges a wide data interface of P×16 bits (P is the number
+proceed to the next. This process ensures forward progress and          of processing elements). When the NEORV32 and accelerator
+re-convergence of operations.                                           contend for data-memory access, the accelerator is prioritized,
+   Implication: The SIMT-style extension shifts the focus               and the NEORV32 is stalled, ensuring deterministic accelera-
+of exploiting sparsity from lockstep coordination (as seen              tor progress.
+in Sparse-SIMD) to a more flexible approach. This method                   Instruction and Data memories: The instruction and data
+allows each Processing Element to navigate the sparse rep-              memories are implemented using single-port, ultra-high-
+resentation independently by updating its own addresses and             density, low-voltage-enabled SRAMs generated with Synopsys
+enabling its own states. This approach offers two main advan-           Embed-It Integrator. The instruction memory consists of 8
+tages for sparse data:                                                  SRAM macros of 32 bits × 1024 words (8×4KB). The data
+                                                                        memory consists of 64 SRAM macros of 16 bits × 2048 words
+  •   It only stores non-zero values, along with compact skip           (64×4KB). These configurations were chosen as a practical
+      metadata, reducing the memory footprint.                          trade-off between memory density and energy consumption.
+  •   It allows for skipping both computations and partial-sum
+                                                                           Technology node, Simulation and measurement tools:
+      memory access/operations. This can significantly enhance
+                                                                        We used an RTL-to-gates evaluation flow to report cycle
+      energy efficiency and throughput.
+                                                                        counts and activity-driven power. Functional simulation and
+   However, this method comes with increased microarchitec-             cycle measurements were performed in Cadence Xcelium
+tural overhead. Notably, it requires a per-PE AGU, additional           (23.03.007). Cycle counts were collected using the NEORV32
+base-address states, and mechanisms to manage divergence                hardware performance monitor (HPM) counters while running
+and reconvergence. These factors can lead to increased area             the compiled benchmark code on the simulated platform. All
+usage, higher static power consumption, and potential control           experimental kernels were written in C and compiled using the
+stalls (such as re-enable or branch overheads) when the skip            riscv-none-elf toolchain as described in the NEORV32 user
+fields are short or irregular.                                          documentation, enabling consistent software control across
+   As a result, SIMT generally outperforms lockstep designs             SIMD/Sparse-SIMD/SIMT variants.
+in high, irregular sparsity, where the benefits of skip metadata           Synthesis and area extraction were performed using Ca-
+can be fully realized. Conversely, its advantages diminish in           dence Genus (23.33) and GF22FDX+ LVT20 ultra-low-power
+dense or lightly sparse layers, where the overhead associated           libraries. Energy consumption was estimated in Cadence
+with per-PE addressing and control can approach the costs of            Joules (23.33) using activity-driven analysis based on switch-
+simply executing the standard SIMD stream.                              ing activity generated by simulation, reported to be accurate
+   Table I summarizes the key microarchitectural differences            within 15% of signoff power. This approach captures the effect
+between the three accelerator variants in terms of control,             of sparsity-dependent memory and datapath enablement on
+addressing, sparse-data representation, and execution behavior.         dynamic power, which is essential for comparing lockstep
+(SIMD/Sparse-SIMD) and per-PE control (SIMT) designs               our focus is architectural. The choice of thresholding method
+across varying sparsity levels.                                    vs more advanced methods doesn’t affect the architectural
+                                                                   trends.
+B. Benchmarking application (event-based VGG-16)
+                                                                   C. Area breakdown
+                             TABLE II                                 Table III summarizes the post-synthesis area of a single
+      C USTOMIZED VGG-16 LAYER LIST AND BASELINE SIMD              neuromorphic core based on NEORV32, comparing a baseline
+LATENCY / ENERGY PER LAYER . E ACH ROW CORRESPONDS TO ONE LAYER    core (“SIMD”) against Sparse-SIMD, and SIMT co-processors
+       OF THE NETWORK . C ONVOLUTION KERNELS ARE 3 × 3.
+                                                                   (all with 8 PEs).
+                                              SIMD     SIMD           The small overall area delta is explained by the fact that data
+        Name         Output     Activation   Latency   Energy      memory dominates the core area (85–88%), with instruction
+                      Shape      Sparsity      (ms)     (mJ)
+                                                                   memory contributing another 10–11%; these components re-
+         Input       32,32,3        0            -        -
+     block1 conv1   32,32,64      1.6%         15.6     1.96
+                                                                   main essentially constant across all variants. Consequently, the
+     block1 conv2   32,32,64      47.7%        174      21.9       net increase is primarily due to the accelerator’s logic. Inside
+      block1 pool   16,16,64        -            -        -        the accelerators, the area is dominated by their 8 Processing
+     block2 conv1   16,16,128     24.8%        241      15.8       Elements. Relative to the SIMD accelerator:
+     block2 conv2   16,16,128     38.7%        393      25.7
+      block2 pool    8,8,128        -            -        -           • Sparse-SIMD increases accelerator area by 9.24%, largely
+     block3 conv1    8,8,256      39.7%        358      12.6            due to Instruction-Controller growth.
+     block3 conv2    8,8,256      58.1%        436      17.6          • SIMT increases accelerator area by 8.88%, primarily
+     block3 conv3    8,8,256      58.7%        430      17.3
+      block3 pool    4,4,256        -            -        -             from adding per-PE Address Generation Units.
+     block4 conv1    4,4,512      64.3%        247      7.48       Therefore, SIMT’s total accelerator area (12,862 µm²) is
+     block4 conv2    4,4,512      74.7%        263      10.6       almost the same as the Sparse-SIMD (12,905 µm²), because
+     block4 conv3    4,4,512      85.4%        152      6.13
+      block4 pool    2,2,512        -            -        -        the added AGU area is approximately offset by a smaller
+     block5 conv1    2,2,512      79.4%        71.6     2.16       Instruction Controller in SIMT.
+     block5 conv2    2,2,512      87.4%        43.8     1.32
+     block5 conv3    2,2,512      88.5%        39.9     1.21       D. Memory footprint overhead
+      block5 pool    1,1,512        -            -        -
+         dense         512         98%         9e-3     6e-5
+        dense 1        256         98%         5e-3     3e-5
+         Output         10          -            -        -
+
+   The design is evaluated using the VGG-16 neural network
+architecture [20] customized for the CIFAR-10 dataset [21].
+This enables the comparison with other accelerators that
+provide layer-wise results for VGG-16. The deployed network
+has undergone quantization-aware training, with weights and
+activations quantized to 4 bits each.
+   Table II lists all evaluated layers of the customized VGG-16
+model and reports the baseline SIMD latency and energy for
+each layer. The model is constructed with Tensorflow 2.14.0.       Fig. 3. Memory Footprint of “VGG-16 dense layer” Weights for SIMD (Dense
+                                                                   storage, in Blue), Sparse-SIMD (Bitmap storage, in Orange) and SIMT (RLC
+   We compared memory footprint, execution time (through-          Encodings storage, in Green) at Six Levels of Sparsity. Sparsity is achieved
+put), and energy consumption across three variations: base-        by reducing smaller weights to zero.
+line SIMD, bitmap-gated Sparse-SIMD, and SIMT, using
+“VGG16” layers [20] driven by event packets. Each event               The architecture and its corresponding weight encoding
+carries the information about the source neuron address (the       affect the memory footprint. The memory footprint for the
+neuron from the previous layer that generated the spike)           “VGG-16 dense” layer is reported in Fig. 3. The relative
+and its corresponding activation (assuming graded spikes).         memory footprint of the encodings is roughly the same across
+The reported measurements include address generation from          all layers of VGG-16:
+the input events, updates to partial sums, and the quantiza-          • SIMD architecture: In this case, the dense encoding is
+tion/activation step. However, they exclude address generation           used with 1024kb for 262144 (512×512) Int4 weights.
+and serialization of output-event packets.                            • Sparse-SIMD architecture: In this case, the bitmap en-
+   To induce weight sparsity in the neural network, we prune             coding is used with 1024 kb for the weights and 256
+the smallest weights using a variable threshold (post-training).         kb for the bitmaps. Since the weights are not stored in
+Therefore, we expect a decrease in accuracy as thresholds                compressed sparse mode, the sparsity does not affect the
+increase. However, this accuracy loss can be [partially] re-             memory footprint.
+covered when using advanced pruning techniques [22]. We               • SIMT architecture: In this case, Run Length Encoding
+omit advanced retraining-aware pruning techniques because                (RLC) is used, and the weights are stored in compressed
+                                                        TABLE III
+A REA BREAKDOWN OF A NEUROMORPHIC CORE COMPARING SIMD, S PARSE -SIMD, AND SIMT ACCELERATORS (8 PROCESSING ELEMENTS ). [ KµM² =
+                                                         10³ µM²]
+
+                  Component                       SIMD     Sparse-SIMD      SIMT       Overhead vs. SIMD
+                                                 (kµm2 )     (kµm2 )       (kµm2 )
+                  Total                          528.00      529.00         529.00     Sparse-SIMD/SIMT: +0.2%
+                  NEORV32 core                     7.25        7.25           7.25     0%
+                  256 KB data memory             452.00      452.00         452.00     0%
+                  32 KB instruction memory        56.60       56.60          56.60     0%
+                  Accelerator
+                  Accelerator (total)             11.80       12.90          12.90     Sparse-SIMD/SIMT: +9.3%
+                    8 processing elements          7.25        7.46           7.30     Sparse-SIMD: +2.9%, SIMT: +0.7%
+                    Instruction controller         4.11        4.97           4.11     Sparse-SIMD: +20.9%, SIMT: 0%
+                    Address Generation Unit(s)     0.30        0.30           1.21     Sparse-SIMD: 0%, SIMT: ×4.0
+
+
+
+     sparse format. The encoding overhead of the inserted
+     RLC values equals the number of stored weights. As
+     such, the overhead of the RLC encoding at 0% sparsity is
+     106.25%. The last 6.25% comes from the stored indices
+     (64kb).
+   At 95% sparsity, RLC encoding reduces the memory foot-
+print by 67.83%. Ideally, this reduction should be around
+83.75%, including index overhead. This discrepancy occurs
+because a single 4-bit RLC value can represent the skipping
+of up to 15 intermediate zero weights. However, for larger
+jumps, one or a few intermediate zero-value weights need to
+be stored to limit the address jump. The lower reduction in
+memory observed is mainly due to the inclusion of these zero-
+valued weights.
+E. Performance comparison
+   Fig. 4 illustrates the number of clock cycles required to
+process both a dense layer and a convolutional layer in VGG-
+16 across all three accelerator architectures. The throughput
+of the SIMD and Sparse-SIMD accelerators remains constant
+and is independent of the weight sparsity. This is expected
+since neither architecture bypasses computations involving
+zero-valued weights.
+   The clock cycle count for the Sparse-SIMD accelerator
+                                                                      Fig. 4. Effect of Sparsity on Execution Time (in clock cycles) for SIMD,
+is more than that of the SIMD accelerator. This increase is           Sparse-SIMD and SIMT, evaluated with the (a) VGG-16 dense Layer, (b)
+anticipated because its instruction set incurs the overhead of        VGG-16 block2 conv1 Layer. The clock cycles shown are the total cycles
+fetching bitmaps and performing a shift operation on them to          required to process the layer, using an input-event count derived from the
+                                                                      average activation sparsity across CIFAR-10 images.
+activate or deactivate the execution of subsequent instructions.
+   As expected, the execution time of the SIMT architecture
+decreases gradually as sparsity increases. This can be ex-
+plained by the skipping of computations and data transfers            calculating the start point is not straightforward. It’s important
+with zero-valued weights.                                             to note that this limitation is a design choice and should not
+   For low sparsity levels, the SIMT unit incurs overhead,            be generalized to all SIMT architectures.
+resulting in worse performance than SIMD. This is similar                At the highest level of weight sparsity, the SIMT accel-
+to the Sparse-SIMD architecture. However, in convolutional            erator achieves more than a 50% reduction in execution time
+layers, SIMT overhead is significantly higher because our             compared to the SIMD accelerator. However, since 96% of the
+SIMT architecture fails to exploit the potential reduction in         partial sum updates need to be skipped, the actual reduction in
+operations at the edges of the output feature map. To do so, it       execution time is much smaller than the increase in sparsity
+would need to know the starting point of each column’s weight         might suggest. Several factors contribute to this diminished
+set. However, since the weights are stored in RLC encoding,           reduction in execution time:
+  •  The execution time of the SIMT accelerator increases due
+     to the additional instruction required for each partial sum
+     update.
+   • For every 4-bit weight, a 4-bit RLC value must be read,
+     effectively doubling the memory accesses for each non-
+     zero weight.
+   • Variations in sparsity lead to some Processing Elements
+     being idle while others are active, resulting in an uneven
+     workload distribution.
+   • The execution time of some tasks, such as the event gen-
+     eration task (applying activation functions to the partial
+     sums), is not affected by sparsity and remains fixed.
+These factors combined limit the overall efficiency gains from
+increased sparsity in the SIMT accelerator.
+F. Energy consumption comparison
+
+
+
+
+                                                                              Fig. 6. Effect of Sparsity on energy consumption for SIMD, Sparse-SIMD
+                                                                              and SIMT, evaluated with the (a) VGG-16 dense Layer, (b) VGG-16 block2
+                                                                              conv1 Layer. The energy consumption shown is the total amount of energy
+                                                                              required to process the layer, using an input-event count derived from the
+                                                                              average activation sparsity across CIFAR-10 images.
+Fig. 5. Distribution of power consumption over Time for processing a Single
+Input Event in the dense layer with SIMD accelerator (8 PEs)
+
+   Fig. 5 illustrates the instantaneous power consumption of                        switching activity: fewer bit toggles travel through the
+the SIMD configuration while processing a single input event.                       SRAM read datapath, the register file, and the arithmetic
+The baseline (idle) power consumption is approximately 1.5                          units, especially with zero-gating implemented in the
+mW, primarily due to leakage and standby activity in the                            ALU. Consequently, this lowers dynamic power usage,
+instruction and data memories. When the NEORV32 performs                            even when executing the same instruction stream.
+instruction fetches and occasional data accesses, power con-                    •   Sparse-SIMD: energy decreases with sparsity, but with
+sumption increases to about 2–2.5 mW. Once the accelerator                          a limited slope. Bitmap-gated Sparse-SIMD can disable
+is activated, power rises to around 5.5–6 mW, experiencing                          subsets of PEs (and their associated SRAM accesses)
+brief peaks of up to 6.5 mW. This data confirms that data                           using a per-lane clock enable derived from the bitmap.
+memory activity is the main contributor to dynamic power                            As sparsity increases, more lanes are disabled more often,
+consumption during event processing, while the processing                           cutting dynamic energy in the PE datapath and partial-
+element array and control logic contribute a smaller fraction                       sum/weight memory accesses. However, the achievable
+of the total, consistent with the area breakdown, indicating                        energy reduction is tempered by the bitmap mecha-
+that SRAM usage is predominant. The short power peak                                nism, which introduces overhead instructions (bitmap
+around 3µs corresponds to the active partial-sum update phase,                      fetch/shift/refresh) that do not vanish with sparsity and
+during which the accelerator is enabled, and the data memory                        therefore impose a non-negligible constant energy com-
+experiences the highest switching activity due to repeated                          ponent.
+weight/partial-sum accesses.                                                    •   SIMT: strongest energy scaling with sparsity. SIMT
+   Fig. 6 compares the total energy per layer (including event                      demonstrates the most significant reduction in energy
+parsing, partial-sum updates, and activation/quantization) for                      consumption as sparsity increases because it simultane-
+SIMD, Sparse-SIMD, and SIMT across increasing levels of                             ously addresses two major costs: the amount of work
+weight sparsity, evaluated on both (a) a dense layer and (b) a                      done and memory activity. By utilizing a compressed
+convolutional layer. Several trends are observed:                                   sparse representation (RLC + values), SIMT achieves the
+   • SIMD: small energy reduction despite dense execution.                          following: (i) it completely skips zero-weight elements,
+     While baseline SIMD does not skip over zeros at the                            thereby avoiding both multiply-accumulate (MAC) oper-
+     memory-access level, its energy consumption decreases                          ations and the corresponding memory traffic associated
+     slightly as sparsity increases. This is because zeros reduce                   with these skipped updates, and (ii) it reduces switching
+                                                         TABLE IV
+      C OMPARISON OF SEVERAL NEUROMORPHIC CORES CONCERNING EVENT DATA TYPE , PERFORMANCE , AREA , AND ENERGY CONSUMPTION .
+   M EASUREMENTS ARE CONDUCTED WITH A 4000- NEURON FULLY CONNECTED LAYER FEATURING 16 INPUT EVENTS AT 86% WEIGHT SPARSITY.
+
+          Accelerator       Architecture     Technology    Event    Area per Memory per     Energy per          Time per
+                             or Mode                      Datatype core (mm2 ) core (Mb) neuron update (pJ) neuron update (ns)
+          Loihi [4]        One PE per core     14 nm       Binary     0.41        2.00            81.00             8.40
+          NeuronFlow [3]   One PE per core     28 nm       Binary     0.10        0.12            20.00             NA
+                           SIMD8-BF16          22 nm       BF16       0.47        2.30            14.00             3.60
+          SENECA [12]
+                           SIMD8-INT8          22 nm       Binary     0.47        2.30             7.00             1.70
+                           SIMD8               22 nm       INT4       0.53        2.30            10.00             1.70
+          Our Accelerators Sparse-SIMD8        22 nm       INT4       0.53        2.30             7                2.1
+                           SIMT8               22 nm       INT4       0.53        2.30             4                0.9
+
+
+
+
+     by issuing fewer effective updates as sparsity increases.                                 IV. C ONCLUSION
+     Furthermore, unlike Sparse-SIMD, which primarily saves
+                                                                           This paper quantifies the sparsity tax in event-driven neu-
+     energy by controlling power within a fixed-length stream,
+                                                                        romorphic processing by comparing three architectures: the
+     SIMT also decreases the overall work executed at the
+                                                                        baseline lockstep SIMD, the bitmap-gated Sparse-SIMD, and
+     layer level. This compounded effect results in greater
+                                                                        the SIMT with per-PE address generation, all within the same
+     energy savings when sparsity is high.
+                                                                        NEORV32-based core, SRAM-dominated memory system,
+   To summarize, Sparse-SIMD saves energy per instruction by            and synthesized on GF22nm-FDX+ technology. With eight
+gating PEs and SRAM rows, but it still incurs overhead from             PEs, the differences in total core area across these architectures
+a largely fixed control schedule that contains non-skippable            are insignificant.
+segments. SIMT, on the other hand, conserves energy by                     The results distinguish between gating sparsity and skip-
+avoiding the execution of the skipped updates altogether.               ping sparsity, revealing how each affects both performance
+   As shown, the benefits of SIMT are not perfectly propor-             and energy consumption. SIMD and Sparse-SIMD maintain
+tional to sparsity levels. This is due to the introduction of           nearly constant throughput regardless of sparsity because they
+certain overheads, such as additional metadata reads (like RLC          primarily execute the same workload (though Sparse-SIMD
+values), as well as divergence and imbalance among process-             incurs a fixed overhead from bitmap usage). In contrast, SIMT
+ing elements. Moreover, there are phases that are independent           performance improves as sparsity increases, as it effectively
+of sparsity, such as activation and event generation.                   traverses compressed representations and skips over zeros.
+                                                                        However, the performance gains are sublinear due to factors
+                                                                        such as metadata reads, PE divergence or imbalance, and
+G. Comparison with existing neuromorphic processors                     phases of computation independent of sparsity.
+                                                                           Energy consumption follows a similar pattern: SIMD expe-
+   Although the primary goal of this work is an apples-to-              riences only slight reductions in energy usage due to lower
+apples comparison between three closely related co-processors           switching activity. Sparse-SIMD saves more energy by dis-
+integrated in the same NEORV32-based core, it is still useful           abling subsets of PEs and their associated memory accesses,
+to position the resulting operating points against representative       though it is limited by the costs associated with densely packed
+digital neuromorphic systems reported in prior work. Table IV           zeros and bitmap overhead. SIMT offers the largest energy
+summarizes a normalized comparison using common bench-                  savings by avoiding both computation and memory traffic for
+marks.                                                                  skipped zeros, though this is offset by the costs of metadata
+   These numbers suggest that, for this workload, our SIMT              movement and potential imbalances across PEs.
+design achieves the lowest per-update energy and latency                   The quantitative break-even point presented in this work
+among the compared points. At the same time, the comparison             should be understood as specific to our evaluated context,
+should be interpreted cautiously because the platforms differ           which includes INT4 event-driven inference, VGG-16-style
+in event representation (binary vs graded), precision for-              workloads, and 4-bit RLC sparse encoding. In practice, the
+mats, memory organization, and measurement methodology,                 exact transition between SIMD-style execution and SIMT-style
+all of which can materially affect the reported pJ/update and           sparse traversal will vary based on factors such as weight
+ns/update.                                                              precision, metadata format, sparsity structure, and workload
+   Many neuromorphic processors typically feature only one              type. For instance, higher precision reduces the relative cost of
+Processing Element per core [3], [4], [7], [23], [24]. These            metadata, while different sparse encodings or more structured
+processors often incur significant control overhead, resulting          sparsity may affect both address-generation overhead and lane
+in poorer performance than SIMD or SIMT cores.                          divergence. Nonetheless, the qualitative conclusion is expected
+to remain valid across a broader scope: lockstep gating primar-                   [12] G. Tang, K. Vadivel, Y. Xu, R. Bilgic, K. Shidqi, P. Detterer, S. Traferro,
+ily conserves energy within a largely fixed execution schedule,                        M. Konijnenburg, M. Sifalakis, G.-J. van Schaik et al., “Seneca: building
+                                                                                       a fully digital neuromorphic processor, design trade-offs and challenges,”
+whereas architectures that effectively skip zero-weight updates                        Frontiers in Neuroscience, vol. 17, p. 1187252, 2023.
+can also reduce total workload, making them increasingly                          [13] H. A. Gonzalez, J. Huang, F. Kelber, K. K. Nazeer, T. Langer, C. Liu,
+appealing as sparsity becomes more irregular.                                          M. Lohrmann, A. Rostami, M. Schöne, B. Vogginger et al., “Spinnaker2:
+                                                                                       A large-scale neuromorphic system for event-based and asynchronous
+   Overall, SIMD is appealing for dense or lightly sparse                              machine learning,” arXiv preprint arXiv:2401.04491, 2024.
+workloads. Sparse-SIMD offers a low-disruption option for                         [14] S. Narayanan, K. Taht, R. Balasubramonian, E. Giacomin, and P.-
+energy optimization when the storage format cannot be altered,                         E. Gaillardon, “Spinalflow: An architecture and dataflow tailored for
+                                                                                       spiking neural networks,” in 2020 ACM/IEEE 47th Annual International
+and SIMT proves most effective for high, irregular sparsity,                           Symposium on Computer Architecture (ISCA). IEEE, 2020, pp. 349–
+especially if future research can reduce metadata overhead and                         362.
+improve load balancing and handling of sparse layouts, such                       [15] H.-H. Lien, C.-W. Hsu, and T.-S. Chang, “Vsa: Reconfigurable vector-
+                                                                                       wise spiking neural network accelerator,” in 2021 IEEE International
+as convolution boundaries. When the weight sparsity exceeds                            Symposium on Circuits and Systems (ISCAS). IEEE, 2021, pp. 1–5.
+50%, which is easily achievable in advanced neural networks,                      [16] A. Agrawal, A. Ankit, and K. Roy, “Spare: Spiking neural network
+the sparsity tax becomes almost negligible, and its advantages                         acceleration using rom-embedded rams as in-memory-computation prim-
+                                                                                       itives,” IEEE Transactions on Computers, vol. 68, no. 8, pp. 1190–1200,
+become evident.                                                                        2018.
+                                                                                  [17] B. Xu, J. Hwang, P. Vanna-iampikul, S. K. Lim, and P. Li, “Spiking
+                         ACKNOWLEDGMENT                                                transformer hardware accelerators in 3d integration,” in Proceedings
+                                                                                       of the 43rd IEEE/ACM International Conference on Computer-Aided
+  We kindly acknowledge EUROPRACTICE for its support                                   Design, 2024, pp. 1–9.
+with the design tool.                                                             [18] O. Zafrir, A. Larey, G. Boudoukh, H. Shen, and M. Wasserblat,
+                                                                                       “Prune once for all: Sparse pre-trained language models,” arXiv preprint
+                              R EFERENCES                                              arXiv:2111.05754, 2021.
+                                                                                  [19] “Neorv32.” [Online]. Available: https://github.com/stnolting/neorv32
+ [1] Y. Xu, K. Shidqi, G.-J. van Schaik, R. Bilgic, A. Dobrita, S. Wang,          [20] K. Simonyan and A. Zisserman, “Very deep convolutional networks for
+     R. Meijer, P. Nembhani, C. Arjmand, P. Martinello et al., “Optimizing             large-scale image recognition,” arXiv preprint arXiv:1409.1556, 2014.
+     event-based neural networks on digital neuromorphic architecture: a          [21] A. Krizhevsky, “Learning multiple layers of features from tiny images,”
+     comprehensive design space exploration,” Frontiers in Neuroscience,               2009.
+     vol. 18, p. 1335422, 2024.                                                   [22] K. Zhu, F. Hu, Y. Ding, W. Zhou, and R. Wang, “A comprehensive
+ [2] J. Stuijt, M. Sifalakis, A. Yousefzadeh, and F. Corradi, “µbrain: An              review of network pruning based on pruning granularity and pruning
+     event-driven and fully synthesizable architecture for spiking neural              time perspectives,” Neurocomputing, p. 129382, 2025.
+     networks,” Frontiers in neuroscience, vol. 15, p. 664208, 2021.              [23] F. Akopyan, J. Sawada, A. Cassidy, R. Alvarez-Icaza, J. Arthur,
+ [3] O. Moreira, A. Yousefzadeh, F. Chersi, G. Cinserin, R.-J. Zwartenkot,             P. Merolla, N. Imam, Y. Nakamura, P. Datta, G.-J. Nam et al.,
+     A. Kapoor, P. Qiao, P. Kievits, M. Khoei, L. Rouillard et al., “Neuron-           “Truenorth: Design and tool flow of a 65 mw 1 million neuron
+     flow: a neuromorphic processor architecture for live ai applications,” in         programmable neurosynaptic chip,” IEEE transactions on computer-
+     2020 Design, Automation & Test in Europe Conference & Exhibition                  aided design of integrated circuits and systems, vol. 34, no. 10, pp.
+     (DATE). IEEE, 2020, pp. 840–845.                                                  1537–1557, 2015.
+ [4] M. Davies, N. Srinivasa, T.-H. Lin, G. Chinya, Y. Cao, S. H. Choday,         [24] S. B. Furber, F. Galluppi, S. Temple, and L. A. Plana, “The spinnaker
+     G. Dimou, P. Joshi, N. Imam, S. Jain et al., “Loihi: A neuromorphic               project,” Proceedings of the IEEE, vol. 102, no. 5, pp. 652–665, 2014.
+     manycore processor with on-chip learning,” Ieee Micro, vol. 38, no. 1,
+     pp. 82–99, 2018.
+ [5] A. Yousefzadeh, G. Orchard, E. Stromatias, T. Serrano-Gotarredona,
+     and B. Linares-Barranco, “Hybrid neural network, an efficient low-
+     power digital hardware implementation of event-based artificial neural
+     network,” in 2018 IEEE International Symposium on Circuits and
+     Systems (ISCAS). IEEE, 2018, pp. 1–5.
+ [6] A. Yousefzadeh, M. Soto, T. Serrano-Gotarredona, F. Galluppi, L. Plana,
+     S. Furber, and B. Linares-Barranco, “Performance comparison of time-
+     step-driven versus event-driven neural state update approaches in spin-
+     naker,” in 2018 IEEE International Symposium on Circuits and Systems
+     (ISCAS). IEEE, 2018, pp. 1–4.
+ [7] G. Orchard, E. P. Frady, D. B. D. Rubin, S. Sanborn, S. B. Shrestha, F. T.
+     Sommer, and M. Davies, “Efficient neuromorphic signal processing with
+     loihi 2,” in 2021 IEEE Workshop on Signal Processing Systems (SiPS).
+     IEEE, 2021, pp. 254–259.
+ [8] T. Gale, E. Elsen, and S. Hooker, “The state of sparsity in deep neural
+     networks,” arXiv preprint arXiv:1902.09574, 2019.
+ [9] S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. A. Horowitz, and
+     W. J. Dally, “Eie: Efficient inference engine on compressed deep neural
+     network,” ACM SIGARCH Computer Architecture News, vol. 44, no. 3,
+     pp. 243–254, 2016.
+[10] X. Zhou, Z. Du, Q. Guo, S. Liu, C. Liu, C. Wang, X. Zhou, L. Li,
+     T. Chen, and Y. Chen, “Cambricon-s: Addressing irregularity in sparse
+     neural networks through a cooperative software/hardware approach,” in
+     2018 51st Annual IEEE/ACM International Symposium on Microarchi-
+     tecture (MICRO). IEEE, 2018, pp. 15–28.
+[11] A. Parashar, M. Rhu, A. Mukkara, A. Puglielli, R. Venkatesan,
+     B. Khailany, J. Emer, S. W. Keckler, and W. J. Dally, “Scnn: An
+     accelerator for compressed-sparse convolutional neural networks,” ACM
+     SIGARCH computer architecture news, vol. 45, no. 2, pp. 27–40, 2017.
+
