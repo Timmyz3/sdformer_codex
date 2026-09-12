@@ -1,12 +1,14 @@
 # 家族执行队列：先试适配接口，不等待证据完备
 
-2026-09-12。完整逐文献去留/未试项在[catalog/works.csv](catalog/works.csv)；完整候选视图在[catalog/idea_views.csv](catalog/idea_views.csv)。下表是这些材料通向实验的入口，不是把305个视图都升级成独立硬件模块。最新完成了同Machine源至局部双消费者、公共源RTL、R24＋onepass两组合真实825及11个附加小集配置；下列保留接口不代表全部在后台运行。
+2026-09-13。完整逐文献去留/未试项在[catalog/works.csv](catalog/works.csv)；完整候选视图在[catalog/idea_views.csv](catalog/idea_views.csv)。下表是这些材料通向实验的入口，不是把305个视图都升级成独立硬件模块。下列保留接口不代表全部在后台运行。
+
+**当前新接口批次已收口：** [production_fusions_20260913](production_fusions_20260913/README.md)实际执行了source/sn2摘要、固定源对公共子图、Q8在U内消费、W8系数响应解码。前两生产点对完整局部链有收益，但生产独占差额仅0.061%–0.136%；子图与W8当前放置无净服务优势。Q8的4.31%–7.61%仅为已就绪表示的U入口，不能当全链。新增摘要原语功能RTL已通过，未迁生产树。[下一固定接口](production_fusions_20260913/NEXT_INTERFACE.md)先补真实编码→U/V输出，再给full-D与普通fixed/affine相同权限；不回到当前摘要或匹配粒度扫描。下方历史父版本和边界保留，不互借精度/服务。
 
 **当前精度按[新规则](ACCURACY_POLICY.md)：候选优于同口径原SDformerFlow本地复现即可继续考虑，取消+0.005淘汰门。** 同diverse10的NB0为1.454603；lifting/剪枝/单遍BN因此恢复比较资格。原学生差值用于权衡，不能再作为精度禁令。性能负结果和最近邻重叠仍分别保留。
 
 最新结果见[扩大执行阶段](breadth_20260912/README.md)：同父dense/34/lifting匹配训练和新825完成，AEE为1.208330/1.421461/1.225495；源RTL491/303/446周期。普通affine/diagonal/full-D的十帧、CR/RF两种查表、真实W4/W8执行、NRV共享索引、固定F_live2均已实试；不能继续把这些完整列为“尚未开工”。另完成两项源常量、同函数低RF普通控制、native全域BN后段、两块目录复用及W8全驻留。原始结果与动态GPU端点收口见最新目录；下方旧数值是对应历史端点，不可移给新训练函数。
 
-真实96RF源/消费者交错已完成首P2和完整A窗口两个边界，共40例；完整A的dense/lifting/34净服务少0.68%/1.90%/2.61%，普通立即消费/P1留Z作分母，保存与迁移费用真实执行。两项源自己的825已完成1.209054/1.235243。当前保存/轮转布局不再扫描，保留公共实现；下一项转向源→preview实际生产顺序、物化/重复首读及完整I24→native/BN链。因果帧间完整尾部与受限公共子图排后续；普通低状态dense、34、量化和分块同权。[实测](breadth_20260912/hardware/actual_interleave/full_window/README.md) · [剩余批次](breadth_20260912/coverage_owned/REMAINING_BATCHES.md)。没有把305个视图全部做成实验，没有用旧负布局判整个家族失败。
+真实96RF源/消费者交错已完成首P2和完整A窗口两个边界，共40例；完整A的dense/lifting/34净服务少0.68%/1.90%/2.61%，普通立即消费/P1留Z作分母，保存与迁移费用真实执行。两项源自己的825已完成1.209054/1.235243。当前保存/轮转布局不再扫描，保留公共实现；source→preview的占用生产接口与受限源对公共子图现已补实测。完整I24→native/BN链、因果帧间完整尾部及其他受限表达接口仍未闭；普通低状态dense、34、量化和分块同权。[实测](breadth_20260912/hardware/actual_interleave/full_window/README.md) · [剩余批次](breadth_20260912/coverage_owned/REMAINING_BATCHES.md)。没有把305个视图全部做成实验，没有用旧负布局判整个家族失败。
 
 | 家族/可借底座 | 网内缺口/拟融合X | 已试与停的具体版本 | 保留的下一执行接口 |
 |---|---|---|---|
