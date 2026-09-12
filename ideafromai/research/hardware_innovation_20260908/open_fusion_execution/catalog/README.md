@@ -2,9 +2,11 @@
 
 这是可直接用于融合试做的导航汇总，不是等待全部文献核完才准实验的门槛。先从适配接口挑组合，在隔离原型中试，再把真实结果写回执行计划；历史负结果只约束当时的布局和身份。
 
-当前聚合得到 **757 个保守归并的工作实体、86 个仓库 URL、305 条结构化 idea 视图、695 份 Markdown 入口**。另有 **15 组同名候选尚未消歧**，所以实体数不是已最终核净的论文数。实体包含论文、代码、内部别名等；idea 视图有重叠，不能称 305 个独立新机制。全树索引是机器导航，不是本人全文阅读计数。
+当前聚合得到 **763 个保守归并的工作实体、88 个仓库 URL、305 条结构化 idea 视图、720 份 Markdown 入口**。另有 **15 组同名候选尚未消歧**，所以实体数不是已最终核净的论文数。实体包含论文、代码、内部别名等；idea 视图有重叠，不能称 305 个独立新机制。全树索引是机器导航，不是本人全文阅读计数。
 
 原表中“先等某门、暂不训练/RTL、停标题”等为当时的状态与建议，不构成本轮继续试做的限制。用户当前已授权先把适配组合做成隔离原型、测性能再决定保留；借入来源和本地新增部分仍需分别列明。
+
+2026-09-12用户取消相对父学生+0.005的精度淘汰门，改以同评价设置的原SDformerFlow为质量对照。历史来源中的旧门判断不再作为当前裁决；见[现行精度规则](../ACCURACY_POLICY.md)、[同帧基线与重评](../accuracy_baseline/README.md)。新颖性、同资源净服务和完整评价范围仍分别判断。
 
 ## 从哪里用
 
@@ -37,20 +39,28 @@
 | [gptpro/ChatGPTpro-#硬件idea深挖0911.md](/home/zhumd/work/sdformer_codex/ideafromai/gptpro/ChatGPTpro-#硬件idea深挖0911.md) | 12 | 原记录/注释；非新增全文阅读 |
 | [gptpro/ChatGPTpro-#第二轮跨领域调研：.md](/home/zhumd/work/sdformer_codex/ideafromai/gptpro/ChatGPTpro-#第二轮跨领域调研：.md) | 27 | 原记录/注释；非新增全文阅读 |
 | [research/hardware_innovation_20260908/open_fusion_execution/literature_followup.md](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/open_fusion_execution/literature_followup.md) | 2 | 原记录/注释；非新增全文阅读 |
-| [research/hardware_innovation_20260908/open_fusion_execution/catalog/local_execution_priors.json](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/open_fusion_execution/catalog/local_execution_priors.json) | 5 | 原记录/注释；非新增全文阅读 |
+| [research/hardware_innovation_20260908/open_fusion_execution/catalog/local_execution_priors.json](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/open_fusion_execution/catalog/local_execution_priors.json) | 13 | 原记录/注释；非新增全文阅读 |
 | [research/hardware_innovation_20260908/survey_ab_fusion_20260910/idea_extract_per_paper.csv](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/survey_ab_fusion_20260910/idea_extract_per_paper.csv) | 252 | 原记录/注释；非新增全文阅读 |
 
 ## 本轮执行先验补录
 
-五项均来自已使用的实际先验，不是新增广扫；BNFF 与 FlexAcc 归回原 ID，其余续排。底座/接口近邻与本地新增机制分开；阅读层级不自动升级。
+下列补录来自已使用的实际先验与强对照；原库存能识别的条目归回原ID，其余续排。底座/接口近邻与本地新增机制分开；阅读层级不自动升级。
 
 | ID | 原工作与主来源 | 实际阅读范围 | 执行角色 / 未试部分 |
 |---|---|---|---|
 | W0755 | [Finch: Finch: Sparse and Structured Tensor Programming with Control Flow](https://commit.csail.mit.edu/papers/2025/Finch-OOPSLA-2025.pdf) | 主来源题名、摘要与格式说明已核；此前仅部分阅读库/格式说明，未全文深读。 | 纳入非零默认值和压缩执行的公共底座；完整编译器未迁入，不单独构成X；完整Finch编译器及原作者工件；动态BN的真实FP32舍入顺序、默认向量更新和双消费者服务的公平移植。 |
-| W0136 | [BNFF / BN restructuring: Restructuring Batch Normalization to Accelerate CNN Training](https://proceedings.mlsys.org/paper_files/paper/2019/file/9db64c20dee0011899dfdf200e61ef35-Paper.pdf) | 本轮核官方摘要；已有MAIN-R164记录原文方法已读和有限本地BN费用迁移，保留来源差别，不借本次补录宣称新增全文阅读。 | 归回原BNFF实体；纳入统计/归一化拆分与相邻算子融合强对照；原作者完整融合系统；当前严格中心化两遍BN下的精确FP32顺序、完整统计域及gate/PED消费者的同端口服务。 |
-| W0155 | [FlexAcc: FlexAcc: Accelerating Batch Normalization through GPU-FPGA Integration](https://jiemingyin.github.io/docs/ISCAS2025_FlexAcc.pdf) | 作者PDF前向/数据流章节已读；本轮重点核§III-B与Fig4，既有记录还报告III-A/B/C。完整异构工件未迁入，未称全文系统复现。 | 归回原实体；一路sum(x)/sum(x²)统计是严格中心化两遍BN的未迁强对照；完整GPU-FPGA供数/状态系统；对当前严格中心化FP32两遍BN的数值影响、动态域和真实双消费者同端口费用。 |
+| W0136 | [BNFF / BN restructuring: Restructuring Batch Normalization to Accelerate CNN Training](https://proceedings.mlsys.org/paper_files/paper/2019/file/9db64c20dee0011899dfdf200e61ef35-Paper.pdf) | 本轮核官方摘要；已有MAIN-R164记录原文方法已读和有限本地BN费用迁移，保留来源差别，不借本次补录宣称新增全文阅读。 | 已补完整域单遍统计与真实BN+PED同Engine强对照；X=0，实际diverse10另列；原作者整个训练系统未迁；当前native投影到统计的全域生产仍未重放；新FP32公式的成对AEE核验单列。 |
+| W0155 | [FlexAcc: FlexAcc: Accelerating Batch Normalization through GPU-FPGA Integration](https://jiemingyin.github.io/docs/ISCAS2025_FlexAcc.pdf) | 作者PDF前向/数据流章节已读；本轮重点核§III-B与Fig4，既有记录还报告III-A/B/C。完整异构工件未迁入，未称全文系统复现。 | 完整192000×96单遍sum/sumsq、同Engine normalize+PED已经执行；普通common baseline，不是X；原GPU-FPGA平台未迁；本地完整原生producer费用仍未闭；AEE成对检查见onepass/aee_check。 |
 | W0756 | [Vecim: Vecim: A 289.13GOPS/W RISC-V Vector Co-Processor with Compute-in-Memory Vector Register File for Efficient High-Performance Computing](https://doi.org/10.1109/ISSCC49657.2024.10454387) | 已读原始ISSCC digest全文及Fig30.6.1–7；原论文PDF为第三方镜像承载，会议官方节目核身份。 | 纳入普通源驻留MAC、分队列发射及依赖转发的强底座；不是新标题，未迁原CIM宏；原Vecim实现未取得；Ara仅在论文中被识别，未checkout。未迁其定制全数字计算SRAM，尚须本地I24×INT16/Acc48/RNE宽度及端口/队列适配，原8位周期/PPA不可移用。 |
-| W0757 | [SPIDER: Efficiently Detecting Inclusion Dependencies](https://hpi.de/oldsite/fileadmin/user_upload/fachgebiete/naumann/publications/PDFs/2007_bauckmann_efficiently.pdf) | 已读作者原文§2.2 / Algorithm1；本轮再次核首页正式题名。算法相关章节阅读，不称全篇数据库实验复现。 | 纳入列关系匹配的跨域算法近邻；原DB工件未迁，当前隔离RTL不是SPIDER完整复现；原DB排序、去重、游标和复合/部分IND扩展未迁；本地输入已有列集合，仅适配包含关系更新。完整同资源消费者服务仍应由主线程模型评价，叶子RTL通过不等于整链加速。 |
+| W0757 | [SPIDER: Efficiently Detecting Inclusion Dependencies](https://hpi.de/oldsite/fileadmin/user_upload/fachgebiete/naumann/publications/PDFs/2007_bauckmann_efficiently.pdf) | 已读作者原文§2.2 / Algorithm1；本轮再次核首页正式题名。算法相关章节阅读，不称全篇数据库实验复现。 | 列流包含关系RTL叶已验；完整K16原作子集语义也已迁入覆盖全部K864，对允许重叠TCAM仅有约0.1%增量；原DB排序、去重、游标和复合/部分IND扩展未迁；本地输入已有列集合，仅适配包含关系更新。完整同资源消费者服务仍应由主线程模型评价，叶子RTL通过不等于整链加速。 |
+| W0758 | [Maestro low-rank LoD: Maestro: Uncovering Low-Rank Structures via Trainable Decomposition](https://proceedings.mlr.press/v235/horvath24a.html) | 官方PMLR题名/摘要及LoD相关方法由执行agent核读；未全文/原工件复现。 | 纳入有序/嵌套秩强对照；原坐标无训渐进PED已实际试过，LoD训练未实施；作者完整LoD/group-lasso训练；固定rank同预算恢复与可部署连续组预测。 |
+| W0759 | [FLRC: FLRC: Fine-grained Low-Rank Compressor for Efficient LLM Inference](https://aclanthology.org/2025.emnlp-main.755/) | ACL出版身份与摘要核实；agent读取progressive decoding相关段落，未迁完整LLM工件。 | 动态低秩的直接先验；当前连续PED渐进原坐标无训布局已测无可用早停机会；作者完整分层分配/LLM解码策略，本网训练有序表示与付费判定。 |
+| W0760 | [SVD-LLM: SVD-LLM: Truncation-aware Singular Value Decomposition for Large Language Model Compression](https://proceedings.iclr.cc/paper_files/paper/2025/file/3104e1ab39875cf54fe1eb4473e7c5a1-Paper-Conference.pdf) | agent读取原作§3.1白化构造，根代理核官方出版题名；§3.2逐层恢复未迁，不称完整复现。 | 已重构真实PED潜空间，原RNE/sat/宽度执行与同端口R24服务已测；真实AEE另列；完整逐层模型更新/恢复；嵌套训练和共同连续消费者的动态完成。 |
+| W0289 | [MotionDeltaCNN: MotionDeltaCNN: Sparse CNN Inference of Frame Differences in Moving Camera Videos with Spherical Buffers and Padded Convolutions](https://openaccess.thecvf.com/content/ICCV2023/html/Parger_MotionDeltaCNN_Sparse_CNN_Inference_of_Frame_Differences_in_Moving_Camera_ICCV_2023_paper.html) | 原文§3.1/3.2和buffer/边界章节导读、官方ICCV出版页核实；未复现作者CUDA/全部实验。 | 纳入运动残差强对照并实际尝试同推理T10本块参考；当前该接口源项机会不足2%；真实视频帧间、跨tile/球面buffer/新表示或训练；不得把可控输入摘要位移冒充光流预测器。 |
+| W0358 | [LoopTree: LoopTree: Exploring the Fused-layer Dataflow Accelerator Design Space](https://arxiv.org/abs/2409.13625) | §II-C/III/VI-F及arXiv作者刊物注记/DOI核对。 | 纳入R24/R32驻潜变量强对照和新颖性边界，未迁原作者完整工件；完整作者工件与原论文平台；本地只实现当前有限RF/端口的具体驻留布局。 |
+| W0761 | [TwinQuant: TwinQuant: Learnable Subspace Decomposition for 4-Bit LLM Quantization](https://arxiv.org/abs/2606.01556) | 原文§4.3硬件相关kernel被审阅agent核读，根代理核题名/预印本身份。 | 纳入R24/R32驻潜变量强对照和新颖性边界，未迁原作者完整工件；完整作者工件与原论文平台；本地只实现当前有限RF/端口的具体驻留布局。 |
+| W0762 | [LowRank-SSM: LowRank-SSM: Hardware-Software Co-Design for Rank-Reduced Mamba Acceleration on FPGA](https://arxiv.org/abs/2608.02954) | 审阅agent核§2.2/4.1/4.2，根代理核题名/预印本身份。 | 纳入R24/R32驻潜变量强对照和新颖性边界，未迁原作者完整工件；完整作者工件与原论文平台；本地只实现当前有限RF/端口的具体驻留布局。 |
+| W0763 | [On-FPGA tensor-compressed training: Ultra Memory-Efficient On-FPGA Training of Transformers via Tensor-Compressed Optimization](https://web.ece.ucsb.edu/~zhengzhang/journals/2025-TCAD-on-FPGA-tensor-transformer.pdf) | 审阅agent读§V-B.2/V-C；作者出版页标录用，本轮未核最终卷页。 | 纳入R24/R32驻潜变量强对照和新颖性边界，未迁原作者完整工件；完整作者工件与原论文平台；本地只实现当前有限RF/端口的具体驻留布局。 |
 
 另外加载同 UID 的 `literature_precision_732.csv` 作为精度分层注释，关联 **245** 篇 `idea_cards/*.md`。全部 Markdown 还扫描了文中 URL，使未进入历史 CSV 的新 Grok/Pro 内容仍可被找到。
 

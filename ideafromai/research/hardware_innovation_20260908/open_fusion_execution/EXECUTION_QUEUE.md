@@ -1,22 +1,25 @@
 # 家族执行队列：先试适配接口，不等待证据完备
 
-2026-09-12。完整逐文献去留/未试项在[catalog/works.csv](catalog/works.csv)；完整候选视图在[catalog/idea_views.csv](catalog/idea_views.csv)。下表是这些材料通向实验的入口，不是把305个视图都升级成独立硬件模块。本轮成对64步恢复、消费者接入、水平P2布局、列流matcher RTL和完整BN四臂已实际执行；下列下一接口不代表全部在后台运行。
+2026-09-12。完整逐文献去留/未试项在[catalog/works.csv](catalog/works.csv)；完整候选视图在[catalog/idea_views.csv](catalog/idea_views.csv)。下表是这些材料通向实验的入口，不是把305个视图都升级成独立硬件模块。最新实际执行包括完整K16、单遍BN+最终PED同Engine、连续PED静态/渐进秩与真实AEE、运动差分；下列保留接口不代表全部在后台运行。
+
+**当前精度按[新规则](ACCURACY_POLICY.md)：候选优于同口径原SDformerFlow本地复现即可继续考虑，取消+0.005淘汰门。** 同diverse10的NB0为1.454603；lifting/剪枝/单遍BN因此恢复比较资格。原学生差值用于权衡，不能再作为精度禁令。性能负结果和最近邻重叠仍分别保留。
 
 | 家族/可借底座 | 网内缺口/拟融合X | 已试与停的具体版本 | 保留的下一执行接口 |
 |---|---|---|---|
-| HiNM/FlexHiNM、DepGraph、Bishop、CGNet | 后继stride/H8供数约束下免去整条T10生产，真实gate+PED共同评价 | phase/H8恢复后AEE1.201610，仍比ordinary未剪枝高0.040423；水平P2共mask去掉广播税但精度仍不足 | 多帧真实任务敏感度或改变生产者支持；保留同预算全局、减宽、2:4；不扫本次mask/恢复配置 |
+| HiNM/FlexHiNM、DepGraph、Bishop、CGNet | 后继stride/H8供数约束下免去整条T10生产，真实gate+PED共同评价 | phase/H8恢复后AEE1.201610，行相位两学生1.217386/1.247094，均优于NB0；请求前地址接口已实测，当前phase比强化global慢0.327–0.658%，同mask端口字节相同 | 保留源结构/精度权衡；地址开关归公共底座。下一比较接lifting生产与完整消费者，不只磨目录；静态偏移表未试但共同授予，普通全局/减宽/2:4保持同权限 |
 | LoAS、BBS/BitVert | 真实连续PED的时间位字而非又一份二值共享 | 新逐位默认/校正比强MAC慢4–5倍，停该串行布局 | 更便宜bit-PE的面积点或形成低位/低校正密度的训练；不免费假设硬件 |
 | 普通驻RF供数/Gustav式局部状态、Vecim | 多H8反复读同一I24；这是执行底座遗漏 | 已接两边完整消费者，并重载恢复后U/F执行；完整消费者约省15–16% | 固定容量内load/MAC重叠与完整生产链；驻留、块MVM和队列不作独占新标题 |
-| Prosperity、Phi、Transitive Array、SPIDER式包含关系 | 动态重复/子集与有限父值完成 | 新列流关系RTL已写并验证，接NRV生产后fullK净变化仍约±0.2%；复用量太低 | 原作K16分块覆盖完整算子、TCAM/重叠以及不同M表示；不拿旧串行SRAM冒充原PR |
-| 全支持等价、Finch默认表达、BNFF、FlexAcc | 完整结果等价能否穿过动态BN保留代码表示 | 完整BN四臂已执行；公共tag约省37%，零叶对强默认控制新增不足1%；保留原分母/浮点顺序/输出 | 接完整native生产、融合统计首遍和最后PED；一遍矩需另核数值；非零LRU16失败不否定默认表示 |
-| da4ml/CSE、可学习lifting、结构化PSN | 非因果T10真实连续算术与二值/连续两个消费者 | lifting40可用，现有相对AEE与同资源净服务不足；gate-collapse和粗证书没胜 | 保留lifting家族与真实常量编译；与剪枝结合后按完整链重测，不能拿159节点当服务 |
+| Prosperity、Phi、Transitive Array、SPIDER式包含关系 | 动态重复/子集与有限父值完成 | 已补全54个K16和允许重叠TCAM：源项少34–47%，H8局部/跨K税使服务比GP慢78–83%；列关系仅比TCAM省约0.1% | 停M20/K16/H8布局。保留不同跨K状态/生产接口；不扫描当前参数，不将负结果外推完整PR |
+| 全支持等价、Finch默认表达、BNFF、FlexAcc | 完整结果等价能否穿过动态BN保留代码表示 | 单遍统计+真实PED已同Engine闭该后段，普通融合少35–39%服务；三种BN函数六臂AEE均优于NB0；第三default臂X=0 | 与R24/结构源真实组合，接完整native生产。小数值差已测到首门单ULP翻转，组合不能继承单项AEE |
+| Maestro LoD、FLRC、SVD-LLM；LoopTree/TwinQuant/LowRank-SSM | 连续PED不能只因gate完成而停；原潜空间缺乏可截断性 | 两学生八个表示AEE均优于同十帧/九帧NB0；同驻RF双方同权限后R24对R32端点少11.4–14.7%；固定门字D残差也实试，仍全密并多算 | ordinary原R24和lifting白化等均可进入组合；不申领blocking为X。停止固定D布局，训练形成物理源字稀疏/低位残差及有序秩仍未试 |
+| da4ml/CSE、可学习lifting、结构化PSN | 非因果T10真实连续算术与二值/连续两个消费者 | lifting40完整825 AEE1.232979优于同口径NB0；新R24仍只有小集。源核有收益，完整链净服务未闭；gate-collapse和粗证书没胜 | 结构源×相位生产删除×共同BN/PED底座优先形成完整链比较，不再先用+0.005挡恢复；不能拿159节点当服务 |
 | Gustav CPTB/NRV、ELSA、HYTE | 供数、分块、局部状态、有限psums | 时间类别/NR4旧开关无净增量；不是Gustav整个底座无效 | 实际来源∩W与物理组跳过、参数固定排列；完整元数据/重叠控制继续补 |
 | VENOM/HighLight/CRISP、QP-SNN | patch/S2仍贵，权重侧缺真正结构零 | 原FP32无精确零块，不能凭稀疏愿望跳；旧S2掩码太不敏感 | 敏感patch的联合权重/激活训练，与普通减宽、2:4和实际任务损失比较 |
 | SparseInfer/BitFair、FGIE、Precision Gating | 只要门有消费者时，早判是否能取消整个共同请求 | 粗L∞证书0命中；普通末成员早停净约1% | 有损可训练整组预测或更细可组合证书，必须付完整误预测/继续费用 |
 | Avalanche、RISCSparse、HyMM、LoopTree | 双消费者不同完成边界造成状态驻留/阻塞 | 改last-use名词不删真实首读；generic defer-V净增量小 | 图/布局改变依赖寿命而非只加计数器，真实producer→consumer时间线 |
 | Motion-XOR、α-XNOR、FireFly-T | 非传统QK算术的首份针对性数字映射与跳输出乘积 | 叶小/系统份额未闭；整窗memo脏率高 | 行内memo、三pop分项、K零只跳输出；用ep34/实际学生身份单独计，不与主岛倍率相乘 |
 | PSN短时间阵、DeepShift/PoT | 连续T10与T2算术本身有结构 | plain快变换/移位常量已是先验；固定±草图失败不杀可学习版本 | 训练源结构与真实舍入边界同编译、同端口比较 |
-| DeltaCNN/CBinfer、S3Net、稀疏stem | patch大头与事件帧间局部变化 | 不能把无事件等同所有后续状态不变；旧解码插零已铺满lane | 新学生稀疏stem或带完整残差更新的帧差；先实际索引/scatter与AEE探针 |
+| DeltaCNN/MotionDeltaCNN/CBinfer、S3Net、稀疏stem | patch大头与事件帧间局部变化 | 已试同推理T10本块前T位移参考，完整K有符号校正0数值差；免费任意邻居源项上界不足2%，停止该接口 | 真视频帧间、跨tile或训练支持改变仍未试；稀疏stem另需训。不能把T10切片当视频帧、普通运动对齐当X |
 | OP-STW、二维运动见证、ERAFT式运动先验 | 光流特有的因果计算选择 | Grok比较器用TB/最终flow喂先验不能作机制；空间局部性已有先验 | 只用事件或上一帧/TDE构建因果wake，训练后评价；不是当前最廉价并行任务 |
 | HBG双轨、幅度/门分型 | 连续PED/膜与二值发放要分工 | 把AT-LIF当任意int8逐事件幅度的旧前提已撤销 | 双轨思想改挂连续PSN/PED；二值g侧继续吸收θ，不能偷换检查点身份 |
 

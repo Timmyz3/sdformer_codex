@@ -1,6 +1,8 @@
 # ideafromai — AI idea drop zone (Codex reads here)
 
-**2026-09-12 统一公开idea入口并实际试做：** [全部工作/仓库/候选](research/hardware_innovation_20260908/open_fusion_execution/catalog/README.md) · [四家族融合、训练与RTL结果](research/hardware_innovation_20260908/open_fusion_execution/README.md) · [后续接口](research/hardware_innovation_20260908/open_fusion_execution/EXECUTION_QUEUE.md)。相位H8已做64步成对恢复及实际U/F消费者重执行；NRV列流精确父匹配RTL已用真实捕获验证；连续PED位面和完整动态BN四臂均已执行。公共源驻RF、code0压缩/默认传播有效，新增X仍未形成强接收证据。CICC遗漏补表已纳入，共16项并保留阅读层级。当前授权是适配组合先试原型，历史“先等某门才实验”不再限制早期尝试；负结果停具体布局，生产与主稿尚未重构。
+**2026-09-12 统一公开idea入口并继续实际融合：** [全部工作/仓库/候选](research/hardware_innovation_20260908/open_fusion_execution/catalog/README.md) · [最新模型/训练/RTL与AEE](research/hardware_innovation_20260908/open_fusion_execution/README.md) · [后续接口](research/hardware_innovation_20260908/open_fusion_execution/EXECUTION_QUEUE.md)。新一轮已试完整K16+列流关系、BNFF/FlexAcc单遍统计接真实PED、连续渐进秩/激活白化、T10运动差分、潜变量/V驻RF和同生产者门字/连续残差。静态R24与普通驻留/融合保留为强底座，新增硬件X仍待证。CICC补表共16项并保留阅读层级；当前授权是适配组合先试原型，历史“先等某门才实验”不限制早期尝试，负结果只停具体布局。生产与主稿只读。
+
+**2026-09-12 用户更新精度要求：不再卡相对父学生+0.005，优于同口径SDformerFlow即可继续考虑。** [现行规则](research/hardware_innovation_20260908/open_fusion_execution/ACCURACY_POLICY.md) · [同帧基线与重评](research/hardware_innovation_20260908/open_fusion_execution/accuracy_baseline/README.md)。原SDformerFlow本地复现NB0的valid825为1.445353，同diverse10为1.454603。原lifting40完整825为1.232979，结构源恢复候选资格；剪枝/R24/BN部署按各自小集重新考虑。此前相对门失败属于历史判断，不能继续阻止实验。
 
 **2026-09-11 Pro/Grok新调研已审阅并测量：** [逐路线复审、采用/修订理由及后续顺序](research/hardware_innovation_20260908/PRO_GROK_REVIEW_20260911.md)。源核8088确认来自指定FIFO背压；整数双消费者的原字最后读与输出完成已分开测，通用门提前对照暂无净服务增量；Pro空间P2舍入证书真实数据零新增命中。lifting主家族与物理源事务闭包候选保留，完整Stage B及相对AEE门仍未过。
 

@@ -292,7 +292,7 @@
 | W0286 | [FlowFormer](https://arxiv.org/abs/2203.16194) / paper | ECCV 2022 / CVPR 2023 | code_not_located_in_aggregated_sources | FlowFormer/cost memory≠lifting 源字 X；旁路。 |
 | W0287 | [VideoFlow](https://openaccess.thecvf.com/content/ICCV2023/html/Shi_VideoFlow_Exploiting_Temporal_Cues_for_Multi-frame_Optical_Flow_Estimation_ICCV_2023_paper.html) / paper | ICCV 2023 | code_not_located_in_aggregated_sources | 无 |
 | W0288 | [DeltaCNN](https://openaccess.thecvf.com/content/CVPR2022/papers/Parger_DeltaCNN_End-to-End_CNN_Inference_of_Sparse_Frame_Differences_in_Videos_CVPR_2022_paper.pdf) / paper | CVPR 2022 \|\| CVPR 2022；CUDA/PyTorch 实现公开 | author_code_reported | 作者全链与稀疏误差训练未迁移；当前1.529×工作、约295MB连续基值的具体精确版停止。 |
-| W0289 | [MotionDeltaCNN](https://arxiv.org/html/2210.09887v2) / paper | ICCV 2023 | code_not_located_in_aggregated_sources | 完整作者重用/映射与可训练表示尚未迁移；不因固定 tile 负数判死整篇。 |
+| W0289 | [MotionDeltaCNN](https://arxiv.org/html/2210.09887v2) / paper | ICCV 2023 | code_not_located_in_aggregated_sources | 运动对齐不属于X；不同执行接口只有净服务/同资源证明之后才可能申新颖。 |
 | W0290 | [MEET](https://openaccess.thecvf.com/content/CVPR2025/papers/Zhu_MEET_Towards_Memory-Efficient_Temporal_Sparse_Deep_Neural_Networks_CVPR_2025_paper.pdf) / paper | CVPR 2025 | code_not_located_in_aggregated_sources | 完整共同内存预算下模型搜索和状态/误差训练未试。 |
 | W0291 | [RAFT-Lite FPGA](https://doi.org/10.1109/CAC57257.2022.10054761) / paper | Chinese Automation Congress 2022 | code_not_located_in_aggregated_sources | 准确原题名/方法全文及完整迁移未做。 |
 | W0292 | [Ultra-Flow](https://doi.org/10.1109/FPL57034.2022.00017) / paper | FPL 2022 | code_not_located_in_aggregated_sources | 完整原文、任务边界及本地迁移未完成。 |
@@ -361,7 +361,7 @@
 | W0355 | FlexHiNM-GP_Gyro / paper | ICLR 2026 | code_not_located_in_aggregated_sources | 完整FlexHiNM Hard Concrete渐进训练 |
 | W0356 | Avalanche / paper | ASPLOS 2025 | code_not_located_in_aggregated_sources | 训练掩码约束广播组生存期；乐观上界先于训练 |
 | W0357 | SparseInfer / paper | arXiv 2024 | code_not_located_in_aggregated_sources | 同检查点独立预测 vs 请求并集损失双轴；完整AEE |
-| W0358 | [LoopTree](https://arxiv.org/pdf/2409.13625) / paper | IEEE TCASAI 2024 \|\| IEEE TCAS-AI 2024 \|\| 2024 | code_not_located_in_aggregated_sources | 完整本网络patch图输入/输出halo、time batch、PSN/BN和Conv2消费者映射，含存储与工作量。 \|\| - |
+| W0358 | [LoopTree](https://arxiv.org/pdf/2409.13625) / paper | IEEE TCASAI 2024 \|\| IEEE TCAS-AI 2024 \|\| 2024 | code_not_located_in_aggregated_sources | 原低秩/分块/驻留不是X，只有共享表示改变真实双消费者的必要输入和完成边界才值得另验。 |
 | W0359 | S3Net / paper | 待核 | code_not_located_in_aggregated_sources | 端到端稀疏stem重训 |
 | W0360 | Graham_SBNet_SSCN / paper | multiple 2018 | code_not_located_in_aggregated_sources | - |
 | W0361 | DeltaCNN / paper | 待核 | author_code_reported | ASIC候选映射 |
@@ -761,3 +761,9 @@
 | W0755 | [Finch](https://commit.csail.mit.edu/papers/2025/Finch-OOPSLA-2025.pdf) / paper | PACMPL 9 OOPSLA1 2025 article117 | code_not_located_in_aggregated_sources | 仅把二值生产者证明与动态BN/PED实际时间线的净增量留作候选；Finch格式和常量fill属于强对照。 |
 | W0756 | [Vecim](https://doi.org/10.1109/ISSCC49657.2024.10454387) / paper | ISSCC 2024 30.6 pp.492-494 | code_not_located_in_aggregated_sources | 源驻留和发射属于底座；本地新机制若存在，应在该普通底座补全后验证。 |
 | W0757 | [SPIDER](https://hpi.de/oldsite/fileadmin/user_upload/fachgebiete/naumann/publications/PDFs/2007_bauckmann_efficiently.pdf) / paper | ICDE 2007 | code_not_located_in_aggregated_sources | 以原ProSparsity exact父选择为底座，消除行键物化并付清NRV输入/回放/选父费用；须对完整强基线验证净服务。 |
+| W0758 | [Maestro low-rank LoD](https://proceedings.mlr.press/v235/horvath24a.html) / paper | ICML 2024 | code_not_located_in_aggregated_sources | 仅在同等有序表示固定rank强对照之后，验证实际连续组请求删除的增量。 |
+| W0759 | [FLRC](https://aclanthology.org/2025.emnlp-main.755/) / paper | EMNLP 2025 | code_not_located_in_aggregated_sources | 普通动态rank不是X；真实请求取消须对静态rank控制证明。 |
+| W0760 | [SVD-LLM](https://proceedings.iclr.cc/paper_files/paper/2025/file/3104e1ab39875cf54fe1eb4473e7c5a1-Paper-Conference.pdf) / paper | ICLR 2025 | repository_link_owner_unverified | 在已补强静态R24之上寻找有序连续请求的供数/完成增量，不申领白化。 |
+| W0761 | [TwinQuant](https://arxiv.org/abs/2606.01556) / paper | arXiv 2026 预印本 | code_not_located_in_aggregated_sources | 原低秩/分块/驻留不是X，只有共享表示改变真实双消费者的必要输入和完成边界才值得另验。 |
+| W0762 | [LowRank-SSM](https://arxiv.org/abs/2608.02954) / paper | arXiv 2026 预印本 | code_not_located_in_aggregated_sources | 原低秩/分块/驻留不是X，只有共享表示改变真实双消费者的必要输入和完成边界才值得另验。 |
+| W0763 | [On-FPGA tensor-compressed training](https://web.ece.ucsb.edu/~zhengzhang/journals/2025-TCAD-on-FPGA-tensor-transformer.pdf) / paper | IEEE TCAD 作者标2025录用 | code_not_located_in_aggregated_sources | 原低秩/分块/驻留不是X，只有共享表示改变真实双消费者的必要输入和完成边界才值得另验。 |

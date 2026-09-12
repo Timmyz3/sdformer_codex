@@ -6,6 +6,7 @@
 |---|---|---|
 | [accelergy-project/accelergy](https://github.com/accelergy-project/accelergy) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [accelergy-project/micro22-sparseloop-artifact](https://github.com/accelergy-project/micro22-sparseloop-artifact) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [aiot-mlsys-lab/svd-llm](https://github.com/aiot-mlsys-lab/svd-llm) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [alexsunnik/spsrc](https://github.com/alexsunnik/spsrc) | author_code_reported | 卷积重组saliency、剪枝、微调与评价；本轮读作者README，未迁入或宣称硬件工件 |
 | [belugarex/0534cele-report](https://github.com/belugarex/0534cele-report) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [bindsnet/bindsnet](https://github.com/bindsnet/bindsnet) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
@@ -39,6 +40,7 @@
 | [kuleuven-micas/zigzag](https://github.com/kuleuven-micas/zigzag) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [lava-nc/lava](https://github.com/lava-nc/lava) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [locuslab/wanda](https://github.com/locuslab/wanda) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [lukasc-ch/cbinfer](https://github.com/lukasc-ch/cbinfer) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [maeri-project/feather](https://github.com/maeri-project/feather) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [maestro-project/maestro](https://github.com/maestro-project/maestro) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [microsoft/bitnet](https://github.com/microsoft/bitnet) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
