@@ -2,6 +2,8 @@
 
 每批都先保留最强普通对照，明确一个新接口，才开始执行。这里是覆盖补漏的具体任务清单，未标“完成”的条目不算实验已发生；root/训练代理的并行结果应由它们的实际输出更新。旧布局负结果只停止那个布局。
 
+**B4最新完成：** [真实编码→完整局部U/V](../../production_fusions_20260913/encoded_consumer/README.md)35条＋[相位双臂](../../production_fusions_20260913/encoded_consumer/PHASE_EXECUTION.md)。full-D完整CSE与signed48 spill已实际执行，当前放置慢2.41%–3.18%；普通fixed/affine同函数省0.73%–1.34%，完整编码仍慢于raw。相位z9实际16bit SRAM接口慢1.87%，停此放置不杀家族。所以下文B4“编码→U/V/full-D仍缺”只描述续轮前状态；现在仍缺native/globalBN/join、不同学生自身质量/整层及电路闭环。
+
 **2026-09-13补充：** [四接口新批次](../../production_fusions_20260913/README.md)已完成。B2/F7补source和sn2两个真实生产点的H4摘要，共36条实际局部链，生产相对强化扫描增量仅0.061%–0.136%，保留普通格式。B4补Q8残差在真实U内消费（36次入口执行，编码/V仍未计）及W8响应解码六臂（仍输同函数展开）。B6补固定I24源对相等的条件CSE子图，dense/lifting无候选、34当前接口慢0.660338%，停止该版，不杀受限图家族。[下一明确接口](../../production_fusions_20260913/NEXT_INTERFACE.md)是Q8真实编码→U/V与full-D消费者费用，尚未执行完整链。
 
 | 批次 | 具体最小接口与输入 | 普通强对照和共同资源 | 本轮状态/下一项证据 |
@@ -10,7 +12,7 @@
 | B1 NRV×W 与 native→BN | 固定16line cache/无cache合并；完整外部gate/PED→native→全域BN→join及两块目录复用均已跑；下一步真实I24前段整层 | dense/index同缓存/合并/队列；采用两块目录复用的普通fused强后缀，新增W流量和raw/PED外存真实收费；不同端点不能相加 | [NRV前端](NEW_INTERFACE_RESULT.md)、[native链及复用审阅](native_chain_review.md)已完成。仍缺原生I24生产、NRV/NR4前段到消费者全层，以及新训练参数整链 |
 | B2 多上下文与交织 | 固定F_live=2已实跑；源/连续PED同96RF真交错已完成首P2及完整A窗口两边界 | 同总RF/状态/ROM/端口/issue/背压；普通完整CSE、P1留Z立即消费、低状态普通控制同权限；真实单DMA缓冲 | [F2的352次](flive2/README.md)原布局负结果保留；[交错40例](../hardware/actual_interleave/full_window/README.md)完整A的dense/lifting/34净少0.68%/1.90%/2.61%，作为公共底座。下一改源→preview生产接口，不扫当前保存/轮转布局；不关闭家族 |
 | B3 同预算可训结构 | 新dense/普通34/lifting已完成同父320步GT及十帧；新常量源RTL和matched局部六例CPU已执行；下一步质量与真实全链 | 同恢复步数/样本/seed、原逐半步RNE；参数量不同明确记录；普通源小RF重算/溢写同权，不以61RF当dense下界 | [匹配训练](../algorithm/matched_training/run.json)、[新源执行](../source_execution/)、[matched局部](../hardware/matched_local_chain/)为动态证据；[valid825](../algorithm/valid825/run.json)及三组GPU halo核对已完成。PIT/新pairing/HiNM/VENOM开放 |
-| B4 表示与低位真实执行 | affine/diag/full等两学生×五表示十帧、CR及紧凑RF5+5解码、25条W4/W8 code+scale局部链均已做；9/13追加Q8-U入口与响应内W8 | 普通affine、缓存条件加、同函数expanded16为强对照；位数/row-scale/原RNE/解码/共享端口实际收费，父版本分开 | [表示质量](../representation/aee/run.json)、[解码器](../hardware/prediction_decoder/README.md)、[packed执行](../hardware/PACKED_RESULTS.md)。Q8入口/step已付费、当前响应内解码已测负；仍缺编码→完整U/V/full-D及MiLo/ReverB/joint sign+rank恢复，不继承父825 |
+| B4 表示与低位真实执行 | affine/diag/full等两学生×五表示十帧、CR/RF解码、25条W4/W8局部链均已做；9/13再补完整编码/U/V35条与相位双臂 | 普通affine、缓存条件加、同函数展开/H8融合为强对照；完整CSE控制/spill、真实码/端口/原RNE均收费，父版本分开 | [表示质量](../representation/aee/run.json)、[完整编码结果](../../production_fusions_20260913/encoded_consumer/README.md)。当前full-D与相位放置负结果保留；仍缺native/globalBN/join整层及MiLo/ReverB/joint sign+rank恢复，不继承父825 |
 | B5 因果帧间与证书 | 用已连续 4 帧资料，上一完成预测/原事件 wake 后做完整尾部；新学生再采连续帧；证书改用真正不同参考轴才算新接口 | 恒等/普通 delta/不动预测、固定历史预算；过去信息，无当前或未来 flow oracle；扣除 exact/zero 普通命中，连续消费者也必须正确 | 原 4 帧机会已做；完整数值/动态 BN/恢复/端口未闭。Pro§6.2严格equal-a/水平P2已在9/11实试；本轮独立复放同305760lane/38220SIMD8命中0，不能计新增接口 |
 | B6 受限公共计算 | 9/13已执行固定I24源对条件、原norm24为原子、完整CSE图与对应RF路径；更广受限图/跨K尚未做 | 无 online 全表发现的普通 CSE、同匹配/元数据/状态/更新费，允许保留本来活着的RF | [固定源对结果](../../production_fusions_20260913/subgraph_owned/README.md)：两项dense/lifting无候选、34慢0.660338%；停止该接口。M20/K16/H8旧负结果保留，未扩成整个PR/Phi/ExSpike失败 |
 | B7 其他精确数字接口 | 分开执行当前学生 attention 行 memo、三 pop 项门控、字转置；只在必须 spill 处 codec；bit-PE 需同面积可比较 | 保留分母/非零默认值、相同物理字总容量和布局转换；普通 MAC/压缩宽度作分母 | 旧叶/字串行/广播/codec 已做，不能据此判所有新布局无效；一次固定布局，不无边界扫参数 |

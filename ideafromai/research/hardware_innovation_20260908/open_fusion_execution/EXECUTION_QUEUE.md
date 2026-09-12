@@ -2,6 +2,8 @@
 
 2026-09-13。完整逐文献去留/未试项在[catalog/works.csv](catalog/works.csv)；完整候选视图在[catalog/idea_views.csv](catalog/idea_views.csv)。下表是这些材料通向实验的入口，不是把305个视图都升级成独立硬件模块。下列保留接口不代表全部在后台运行。
 
+**B4续轮现已完成真实编码→U/V的35条及相位双臂。** [完整结果](production_fusions_20260913/encoded_consumer/README.md)：普通Q8比同函数展开少0.73%–1.34%，但仍慢于raw；full-D带完整CSE、真实控制和spill后慢2.41%–3.18%。全表/H8融合后，z9按16bit SRAM表示仍比同表控制慢1.87%，停止当前放置。下段“下一固定接口”已执行，不再据入口4.31%–7.61%推完整链；当前下一项从未试的不同家族接口中选择，见[具体单项](production_fusions_20260913/encoded_consumer/NEXT_FAMILY.md)。
+
 **当前新接口批次已收口：** [production_fusions_20260913](production_fusions_20260913/README.md)实际执行了source/sn2摘要、固定源对公共子图、Q8在U内消费、W8系数响应解码。前两生产点对完整局部链有收益，但生产独占差额仅0.061%–0.136%；子图与W8当前放置无净服务优势。Q8的4.31%–7.61%仅为已就绪表示的U入口，不能当全链。新增摘要原语功能RTL已通过，未迁生产树。[下一固定接口](production_fusions_20260913/NEXT_INTERFACE.md)先补真实编码→U/V输出，再给full-D与普通fixed/affine相同权限；不回到当前摘要或匹配粒度扫描。下方历史父版本和边界保留，不互借精度/服务。
 
 **当前精度按[新规则](ACCURACY_POLICY.md)：候选优于同口径原SDformerFlow本地复现即可继续考虑，取消+0.005淘汰门。** 同diverse10的NB0为1.454603；lifting/剪枝/单遍BN因此恢复比较资格。原学生差值用于权衡，不能再作为精度禁令。性能负结果和最近邻重叠仍分别保留。

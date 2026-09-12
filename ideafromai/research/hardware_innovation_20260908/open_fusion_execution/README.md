@@ -2,6 +2,8 @@
 
 更新：2026-09-13。按“适配组合先写隔离原型，再测性能和新颖性”推进；早期尝试已获授权。AT-LIF 为 `{0,θ}`，固定 θ 可折权，连续 PSN/I24/PED 单独计费。以下结果尚未形成 TCAS-II 强接收证据。
 
+**最新续轮：完整编码消费35条＋相位双臂已执行。** 真实Q8编码、完整局部U/V和输出收费后，fixed/affine比同函数展开省0.73%–1.34%，仍慢于raw；完整D门预测带完整CSE与真实spill后慢2.41%–3.18%。另试全1024门表＋精确z/phase表示，phase比同表H8融合控制慢1.87%，停止这个放置、保留家族。35条端点与两条新表示均0差，属于CPU模型，未新增训练、全层或ASIC证据。[实测与去留](production_fusions_20260913/encoded_consumer/README.md) · [相位试验](production_fusions_20260913/encoded_consumer/PHASE_EXECUTION.md)。下段免费U入口结论是上一轮边界，不能当本轮加速。
+
 **本轮四个新融合接口已经执行：** 真实门生产摘要×NRV、固定源对条件CSE子图、Q8在连续U内消费、W8响应内解码。摘要的36条局部CPU链最多省4.234%，但相对强化扫描仅多省0.061%–0.136%；Q8入口省4.31%–7.61%，尚未计编码/后段，保留为普通底座。固定子图命中不足，W8新响应放置仍比同函数展开慢0.33%–0.38%，只停这两个接口。新增摘要SV原语功能通过，没有ASIC证据。见[本轮完整结果与去留](production_fusions_20260913/README.md)、[独立创新审阅](production_fusions_20260913/NOVELTY_REVIEW.md)及[下一固定消费接口](production_fusions_20260913/NEXT_INTERFACE.md)。
 
 **最新完成两套两项源的fresh825及40组真实共享资源调度：** dense/lifting AEE为1.209054/1.235243，均优于NB0；完整A局部消费者＋B源中，同资源交错对最强普通分别少0.68%/1.90%，普通34少2.61%。保存税、立即消费的P1强对照与实际输出均已计入；新颖性尚不足，作为公共底座继续保留。见[本阶段新增结果](breadth_20260912/README.md)及[完整A边界](breadth_20260912/hardware/actual_interleave/full_window/README.md)。
