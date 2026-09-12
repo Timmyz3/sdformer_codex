@@ -30,8 +30,12 @@
 | [fminference/flexgen](https://github.com/fminference/flexgen) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [gatech-eic/vitcod](https://github.com/gatech-eic/vitcod) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [githubofaliyev/snn-dse](https://github.com/githubofaliyev/snn-dse) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [hpmll/zipserv_asplos26](https://github.com/hpmll/zipserv_asplos26) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [hppeace/s3net](https://github.com/hppeace/s3net) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [icgy96/syops-counter](https://github.com/icgy96/syops-counter) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [intelligent-computing-research-group/elsa](https://github.com/intelligent-computing-research-group/elsa) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [intelligent-computing-research-group/vistream](https://github.com/intelligent-computing-research-group/vistream) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [ist-daslab/marlin](https://github.com/ist-daslab/marlin) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [ist-daslab/sparsegpt](https://github.com/ist-daslab/sparsegpt) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [jeshraghian/snntorch](https://github.com/jeshraghian/snntorch) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [julialang/julia](https://github.com/julialang/julia) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
@@ -47,6 +51,7 @@
 | [microsoft/deepspeed](https://github.com/microsoft/deepspeed) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [mit-han-lab/llm-awq](https://github.com/mit-han-lab/llm-awq) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [mit-han-lab/smoothquant](https://github.com/mit-han-lab/smoothquant) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [mobiusml/hqq](https://github.com/mobiusml/hqq) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [mostafaelhoushi/deepshift](https://github.com/mostafaelhoushi/deepshift) | author_code_reported | Q/PS 训练、量化、压缩、CUDA；非 ASIC RTL |
 | [neufieldrobotics/neuflow_v2](https://github.com/neufieldrobotics/neuflow_v2) | author_code_reported | 光流算法实现 |
 | [neuralmagic/sparseml](https://github.com/neuralmagic/sparseml) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
@@ -58,6 +63,7 @@
 | [nvidia/megatron-lm](https://github.com/nvidia/megatron-lm) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [nvlabs/timeloop](https://github.com/nvlabs/timeloop) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [pengxue0812/multiplication-free-parallelizable-spiking-neurons-with-efficient-spatio-temporal-dynamics](https://github.com/pengxue0812/multiplication-free-parallelizable-spiking-neurons-with-efficient-spatio-temporal-dynamics) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [pku-sec-lab/iccad24-hg-pipe](https://github.com/pku-sec-lab/iccad24-hg-pipe) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [princeton-vl/raft](https://github.com/princeton-vl/raft) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [princeton-vl/sea-raft](https://github.com/princeton-vl/sea-raft) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [pulp-platform/stream-ebpc](https://github.com/pulp-platform/stream-ebpc) | author_code_reported | 流式无损压缩/解码 RTL；主审计 R043 来源声明 |
@@ -73,6 +79,7 @@
 | [sfmth/openspike](https://github.com/sfmth/openspike) | author_code_reported | Verilog/OpenLane/OpenRAM 工程；不能借用为本地 PPA |
 | [shenshuaijie/sdn](https://github.com/shenshuaijie/sdn) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [spcl/quarot](https://github.com/spcl/quarot) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [supercomputing-system-ai-lab/milo](https://github.com/supercomputing-system-ai-lab/milo) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [superscientificsoftwarelaboratory/uni-stc](https://github.com/superscientificsoftwarelaboratory/uni-stc) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [synsense/sinabs](https://github.com/synsense/sinabs) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [the-openroad-project/openlane](https://github.com/the-openroad-project/openlane) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
@@ -92,3 +99,5 @@
 | [xilinx/finn](https://github.com/xilinx/finn) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [xilinx/vitis-ai](https://github.com/xilinx/vitis-ai) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
 | [yc2367/bbs-micro](https://github.com/yc2367/bbs-micro) | author_code_reported | BBS 位列剪枝算法作者工件；完整硬件另计 |
+| [yinsongyan/iclr26](https://github.com/yinsongyan/iclr26) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |
+| [zhongdao/unitrack](https://github.com/zhongdao/unitrack) | repository_link_owner_unverified | 现有材料中的仓库入口；实现/许可/作者关系待核 |

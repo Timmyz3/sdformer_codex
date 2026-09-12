@@ -1,8 +1,8 @@
 # 当前推进：多先验融合的实际训练与完整对照（2026-09-09）
 
-**2026-09-12 最新执行：** [公开idea统一目录与实际融合](open_fusion_execution/README.md)、[按会议期刊/缺读项](open_fusion_execution/catalog/VENUES.md)、[后续接口](open_fusion_execution/EXECUTION_QUEUE.md)。新一轮已补完整K16/TCAM重叠、同Engine单遍统计→真实PED、连续PED不同低秩表示与两学生×四表示×diverse10的实际评价；潜变量/V驻RF、T10运动差分、同生产者门字/连续残差也已实测。普通低秩与融合保留为强底座，不能据其收益申领新X。没有强接收或新ASIC PPA。用户已授权直接写隔离原型和算法试验，下方历史“不启动训练/RTL、只做Stage B”等时点限制不再适用于早期探索。生产nts07与主稿继续只读。
+**2026-09-12 大阶段已完成：** [总报告](open_fusion_execution/stage_20260912/README.md)。同一机器接通真实T10源→完整K864 preview/sn2→Conv2/BN2/raw I24→门与连续PED，公共源RTL每tile497→410周期；完整局部CPU净服务约少8%，两者分母分开。ordinary R24＋onepass、lifting R24＋onepass已各重新跑完valid825，AEE **1.211716/1.232391**，实际部署参数与局部硬件输入对应。门预测Q8残差、W4/W8、普通结构源等新接口也完成真实小集；13种配置共1780行配对记录。新增14条定向文献补查（12条补入catalog），公开库存当前775实体、698论文、97仓库URL；数量不是全文精读。代码/结果均在隔离树，没有ASIC PPA或强接收结论。[目录](open_fusion_execution/README.md) · [两条下一阶段推进链](open_fusion_execution/stage_20260912/NEXT_STAGE.md)。
 
-**2026-09-12 精度门更新：** 用户取消相对学生+0.005限制，改与同设置原SDformerFlow比较。[当前规则](open_fusion_execution/ACCURACY_POLICY.md) · [原NB0同帧依据与候选重评](open_fusion_execution/accuracy_baseline/README.md)。NB0本地复现valid825为1.445353，同diverse10为1.454603；旧lifting40 raw的完整825为1.232979，可继续推进。下方历史相对门与1.259预算不再作当前淘汰条件。新剪枝/R24/BN函数仍只完成小集，不能继承旧lifting的完整精度。
+**2026-09-12 精度门更新：** 用户取消相对学生+0.005限制，改与同设置原SDformerFlow比较。[当前规则](open_fusion_execution/ACCURACY_POLICY.md) · [原NB0同帧依据与候选重评](open_fusion_execution/accuracy_baseline/README.md)。NB0本地复现valid825为1.445353，同diverse10为1.454603；旧lifting40 raw的完整825为1.232979，可继续推进。下方历史相对门与1.259预算不再作当前淘汰条件。当前R24＋onepass组合已有上方新的完整825；其他剪枝、Q8、W4/W8等按各自真实小集范围报告，不能继承组合精度。
 
 **2026-09-11 AT-LIF 身份更正：** `{0,θ}` 二电平、推理θ固定且可折入下游W，执行接口可只传g。[最新合同](../../ATLIF_INFERENCE_CONTRACT.md)。取消“不可折权实值发放”作为幅度MAC的创新前提；连续PSN/残差仍计费。完整消费者最新结果见[Stage B实际BN边界与预取小核](algorithm/patch_probe/residual_consumer_probe/projection_chain/fast_temporal_recovery_lifting40/schedule_compare_same_port/full_chain/README.md)，完整链尚未闭合。
 

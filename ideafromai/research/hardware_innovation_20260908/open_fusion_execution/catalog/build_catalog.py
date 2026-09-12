@@ -294,6 +294,22 @@ local_execution_priors = load(local_execution_source)
 for raw in local_execution_priors['works']:
     add_record(raw, local_execution_source, raw['record_ref'])
 
+# Append the September12 bounded primary-source supplement without replacing
+# any Grok/Pro inventory or upgrading metadata-only entries to full reads.
+stage_source = str((OUT.parent / 'stage_20260912/literature/literature_supplement.json').relative_to(IDEAS))
+stage_supplement = load(stage_source)
+for raw in stage_supplement:
+    if raw['catalogue_status'] != 'missing':
+        continue
+    add_record(dict(
+        name=raw['name'], full_title=raw['name'], venue=f"{raw['venue']} {raw['year']}",
+        source_url=urls(raw['primary_url']) + urls(raw['author_code']),
+        category='September12 bounded literature supplement',
+        reading_depth=raw['reading_depth'], status=raw['decision'],
+        reason=raw['decision'], what_untried=raw['complete_original_implementation_missing'],
+        evidence_file=str((OUT.parent / 'stage_20260912/literature/LITERATURE_SUPPLEMENT.md').relative_to(IDEAS))),
+        stage_source, 'STAGE20260912-' + raw['id'])
+
 # Merge only exact source identity, exact full title + compatible entity type,
 # single identical arXiv ID for paper records, or one identical repo URL for code.
 # A paper and its code are separate entities. No fuzzy title/name similarity.
@@ -639,6 +655,9 @@ summary = {'work_entities': len(clusters), 'input_work_records': len(records),
            'source_urls': len(all_links), 'source_counts': source_counts,
            'identity_variant_groups': len(merge_rows),
            'unmerged_same_name_groups': len(possible_aliases),
+           'stage_20260912_supplement': dict(reviewed_records=len(stage_supplement),
+                appended_records=sum(r['catalogue_status']=='missing' for r in stage_supplement),
+                source=stage_source, meaning='Reading and implementation limits are preserved per record.'),
            'venue_paper_counts': {v: len(items) for v, items in venue_items.items()},
            'local_execution_priors': dict(source_records=len(local_execution_priors['works']),
                 represented_work_entities=len(execution_clusters),

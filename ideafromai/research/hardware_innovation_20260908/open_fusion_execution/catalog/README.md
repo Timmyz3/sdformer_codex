@@ -2,7 +2,7 @@
 
 这是可直接用于融合试做的导航汇总，不是等待全部文献核完才准实验的门槛。先从适配接口挑组合，在隔离原型中试，再把真实结果写回执行计划；历史负结果只约束当时的布局和身份。
 
-当前聚合得到 **763 个保守归并的工作实体、88 个仓库 URL、305 条结构化 idea 视图、720 份 Markdown 入口**。另有 **15 组同名候选尚未消歧**，所以实体数不是已最终核净的论文数。实体包含论文、代码、内部别名等；idea 视图有重叠，不能称 305 个独立新机制。全树索引是机器导航，不是本人全文阅读计数。
+当前聚合得到 **775 个保守归并的工作实体、97 个仓库 URL、305 条结构化 idea 视图、744 份 Markdown 入口**。另有 **15 组同名候选尚未消歧**，所以实体数不是已最终核净的论文数。实体包含论文、代码、内部别名等；idea 视图有重叠，不能称 305 个独立新机制。全树索引是机器导航，不是本人全文阅读计数。
 
 原表中“先等某门、暂不训练/RTL、停标题”等为当时的状态与建议，不构成本轮继续试做的限制。用户当前已授权先把适配组合做成隔离原型、测性能再决定保留；借入来源和本地新增部分仍需分别列明。
 
@@ -40,6 +40,7 @@
 | [gptpro/ChatGPTpro-#第二轮跨领域调研：.md](/home/zhumd/work/sdformer_codex/ideafromai/gptpro/ChatGPTpro-#第二轮跨领域调研：.md) | 27 | 原记录/注释；非新增全文阅读 |
 | [research/hardware_innovation_20260908/open_fusion_execution/literature_followup.md](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/open_fusion_execution/literature_followup.md) | 2 | 原记录/注释；非新增全文阅读 |
 | [research/hardware_innovation_20260908/open_fusion_execution/catalog/local_execution_priors.json](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/open_fusion_execution/catalog/local_execution_priors.json) | 13 | 原记录/注释；非新增全文阅读 |
+| [research/hardware_innovation_20260908/open_fusion_execution/stage_20260912/literature/literature_supplement.json](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/open_fusion_execution/stage_20260912/literature/literature_supplement.json) | 12 | 原记录/注释；非新增全文阅读 |
 | [research/hardware_innovation_20260908/survey_ab_fusion_20260910/idea_extract_per_paper.csv](/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/survey_ab_fusion_20260910/idea_extract_per_paper.csv) | 252 | 原记录/注释；非新增全文阅读 |
 
 ## 本轮执行先验补录
