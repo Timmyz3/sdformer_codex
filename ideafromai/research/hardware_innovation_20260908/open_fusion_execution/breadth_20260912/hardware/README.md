@@ -1,4 +1,8 @@
-# 本轮两种真实表示接口
+# 硬件执行入口
+
+最新完成[真实共享资源交错](actual_interleave/README.md)与[完整A窗口扩展](actual_interleave/full_window/README.md)，共40例CPU数值时间线。完整A消费者＋B源相对立即消费/P1留Z强对照：dense/lifting/34少0.68%/1.90%/2.61%；当前布局作为公共底座，不作为独占创新。另见[新参数局部链](matched_local_chain/README.md)、[两项源局部链](source_constant_local_chain/README.md)、[完整native后段](native_bn_join/README.md)。具体函数与范围分别记录。
+
+以下两项是本目录早期表示接口记录；后续完成状态以[阶段总表](../README.md)为准。
 
 已完成两项实际执行；没有新增生产RTL/EDA/训练，也未改旧stage。结果均是CPU payload slot prototype，不是RTL加速比或整机指标。
 

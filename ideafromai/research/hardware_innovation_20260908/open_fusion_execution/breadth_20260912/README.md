@@ -2,6 +2,20 @@
 
 **仍没有把所有适配接口试完。本批已推进到匹配训练、新完整825、新参数源RTL、付费局部链和完整native后段。** 305条候选视图逐行关联到实测/未试接口；论文别名、同机制多来源和工具记录重叠，不是305个独立idea或已复现论文。逐项见[覆盖表](coverage_owned/COVERAGE.md)，未试范围见[剩余批次](coverage_owned/REMAINING_BATCHES.md)。
 
+## 最新增量：两项源的完整825与真实共享资源交错
+
+两项dense与lifting40各完成一次新的valid825：AEE **1.209053834 / 1.235243345**，均优于NB0。相对自己的未量化父分别为+0.000724/+0.009749；lifting十帧改善没有扩展到825，12项真实sat24饱和已计入评价。[逐帧质量](algorithm/source_constant_valid825/README.md)。
+
+40个固定局部CPU执行已完成：首对A-PED P2＋完整B源的22例，以及完整A窗口消费者＋完整B源的18例。每次实际共享96RF、单issue/ready/pending、SR/SW/CR和单DMA暂存；不是合并两条独立时间线。
+
+| 完整A局部窗口＋B源 | 最强普通串行槽 | 保存后交错槽 | 净减少 ready / 固定背压 |
+|---|---:|---:|---:|
+| dense 两项 | 2,372,848 | 2,356,692 | 0.681% / 0.545% |
+| lifting40 两项 | 2,227,558 | 2,185,190 | 1.902% / 2.143% |
+| 普通分组34 | 2,090,628 | 2,036,004 | 2.613% / 2.694% |
+
+强普通立即完成PED并采用P1留Z；候选保存16个anchors的46,080B，迁移、读回和真实输出都收费。每例A全8×8门与4×4 PED、B全11×11源均数值通过。普通34也受益，故该布局保留为公共底座，**不作为lifting独占X，也不关闭整个结构/交错家族**。完整B消费者、native/全域BN与整层不在此表。[首P2](hardware/actual_interleave/README.md) · [完整A窗口](hardware/actual_interleave/full_window/README.md)。
+
 ## 新训练的时间源：质量与服务一起比较
 
 三臂从同一ordinary R24＋onepass父出发，同train数据、同初始化预算、同新增320步GT恢复；没有继承旧lifting额外训练。推理加载实际整数常量、cutoff与RNE/sat。参数量不同，未声称等参数量。质量门为同协议优于本地原SDformerFlow NB0（valid825帧均1.445352535）。
@@ -26,7 +40,7 @@
 | 两项lifting，完整CSE | 290 | 10 | 比其446周期父源少34.98%，35次中间norm仍在 |
 | 同两项dense，逐行低状态CSD | 472 | 13 | 229字ROM合法；普通源同样能低状态，需付时间 |
 
-量化改变真实门位0.253%/0.519%，新diverse10已完成：dense **1.165901**、lifting **1.152913**，均过NB0；没有继承父825。[完整局部链四例](hardware/source_constant_local_chain/README.md)已实跑：dense对其父少8.20%/9.19%，lifting对其父少7.61%/7.94%；同量化权限下lifting相对dense仅再少5.47%/4.47%，不把源约35%推广整链。原未量化dense低状态布局需524字，超过共同512字ROM；量化后的同函数控制已经适配。**不能将dense的40/61RF当状态下界。** [两项接口及RTL](source_constant_probe/README.md)中保留完整对照；PoT、CSE、低状态重算都属于公共底座，单独不是X。
+量化改变真实门位0.253%/0.519%，新diverse10为dense **1.165901**、lifting **1.152913**；自己的825现已完成，以上方新结果为准。[完整局部链四例](hardware/source_constant_local_chain/README.md)已实跑：dense对其父少8.20%/9.19%，lifting对其父少7.61%/7.94%；同量化权限下lifting相对dense仅再少5.47%/4.47%，不把源约35%推广整链。原未量化dense低状态布局需524字，超过共同512字ROM；量化后的同函数控制已经适配。**不能将dense的40/61RF当状态下界。** [两项接口及RTL](source_constant_probe/README.md)中保留完整对照；PoT、CSE、低状态重算都属于公共底座，单独不是X。
 
 ## 完整后段：普通底座继续补强
 
@@ -59,6 +73,6 @@
 
 候选X须落在“结构时间源如何在真实二值门/连续消费者共同资源中改变可执行时间线”。本批补齐普通34源、普通两项常量、低状态dense、分块和W8驻留，避免把底座遗漏当创新；没有因一个负布局杀掉lifting、NRV、多上下文、剪枝或表示家族。
 
-下一批复用已执行底座：共享96RF的真实源/消费者交织、结构源与native/全域BN完整生产链、当前学生因果帧间完整尾部。受限公共子图、注意力行memo、权重结构训练、固定stem/decoder替换保留在[批次表](coverage_owned/REMAINING_BATCHES.md)，不假装全部启动。[16＋80接口](coverage_owned/INTERLEAVE_NEXT_INTERFACE.md)仅有设计，尚无交织结果，普通低状态dense必须获得同等权限。
+真实96RF交错已执行两种工作边界，小幅净收益保留为公共对照。下一步改接口：先在已执行的源→preview/后继中定位可删除的物化/重复首读，接结构源与native/全域BN完整生产链；当前学生因果帧间完整尾部、受限公共子图作为后续独立批次。注意力行memo、权重结构训练、固定stem/decoder替换仍列在[批次表](coverage_owned/REMAINING_BATCHES.md)，不假装全部启动。[原交错设计](coverage_owned/INTERLEAVE_NEXT_INTERFACE.md)保留设计到实测的链接；本轮不再扫当前保存/轮转布局。
 
 AT-LIF按最后确认的`{0,θ}`、固定θ可折权；连续I24/PSN/PED单列。NB0门代替旧+0.005/1.259。原Grok错误身份材料不覆盖、不沿用其否决理由。生产nts07、docs359、H81、main.tex未改。源为Verilator RTL，其余性能主要为有数值执行的CPU服务模型；尚无新的VCS/DC/PT/Formality同负载闭环、ASIC PPA或TCAS-II强接收结论。

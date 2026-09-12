@@ -1,4 +1,6 @@
-# 固定两项有符号幂和：源RTL、局部链与新十帧完成
+# 固定两项有符号幂和：源RTL、局部链与新825完成
+
+**最新质量：** 两项dense/lifting40各自fresh valid825已完成，帧均AEE **1.209053834 / 1.235243345**，均优于NB0；相对未量化父为+0.000724/+0.009749。lifting十帧改善未推广完整集。[逐帧结果](../algorithm/source_constant_valid825/README.md)。[真实同资源交错](../hardware/actual_interleave/full_window/README.md)也已执行，普通源获得相同权限；下文的待评描述保留为原实验时间点记录。
 
 **两套新函数均实际降低源周期；普通dense也同样获益，不能作为lifting独占X。** 无训练、无项数/位宽/指数扫描，只将新320步dense的As和lifting的q12分别投影到同一固定“至多两项signed power-of-two整数”集合。先写的[A/B/X和规则](PLAN.md)、[实际运行](run.py)、[完整汇总](summary.json)保留。
 

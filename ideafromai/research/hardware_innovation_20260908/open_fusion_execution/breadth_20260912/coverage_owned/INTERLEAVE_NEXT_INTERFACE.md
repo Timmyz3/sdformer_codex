@@ -1,4 +1,6 @@
-# 下一接口：同96RF的源程序与PED交织（设计，未执行）
+# 同96RF的源程序与PED交织：原设计与完成链接
+
+**执行更新：** 此设计已完成[首P2的22例](../hardware/actual_interleave/README.md)与[完整A消费者的18例](../hardware/actual_interleave/full_window/README.md)。后者ready相对最强立即消费/P1串行，dense/lifting/34净服务少0.68%/1.90%/2.61%；额外保存/迁移已收费，普通源同权限。下文是动手前原设计记录，“未执行”仅描述当时状态，不是当前队列。小幅收益留公共底座，不把整个家族杀掉。
 
 **先定义B。** 对同一组已冻结参数、相同真实输入和相同终点，先重跑最强普通串行：完整CSE原调度源程序，原resident PED P2/H32，以及既有 `new_interface_selection/resident_latent/run.py` 的普通P1留Z（R24/H48、R32/H32），按实测最低总服务选分母。dense、34、lifting都获得相同重排、16RF约束下重算/溢写权限；强原61/29/13临时RF调度保留，不能用较差DFS强制替换。重算保留必要RNE与饱和，增加的指令、SR/SW、完整signed48 spill（每向量48B）和ROM容量都付费；装不进512×128 ROM就记录该固定控制不可行，不扩大候选容量。新参数均重新执行，不能拼旧源时延、旧PED表或825。本文只设计下一次CPU接口，不改变当前matched局部绑定。
 
