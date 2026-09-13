@@ -1,4 +1,4 @@
-独立审阅，2026-09-13。审阅者未参与 `decomposition_owned`、`sparse_owned` 的实现；只读其源码和结果，并独立重算 AEE 与当前 SVD8 算术项。此文区分方法新意、本网适配与性能证据，分数不是录用概率。
+独立审阅完成，2026-09-13。审阅者未参与 `decomposition_owned`、`sparse_owned` 的实现；只读其源码和结果，并独立重算 AEE 与当前 SVD8 算术项。最终已读 decomposition 的 README/PAID_SCHEDULE 和 sparse 的 README，与下列结账边界一致。此文区分方法新意、本网适配与性能证据，分数不是录用概率。
 
 **判断：优先把已经过新精度门的无残差 SVD8 做成完整强 A；保留 H8 共同 pair-ID 和请求代价驱动支持选择这两个 X 接口。** 现有空间/低秩加残差、逐输出 pair、固定 nonzero-fill 布局尚未证明净性能优势。负结果约束这些具体布局，不能据此排除分解、整数基或非零填充值家族。也不能因相对当前父有退化而否决已优于 NB0 的候选。
 
@@ -38,7 +38,7 @@ C 明确定义为 `2×(value+metadata CR32)+SIMD8 MAC+27,900 support decode`。G
 
 该 r0 表还缺 source gather/im2col、包生成、仲裁、延迟与目标写出；20 个 T/P accumulator vectors 的 H8 外循环使每个源包读12次，共41,472个16 B包，包含零包。其 C 是服务计数，不能与另一目录的时间线相除。r1 的 `fill_chain` 则确实将完整 K864 的 U 接到 F/raw merge、gate、U24/V96、连续 PED 和写出，并复用原 Machine 的端口/RAW规则：dense 612,457、ordinary2:4 604,847、shift1:4 606,702、允许先抵消的 fill 606,688 服务槽。fill 相对 dense 仅少0.94%，仍比普通2:4多0.30%；压力序列也未反转。上游 PSN/preview、原生 projection conv/global BN 在该窗口之外。r1 普通 N:M 仍用旧 2n-bit 码，进一步压紧只会增强已经胜出的普通控制。[执行结果](../sparse_owned/fill_chain_results.json)
 
-H8 最终表已重新核查：8个48-bit加法lane，逐lane96×48-bit RF、2R1W，256-bit系数/描述符口、48-bit源口、256-bit输出口；单个10-bit公共walker，所有lane共用同一slot/time。系数填入、选择、mask/地址遍历和加法串行；每wave60次SIMD8累加器清零另付，共7,680槽/臂。审阅者核对全部十臂的64位置加总、busy项加共同源填入/输出费用，以及每臂27,648次wave内源组读取，恒等式全通过。[最终源码/表](../decomposition_owned/paid_schedule.py) · [JSON](../decomposition_owned/paid_schedule.json)
+H8 最终表已重新核查：8个48-bit加法lane，逐lane96×48-bit RF、2R1W，256-bit系数/描述符口、48-bit源口、256-bit输出口；单个10-bit公共walker，所有lane共用同一slot/time。系数填入、选择、mask/地址遍历和加法串行；每wave60次SIMD8累加器清零另付，共7,680槽/臂。审阅者核对全部十臂的64位置加总、busy项加共同源填入/输出费用，以及每臂27,648次wave内源组读取，恒等式全通过。[最终源码](../decomposition_owned/paid_schedule.py) · [JSON](../decomposition_owned/paid_schedule.json) · [作者最终边界](../decomposition_owned/PAID_SCHEDULE.md)
 
 | 最终公共walker模型 | 64位置完整N96/K864/T10服务槽 |
 |---|---:|
