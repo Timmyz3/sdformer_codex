@@ -2,6 +2,8 @@
 
 更新：2026-09-13。按“适配组合先写隔离原型，再测性能和新颖性”推进；早期尝试已获授权。AT-LIF 为 `{0,θ}`，固定 θ 可折权，连续 PSN/I24/PED 单独计费。以下结果尚未形成 TCAS-II 强接收证据。
 
+**最新大算子续轮：完整Prosperity重开＋32组真实整网融合已完成。** 原样官方底座及本网完整3000×6912×768算子、源布局/编码/有限部分和均实跑；普通stationarity归A，未包装为X。转向未改造的patch r0，实际执行SVD/空间/Tucker、稀疏残差、有限整数基、H8共同配对、非零默认值/请求感知选择及与lifting的组合。32×10帧全部过当前NB0门，四个无残差小秩方案重新进入硬件候选；新增费用仍按CPU/采样模型标记，没有新ASIC或新valid825。[本阶段结果与下一接口](major_operator_fusions_20260913/README.md) · [32臂真实AEE](major_operator_fusions_20260913/root_owned/aee_all.md) · [当前大算子](major_operator_fusions_20260913/root_owned/current_bottlenecks.md)。
+
 **最新续轮：源VCS20点＋新四帧融合24条＋独立创新评审已完成。** 五种源程序在两halo/两压力下的VCS门/RF/周期均与原Verilator一致；这推进源核验证，不是新增ASIC或全链加速。真实matched dense四帧的24项margin缓存0/72暖命中，完整局部CPU总服务增加0.432%–0.454%，停止这个布局；未量化半径也不能挽救当前样本，保留不同接口。新独立评审最高仍是lifting40约5/10，门条件表示4.5/10，未选出强投稿标题。[阶段结果](fusion_followthrough_20260913/README.md) · [独立评审](fusion_followthrough_20260913/review_owned/REVIEW.md) · [下一次保序直供](fusion_followthrough_20260913/NEXT_INTERFACE.md)。
 
 **最新续轮：完整编码消费35条＋相位双臂已执行。** 真实Q8编码、完整局部U/V和输出收费后，fixed/affine比同函数展开省0.73%–1.34%，仍慢于raw；完整D门预测带完整CSE与真实spill后慢2.41%–3.18%。另试全1024门表＋精确z/phase表示，phase比同表H8融合控制慢1.87%，停止这个放置、保留家族。35条端点与两条新表示均0差，属于CPU模型，未新增训练、全层或ASIC证据。[实测与去留](production_fusions_20260913/encoded_consumer/README.md) · [相位试验](production_fusions_20260913/encoded_consumer/PHASE_EXECUTION.md)。下段免费U入口结论是上一轮边界，不能当本轮加速。
