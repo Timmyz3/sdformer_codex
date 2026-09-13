@@ -1,4 +1,6 @@
-# 当前推进：多先验融合的实际训练与完整对照（2026-09-09）
+# 当前推进：昂贵算子的分解与任务稀疏执行（2026-09-13）
+
+**2026-09-13 定向研究收口：** [综合报告](deep_target_research_20260913/REPORT.md) · [具体目标与 RTL 队列](deep_target_research_20260913/TARGETS_AND_RTL_QUEUE.md) · [独立评审](deep_target_research_20260913/INDEPENDENT_REVIEW.md)。lifting 降为实现/质量对照；优先研究 r0 大卷积的有限整数 Winograd、N:M 支撑与实际 lane 完成代价，以及 decoder2 的事件可观测性细化。32 篇去重原论文的方法/实现章节精读，另两篇全文缺口单列；只新增二值变换取值穷举，没有新训练或 RTL 周期。下一阶段须完整源到输出的 RTL 比较，不以已有 CPU 服务模型代替。[全部材料](deep_target_research_20260913/README.md)。
 
 **2026-09-12 大阶段已完成：** [总报告](open_fusion_execution/stage_20260912/README.md)。同一机器接通真实T10源→完整K864 preview/sn2→Conv2/BN2/raw I24→门与连续PED，公共源RTL每tile497→410周期；完整局部CPU净服务约少8%，两者分母分开。ordinary R24＋onepass、lifting R24＋onepass已各重新跑完valid825，AEE **1.211716/1.232391**，实际部署参数与局部硬件输入对应。门预测Q8残差、W4/W8、普通结构源等新接口也完成真实小集；13种配置共1780行配对记录。新增14条定向文献补查（12条补入catalog），公开库存当前775实体、698论文、97仓库URL；数量不是全文精读。代码/结果均在隔离树，没有ASIC PPA或强接收结论。[目录](open_fusion_execution/README.md) · [两条下一阶段推进链](open_fusion_execution/stage_20260912/NEXT_STAGE.md)。
 
