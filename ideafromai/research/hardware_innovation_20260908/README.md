@@ -1,5 +1,7 @@
 # 当前推进：昂贵算子的分解与任务稀疏执行（2026-09-13）
 
+**2026-09-13 新一轮融合实测已完成：** [整源剪枝与父和合并报告](r0_source_retirement_20260913/REPORT.md) · [结果表](r0_source_retirement_20260913/comparison.csv) · [可运行RTL](r0_source_retirement_20260913/pair_parent_merge/README.md)。四mask、六臂diverse10、1,176次RTL命令均完成。四源逐码重建先测负；保留两源父和、单侧转发和双侧按需合并后，相对同端口/状态强对照核心少4.92%–5.55%，作为更强乘积复用A保留。整Cin费用剪枝内部源读9,600→7,200，AEE1.260350；普通块幅值AEE1.185997，仍有质量取舍。独立审阅未建立标题级X；无新valid825、生产EDA或整网性能。当前用户质量门是优于原SDformerFlow NB0，不再用历史+0.005门淘汰候选。网页登录按用户最新指令暂停，下列登录与旧准入表述是历史状态。
+
 **2026-09-13 原生r0执行已完成：** [本阶段报告](r0_execution_trials_20260913/REPORT.md) · [RTL与质量目录](r0_execution_trials_20260913/README.md)。实际连续4×4→2×2、完整C96/N96/T10：原生源优先比强权重优先少39.86%周期，再写消费者枚举器后同事务少约11%；均是隔离Verilator与八块范围。完整整数Winograd/坐标剪枝分别仍为其同核direct的1.965/1.630×周期，不晋级本布局。三份固定剪枝已跑完同环境diverse10，AEE1.190684/1.185997/1.172116，都优于原SDformerFlow NB0；物理费用mask未胜普通幅值控制。新增的是实际RTL、完整函数/事务比较和质量筛查，尚无新标题或PPA。下一接口围绕共同消费者退休完整源字，保留本轮强A，不再只优化W词数。本机ChatGPT可见浏览器已启动，待用户网页登录，[入口](r0_execution_trials_20260913/browser/README.md)。
 
 **2026-09-13 实际 RTL 融合筛选：** [阶段结果](pro_fusion_trials_20260913/REPORT.md) · [点名论文与未试项](pro_fusion_trials_20260913/NAMED_LITERATURE.md)。已实现连续V的Kronecker收缩、T10端点/prefix与共同活动打包三份SV；打包进一步执行r0完整K864/N96的16个P2真实tile。局部Kronecker有周期下降但免训误差大；端点当前数据变慢；r0打包只少约1.12%且不及两源部分和。ELSA2026与Phi的队列/归约强先验已补齐。均是隔离Verilator筛选，不是PPA、整网加速或新标题；完整资源、快照与交叉审阅见[目录](pro_fusion_trials_20260913/README.md)。
