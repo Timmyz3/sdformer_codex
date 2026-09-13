@@ -1,5 +1,7 @@
 # 当前推进：昂贵算子的分解与任务稀疏执行（2026-09-13）
 
+**2026-09-13 实际 RTL 融合筛选：** [阶段结果](pro_fusion_trials_20260913/REPORT.md) · [点名论文与未试项](pro_fusion_trials_20260913/NAMED_LITERATURE.md)。已实现连续V的Kronecker收缩、T10端点/prefix与共同活动打包三份SV；打包进一步执行r0完整K864/N96的16个P2真实tile。局部Kronecker有周期下降但免训误差大；端点当前数据变慢；r0打包只少约1.12%且不及两源部分和。ELSA2026与Phi的队列/归约强先验已补齐。均是隔离Verilator筛选，不是PPA、整网加速或新标题；完整资源、快照与交叉审阅见[目录](pro_fusion_trials_20260913/README.md)。
+
 **2026-09-13 定向研究收口：** [综合报告](deep_target_research_20260913/REPORT.md) · [具体目标与 RTL 队列](deep_target_research_20260913/TARGETS_AND_RTL_QUEUE.md) · [独立评审](deep_target_research_20260913/INDEPENDENT_REVIEW.md)。lifting 降为实现/质量对照；优先研究 r0 大卷积的有限整数 Winograd、N:M 支撑与实际 lane 完成代价，以及 decoder2 的事件可观测性细化。32 篇去重原论文的方法/实现章节精读，另两篇全文缺口单列；只新增二值变换取值穷举，没有新训练或 RTL 周期。下一阶段须完整源到输出的 RTL 比较，不以已有 CPU 服务模型代替。[全部材料](deep_target_research_20260913/README.md)。
 
 **2026-09-12 大阶段已完成：** [总报告](open_fusion_execution/stage_20260912/README.md)。同一机器接通真实T10源→完整K864 preview/sn2→Conv2/BN2/raw I24→门与连续PED，公共源RTL每tile497→410周期；完整局部CPU净服务约少8%，两者分母分开。ordinary R24＋onepass、lifting R24＋onepass已各重新跑完valid825，AEE **1.211716/1.232391**，实际部署参数与局部硬件输入对应。门预测Q8残差、W4/W8、普通结构源等新接口也完成真实小集；13种配置共1780行配对记录。新增14条定向文献补查（12条补入catalog），公开库存当前775实体、698论文、97仓库URL；数量不是全文精读。代码/结果均在隔离树，没有ASIC PPA或强接收结论。[目录](open_fusion_execution/README.md) · [两条下一阶段推进链](open_fusion_execution/stage_20260912/NEXT_STAGE.md)。
