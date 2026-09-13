@@ -1,5 +1,7 @@
 # ONE 后继：跨推理帧的H8源门安全半径缓存
 
+**执行状态更新：本页方案现已完成。** 新matched dense四帧捕获、24条完整局部CPU链及定向命中分支均已实做；自然0/72暖命中，认证增加0.432%–0.454%服务。停止此24项/三级布局，保留其他参考/表示；[最终结果](../../fusion_followthrough_20260913/cache_owned/README.md)与[新下一接口](../../fusion_followthrough_20260913/NEXT_INTERFACE.md)。下文是开工前的原设计，不再代表未启动。
+
 **选择B5的一个新参考边界，先零训练、零RTL。** 固定matched dense stage320父、两个同坐标源像素的24个H8组；`{64,256,1024}` I24单位是**ONE固定三级编码器**，不是三个配置扫描。从上一**已完成**参考取得I24、T10门词及等级。当前I24到达后付费认证，成功取消完整源DAG，失败执行原完整CSE。此具体接口未试；概念新颖性暂评**3/10**，不是录用概率。本页没有启动捕获或实验。
 
 **B：为什么换边界。** [35条真实编码链](README.md)中，fixed/affine码内消费仍比raw慢0.70%–2.06%，full-D比同函数展开慢2.41%–3.18%；换码未删除源/Conv。旧phase/global H8剪枝、成对恢复、dense/34/lifting及两项PoT都已试。[连续四帧资料](../../../motion/capture/frames.json)只有native ep34门/flow，**没有matched dense I24/门前整数dot，必须新采**；旧约295MB宽历史方案也不是本缓存。[B3/B5/B8](../../breadth_20260912/coverage_owned/REMAINING_BATCHES.md)仍开放；水平P2 strict equal-a的38,220个SIMD8零命中不计新证据。

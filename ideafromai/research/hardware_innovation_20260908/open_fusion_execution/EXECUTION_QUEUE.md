@@ -2,7 +2,9 @@
 
 2026-09-13。完整逐文献去留/未试项在[catalog/works.csv](catalog/works.csv)；完整候选视图在[catalog/idea_views.csv](catalog/idea_views.csv)。下表是这些材料通向实验的入口，不是把305个视图都升级成独立硬件模块。下列保留接口不代表全部在后台运行。
 
-**B4续轮现已完成真实编码→U/V的35条及相位双臂。** [完整结果](production_fusions_20260913/encoded_consumer/README.md)：普通Q8比同函数展开少0.73%–1.34%，但仍慢于raw；full-D带完整CSE、真实控制和spill后慢2.41%–3.18%。全表/H8融合后，z9按16bit SRAM表示仍比同表控制慢1.87%，停止当前放置。下段“下一固定接口”已执行，不再据入口4.31%–7.61%推完整链；当前下一项从未试的不同家族接口中选择，见[具体单项](production_fusions_20260913/encoded_consumer/NEXT_FAMILY.md)。
+**B5的新参考边界也已实做。** [四帧缓存结果](fusion_followthrough_20260913/cache_owned/README.md)使用新matched dense真实I24/S48、同Machine完整局部双消费者，24条CPU链全0差；72暖查询无命中，三级认证增加0.432%–0.454%服务，当前24项布局停止。source-only人工命中另验，不混自然性能。同时[源VCS20点](fusion_followthrough_20260913/source_vcs_owned/README.md)全部通过。下一接口为[保序source commit→首次preview-U直供](fusion_followthrough_20260913/NEXT_INTERFACE.md)，先识别可删的真实读写，再做一次固定布局；旧NEXT_FAMILY不再是未开工任务。
+
+**B4续轮现已完成真实编码→U/V的35条及相位双臂。** [完整结果](production_fusions_20260913/encoded_consumer/README.md)：普通Q8比同函数展开少0.73%–1.34%，但仍慢于raw；full-D带完整CSE、真实控制和spill后慢2.41%–3.18%。全表/H8融合后，z9按16bit SRAM表示仍比同表控制慢1.87%，停止当前放置，真正`Uz+Uδφ`仍未执行。下段“下一固定接口”已执行，不再据入口4.31%–7.61%推完整链；不同家族的[既定四帧单项](production_fusions_20260913/encoded_consumer/NEXT_FAMILY.md)现也按上段收口。
 
 **当前新接口批次已收口：** [production_fusions_20260913](production_fusions_20260913/README.md)实际执行了source/sn2摘要、固定源对公共子图、Q8在U内消费、W8系数响应解码。前两生产点对完整局部链有收益，但生产独占差额仅0.061%–0.136%；子图与W8当前放置无净服务优势。Q8的4.31%–7.61%仅为已就绪表示的U入口，不能当全链。新增摘要原语功能RTL已通过，未迁生产树。[下一固定接口](production_fusions_20260913/NEXT_INTERFACE.md)先补真实编码→U/V输出，再给full-D与普通fixed/affine相同权限；不回到当前摘要或匹配粒度扫描。下方历史父版本和边界保留，不互借精度/服务。
 
@@ -20,7 +22,7 @@
 | Prosperity、Phi、Transitive Array、SPIDER式包含关系 | 动态重复/子集与有限父值完成 | 已补全54个K16和允许重叠TCAM：源项少34–47%，H8局部/跨K税使服务比GP慢78–83%；列关系仅比TCAM省约0.1% | 停M20/K16/H8布局。保留不同跨K状态/生产接口；不扫描当前参数，不将负结果外推完整PR |
 | 全支持等价、Finch默认表达、BNFF、FlexAcc | 完整结果等价能否穿过动态BN保留代码表示 | 单遍统计+真实PED已同Engine闭该后段，普通融合少35–39%服务；三种BN函数六臂AEE均优于NB0；第三default臂X=0 | R24＋onepass两学生组合已各跑825，1.211716/1.232391；下一接完整native生产，不能将后段旧服务表加到当前局部时间线 |
 | Maestro LoD、FLRC、SVD-LLM；LoopTree/TwinQuant/LowRank-SSM | 连续PED不能只因gate完成而停；原潜空间缺乏可截断性 | 两学生八个表示AEE均优于同十帧/九帧NB0；同驻RF双方同权限后R24对R32端点少11.4–14.7%；固定门字D残差也实试，仍全密并多算 | ordinary原R24及lifting白化组合已完成825；不申领blocking为X。Dg＋Q8残差新函数已过真实小集，整字空率为0；下一补普通affine/diagonal控制和付费执行 |
-| da4ml/CSE、可学习lifting、结构化PSN | 非因果T10真实连续算术与二值/连续两个消费者 | 当前lifting R24＋onepass真实825为1.232391；源RTL少17.505%周期、局部CPU少7.954–8.127%服务。普通source34更快但免训AEE1.686686失败 | 同预算训练普通结构源与lifting比较；接native/globalBN完整后段；共同96RF内检验结构小活跃集，不把节点数当服务或把8%全归ALU |
+| da4ml/CSE、可学习lifting、结构化PSN | 非因果T10真实连续算术与二值/连续两个消费者 | 新同预算dense/34/lifting的825为1.208330/1.421461/1.225495，源491/303/446周期；两项dense/lifting319/290周期，自身8251.209054/1.235243。五函数源VCS已通过 | 保留结构候选；同预算比较已做，旧34免训红灯不否决新34。下一执行保序首消费者直供、保留真实舍入及强普通权限；仍缺native/globalBN整层与ASIC |
 | Gustav CPTB/NRV、ELSA、HYTE | 供数、分块、局部状态、有限psums | 时间类别/NR4旧开关无净增量；不是Gustav整个底座无效 | 实际来源∩W与物理组跳过、参数固定排列；完整元数据/重叠控制继续补 |
 | VENOM/HighLight/CRISP、QP-SNN | patch/S2仍贵，权重侧缺真正结构零 | 原FP32无精确零块，不能凭稀疏愿望跳；旧S2掩码太不敏感 | 敏感patch的联合权重/激活训练，与普通减宽、2:4和实际任务损失比较 |
 | SparseInfer/BitFair、FGIE、Precision Gating | 只要门有消费者时，早判是否能取消整个共同请求 | 粗L∞证书0命中；普通末成员早停净约1% | 有损可训练整组预测或更细可组合证书，必须付完整误预测/继续费用 |
