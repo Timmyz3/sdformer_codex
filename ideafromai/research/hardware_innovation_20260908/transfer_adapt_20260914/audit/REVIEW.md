@@ -1,0 +1,58 @@
+# 已有融合的两条路径复审
+
+2026-09-14。以40类为导航合并重复布局；“40类”不是40个本轮新实验，也不是775篇文献的全文复现。独立代理核对旧入口/相关报告/部分SV，根代理复核近期核心报告并补入本轮真实RTL。部分早期项只重新审阅文档，未重新运行；不要将本表升级为旧全部源码已再验证。
+
+当前身份为AT-LIF {0,θ}、推理静态θ可吸W。当前R8是部署学生，当前A800/env312的NB0 valid825=1.4479366656；旧学生和旧环境数值只在各自协议下比较。没有以+0.005或1.259批量否决有损候选。
+
+路线一：迁移有效，先保留完整强A，再找它尚未消掉的开销。路线二：迁移失效，先区分依赖条件失效、A借得不完整、实现控制低效与质量失败，再改一个具体接口。多idea融合必须实际比较A、A+修改和最强普通控制。
+
+|# / 机制|借入程度与已有结果|为何没直接晋级|两路径下的下一接口 / 本轮状态|证据|
+|---|---|---|---|---|
+|1. C1 Prosperity∪APEC|完整M/N/K CPU服务与诊断θW；非完整两芯片RTL；原融合未胜过完整Prosperity|先抽共同根会破坏原父共享并增加状态/散播；负的是该联合布局|保留原森林，联合选择虚节点/部分lane/供权包；先与原森林同资源；**保留家族，第二队列**|[原记录](../../../same_workload_c1c2_20260907/README.md)|
+|2. Prosperity布局与有限psum|官方程序原样运行+完整本网3000×6912×768；非原芯片；产品稀疏仍强；共支持/空间批均未胜原A|EM复制、跨K状态和供数费用；995MB是逻辑片上访问，不能当可免DRAM|普通resident-set归A；联合图执行之外，不再重跑相同重排；**保留强A**|[原记录](../../open_fusion_execution/major_operator_fusions_20260913/prosperity_owned/README.md)|
+|3. Gustav CPTB/NRV/W交集|供数与PSN切片已迁；通用压缩交集/全层条带未全闭；原宽psum必驻留理由被普通门图分块反例推翻|补A不足与候选失效须分开；不能称Gustav已抄完|先补真实NRV∩W地址交集，再谈联合支撑/halo/W驻留；**补A入队**|[原记录](../../psn/gustavsnn_implementation_status_20260908.md)|
+|4. 时间类别状态直达PSN/六基|分类门与完整PSN的算法/有限执行探针；类别少不必然省拍；普通原行是强对照|状态、完整非因果PSN与解码仍要执行|不同表示接口须对普通原行同编译，不能只比较类别数；**保留，未补新执行**|[原记录](../../psn/README.md)|
+|5. NR4费用训练|Gustav费用模型及受约束训练思路；旧训练端点未形成净服务赢家|代理事务数不等于完整供数/消费者；非全家不可训|若真实物理费用目标改变才重开；不恢复旧代理损失扫参；**当前目标停止，家族留存**|[原记录](../../psn/README.md)|
+|6. 支持码LUT与生产训练|支持表示、LUT/生产支路局部探针；尚无能借作当前R8加速的完整证据|支持生成、查表、后继连续算术不能免费|生成与消费同一程序计费；当前不拿旧功能绿晋级；**保留具体接口**|[原记录](../../psn/README.md)|
+|7. 隐藏通道按需树|有限隐藏通道/完成边界模型；普通hidden减宽仍必须保留|控制/树边界若普通减宽能解释则没有独立X|真实请求前取消并对同质量hidden50/结构剪枝；**第二队列**|[原记录](../../psn/psn_decision_one_page.md)|
+|8. 源Gram前馈统计|源统计替代目标域统计的代数与成本探针；深层代价差不能外推浅层FC1|Gram构造/完整BN域/保存重算可能抵消节省|只保留浅层FC1和完整BN域；未有当前R8新RTL；**未闭，非全杀**|[原记录](../../../same_workload_c1c2_20260907/five_ideas_reassessment.md)|
+|9. 晚知BN确认包A8|界包/提交叶及合成区间验证；功能通过不等于真实BN区间可省服务|尚缺真实区间及消费者；不能拿合成命中做网络收益|与普通界/真实BN和同提交链比较；**未闭，条件保留**|[原记录](../../../same_workload_c1c2_20260907/five_ideas_reassessment.md)|
+|10. 默认值BN/零叶/单遍统计|完整域统计与真实PED CPU链，实际AEE；普通融合有大收益；default相对完整普通X=0|原−μ缓存对照遗漏已修；物化省掉归普通融合|保留单遍/融合为A，不复活零响应标题；**迁移有效，归A**|[原记录](../../open_fusion_execution/default_bn/onepass/integrated_consumer/README.md)|
+|11. PSN CMVM与提前判决|完整矩阵/常量编译及决策探针；不能把T10当因果LIF截断|非因果全矩阵及真实门/连续结果仍有消费者|执行费用必须超出完整CMVM常量编译；不按位判数命名；**保留底座**|[原记录](../../psn/cmvm_20260909/README.md)|
+|12. 公共时间列/私有尾完成|完整消费者与完成界模型；旧小比例请求减少没有主线证据|私有尾、复制、最后完成可能落在关键路径|留不同TC/TR/依赖接口；不反复改同尾宽；**停旧端点，家族留存**|[原记录](../../algorithm/patch_probe/partial_completion/README.md)|
+|13. CFMP两因子/私有潜变量|公开功能链与算法恢复；未完整TC/TR硬件；private56小请求增量不等于CFMP全家无效|连续V、bank状态和后继链未完全计费闭合|同预算TC/TR bank+V+真实消费者完整时间线；**明确漏项，第二队列**|[原记录](../../algorithm/patch_probe/factor_completion_20260909/README.md)|
+|14. PED空间删除与低秩|真实连续支路的有损/低秩探针；精度和结构点可留；当前复审未重新跑|局部产品量不能当全链服务；剪枝函数须自身AEE|针对仍贵消费者，和同预算低秩/掩码对照；**保留算法点**|[原记录](../../algorithm/patch_probe/residual_consumer_probe/README.md)|
+|15. 三源前投影/OBS恢复|源结构、恢复训练及真实消费者探针；旧局部费用不是独立新颖性|源省算与后继仍连续的成本分离|普通同预算稀疏源/常量编译必须同行；**保留为比较轴**|[原记录](../../algorithm/patch_probe/residual_consumer_probe/projection_chain/README.md)|
+|16. lifting半步RNE+CSE|完整源RTL/局部消费者及多版本AEE；后来质量可过NB0；不能拿旧+0.005杀|快变换/CSE本身已有，真实净服务与完成边界才是X|保留完整强A；用户已要求主探索转贵算子，不为小增量扫参；**可用备选，不抢当前线**|[原记录](../../open_fusion_execution/breadth_20260912/README.md)|
+|17. 舍入证书/跨帧认证缓存|真实四帧与完整局部消费者CPU；72暖查询0命中；该放置慢约0.43%|完整输出变化、认证本身收费，非只阈值不合适|只改粒度/表示/运动参考才重开；不扫半径续命；**停此放置**|[原记录](../../open_fusion_execution/fusion_followthrough_20260913/cache_owned/README.md)|
+|18. 动态源对条件CSE|真实图、CMP/COPY/MERGE与原RNE；原源对命中不足，34臂仍多0.660338%|直接相等接口过窄；静态CSE已吃大量共享|缩放别名/多消费者/图重写须实付；未做过不算已杀；**具体未试留存**|[原记录](../../open_fusion_execution/production_fusions_20260913/subgraph_owned/README.md)|
+|19. 生产摘要+NRV|真实commit摘要、扫描强控制；SV原语；相对强化扫描仅约0.061%–0.136%|普通摘要/预取已取走大头，不是新稀疏原语|作为公共供数；只有真正请求取消增量再立题；**迁移有效，归A**|[原记录](../../open_fusion_execution/production_fusions_20260913/source_metadata/README.md)|
+|20. 源/消费者交错与生命周期|真实共享资源局部调度及源RTL；有小正服务但通用轮转解释较强|普通P1立即消费/同端口是必要控制|不能把通用驻留当lifting独有；保留共同后端；**迁移有效，归A**|[原记录](../../open_fusion_execution/breadth_20260912/hardware/actual_interleave/full_window/README.md)|
+|21. 门预测Q8/full-D/phase|编码到U/V完整局部CPU已做，非免费U入口；Q8比展开小省但慢raw；full-D/phase当前放置负|编码、spill与原舍入边界吃掉收益|真正Uz+Uδφ分域直达、舍入前合并未实现；**明确漏项，保留**|[原记录](../../open_fusion_execution/production_fusions_20260913/encoded_consumer/PHASE_EXECUTION.md)|
+|22. W4/W8/sign+低秩补偿|真实量化/补偿与系数响应解码；普通W4/W8可用；当前响应解码仍慢展开|解码/尺度费用；ReverB名称不替代完整A|普通低位权重归A；联合训练/不同消费接口另试；**有效底座与失败放置分开**|[原记录](../../open_fusion_execution/production_fusions_20260913/response_decode_owned/README.md)|
+|23. 连续codec/PED位面|真实I24/U/V/RNE与位面执行；复杂codec相对普通signed-width薄；校正太多|BN普通融合已删除物化；无存储就无压缩收益|只在仍真实spill的接口重开；不再对已删物化编故事；**停当前放置，家族留存**|[原记录](../../open_fusion_execution/ped_bitplanes/README.md)|
+|24. stride相位/H8物理剪枝|训练恢复、真实U/F、请求前迭代已做；同协议可过NB0；相位没胜最强global服务|共广播/权重词取消与单非零数量不同|同质量物理事务损失或普通常量偏移；不能按旧严AEE门杀；**保留算法/接口权衡**|[原记录](../../open_fusion_execution/pruning/source_address_iterator/README.md)|
+|25. r0整Cin退休/父和合并|完整算子与实际整数执行底座；完整父复用/退休不能被叶周期代替|生产者供数和跨K输出寿命必须闭|保留完整执行A，不复活旧APEC融合标题；**归A并留新接口**|[原记录](../../open_fusion_execution/major_operator_fusions_20260913/prosperity_owned/psum_probe/README.md)|
+|26. 整数pair基/nonzero-fill例外|小整数基、例外和H8共同pair真实执行；低冲突配对可增加权重词；两源和是更强A|减少AND冲突并不等于取消物理读取|按真实取词/归约/目的支持共同优化，与普通部分和比；**重开费用目标，非杀打包**|[原记录](../../pro_fusion_trials_20260913/packing/README.md)|
+|27. flat SVD窄整数R8|算法分解+真实整数全消费者执行；R8已成为可执行底座；当前8251.327635优于同环境NB0|低秩自身成熟；新增硬件须相对R8当前强控制|用R8作分母，继续表示/端口/稀疏融合；**迁移有效，现主底座**|[原记录](../../r8_consumer_fusion_20260914/REPORT.md)|
+|28. 空间R16/Tucker|真实diverse10算法点，未窄整数后因子闭；对应旧小集AEE1.269130/1.417015，按各自协议保留|不能借flat R8成功或Winograd失败替它作结论|完整窄整数因子和连续后端RTL，已有明确算法候选；**漏项，第二队列**|[原记录](../../open_fusion_execution/major_operator_fusions_20260913/decomposition_owned/README.md)|
+|29. 二维/单轴Winograd|输入变换/系数/逆变换的已试布局；迁移完整度须按具体叶，不等整芯片|二值源变多位、系数膨胀与状态会抵消乘积减少|支持取消物理词/变换域稀疏可留，普通WINS享同编译；**本轮未补新布局**|[原记录](../../open_fusion_execution/major_operator_fusions_20260913/decomposition_owned/README.md)|
+|30. Kronecker/整组escape|原展开与收缩RTL、R8真实后继+AEE；当前R8拟合小省2.231%，十帧AEE1.899失败|逼近质量与多因子/修正税；HKPRNN已有混合结构|只停本拟合；空间其他shape/有界恢复不是已证不行；**停止本拟合，家族留存**|[原记录](../../fusion_review_followup_20260914/kron_escape/REPORT.md)|
+|31. Q1 bitmap/bitplane|真实native K864 RTL，含动态转置；87599→103908，当前布局负|位平面扫描及BM_PACK；不等于所有bitmap都差|原生供数生成位图+fetch/execute/result流水未迁全；**漏项，可补A**|[原记录](../../fusion_review_followup_20260914/review_decompositions.md)|
+|32. Q2 DA混合|576B LUT完整K/R8 raw RTL；本轮100043→94823，仍慢MAC8.247%|已修空/小rank旁路、lazy、沉没费；真实检测和构表不划算|入口必要条件/真实表生命周期还留；不默认扩12倍表；**本轮已实试适配，当前点停**|[原记录](../../transfer_adapt_20260914/da_adapt/REPORT.md)|
+|33. Q1完整列/R2字典|sum-first局部机制，非完整UCNN芯片；本轮R2最终固定T配对64冷983682→888735；另组1077632→935939|原稠密控制/独立计数存储已修；已补416bit原生四P，仍缺同资源完整I24/RR|count8+psum复用+固定T配对已完整raw实跑；**保留优先候选，非标题**|[原记录](../../transfer_adapt_20260914/pair_psum_overlay/temporal_pairing/README.md)|
+|34. latent同幅分组|真实部署latent归组/表示探针；低维连续值不自动等同重复二值列|相同幅值支撑、key/状态/恢复均收费|若换表示或权重支持才再试；当前未新增闭合；**保留条件接口**|[原记录](../../fusion_ten_trials_20260914/SOURCES_AND_NEXT_INTERFACES.md)|
+|35. 子字打包/模数/宽链|完整R8+J20+I24、2context RR；本轮borrow64冷786421 vsmodular787603，省0.1501%|60k次Q1只是换链；z与Q2仍限制；仲裁反例真实|表示选择与资源绑定分开反事实；普通借链必须给A；**本轮已补强A/一次适配**|[原记录](../../transfer_adapt_20260914/rr_borrow/README.md)|
+|36. psum直供/halo/context|真实数据流RTL与整帧组件回放；转发同拍；halo有省；普通RR优于phase offset|消写不一定消服务；普通RR吃掉调度增量|halo/原子grant归共同底座，不能重复当新标题；**迁移有效，归A**|[原记录](../../fusion_review_followup_20260914/review_dataflow.md)|
+|37. group/rank剪枝|实际RTL与各自valid825；质量和费用有不同可用点，不能同AEE宣称优胜|泛稀疏先验很强；逻辑零必须改变词/发射|物理广播域共同删除+同质量对照；有损可试；**可用算法点，不恢复严门**|[原记录](../../fusion_review_followup_20260914/review_quality.md)|
+|38. prototype+残差|固定K4码本/one-residual RTL及AEE；周期可省但该码本十帧1.4719未胜当时NB0|码表/编码/残差同时收费，不能只看查表次数|受限修正/参考编码尚可试；不把LUT-DLA当首次；**停该码本，保留家族**|[原记录](../../fusion_review_followup_20260914/review_quality.md)|
+|39. 时间hold/latent差分/区间/anchor|不同机制端点保留各自函数；原端点已有RTL；hold薄；anchor漏启用税已反例；旧端点孤立脉冲多|不能把原T、原锚点和一次端点失败外推所有表示|每K两域、固定T序+inverse、同序单域及无源重叠64已实跑；仍输更宽口原生四P；**保留窄端口接口**|[原记录](../../pro_fusion_trials_20260913/interval/REPORT.md)|
+|40. 因果运动/粗头/稀疏decoder|运动差分已有探针，粗头是强A；decoder2前置wake未实现；旧运动残差多工作；当前输出flow不能反向当免费先验|内部T不是跨帧；mask须在昂贵分支之前生成并付halo|已有粗流/事件前置wake+真实decoder2；新函数另过NB0；**明确未试，保留任务特性支线**|[原记录](../../pro_fusion_trials_20260913/REPORT.md)|
+
+**确有遗漏，已纳入执行。** Q2按位置选择与有费LUT生命周期、R2稀疏计数控制/双位置退休、RR借用consumer64及真实仲裁反例、本轮每K direct/delta两域均已经实写；不再列成未试。count8/psum复用、固定T排列+inverse及两者的计数配对融合均已实写并完成两组64；结果以本轮入口为准。
+
+**仍然真正未闭的接口。** 完整Gustav压缩交集、Prosperity联合虚节点/部分lane图、CFMP同预算TC/TR/真实消费者、Q1生产期bitmap流水、真正Uz+Uδφ分域消费、空间R16/Tucker窄整数后端、anchor整P启用决策、因果decoder2前置wake。它们是队列，不是假装本轮已经测过。
+
+**修正过去过度结论。** 端点、Q8消费、单遍BN、完整Prosperity外层并非都没做；后来的执行已补上，旧“未试”不能原样复制。另一方面，许多移植只是核心原则或一份局部RTL，不能称完整复刻作者加速器。控制优化能让失败变小正，本身也不能自动升为创新标题。
+
+**未再核的边界。** 本表没有逐页复查全部论文/全部历史源码，早期PSN若干项只依既有入口，40类之外的未读/未尝试仍由总目录保留。身份不符的连续幅值HBG/用当前完整flow作神谕不是“性能差的家族”，而是尚不符合当前实验函数；只有改变合法输入合同后才可重开。

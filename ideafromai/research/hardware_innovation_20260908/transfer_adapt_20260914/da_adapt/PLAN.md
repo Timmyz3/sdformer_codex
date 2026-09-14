@@ -1,0 +1,25 @@
+# Q2 DA failure adaptation: implementation contract, before RTL
+
+2026-09-14. Old leaf and production tree are read-only. This experiment owns only this directory, performs no training or EDA, and makes no commit. Its scope is the fixed R8 exact-integer line: native binary events g from AT-LIF {0, theta}, with theta absorbed into W; p = Q2 @ (Q1 @ g), no intermediate rounding. Every command checks all 480 x 8 raw outputs. It does not claim full I24 consumer or network quality revalidation.
+
+## Retained controls and bounded candidate
+
+- Keep the old experiment as the authoritative read-only source; reference its SV/TB/run/definition/results/summary directly without duplicate archives. Migrated modes 14 (native dual-P packed MAC) and 15 (fixed DA, 32 LUT-build cycles per N8 including empty blocks) must reproduce original 87,599 and 100,043 real-eight unblocked core cycles.
+- Mode 13: per-position MAC/DA choice, build the two R4 tables once for each nonempty N8 configuration. Rank support already known at POSLOAD gives free-in-existing-state 0-rank STORE and 1/2-rank direct MAC. Only positions with at least three nonzero participating ranks enter DA_POS (one actual z vector read) and DA_ENCODE (one detection cycle). DA selection requires 2 + popcount(da_encoded) < popcount(remaining), using the original full signed-width and zero-LUT-vector detection. Ties fall back. A rejected candidate still pays both DA_POS and DA_ENCODE before direct MAC.
+- One predeclared bounded adaptation, mode 12: use the identical selector but delay each N8 table build until its first position with >2 live ranks. DA_BUILD resumes that position at DA_POS. It avoids building a table for a block that only uses direct bypasses. No other group-width, LUT-capacity, residency or selector sweep.
+
+## Exact accounting and lifecycle
+
+One 576 B LUT only, two groups x16 entries x8 signed18 lanes, plus existing 32-bit live metadata. Each N8 Q2 cache fill invalidates the table, which is rebuilt in 32 cycles (2 zero writes +30 shared-ALU subset additions) when needed. The table serves only the current N8's 40 positions, is overwritten for the next N8, and is invalidated on every command. Nothing persists as 12 resident blocks and no warm command receives free construction. Empty N8 blocks do not build in modes12/13. Build cost is real and reported separately; the local selector does not predict future amortization and may still lose overall.
+
+The union module retains the exact eight multiplier expressions, eight 32-bit ALU chains and original memory ports. New control is rank popcount, 26-bit encoded popcount/comparison, a table-ready flag and build-return flag, plus observation counters. No extra multiplier, wide arithmetic lane, z storage or LUT capacity. Encoding and scalar MAC reads never overlap. This is resource-declaration parity, not synthesized equal area/Fmax.
+
+## Validation and stopping rule
+
+Run all original 14 real/corner fixtures, zero-Q2/full zero blocks, dense small z of both signs, ± extrema including legal signed3 -4, partial Q2 cancellation, >2-rank paid fallback, 1/2-rank bypass, poisoned out-of-bounds padding, deterministic source/weight/result backpressure, repeated commands without reset, and source/weight reconfiguration between commands. Independently regenerate golden p directly from source convolution indexing and verify original gold; TB consumes only source/Q1/Q2/static liveK/origin and compares every actual output handshake. Per-state sum and the exact delta = build + read/encode + DA issues - saved MAC issues will be checked. Export RTL raw output traces for inspectable comparisons.
+
+A small-z positive control only demonstrates the break-even regime. If practical native 64-tile source data are available, optionally measure the unchanged real factor on that stream without new training, and clearly distinguish from synthetic small-z factors. Report a negative real result as a failed fixed adaptation. MAC/DA selection and lazy LUT construction are known scheduling/DA techniques; repairing the control is not a new research title or an architecture novelty claim.
+
+## Required deterministic cost correction after first results
+
+The first 432 commands exposed a selector weakness: after DA_ENCODE both DA and fallback already incurred the same two detection cycles and (when required) the same table construction. Add mode11 with the same lazy lifecycle as12 but compare only remaining work, popcount(da_encoded) < popcount(remaining), with ties to MAC. Keep12/13 and their measured results as the conservative prior, and run the same25 fixtures plus four reconfiguration pairs for11. This is an explicit strong-control repair, not a parameter sweep. All already incurred two-cycle detection and32-cycle table construction remain in total service and delta equations. Before the first evaluation the table is constructed under the declared block policy; no unpaid future build is omitted from the ENCODE comparison. This policy still does not predict whether the table will amortize across future positions.
