@@ -1,0 +1,13 @@
+质量使用本会话已冻结的A800/env312与matched-dense学生配置，Q1/Q2/a/b保持相同实值；没有重选格式、训练模型或在验证数据拟合阈值。原完整R8+固定消费者的diverse10本次精确复现1.3903315401317662。
+
+入口是真实DSEC voxel T10，r0.conv2 override执行FP64整数卷积Q1、冻结latent函数、FP64整数Q2 dot，逐帧断言为整数并在已证范围内。r0后置hook用真实FP32 identity按signed64公式产生新I24，`LiteralForward`入口逐帧确认接到同一个整数I24。FP32 identity→J、p→I24本轮RTL已实现；后续网络仍使用既有浮点/冻结deployed实现，不能称完整全网bittrue。
+
+AEE严格沿既有`evaluate_branch_control.evaluate_axis`：每帧reset spiking状态，真实`preds.2` coarse exit，时域聚合来自原控制器；bilinear到480×640、align_corners=False，不额外缩放flow数值；以既有GT valid mask的欧氏误差计算每帧均值，再平均帧。官方valid825指真实valid CSV的825帧，本轮没有改coarse出口评价协议，也没有把它称为另一个全网络最终head协议。同环境原NB0参考使用同集合/同公式。
+
+七函数diverse10均实际跑过，共10帧516735有效像素。四个过十帧且有实测周期潜力的函数1/2/5/6再各跑825。模式7/8只是模式6/5的同函数精确delta执行选项，RTL逐值证明相同，因此不重复GPU质量。AS2模式3十帧未过，共同zero-bypass后暖周期净收益7.69%低于事先root的10%拓展要求；模式4强控制未过，均不扩825。
+
+本次第一轮运行的共享`quality_work`逐帧文件在开始825后按axis覆盖同名十帧文件；其原始diverse汇总/逐帧整数检查和完整日志已保留。其余六函数的10行原始frame文件及时保存到`diverse_frames`；group_drop在覆盖后，从同函数825前缀按相同十帧文件名取回，其均值与原diverse收据逐位相同，来源单列`group_drop_valid_prefix_receipt.json`。这不是额外GPU复跑或新的十帧结果；原diverse.log的累计均值仍可核对。后续重现入口已改为按split分目录，避免再次覆盖。
+
+825运行中观察到A800约37%利用率、7.7GB/81.9GB显存，于不改变batch/参数/数值的前提下，另起独立mode6进程。原进程继续完成mode2与mode5；监视器只在mode5完整825收据落盘后终止原序列。mode6仅采用`quality_valid_6_parallel.json`及`quality_work_parallel_valid`的完整结果，`quality_valid_6.json`在本地是该文件的可读别名。任何原序列随后开始的mode6只是unused前缀，不计为完成评价。独立mode6的十帧子集均值精确复现原diverse10，证明此次并行没有改变已核对的子集结果。两个进程均退出的最终检查另存。
+
+最终退出：监视器起初把nvidia-smi的宿主PID当作容器PID，/proc安全检查失败；已按真实/proc argv唯一定位PID460805后终止原序列，保留137帧重复mode6前缀但不使用。`sequential_retirement.json`记录纠正过程，`final_process_check.json`记录两个评价进程/监视器均退出、GPU进程列表为空。mode5的完整825数据在终止前已落盘且通过配对检查。
