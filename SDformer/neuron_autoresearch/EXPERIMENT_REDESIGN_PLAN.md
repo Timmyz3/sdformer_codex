@@ -12788,3 +12788,52 @@ All three rows start from the same MVSEC NB0 ep11 model and use the same fresh-o
 `neuron_autoresearch/DATE_PAPER_RESULT_TABLES_20260901.md`。该索引严格分开 DSEC local valid825、
 MVSEC day2 same-parent 和 DSEC official hidden test；optimized C12 ep34 不替代 strict full30 C12
 因果行，spike-energy proxy 不替代硬件 PPA/SAIF 能耗表。
+
+<!-- ATLIF_EP34_AND_NEW_FLOW_LITERATURE_AUDIT_20260906 -->
+
+### ATLIF ep34 execution/output audit and literature refresh (2026-09-06)
+
+See `neuron_autoresearch/ATLIF_EP34_AUDIT_AND_FLOW_LITERATURE_20260906.md`.
+The final ep34 capture confirms 105 installed / 93 runtime-called / 81
+functionally live ATLIF sites: 12 sn2_q are bypassed and 12 attn_sn outputs are
+diagnostic-only. Binary output remains `{0, theta}`; 95/105 checkpoint thresholds
+are exactly 1, ten are slightly below 1, and all 24 Q/K thresholds equal 1.
+All thresholds are unchanged from C12 ep29 to ep34; activity-driven threshold
+growth and target-rate feedback are disabled by the final recipe. Do not claim
+that adaptive threshold growth caused its final sparsity gain.
+The literature refresh identifies newer SNN flow work (AAAI 2026 Spike GRU,
+ST-FlowNet, Aq-FireNet, and STIRFlow), but no additional independently verified
+released spiking-Transformer flow backbone. Public numbers require split and
+metric verification before comparison. No training or hardware code was changed.
+
+<!-- ALGORITHM_REFRESH_CANDIDATES_20260906 -->
+
+### Frozen-graph algorithm refresh candidates (2026-09-06)
+
+See `neuron_autoresearch/literature/ALGORITHM_REFRESH_CANDIDATES_20260906.md`.
+Read 2026 MEOM, FlowAnyTime, STSC-Flow, MD-Mixer and TRE method sections, plus
+MEOM author training/loss code. First recommendation: same-interval clean-to-
+corrupted temporal-view distillation with continuation and augmentation-only
+controls. Event-structure supervision and training-only feature suppression are
+secondary; original continuous-time losses and channel-specific delays cannot
+be transplanted unchanged. Existing alpha, PAFT, Local5 cardinality and temporal
+factorization experiments are explicitly separated from new candidates.
+C12 ep34 remains frozen. Candidate status is proposed, not queued or trained;
+hardware code and active experiment queues were not modified. Every future
+weight change requires new checkpoint-bound evaluation/capture evidence.
+
+<!-- ALGORITHM_REFRESH_AUTHORIZED_RUNS_20260906 -->
+
+### Authorized algorithm refresh training (2026-09-06)
+
+The user authorized implementation and training after the literature review.
+Protocol: `neuron_autoresearch/ALGORITHM_REFRESH_RUN_PROTOCOL_20260906.md`.
+Four independent five-full-epoch arms from frozen C12 ep34: ordinary fine-tuning,
+voxel-view augmentation, clean-view teacher distillation, and train-only shared
+delay parameterization over all81 functional ATLIF sites (105 installed retained).
+All deploy as the original all12 binary C12 graph. Save/standard-valid825 at
+global ep37/39. Fresh matched optimizers, not true optimizer-state continuation.
+CPU tests pass; GPU smoke/export admission precedes the finite queue.
+Live state: `neuron_experiments/H9_bipolar_self_attention/results/algorithm_refresh_20260906/`.
+No hardware implementation changes, no official DSEC evaluation, no old weights
+deleted. Failed attempts stop for diagnosis instead of auto-retrying.
