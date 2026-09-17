@@ -1,0 +1,9 @@
+Wz must face the already effective ordinary partial-frontier, resident-X and active-prefetch control. Earlier common-T10-channel comparisons do not establish its remaining independent gain.
+
+Read-only copy the frozen frontier_joined/retained_config core/wrapper/TB. Keep its four 32-byte X slots, 128-byte graph cache, 10 source multipliers, first-P cold configuration and P1..31 static-register reuse; reset dynamic X/cache/graph state each P. Both modes use physical root word6174 and the same active prefetch. Only mode2 exact-code and mode3 response-class, resident frontier=1, backend mode4 are run.
+
+Use the existing Wz and full-H384 canonical graph unchanged. Both producers receive the zero-aware backend route omission and content dedup. Neither source nor downstream words/gates are supplied by TB: it starts from X and static parameters, independently computes nearest-code and Wz full Y/U/gate, and counts unique active channel references per actual batch independently of RTL count_channels.
+
+First replay joined_zero.bin (two training frames/P32 and two diagnostics), H384, ready/BP and two passes without reset. Then replace only X/case list with the same existing 32 training frames; no selection, training or parameter changes. Only strong arms; one full expanded pass with continuous commands. Record start-to-last-gate, all physical words, produced (P,c,t) pairs and true source channel references, backend work, configuration and stalls. Match full graph path lengths/semantic zero-aware backend jobs with an independent CPU profile.
+
+Shared pool remains256KiB/eight128-bit banks, one accepted outstanding per bank; source10+backend96 distinct multipliers with serial phases. Added source residency is ordinary A and available to both arms. Preserve all prior CSV/results as weaker comparisons; use this final control to judge whether Wz retains an increment. Quality remains the same unknown-AEE Wz function.

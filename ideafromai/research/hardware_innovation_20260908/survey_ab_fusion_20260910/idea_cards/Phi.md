@@ -1,7 +1,7 @@
 # Phi
 
 - uid/来源: `MAIN-R005`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/codex_independent_20260905/02_literature_and_alternative_ideas.md; /home/zhumd/work/sdformer_codex/ideafromai/research/prosperity_fusion_20260906/README.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/README.md; /home/zhumd/work/sdformer_codex/ideafromai/codex_independent_20260905/01_review_and_selective_shared_reduction.md
+- 全文出处: /home/zhumd/work/ideafromai/codex_independent_20260905/02_literature_and_alternative_ideas.md; /home/zhumd/work/ideafromai/research/prosperity_fusion_20260906/README.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/README.md; /home/zhumd/work/ideafromai/codex_independent_20260905/01_review_and_selective_shared_reduction.md
 - 精读深度: 全文层次pattern/PWP/处理器
 - 题名: Phi: Leveraging Pattern-based Hierarchical Sparsity for High-Efficiency Spiking Neural Networks
 - venue: ISCA 2025

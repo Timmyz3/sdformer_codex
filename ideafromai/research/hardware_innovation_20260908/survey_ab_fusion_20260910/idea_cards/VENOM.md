@@ -1,7 +1,7 @@
 # VENOM
 
 - uid/来源: `MAIN-R027`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/literature/sparsity_transfer_followup_20260908.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/algorithm/group_pruning_probe/README.md
+- 全文出处: /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/literature/sparsity_transfer_followup_20260908.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/algorithm/group_pruning_probe/README.md
 - 精读深度: §3–4/§6 + 官方剪枝代码
 - 题名: VENOM: A Vectorized N:M Format for Unleashing the Power of Sparse Tensor Cores
 - venue: SC 2023

@@ -1,7 +1,7 @@
 # TASD
 
 - uid/来源: `MAIN-R029`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/literature/sparsity_transfer_followup_20260908.md
+- 全文出处: /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/literature/sparsity_transfer_followup_20260908.md
 - 精读深度: §3/4.2–4.4/图11
 - 题名: Enabling Unstructured Sparse Acceleration on Structured Sparse Accelerators
 - venue: MLSys 2025

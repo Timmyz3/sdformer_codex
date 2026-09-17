@@ -1,7 +1,7 @@
 # LUT-DLA
 
 - uid/来源: `MAIN-R103`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/bn_state/next_training_proposal.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/bn_state/response_zero_one_page.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/algorithm/hidden_queries/novelty_review.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/bn_state/support_service_notes.md
+- 全文出处: /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/bn_state/next_training_proposal.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/bn_state/response_zero_one_page.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/algorithm/hidden_queries/novelty_review.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/bn_state/support_service_notes.md
 - 精读深度: §IV–VI/Algorithm1
 - 题名: LUT-DLA: Lookup Table as Efficient Extreme Low-Bit Deep Learning Accelerator
 - venue: HPCA 2025

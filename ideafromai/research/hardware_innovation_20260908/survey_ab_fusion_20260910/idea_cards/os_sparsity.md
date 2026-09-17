@@ -3,7 +3,7 @@
 - uid/来源: `OS2-014`｜P0 open_source
 - 全文出处: PyTorch sparsity / ao sparsity tooling family
 - 精读深度: 开源仓/工件级盘点（开源仓级精读，非论文全文）——**不虚报论文全文**
-- sources: ['hw_literature:/home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/literature/sparsity_transfer_followup_20260908.md', 'opensource']
+- sources: ['hw_literature:/home/zhumd/work/ideafromai/research/hardware_innovation_20260908/literature/sparsity_transfer_followup_20260908.md', 'opensource']
 
 ## 可继承 A
 开源生态盘点；可作为本地对照或工具链，不自动构成标题机制。

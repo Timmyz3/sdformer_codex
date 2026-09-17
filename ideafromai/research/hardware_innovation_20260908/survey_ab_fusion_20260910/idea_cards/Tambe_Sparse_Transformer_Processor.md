@@ -1,7 +1,7 @@
 # Tambe Sparse Transformer Processor
 
 - uid/来源: `MAIN-R324`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/13_isscc_vlsi_hotchips_edge_npus.md
+- 全文出处: /home/zhumd/work/ideafromai/research/13_isscc_vlsi_hotchips_edge_npus.md
 - 精读深度: 本轮重新读作者全文（审计标注）
 - 题名: Sparse Transformer Processor with Entropy-Based Early Exit, Mixed-Precision Predication and Fine-Grained Power Management
 - venue: ISSCC 2023

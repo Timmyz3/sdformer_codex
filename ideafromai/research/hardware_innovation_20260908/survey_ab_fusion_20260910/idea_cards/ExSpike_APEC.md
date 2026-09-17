@@ -1,7 +1,7 @@
 # ExSpike / APEC
 
 - uid/来源: `MAIN-R004`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/concept_reassessment_20260906/report-source.md; /home/zhumd/work/sdformer_codex/ideafromai/research/prosperity_fusion_20260906/README.md; /home/zhumd/work/sdformer_codex/ideafromai/research/same_workload_c1c2_20260907/README.md; /home/zhumd/work/sdformer_codex/ideafromai/research/handoff_reconciliation_20260906/report-source.md
+- 全文出处: /home/zhumd/work/ideafromai/research/concept_reassessment_20260906/report-source.md; /home/zhumd/work/ideafromai/research/prosperity_fusion_20260906/README.md; /home/zhumd/work/ideafromai/research/same_workload_c1c2_20260907/README.md; /home/zhumd/work/ideafromai/research/handoff_reconciliation_20260906/report-source.md
 - 精读深度: §III-A2/Fig.5 方法精读 + 本地 fusion 负结果
 - 题名: ExSpike: A General Full-Event Neuromorphic Architecture for Exploiting Irregular Sparsity with Event Compression
 - venue: FPL 2026

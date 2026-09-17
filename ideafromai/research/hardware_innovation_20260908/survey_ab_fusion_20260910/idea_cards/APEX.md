@@ -1,7 +1,7 @@
 # APEX
 
 - uid/来源: `MAIN-R110`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/literature/patch_conditional_fusion_followup_20260908.md; /home/zhumd/work/sdformer_codex/ideafromai/research/grok46_20260905/04_paper_survey.md; /home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/report-source.md
+- 全文出处: /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/literature/patch_conditional_fusion_followup_20260908.md; /home/zhumd/work/ideafromai/research/grok46_20260905/04_paper_survey.md; /home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/report-source.md
 - 精读深度: §II-B/III-B/E
 - 题名: APEX: A Dual-Sparsity Accelerator for Precise and Efficient SNN Inference
 - venue: arXiv预印本 2026 / arXiv 2026

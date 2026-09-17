@@ -1,7 +1,7 @@
 # GustavSNN
 
-- uid/来源: `MAIN-R002`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/literature/architecture_followup_20260908.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/psn/gustavsnn_implementation_status_20260908.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/psn/rtl/gp_slice/README.md; /home/zhumd/work/sdformer_codex/ideafromai/research/innovation_first_audit_20260906/report-source.md
+- uid/来源: `MAIN-R002` / `MUSHA-SP001`（musha 清单别名）｜audit_deep 核对复用
+- 全文出处: /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/literature/architecture_followup_20260908.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/psn/gustavsnn_implementation_status_20260908.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/psn/rtl/gp_slice/README.md; /home/zhumd/work/ideafromai/research/innovation_first_audit_20260906/report-source.md
 - 精读深度: 审计§IV–VII + 本地镜像全文；证据见 gustavsnn_* / architecture_followup
 - 题名: GustavSNN: Unleashing the Power of Gustavson's Algorithm on SNN Acceleration with Column-Parallel Tick-Batch Dataflow
 - venue: 2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) 2026

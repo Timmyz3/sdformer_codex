@@ -1,7 +1,7 @@
 # SCNN
 
 - uid/来源: `MAIN-R031`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/13_isscc_vlsi_hotchips_edge_npus.md; /home/zhumd/work/sdformer_codex/ideafromai/research/hardware_innovation_20260908/literature/patch_crosslayer_fusion_followup_20260908.md
+- 全文出处: /home/zhumd/work/ideafromai/research/13_isscc_vlsi_hotchips_edge_npus.md; /home/zhumd/work/ideafromai/research/hardware_innovation_20260908/literature/patch_crosslayer_fusion_followup_20260908.md
 - 精读深度: §III–IV/图4–6
 - 题名: SCNN: An Accelerator for Compressed-sparse Convolutional Neural Networks
 - venue: ISCA 2017

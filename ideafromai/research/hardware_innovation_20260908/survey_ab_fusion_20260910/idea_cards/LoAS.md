@@ -1,7 +1,7 @@
 # LoAS
 
 - uid/来源: `MAIN-R003`｜audit_deep 核对复用
-- 全文出处: /home/zhumd/work/sdformer_codex/ideafromai/research/fusion_delivery_20260907/report-source.md; /home/zhumd/work/sdformer_codex/ideafromai/research/same_workload_c1c2_20260907/c2/README_R4.md; /home/zhumd/work/sdformer_codex/ideafromai/research/same_workload_c1c2_20260907/README.md; /home/zhumd/work/sdformer_codex/ideafromai/codex_independent_20260905/02_literature_and_alternative_ideas.md
+- 全文出处: /home/zhumd/work/ideafromai/research/fusion_delivery_20260907/report-source.md; /home/zhumd/work/ideafromai/research/same_workload_c1c2_20260907/c2/README_R4.md; /home/zhumd/work/ideafromai/research/same_workload_c1c2_20260907/README.md; /home/zhumd/work/ideafromai/codex_independent_20260905/02_literature_and_alternative_ideas.md
 - 精读深度: 全文 FTP+Algo1；本地 r4 8bank 记录
 - 题名: LoAS: Fully Temporal-Parallel Dataflow for Dual-Sparse Spiking Neural Networks
 - venue: MICRO 2024
