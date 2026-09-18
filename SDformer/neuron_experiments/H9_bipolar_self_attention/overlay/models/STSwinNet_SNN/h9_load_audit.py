@@ -28,6 +28,31 @@ def is_h9_overlay_key(key: str) -> bool:
     return any(marker in key for marker in H9_OVERLAY_KEY_MARKERS)
 
 
+def is_dead_atlif_key(key: str) -> bool:
+    """Overlay keys belonging to the ATLIF modules the installer no longer installs.
+
+    ``install_atlif_ternary_psn`` deliberately skips two families of paths, both of
+    which the Shiftmax overlay renders unreachable: ``.sn2_q`` is never called (the
+    overlay's forward omits the base model's ``att_token = self.sn2_q(...)`` line) and
+    ``.attn_sn``'s output is discarded (``proj`` consumes the pre-neuron value). Their
+    parameters therefore never influence the forward pass.
+
+    Checkpoints predating that filter (e.g. the ep34 anchor) still carry these keys, so
+    they arrive as ``unexpected``. Treating them as fatal would make every older
+    checkpoint unevaluatable, so they are excluded from the audit instead. On a
+    checkpoint saved *by* the filtered installer these keys do not exist and this
+    predicate never matches -- it is a no-op there.
+
+    Measured on the shipped ep34 checkpoint: exactly 48 such keys (24 modules x
+    ``thresh``/``center``), and this predicate selects the same 48 as a
+    path-component test would, with no extras on either side.
+    """
+    if ".spiking_neuron." not in key:
+        return False
+    dead_path = key.split(".spiking_neuron.", 1)[0]
+    return dead_path.endswith(".sn2_q") or dead_path.endswith(".attn_sn")
+
+
 def config_requires_h9_overlay(config: dict[str, Any] | None) -> bool:
     config = config or {}
     return bool(
@@ -93,7 +118,10 @@ def load_checkpoint_with_h9_audit(
         load_pretrained_interpolate(model, pretrained_dict)
         print("[H9] remap=v1 interpolation complete; applying interpolated state dict")
 
-    overlay_checkpoint_keys = [key for key in pretrained_dict if is_h9_overlay_key(key)]
+    overlay_checkpoint_keys = [
+        key for key in pretrained_dict
+        if is_h9_overlay_key(key) and not is_dead_atlif_key(key)
+    ]
     overlay_model_keys = [key for key in model.state_dict() if is_h9_overlay_key(key)]
     h9_enabled = config_requires_h9_overlay(config)
     if overlay_checkpoint_keys and not h9_enabled:
@@ -112,7 +140,10 @@ def load_checkpoint_with_h9_audit(
     missing = list(getattr(incompatible, "missing_keys", []))
     unexpected = list(getattr(incompatible, "unexpected_keys", []))
     overlay_missing = [key for key in missing if is_h9_overlay_key(key)]
-    overlay_unexpected = [key for key in unexpected if is_h9_overlay_key(key)]
+    overlay_unexpected = [
+        key for key in unexpected
+        if is_h9_overlay_key(key) and not is_dead_atlif_key(key)
+    ]
     print(
         f"[H9] load audit: checkpoint_overlay_keys={len(overlay_checkpoint_keys)}, "
         f"model_overlay_keys={len(overlay_model_keys)}, missing={len(missing)}, unexpected={len(unexpected)}"

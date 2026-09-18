@@ -168,6 +168,34 @@ def _is_qk_attention_path(path: str) -> bool:
     return path.endswith(".sn_q") or path.endswith(".sn_k") or path.endswith(".sn2_q")
 
 
+def _is_shiftmax_gate_bypassed_path(path: str) -> bool:
+    """Attention-output neurons the Shiftmax overlay renders unreachable.
+
+    Two mechanisms, both created by ``install_shiftmax_attention`` replacing the
+    base forward wholesale:
+
+    * ``.sn2_q`` — the base model builds its binary Q gate as
+      ``sn2_q(q.sum(-1))`` and never calls it again; the overlay's
+      ``_qk_shiftmax_gate_forward`` has no such line, so the module is dead.
+    * ``.attn_sn`` — its output is discarded. In both the base model and the
+      overlay tail the block ends with ``attn = self.attn_sn(x)`` followed by
+      ``x = self.proj(x)``, so ``proj`` consumes the *pre*-neuron activation;
+      the neuron's spikes are only returned as the second tuple element, which
+      the caller ``SSA`` ignores. Measured on the shipped checkpoint: 0 spikes
+      in all 12 modules across a full valid825 pass. It is also threshold-starved
+      — the overlay's gate is ``shiftmax`` rescaled by ``preserve_mean`` to a
+      row mean of roughly 0.5-1, while ``threshold_init`` is 1.0, so only
+      above-mean keys could ever fire.
+
+    Installing an ATLIF neuron on either path only manufactures dead parameters
+    (no forward effect, no gradient, 24 of the 105 modules in the shipped
+    checkpoint). Reviving ``.attn_sn`` is not a bug fix: it needs ``proj`` to
+    consume the neuron output *and* a threshold matched to the attention
+    magnitude, which is an accuracy-changing architectural experiment.
+    """
+    return path.endswith(".sn2_q") or path.endswith(".attn_sn")
+
+
 def iter_non_qk_spiking_neuron_paths(
     model: nn.Module,
     seen: set[str] | None = None,
@@ -182,6 +210,8 @@ def iter_non_qk_spiking_neuron_paths(
         if module.__class__.__name__ != "Spiking_neuron":
             continue
         if _is_qk_attention_path(name):
+            continue
+        if _is_shiftmax_gate_bypassed_path(name):
             continue
         if name in skip:
             continue
@@ -442,8 +472,12 @@ def install_atlif_ternary_psn(model: nn.Module, raw_config: dict | None) -> list
             wrapper = getattr(attn, child_name)
             _install_on_wrapper(wrapper, cfg, full_name, stage_idx=stage_idx)
             installed.append(full_name)
+    skipped_dead: list[str] = []
     for path in cfg.target_paths:
         if path in seen:
+            continue
+        if _is_shiftmax_gate_bypassed_path(path):
+            skipped_dead.append(path)
             continue
         seen.add(path)
         wrapper = _get_module_by_path(model, path)
@@ -469,10 +503,23 @@ def install_atlif_ternary_psn(model: nn.Module, raw_config: dict | None) -> list
             path = str(path)
             if path in seen:
                 continue
+            if _is_shiftmax_gate_bypassed_path(path):
+                skipped_dead.append(path)
+                continue
             seen.add(path)
             wrapper = _get_module_by_path(model, path)
             _install_on_wrapper(wrapper, group_cfg, path, stage_idx=None)
             installed.append(f"group{group_index}:{path}")
+    if skipped_dead:
+        print(
+            "[atlif_ternary_psn] skipped %d target(s) that the Shiftmax overlay "
+            "makes unreachable (dead parameters): %s%s"
+            % (
+                len(skipped_dead),
+                ", ".join(skipped_dead[:3]),
+                " ..." if len(skipped_dead) > 3 else "",
+            )
+        )
     return installed
 
 

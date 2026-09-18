@@ -17,8 +17,13 @@
   其余（注意力 mismatch_penalty=0.0、motion alpha=0.125、数据、分辨率）**全部不动**，
   这样「AEE 差多少」可以干净地归因到三值本身。
 
-刻意不动的一轴：`threshold_eta` 保持 0.0。T49 已证 θ≡1 是冗余尺度、且
-自适应阈值在硬件上要付逐神经元阈值存储 + 变尺度通路。本次只测三值。
+刻意不动的一轴：`threshold_eta` 默认保持 0.0（=θ 恒定，自适应关）。T49 已证
+θ≡1 是冗余尺度、且自适应阈值在硬件上要付逐神经元阈值存储 + 变尺度通路。
+**但自适应正是 ATLIF 相对 LIF 的唯一增量**，所以要单独一格消融：
+`--threshold-eta >0`（官方质量型）或 `--target-rate/--target-rate-eta`
+（发放率反馈型，需 threshold_mode != official_atlif）；两者都会把
+`threshold_freeze_after_step` 置 null 以解除永久冻结。`--binary-official`
+用于把这格跑成 binary+official_atlif，对照直接是已发布的 ep34 锚点。
 
 优化器：fresh（不传 --resume），flat low LR（milestones 推到 999 之外），
 5 epoch，每个 epoch 存一次 checkpoint 以便看曲线。
@@ -47,10 +52,15 @@ SRC_EPOCH = 34
 
 def build_config(scale: float, epochs: int, backbone_lr: float,
                  mismatch_penalty: float = 0.0, motion_alpha: float = 0.125,
-                 max_train_steps: int = 0) -> dict:
+                 max_train_steps: int = 0, target_rate: float | None = None,
+                 target_rate_eta: float | None = None,
+                 threshold_eta: float | None = None,
+                 binary_official: bool = False) -> dict:
     cfg = yaml.safe_load(SRC_CFG.read_text(encoding="utf-8"))
 
     def flip(d: dict) -> None:
+        if binary_official:      # 保持源配置的 binary + official_atlif（单变量消融）
+            return
         d["output_mode"] = "ternary"
         d["threshold_mode"] = "asymmetric_scale"
 
@@ -59,6 +69,34 @@ def build_config(scale: float, epochs: int, backbone_lr: float,
     for g in a.get("target_groups", ()) or ():
         flip(g)
     a["negative_threshold_scale"] = float(scale)
+
+    # 自适应阈值对照组：源配置 target_rate=null / threshold_eta=0 ⇒ θ 恒定 1.0，
+    # ATLIF 实际退化成"固定阈值的非对称 LIF"。不打开这几个键，就无法回答
+    # "自适应阈值到底值不值"，而自适应恰恰是 ATLIF 相对 LIF 的**唯一**增量。
+    #
+    # 三条路径（2026-09-18 按源码重核）：①`threshold_eta`→`module.sp`（质量型手动项）
+    # ②`target_rate`+`target_rate_eta`（反馈型手动项，需 threshold_mode != official_atlif）
+    # ③ optimizer 的 `atlif_threshold` 参数组走 `thresh.grad`（**默认开启**，
+    #   只有 `freeze_threshold_grad_after_step` 才关，源配置没有这个键）。
+    # 所以 `threshold_freeze_after_step` **只冻结 ①② 的手动项**，不冻结 ③。
+    # 这里只暴露 ①；②③ 需要另立单变量臂。
+    if target_rate is not None:
+        a["target_rate"] = float(target_rate)
+        for g in a.get("target_groups", ()) or ():
+            g["target_rate"] = float(target_rate)
+    if target_rate_eta is not None:
+        a["target_rate_eta"] = float(target_rate_eta)
+        for g in a.get("target_groups", ()) or ():
+            g["target_rate_eta"] = float(target_rate_eta)
+    if threshold_eta is not None:
+        a["threshold_eta"] = float(threshold_eta)
+        for g in a.get("target_groups", ()) or ():
+            g["threshold_eta"] = float(threshold_eta)
+    if threshold_eta or target_rate_eta:
+        # 必须"解除"冻结才能让 θ 动。installer 的判据是
+        # `freeze_after_step is not None and global_step >= freeze_after_step`
+        # ⇒ 写 0 等于"从第 0 步起永久冻结"（恰是反的），只有 null 才不冻结。
+        a["threshold_freeze_after_step"] = None
 
     # 注意力侧：cell A 保持源配置不动（mismatch 0.0 / motion 0.125），
     # cell B 才把负极性惩罚打开、并关掉丢极性的 motion XOR 项。
@@ -105,13 +143,23 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--max-steps", type=int, default=0,
                     help="runtime.max_train_steps; >0 用于冒烟测试（先跑几步确认能起）")
+    ap.add_argument("--target-rate", type=float, default=None,
+                    help="ATLIF 目标发放率；设置后打开自适应阈值（源配置为 null=关闭）")
+    ap.add_argument("--target-rate-eta", type=float, default=None,
+                    help="目标发放率自适应步长（仅 threshold_mode != official_atlif 生效）")
+    ap.add_argument("--threshold-eta", type=float, default=None,
+                    help="官方 ATLIF 质量型自适应步长（接到 module.sp；源配置 0.0=关闭）")
+    ap.add_argument("--binary-official", action="store_true",
+                    help="保持源配置的 binary + official_atlif 不变（自适应单变量消融用）")
     args = ap.parse_args()
 
     name = args.name or ("t49_ternary_ws%s_ep%d" % (("%g" % args.scale).replace(".", "p"), args.epochs))
     out_cfg = EXP / "configs/generated" / (name + ".yml")
     out_cfg.write_text(yaml.safe_dump(
         build_config(args.scale, args.epochs, args.backbone_lr,
-                     args.mismatch_penalty, args.motion_alpha, args.max_steps),
+                     args.mismatch_penalty, args.motion_alpha, args.max_steps,
+                     args.target_rate, args.target_rate_eta, args.threshold_eta,
+                     args.binary_official),
         sort_keys=False), encoding="utf-8")
 
     run_dir = EXP / "results" / name
