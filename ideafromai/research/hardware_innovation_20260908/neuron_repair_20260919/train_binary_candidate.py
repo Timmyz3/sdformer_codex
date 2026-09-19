@@ -15,9 +15,13 @@ def patch_training_source(source, rule, theta_epsilon=None, neuron_fp32=False):
 '''
     boundary = '''            if ((sample + 1) % num_acc_steps == 0) or (sample + 1 == len(train_dataloader)):
 '''
-    assert source.count(old_clip) == 1 and source.count(boundary) == 1
-    source = source.replace(old_clip, '', 1)
-    source = source.replace(boundary, boundary + '''                if scaler is not None:
+    if '# [H9 AMP] Unscale before clipping at the optimizer boundary.' in source:
+        # The normal H9 entry already owns the fix. Never unscale twice.
+        assert old_clip not in source and source.count('scaler.unscale_(optimizer)') == 1
+    else:
+        assert source.count(old_clip) == 1 and source.count(boundary) == 1
+        source = source.replace(old_clip, '', 1)
+        source = source.replace(boundary, boundary + '''                if scaler is not None:
                     scaler.unscale_(optimizer)
                 if config["loss"]["clip_grad"] is not None:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config["loss"]["clip_grad"])

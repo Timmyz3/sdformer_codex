@@ -1,0 +1,61 @@
+"""Summarize completed paired inference and successful-update receipts."""
+import json
+from pathlib import Path
+import re
+
+HERE = Path(__file__).resolve().parent
+
+
+def main():
+    training = json.loads((HERE / 'RECOVERY.json').read_text())
+    paired = json.loads((HERE / 'PAIRED_VALID825.json').read_text())
+    assert training['complete'] and paired['complete']
+    reference = paired['arms']['ep34']['rows']
+    assert len(reference) == 825 and len({r['file'] for r in reference}) == 825
+    sequence_ids = [re.search(r'(?:zurich_city_\d+_[a-z]|interlaken_\d+_[a-z]|thun_\d+_[a-z])', r['file']).group()
+                    for r in reference]
+    summary = dict(frames=len(reference), sequences=len(set(sequence_ids)),
+                   valid_pixels=sum(r['pixels'] for r in reference),
+                   trainable_parameters=training['trainable_parameters'],
+                   baseline_aee=paired['arms']['ep34']['aee_frame_mean'],
+                   baseline_firing=paired['arms']['ep34']['element_weighted_firing'], arms=[])
+    for arm in training['arms']:
+        name = arm['rule']
+        result = paired['arms'][name]
+        assert len(result['rows']) == len(reference)
+        by_sequence = {}
+        for seq, r0, r1 in zip(sequence_ids, reference, result['rows']):
+            assert r0['file'] == r1['file'] and r0['pixels'] == r1['pixels']
+            entry = by_sequence.setdefault(seq, dict(frames=0, baseline_sum=0., candidate_sum=0.))
+            entry['frames'] += 1
+            entry['baseline_sum'] += r0['aee']; entry['candidate_sum'] += r1['aee']
+        sequences = [dict(sequence=seq, frames=v['frames'],
+                          baseline_aee=v['baseline_sum'] / v['frames'],
+                          candidate_aee=v['candidate_sum'] / v['frames'],
+                          delta=(v['candidate_sum'] - v['baseline_sum']) / v['frames'])
+                     for seq, v in sorted(by_sequence.items())]
+        row = dict(rule=name, successful_updates=arm['successful_updates'],
+                   overflow_retries=arm['overflow_attempts'],
+                   first_batch_loss=arm['updates'][0]['attempts'][-1]['loss'],
+                   ten_frame_aee=arm['diagnostics'][-1]['validation']['aee_frame_mean'],
+                   valid825_aee=result['aee_frame_mean'],
+                   delta_aee=result['aee_frame_mean'] - summary['baseline_aee'],
+                   pixel_weighted_aee=result['aee_pixel_weighted'],
+                   changed_theta=sum(v['before'] != v['after'] for v in arm['theta'].values()),
+                   changed_q_theta=sum(v['before'] != v['after'] for n, v in arm['theta'].items() if '.sn_q.' in n),
+                   max_theta_change=max(abs(v['before'] - v['after']) for v in arm['theta'].values()),
+                   final_q_nonzero_theta_gradient=arm['updates'][-1]['q_nonzero_theta_grad'],
+                   changed_psn_matrices=sum(v > 0 for n, v in arm['parameter_max_change'].items() if n.endswith('.weight')),
+                   element_weighted_firing=result['element_weighted_firing'],
+                   zero_firing_modules=result['zero_firing_modules_observed'],
+                   improved_sequences=sum(r['delta'] < 0 for r in sequences),
+                   worsened_sequences=sum(r['delta'] > 0 for r in sequences),
+                   sequences=sequences)
+        summary['arms'].append(row)
+    (HERE / 'SUMMARY.json').write_text(json.dumps(summary, indent=2) + '\n')
+    print(json.dumps({**summary, 'arms': [{k: v for k, v in a.items() if k not in {'sequences', 'zero_firing_modules'}}
+                                        for a in summary['arms']]}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

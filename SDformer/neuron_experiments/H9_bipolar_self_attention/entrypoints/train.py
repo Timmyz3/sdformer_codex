@@ -290,15 +290,25 @@ SCALER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimiz
                     h40_lrs = apply_lr_warmup(optimizer, h40_global_step, config)
                     from models.STSwinNet_SNN.h28_optimizer import freeze_threshold_gradients
                     h40_frozen_threshold_grads = freeze_threshold_gradients(model, h40_global_step, config)
+                    h9_scale_before_step = scaler.get_scale()
                     scaler.step(optimizer)
-                    from models.STSwinNet_SNN.atlif_ternary_psn import threshold_update
+                    scaler.update()
+                    from models.STSwinNet_SNN.atlif_ternary_psn import threshold_update, iter_atlif_ternary_psn
                     h40_warmup_factor = lr_warmup_factor(h40_global_step, config)
                     h8_threshold_lr = float(config.get("atlif_ternary_psn", {}).get("threshold_base_lr", optimizer.param_groups[0]["lr"]))
                     if h40_warmup_factor is not None:
                         h8_threshold_lr *= h40_warmup_factor
                     h8_threshold_cfg = dict(config.get("atlif_ternary_psn", {}) or {})
                     h8_threshold_cfg["_global_step"] = h40_global_step
-                    h8_update_stats = threshold_update(model, h8_threshold_lr, h8_threshold_cfg)
+                    if scaler.get_scale() >= h9_scale_before_step:
+                        h8_update_stats = threshold_update(model, h8_threshold_lr, h8_threshold_cfg)
+                    else:
+                        # Do not apply or carry manual threshold increments
+                        # from an accumulation group whose AMP step was skipped.
+                        for _, h9_neuron in iter_atlif_ternary_psn(model):
+                            h9_neuron.update_value = 0.0
+                            h9_neuron.act_value = 0.0
+                        h8_update_stats = {"amp_skipped": 1}
                     h6_log_interval = int(config.get("atlif_ternary_psn", {}).get("log_interval_steps", 0) or 0)
                     if h6_log_interval > 0 and (sample + 1) % h6_log_interval == 0:
                         if h40_lrs is not None:
@@ -306,7 +316,6 @@ SCALER_STEP_PATCH = """                    from models.STSwinNet_SNN.h28_optimiz
                         if h40_frozen_threshold_grads:
                             print(f"[H40] step {sample + 1} frozen threshold gradients: {h40_frozen_threshold_grads}")
                         print(f"[H9] step {sample + 1} update: {h8_update_stats}")
-                    scaler.update()
 """
 
 OPTIMIZER_STEP_ANCHOR = """                    optimizer.step()
@@ -566,6 +575,24 @@ def _absolutize_path_args(extra_args: list[str]) -> list[str]:
     return normalized
 
 
+def _patch_amp_clipping(source: str) -> str:
+    """Clip unscaled, accumulated gradients only when updating parameters."""
+    old_clip = '''            if config["loss"]["clip_grad"] is not None:
+                torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), config["loss"]["clip_grad"])
+'''
+    boundary = '''            if ((sample + 1) % num_acc_steps == 0) or (sample + 1 == len(train_dataloader)):
+'''
+    if source.count(old_clip) != 1 or source.count(boundary) != 1:
+        raise RuntimeError("Could not locate the original gradient clip/update boundary")
+    source = source.replace(old_clip, '', 1)
+    return source.replace(boundary, boundary + '''                # [H9 AMP] Unscale before clipping at the optimizer boundary.
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                if config["loss"]["clip_grad"] is not None:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config["loss"]["clip_grad"])
+''', 1)
+
+
 def _patch_source(source: str, baseline_entry: Path) -> str:
     for anchor, replacement in (
         (PIN_MEMORY_ANCHOR, PIN_MEMORY_PATCH),
@@ -589,7 +616,7 @@ def _patch_source(source: str, baseline_entry: Path) -> str:
         if anchor not in source:
             raise RuntimeError(f"Could not patch {baseline_entry}: missing anchor {anchor[:60]!r}")
         source = source.replace(anchor, replacement, 1)
-    return source
+    return _patch_amp_clipping(source)
 
 
 def main() -> None:
