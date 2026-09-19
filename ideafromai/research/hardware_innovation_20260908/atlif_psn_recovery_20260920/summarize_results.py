@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import re
+from statistics import median
 
 HERE = Path(__file__).resolve().parent
 
@@ -18,7 +19,11 @@ def main():
                    valid_pixels=sum(r['pixels'] for r in reference),
                    trainable_parameters=training['trainable_parameters'],
                    baseline_aee=paired['arms']['ep34']['aee_frame_mean'],
-                   baseline_firing=paired['arms']['ep34']['element_weighted_firing'], arms=[])
+                   baseline_firing=paired['arms']['ep34']['element_weighted_firing'],
+                   baseline_zero_firing_modules=paired['arms']['ep34']['zero_firing_modules_observed'],
+                   baseline_observed_modules=len(paired['arms']['ep34']['activity']),
+                   arms=[])
+    baseline_zero = set(summary['baseline_zero_firing_modules'])
     for arm in training['arms']:
         name = arm['rule']
         result = paired['arms'][name]
@@ -34,6 +39,12 @@ def main():
                           candidate_aee=v['candidate_sum'] / v['frames'],
                           delta=(v['candidate_sum'] - v['baseline_sum']) / v['frames'])
                      for seq, v in sorted(by_sequence.items())]
+        frame_deltas = [dict(file=r1['file'], baseline_aee=r0['aee'],
+                             candidate_aee=r1['aee'], delta=r1['aee'] - r0['aee'])
+                        for r0, r1 in zip(reference, result['rows'])]
+        best_frame = min(frame_deltas, key=lambda r: r['delta'])
+        worst_frame = max(frame_deltas, key=lambda r: r['delta'])
+        deltas = [r['delta'] for r in frame_deltas]
         row = dict(rule=name, successful_updates=arm['successful_updates'],
                    overflow_retries=arm['overflow_attempts'],
                    first_batch_loss=arm['updates'][0]['attempts'][-1]['loss'],
@@ -45,11 +56,22 @@ def main():
                    changed_q_theta=sum(v['before'] != v['after'] for n, v in arm['theta'].items() if '.sn_q.' in n),
                    max_theta_change=max(abs(v['before'] - v['after']) for v in arm['theta'].values()),
                    final_q_nonzero_theta_gradient=arm['updates'][-1]['q_nonzero_theta_grad'],
+                   q_gradient_steps=sum(r['q_nonzero_theta_grad'] > 0 for r in arm['updates']),
                    changed_psn_matrices=sum(v > 0 for n, v in arm['parameter_max_change'].items() if n.endswith('.weight')),
                    element_weighted_firing=result['element_weighted_firing'],
+                   observed_modules=len(result['activity']),
+                   min_nonzero_frames_per_module=min(r['nonzero_frames'] for r in result['activity'].values()),
                    zero_firing_modules=result['zero_firing_modules_observed'],
+                   newly_active_modules=sorted(baseline_zero - set(result['zero_firing_modules_observed'])),
+                   newly_zero_modules=sorted(set(result['zero_firing_modules_observed']) - baseline_zero),
                    improved_sequences=sum(r['delta'] < 0 for r in sequences),
                    worsened_sequences=sum(r['delta'] > 0 for r in sequences),
+                   paired_frame_median_delta=median(deltas),
+                   improved_frames=sum(d < 0 for d in deltas),
+                   worsened_frames=sum(d > 0 for d in deltas),
+                   best_improvement_frame=best_frame, worst_regression_frame=worst_frame,
+                   posthoc_leave_best_improvement_frame_out_delta=
+                       (sum(deltas) - best_frame['delta']) / (len(deltas) - 1),
                    sequences=sequences)
         summary['arms'].append(row)
     (HERE / 'SUMMARY.json').write_text(json.dumps(summary, indent=2) + '\n')
