@@ -1804,10 +1804,7 @@ def _binary_temporal_k_xor_popcount(
     if tuple(k_orig.shape) != (batch, heads, t_steps * spatial_tokens, head_dim):
         raise ValueError("k_orig shape is inconsistent with q_orig temporal/spatial layout")
 
-    # Signed events: {0,+-1} so that |k_event - paired| yields 0 = same polarity,
-    # 1 = one side silent, 2 = opposite polarity. A gt(0) binarization collapses
-    # every negative event to 0 and makes the motion term blind to polarity.
-    k_event = _ternary_sign_ste(k_orig).reshape(batch, heads, t_steps, spatial_tokens, head_dim)
+    k_event = _binary_event_ste(k_orig).reshape(batch, heads, t_steps, spatial_tokens, head_dim)
     paired = k_event.flip(dims=(2,))
     return (k_event - paired).abs().sum(dim=-1, keepdim=True).reshape(
         batch, heads, t_steps * spatial_tokens, 1
@@ -4800,14 +4797,8 @@ MATCH_CODE_MODES = (
 )
 
 
-def _bounded_binary_event_ste(value: torch.Tensor) -> torch.Tensor:
-    """Binary forward with a bounded identity surrogate for Match-Code Q/K.
-
-    Must NOT be named ``_binary_event_ste``: that name is already taken by the
-    identity-STE helper defined earlier in this module, and a second definition
-    silently shadows it at every earlier call site (including the motion XOR
-    term), zeroing the gradient of any negative activation.
-    """
+def _binary_event_ste(value: torch.Tensor) -> torch.Tensor:
+    """Binary forward with a bounded identity surrogate for Match-Code Q/K."""
 
     hard = value.gt(0).to(dtype=value.dtype)
     proxy = value.clamp(min=0.0, max=1.0)
@@ -4821,8 +4812,8 @@ def _cross_time_match_events(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Gather binary Q and opposite-time K events for fixed offsets."""
 
-    q_event = _bounded_binary_event_ste(_qkformer_token_q(q_orig))
-    k_event = _bounded_binary_event_ste(k_orig)
+    q_event = _binary_event_ste(_qkformer_token_q(q_orig))
+    k_event = _binary_event_ste(k_orig)
     batch, heads, n_tokens, _ = q_event.shape
     t_steps, height, width = int(q_orig.shape[0]), 9, 9
     if t_steps != 2 or t_steps * height * width != n_tokens:
@@ -5087,7 +5078,7 @@ def _cf10_match_code_attention(
         (n11 + float(cfg.alpha0) * n00) / float(head_dim), cfg
     )
     scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
-    q_activity = _bounded_binary_event_ste(_qkformer_token_q(q_orig)).mean(dim=-1)
+    q_activity = _binary_event_ste(_qkformer_token_q(q_orig)).mean(dim=-1)
     null_score = _cf10_null_score(scores, q_activity, module, cfg)
     scores10 = torch.cat((scores, null_score.unsqueeze(-1)), dim=-1)
     descriptor = _apply_hardware_gate_quant(shiftmax(scores10, dim=-1, eps=cfg.eps), cfg)

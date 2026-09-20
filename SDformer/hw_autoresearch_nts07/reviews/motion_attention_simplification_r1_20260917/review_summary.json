@@ -1,0 +1,93 @@
+{
+  "review": "motion_attention_simplification_r1",
+  "date": "2026-09-17",
+  "mode": "read-only code analysis + CPU micro-benchmarks (no GPU, no training contact, no repo edits)",
+  "live_config": "neuron_experiments/H9_bipolar_self_attention/configs/generated/t49_ternary_ws4_ep5.yml:118-161",
+  "deploy_config": "neuron_experiments/H9_bipolar_self_attention/configs/generated/dsec_fullres_paper_w15_h67_motion_ep19_ft30_dyadic_q7q17_deploy.yml:118-169",
+  "main_file": "neuron_experiments/H9_bipolar_self_attention/overlay/models/STSwinNet_SNN/bsa_attention.py",
+  "live_path": {
+    "install": "6637-6670 install_shiftmax_attention (12 blocks, forward patch 6668)",
+    "entry": "5338-5346",
+    "h60_branch": "6092-6147",
+    "segments": {
+      "mu": "6099 -> 0.0 (SC dead)",
+      "fusion": "6100 _tx_sc_fusion_score_pair -> 3414-3428",
+      "TX": "1736-1784 (masks 1753-1757, single 1758-1763, combine 1764-1770)",
+      "motion_xor": "1787-1814",
+      "SC_dead": "1593-1666",
+      "center": "6120-6121",
+      "shiftmax": "6125 (232-242)",
+      "preserve_mean": "6127-6128",
+      "hw_quant": "6124/6129 (252-259, 291-298; deploy only)",
+      "output": "6141 attn = k_orig.mul(gate)",
+      "diag_tail": "6617-6624 (5 host syncs, no flag)"
+    }
+  },
+  "findings": {
+    "live_terms": "TX(same_nonzero + alpha0*same_zero) + motion-XOR(0.125) only; SC fully dead via mu=0",
+    "gradient": "TX bool masks have zero gradient path to Q (dq=None); live config dq == 0 everywhere, dk only from motion-XOR",
+    "dead_knobs": ["consensus_bias", "value_mode", "relu_k_floor", "bipolar_lambda/gate_min/gate_max", "eps-side knobs", "sc_mu_schedule", "castling_matrix_aux_weight", "event_temperature", "context_broadcast"],
+    "dead_module": "sn2_q (baseline carrier) still in checkpoint/ATLIF module list",
+    "pass_ledger": "~50 full-tensor passes per call, ~48% dead/redundant; 2.875 G lanes/forward over 12 blocks",
+    "hot_redundant_top5": [
+      "dead SC chain 1593-1666 + 6101 (~23% CPU)",
+      "TX mask tree 1753-1770 (~40%, opposite+single multiplied by 0)",
+      "repeated ternarization: Q 2x, K 3x (5 total, min 2)",
+      "diagnostic tail 6617-6624: 5 host syncs per block call, no switch",
+      "11 misleading dead knobs in config"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "A1",
+      "name": "dedup-SC-off",
+      "edit": "3414-3428 need_sc guard; 6099-6101 skip SC when mu==0; if-guard opposite/single masks",
+      "risk": "forward+backward bit-exact in live config",
+      "hw_benefit": "RTL area unchanged (no SC in RTL); score-front time -23%; model/RTL verification面同构",
+      "verify": "equivalent_audit_cpu.py C1b done (1 ulp); add deploy-knob bitwise; GPU 5ep AEE probe queued"
+    },
+    {
+      "id": "A2",
+      "name": "shared-ternarize",
+      "edit": "single q_event/k_event per call; motion-XOR reuses k_event (1787-1814)",
+      "risk": "forward exact; backward needs 3x/3x compensation factor (legacy |dk|/cand = 0.3845)",
+      "hw_benefit": "neutral in RTL (already CSE'd); model side -15~25% time/bandwidth",
+      "verify": "CPU forward bitwise done (C2); gradcheck-style + 2-layer single-step; GPU 5ep queued"
+    },
+    {
+      "id": "A3",
+      "name": "canonical-popcount",
+      "edit": "replace mask block with {s, o, q_act, k_act} sufficient statistics (MSSB5-isomorphic)",
+      "risk": "float32 1 ulp forward; integer Q7 domain exact; activates Q gradient (dq None -> 0.0163) = training semantics change",
+      "hw_benefit": "0 new area (this IS the MSSB5 software form); model<->RTL miter bitwise in integer domain",
+      "verify": "CPU C1/C2 done; add int64 assertion; GPU mechanism experiment queued"
+    },
+    {
+      "id": "D",
+      "name": "diag-tail-guard",
+      "edit": "6617-6624 wrap in collector/training+flag guard",
+      "risk": "none (non-numerical)",
+      "hw_benefit": "removes 5x12 host syncs/forward latency tax in GPU",
+      "verify": "n/a"
+    }
+  ],
+  "unclosed_risks": [
+    "deploy bit-exact blocked by center->quant vs RTL ordering mismatch (docs/44:128)",
+    "row_sum semantics differ between the two branches (6126 pre-scale vs 6116-6118 post-norm)",
+    "sn2_q dead module remains in checkpoint and ATLIF 105 module list",
+    "A3 activates Q gradient -> requires GPU retraining comparison"
+  ],
+  "evidence_tiers": {
+    "prof_cpu": ["prof_h60_attention_cpu.py/.json", "prof_h60_tx_ab_cpu.py", "equivalent_audit_cpu.py"],
+    "rtl_docs": ["docs/42", "docs/44:128,131-143", "docs/388:18-55", "docs/394:33", "docs/CLAUDE_MOTION_SIDECAR_MODEB_DESIGN_20260819.md"],
+    "model": "identities and pass ledger derived analytically"
+  },
+  "constraints_respected": {
+    "code_config_changes": "none",
+    "gpu_used": false,
+    "files_deleted": false,
+    "numbered_docs_touched": false,
+    "h82_h86_restarted": false,
+    "output_dir_only": true
+  }
+}

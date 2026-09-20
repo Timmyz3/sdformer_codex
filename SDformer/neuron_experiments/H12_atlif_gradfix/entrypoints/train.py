@@ -51,19 +51,6 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
         markers = (".linear_v.", ".bn_v.", ".sn_v.", "._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta", ".spiking_neuron.thresh", ".spiking_neuron.center", ".temporal_factor_left", ".temporal_factor_right")
         return any(marker in key for marker in markers)
 
-    def _h9_is_dead_atlif_key(key):
-        # ATLIF keys on paths install_atlif_ternary_psn deliberately no longer
-        # installs. The Shiftmax overlay replaces the base attention forward,
-        # which leaves .sn2_q (never called) and .attn_sn (output discarded)
-        # unable to contribute anything. Older checkpoints still carry their
-        # parameters, so those keys show up as "unexpected"; they are expected.
-        # For runs whose installer predates this filter the keys are registered
-        # normally and this predicate never matches, so it is a no-op there.
-        if ".spiking_neuron." not in key:
-            return False
-        _dead_path = key.split(".spiking_neuron.", 1)[0]
-        return _dead_path.endswith(".sn2_q") or _dead_path.endswith(".attn_sn")
-
     def _h9_is_match_candidate_key(key):
         return any(marker in key for marker in ("._h9_match_code_weight", "._h9_lc4_coefficients", "._h9_cf10_beta"))
 
@@ -78,7 +65,7 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
             elif remap == "v1":
                 load_pretrained_interpolate(model, pretrained_dict)
                 print("[H9] remap=v1 interpolation complete; applying interpolated state dict")
-            overlay_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_overlay_key(key) and not _h9_is_dead_atlif_key(key)]
+            overlay_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_overlay_key(key)]
             match_candidate_checkpoint_keys = [key for key in pretrained_dict.keys() if _h9_is_match_candidate_key(key)]
             overlay_v_checkpoint_keys = [
                 key for key in pretrained_dict.keys()
@@ -108,7 +95,7 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
             round4_aux_missing = [key for key in missing if "._h9_cf10_beta" in key]
             match_candidate_missing = [key for key in missing if _h9_is_match_candidate_key(key)]
             non_candidate_overlay_missing = [key for key in overlay_missing if not _h9_is_match_candidate_key(key)]
-            overlay_unexpected = [key for key in unexpected if _h9_is_overlay_key(key) and not _h9_is_dead_atlif_key(key)]
+            overlay_unexpected = [key for key in unexpected if _h9_is_overlay_key(key)]
             print(
                 f"[H9] load audit: checkpoint_overlay_keys={len(overlay_checkpoint_keys)}, "
                 f"missing={len(missing)}, unexpected={len(unexpected)}"
@@ -170,6 +157,11 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
     else:
         installed_h9_preload = install_atlif_ternary_psn(model, config.get("atlif_ternary_psn"))
         installed_h9_bsa_preload = install_shiftmax_attention(model, config.get("bsa_attention"))
+        if config.get("bsa_attention_stage0"):
+            _s0_cfg = dict(config["bsa_attention_stage0"])
+            _s0_cfg["stage_selection"] = "stage0"
+            _s0_pre = install_shiftmax_attention(model, _s0_cfg)
+            print(f"[H12] installed stage0 attention before load: {len(_s0_pre)} modules")
         if installed_h9_preload:
             print(f"[H9] installed ATLIFTernaryPSN before load: {len(installed_h9_preload)} modules")
             print(f"[H9] preload neuron targets: {installed_h9_preload[:8]}{' ...' if len(installed_h9_preload) > 8 else ''}")
@@ -182,6 +174,11 @@ LOAD_MODEL_PATCH = """    from models.STSwinNet_SNN.bsa_attention import registe
         print(f"[H9] installed ATLIFTernaryPSN: {len(installed_h9)} modules")
         print(f"[H9] neuron targets: {installed_h9[:8]}{' ...' if len(installed_h9) > 8 else ''}")
     installed_h9_bsa = install_shiftmax_attention(model, config.get("bsa_attention"))
+    if config.get("bsa_attention_stage0"):
+        _s0_cfg = dict(config["bsa_attention_stage0"])
+        _s0_cfg["stage_selection"] = "stage0"
+        _s0_inst = install_shiftmax_attention(model, _s0_cfg)
+        print(f"[H12] installed stage0 attention: {len(_s0_inst)} modules")
     if installed_h9_bsa:
         print(f"[H9] installed Shiftmax attention: {len(installed_h9_bsa)} modules")
         print(f"[H9] attention targets: {installed_h9_bsa[:8]}{' ...' if len(installed_h9_bsa) > 8 else ''}")
