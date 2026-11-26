@@ -1,0 +1,21 @@
+# R38: actual new-input replay of the frozen R34 prefix
+
+All 20 new input windows were executed through the unchanged R34 X128 streaming source and then the unchanged finite head implementation. Folded128 and calibrated ordinary128 both selected the same actions as R38's primary FP32 numerical implementation on every identity. This is a CPU numerical/service bridge, not new RTL, synthesis, quality evaluation or whole-network timing.
+
+`actual_v2/ACTUAL_PREFIX_BUDGET_V1.json` contains the per-input results and source bindings. Four `thun_00_a` identities each have one zero-mass cell and actual feature service 113,938,592 ticks; the other sixteen have no zero-mass cells and service 113,938,624. Each head was actually executed against that input's physical IOS image, reading its first feature at byte address 400000. The folded head costs 8,599 ticks and the ordinary calibrated head costs 26,646 ticks. Their parameter blobs are identical to the original R34 ones.
+
+The streaming feature reduction is not bitwise NumPy FP32: the largest feature difference is 2.384185791015625e-7. Folded and ordinary score differences are at most 1.210719347000122e-8 and 6.705522537231445e-8 respectively, with zero action changes. Each finite head output is bitwise equal to a separate explicit numerical readout of its actual streamed feature values. No recalibration, fitting or new threshold was introduced.
+
+For every actual identity, the frozen static360 four-convolution service of 1,032,538,860 ticks is below folded128's actual prefix plus selected four isolated convolution services. Remaining budget is **184,991–187,075 ticks**. Ordinary128 is separately charged its more expensive head. A stronger information-independent check gives a margin of 184,511 ticks even with all sixteen cells zero-mass and the cheapest of the six allowed upgrade actions; it is supplemental to the actual replays, not a substitute for them.
+
+The interpretation remains exactly R34's: serialize the predictor prefix once, then compare four isolated convolution services. The first controlled convolution still requires an unmodeled shared stem. No free overlap, full-network speed, physical FPU timing, energy saving or static360 accuracy is inferred. The original scalar-register/routing assumptions remain unchanged.
+
+## Actual storage and implementation binding
+
+The original frozen manifest pins the stream C++ source and head Python source, but not the old compiled executable. Therefore this round rebuilt that exact C++ source locally with `g++ -O2 -std=c++17 -ffp-contract=off`, saved as `stream_frozen_rebuilt`, and bound both source and executable hashes. No old source or result was edited.
+
+All twenty completed stream outputs and IOS backing images are preserved under `failed_head_setup_v1/<identity>/`: the directory name records the later wrapper head-initialization failure, not a failure in those completed streaming computations. After fixing only the new wrapper, the actual stream outputs were rechecked and the 40 heads were executed under `actual_v2/<identity>/`. A symlink supplies each real IOS image to the unchanged head constructor's literal filename; it aliases the same bytes and is not an uncharged modeled relocation or reuse of old-image features.
+
+The first new input has a full memory trace and DMA CSV. `actual_v2/STORAGE_PARAMETER_CHECK_V1.json` checks its serial ordering, finite capacities, read/write totals and protected feature writes `[400000,400512)`. All twenty actual IOS payloads were checked against their emitted feature bytes. The earlier independent R34 address/bank/port proof applies to the unchanged implementation; this round does not relabel it as a new independently derived DMA golden model.
+
+`replay_frozen_prefix.py` is the reproducible wrapper. It intentionally requires fresh result directories. The final execution reused the already completed stream directory through `--reuse-completed-streams failed_head_setup_v1`; no GPU forward was repeated. Initial failures are retained in `failures/`: checking for a nonexistent old binary entry in the manifest, and a wrapper `None` placeholder rejected before ordinary-head execution. Neither changed the frozen sources, input arrays, model parameters or output policy.
